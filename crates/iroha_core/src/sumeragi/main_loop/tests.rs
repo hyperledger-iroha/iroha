@@ -250,6 +250,14 @@ fn zero_state_root() -> Hash {
     Hash::prehashed([0u8; 32])
 }
 
+fn isolate_commit_history_state() -> super::status::TestLockGuard {
+    let guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+    guard
+}
+
 fn deterministic_keypair(seed: impl AsRef<[u8]>, algorithm: Algorithm) -> KeyPair {
     let seed_hash = Hash::new(seed.as_ref());
     KeyPair::from_seed(seed_hash.as_ref().to_vec(), algorithm)
@@ -344,6 +352,152 @@ fn seed_near_quorum_commit_votes_for_block(
     );
     assert_eq!(seeded, required.saturating_sub(1));
     required
+}
+
+fn seed_remote_commit_votes_for_block(
+    actor: &mut Actor,
+    keypairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view_idx: u64,
+    count: usize,
+) -> usize {
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local signer in topology");
+
+    let mut seeded = 0usize;
+    for (signer_idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        if signer == local_signer {
+            continue;
+        }
+        let keypair = keypairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.handle_vote(vote);
+        seeded = seeded.saturating_add(1);
+        if seeded == count {
+            break;
+        }
+    }
+
+    seeded
+}
+
+fn seed_remote_vote_locked_frontier_owner_without_pending(
+    actor: &mut Actor,
+    keypairs: &[KeyPair],
+    owner_view: u64,
+) -> (Option<HashOf<BlockHeader>>, u64, HashOf<BlockHeader>, usize) {
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&owner_block));
+
+    actor.note_proposal_seen(height, owner_view, owner_payload_hash);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor.phase_tracker.start_new_round(height, now);
+
+    let commit_topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = commit_topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires enough remote validators to form a near-quorum without the local signer"
+    );
+    let seeded = seed_remote_commit_votes_for_block(
+        actor,
+        keypairs,
+        owner_hash,
+        height,
+        owner_view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup requires a remote near-quorum on the old owner"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "test setup requires the owner to survive purely in frontier-slot state"
+    );
+    assert!(
+        actor
+            .local_same_height_vote(height, actor.epoch_for_height(height))
+            .is_none(),
+        "test setup requires the live-owner preservation to come from remote quorum math rather than local vote history"
+    );
+
+    (parent, height, owner_hash, required)
+}
+
+fn commit_inflight_for_block(
+    actor: &Actor,
+    block: SignedBlock,
+    height: u64,
+    view: u64,
+) -> CommitInFlight {
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+    };
+    let commit_topology = actor.effective_commit_topology();
+    CommitInFlight {
+        id: 1,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology,
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    }
 }
 
 fn pending_session_key(height: u64) -> SessionKey {
@@ -8897,6 +9051,7 @@ async fn flush_pending_rbc_if_roster_ready_returns_false_without_pending() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn flush_pending_rbc_if_roster_ready_returns_false_when_roster_unresolved() {
+    let _commit_history_guard = isolate_commit_history_state();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 2;
@@ -9060,6 +9215,72 @@ async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_to_replay_pending_
         stored.received_chunks(),
         1,
         "pending chunk should be replayed through the cached authoritative roster path"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missing() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let epoch = actor.epoch_for_height(key.1);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires a cached roster snapshot");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(key, roster.clone());
+    assert!(
+        actor.rbc_session_roster_source(key).is_none(),
+        "test requires the roster source entry to be missing"
+    );
+
+    let session = RbcSession::new(1, None, None, None, epoch).expect("session");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    let pending = actor.pending_rbc_slot(key).expect("pending slot");
+    let _ = pending.push_chunk_capped(
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch,
+            idx: 0,
+            bytes: vec![0xAA, 0x55],
+        },
+        None,
+        usize::MAX,
+        usize::MAX,
+        Instant::now(),
+    );
+
+    assert!(
+        actor.flush_pending_rbc_if_roster_ready(key),
+        "cached roster bytes should replay pending chunks even when the roster source marker is absent"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "successful replay should clear the pending stash"
+    );
+    assert!(
+        actor.rbc_session_roster_source(key) == Some(super::RbcRosterSource::Derived),
+        "flush should restore the missing source marker as derived when cached roster refresh succeeds"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session retained");
+    assert_eq!(
+        stored.received_chunks(),
+        1,
+        "pending chunk should replay through the cached-roster path even without a source marker"
     );
 
     harness.shutdown.send();
@@ -92292,6 +92513,7 @@ async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_vote_loc
 #[tokio::test(flavor = "current_thread")]
 async fn later_view_block_created_becomes_passive_when_frontier_owner_has_vote_locked_commit_evidence()
  {
+    let _commit_history_guard = isolate_commit_history_state();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -92323,6 +92545,7 @@ async fn later_view_block_created_becomes_passive_when_frontier_owner_has_vote_l
         None,
         None,
     ));
+    actor.phase_tracker.start_new_round(height, Instant::now());
 
     let required =
         seed_near_quorum_commit_votes_for_block(actor, &harness.key_pairs, owner_hash, height, 0);
@@ -92381,6 +92604,1359 @@ async fn later_view_block_created_becomes_passive_when_frontier_owner_has_vote_l
             .expect("retained conflicting block")
             .is_retired_same_height(),
         "the conflicting body must be downgraded into passive same-height retained state"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn later_view_block_created_becomes_passive_when_remote_near_quorum_commit_votes_lock_frontier_owner_without_pending_wrapper()
+ {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&owner_block));
+
+    actor.note_proposal_seen(height, owner_view, owner_payload_hash);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor.phase_tracker.start_new_round(height, now);
+
+    let commit_topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = commit_topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires enough remote validators to form a near-quorum without the local signer"
+    );
+    let seeded = seed_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        height,
+        owner_view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup requires a remote near-quorum on the old owner"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "test setup requires the owner to survive purely in frontier-slot state"
+    );
+    assert!(
+        actor
+            .local_same_height_vote(height, actor.epoch_for_height(height))
+            .is_none(),
+        "test setup requires the live-owner preservation to come from remote quorum math rather than local vote history"
+    );
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(owner_hash, height, owner_view);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test setup requires same-slot near-quorum commit evidence on the old owner"
+    );
+
+    let conflicting_block = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    );
+    let conflicting_hash = conflicting_block.hash();
+    assert_ne!(
+        conflicting_hash, owner_hash,
+        "test setup requires a later-view conflicting body"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "remote near-quorum commit evidence should keep the original owner live across later views even without a pending wrapper"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_some(),
+        "later-view conflicting bodies should stay passive when remote near-quorum votes lock out a fresh quorum"
+    );
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: conflicting_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle conflicting later-view BlockCreated");
+
+    assert!(
+        actor.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.block_hash == owner_hash
+                && slot.view == owner_view
+                && matches!(slot.mode, super::FrontierSlotMode::Normal)
+        }),
+        "remote near-quorum vote-locked frontier ownership must remain active"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "preserving the frontier owner must not recreate an active pending wrapper"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&conflicting_hash),
+        "the conflicting body should still be retained for later recovery"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&conflicting_hash)
+            .expect("retained conflicting block")
+            .is_retired_same_height(),
+        "the conflicting body must be downgraded into passive same-height retained state"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_conflicts_with_live_local_owner_returns_none_when_remote_commit_votes_leave_fresh_quorum_possible()
+ {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&owner_block));
+
+    actor.note_proposal_seen(height, owner_view, owner_payload_hash);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor.phase_tracker.start_new_round(height, now);
+
+    let seeded = seed_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        height,
+        owner_view,
+        1,
+    );
+    assert_eq!(
+        seeded, 1,
+        "test setup requires a single remote commit vote on the old owner"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "test setup requires the owner to survive purely in frontier-slot state"
+    );
+    assert!(
+        actor
+            .local_same_height_vote(height, actor.epoch_for_height(height))
+            .is_none(),
+        "test setup requires the owner to have no local vote history"
+    );
+
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(owner_hash, height, owner_view);
+    assert_eq!(
+        vote_status.vote_count, 1,
+        "test setup requires exact same-slot commit evidence without near-quorum lockout"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_none(),
+        "a single remote commit vote should still leave room for a fresh quorum in the later view"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_none(),
+        "later-view conflicting bodies should not stay passive when the old owner still leaves enough untouched validators to reach quorum"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_requires_later_view_for_remote_near_quorum_lockout_without_pending_wrapper()
+ {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let (parent, height, owner_hash, required) =
+        seed_remote_vote_locked_frontier_owner_without_pending(
+            actor,
+            &harness.key_pairs,
+            owner_view,
+        );
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(owner_hash, height, owner_view);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test setup requires same-slot near-quorum commit evidence on the old owner"
+    );
+
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, owner_view)
+            .is_none(),
+        "remote near-quorum commit evidence alone should not mark the owner live for its exact original view once the pending wrapper is gone"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "the same remote near-quorum should keep the owner live once a later view would otherwise repropose a conflicting branch"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, owner_view, conflicting_hash)
+            .is_none(),
+        "remote near-quorum lockout should only block conflicting later-view candidates, not exact-slot conflict checks"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_conflicts_with_live_local_owner_returns_none_for_same_hash_when_remote_near_quorum_locks_owner()
+ {
+    let _commit_history_guard = isolate_commit_history_state();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let (parent, height, owner_hash, _required) =
+        seed_remote_vote_locked_frontier_owner_without_pending(
+            actor,
+            &harness.key_pairs,
+            owner_view,
+        );
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+    assert_ne!(
+        conflicting_hash, owner_hash,
+        "test setup requires a distinct later-view conflicting body"
+    );
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "test setup requires remote near-quorum lockout to keep the old owner live in the later view"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, owner_hash)
+            .is_none(),
+        "the live owner should not conflict with itself even when remote near-quorum votes lock the slot"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "the same later-view check should still reject different hashes while the old owner remains live"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_ignores_local_vote_history_when_slot_is_passive_catchup()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor.vote_log.insert(
+        (
+            Phase::Commit,
+            height,
+            owner_view,
+            actor.epoch_for_height(height),
+            0,
+        ),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: owner_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: owner_view,
+            epoch: actor.epoch_for_height(height),
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        },
+    );
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "test setup requires old-view local vote history to keep the owner live before the passive handoff"
+    );
+    actor.frontier_slot.as_mut().expect("frontier slot").mode =
+        super::FrontierSlotMode::PassiveCatchup;
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_none(),
+        "passive catch-up mode must suppress same-height active-owner protection even when old local vote history exists"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_none(),
+        "passive catch-up mode must stop treating the stale owner as a conflicting live branch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_ignores_commit_qc_evidence_when_slot_is_finalized()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.quorum_progress.commit_qc_observed = true;
+        slot.quorum_progress.last_commit_qc_at = Some(Instant::now());
+        slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
+    }
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "test setup requires commit-QC evidence to keep the frontier owner live before finalization"
+    );
+    actor.frontier_slot.as_mut().expect("frontier slot").mode = super::FrontierSlotMode::Finalized;
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_none(),
+        "finalized slot state must suppress further same-height active-owner protection"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_none(),
+        "finalized slot state must stop treating the old owner as a conflicting live branch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_uses_explicit_locally_voted_lock_state_without_vote_history()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let owner_hash = sample_block(height, owner_view, parent).hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot")
+        .lock_state = super::FrontierOwnerLockState::LocallyVoted;
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        actor
+            .local_same_height_vote(height, actor.epoch_for_height(height))
+            .is_none(),
+        "test setup requires the locally-voted lock-state path to avoid vote-log history"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "test setup requires the owner to survive without an active pending wrapper"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, owner_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "explicit locally-voted lock state should keep the owner live in its exact slot even without vote-log history"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "explicit locally-voted lock state should also keep the owner live across later views"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "later-view conflicting bodies should still defer to the explicitly vote-locked owner"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_uses_commit_inflight_without_pending_wrapper() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
+        actor,
+        owner_block,
+        height,
+        owner_view,
+    ));
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&owner_hash),
+        "test setup requires the owner to survive without an active pending wrapper"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, owner_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "commit inflight should keep the owner live in its exact slot even after the pending wrapper is gone"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "commit inflight should keep the owner live across later views while local execution work is still active"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "later-view conflicting bodies should remain passive while commit inflight still owns the frontier slot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn keep_frontier_pending_active_across_view_change_uses_commit_inflight_for_live_owner_and_rejects_other_hashes()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    let mut stale_pending =
+        PendingBlock::new(owner_block.clone(), payload_hash, height, owner_view);
+    stale_pending.validation_status = ValidationStatus::Invalid;
+    actor
+        .pending
+        .pending_blocks
+        .insert(owner_hash, stale_pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = later_view;
+        slot.sync_compat_fields();
+    }
+    actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
+        actor,
+        owner_block,
+        height,
+        owner_view,
+    ));
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&owner_hash)
+            .is_some_and(|pending| pending.validation_status == ValidationStatus::Invalid),
+        "test setup requires the pending wrapper itself to be non-live so commit inflight drives the owner liveness"
+    );
+    assert!(
+        actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "commit inflight should keep the matching frontier hash active across the view change even when the cached pending wrapper is already stale"
+    );
+    assert!(
+        !actor.keep_frontier_pending_active_across_view_change(
+            height,
+            later_view,
+            conflicting_hash
+        ),
+        "only the live frontier owner's hash should stay active across the view change"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_has_local_vote_history_in_slot_uses_live_local_signer_when_cached_roster_cannot_resolve_peer()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(actor.state.as_ref());
+
+    let height = actor.committed_height_snapshot();
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    let live_topology = super::network_topology::Topology::new(live_roster.clone());
+    let (view, local_idx) = (0..live_roster.len())
+        .find_map(|view_idx| {
+            let view = u64::try_from(view_idx).ok()?;
+            let signature_topology =
+                super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
+            let local_idx = actor.local_validator_index_for_topology(&signature_topology)?;
+            let local_idx = usize::try_from(local_idx).ok()?;
+            (local_idx > 0).then_some((view, local_idx))
+        })
+        .expect("test requires a view where the live local signer is not zero");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
+    let cached_roster: Vec<_> = live_roster.iter().take(local_idx).cloned().collect();
+    assert!(
+        !cached_roster.is_empty(),
+        "test requires a truncated cached roster"
+    );
+    actor.cache_vote_roster(block_hash, height, view, cached_roster);
+
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: ValidatorIndex::try_from(local_idx).expect("local signer fits u32"),
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote.clone(),
+    );
+    let slot = super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    );
+
+    assert!(
+        actor.vote_signer_peer(&vote).is_none(),
+        "test setup requires cached roster drift to make peer resolution unavailable for the raw signer"
+    );
+    assert!(
+        actor.frontier_slot_has_local_vote_history_in_slot(&slot),
+        "live slot signer fallback should still treat the unresolved raw signer as local vote history for the exact frontier slot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_has_local_vote_history_in_slot_ignores_unresolved_signer_when_live_local_signer_differs()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(actor.state.as_ref());
+
+    let height = actor.committed_height_snapshot();
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    let live_topology = super::network_topology::Topology::new(live_roster.clone());
+    let (view, local_idx, unresolved_remote_idx) = (0..live_roster.len())
+        .find_map(|view_idx| {
+            let view = u64::try_from(view_idx).ok()?;
+            let signature_topology =
+                super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
+            let local_idx = actor.local_validator_index_for_topology(&signature_topology)?;
+            let local_idx = usize::try_from(local_idx).ok()?;
+            (local_idx > 0 && local_idx + 1 < signature_topology.as_ref().len())
+                .then_some((view, local_idx, local_idx + 1))
+        })
+        .expect("test requires a view where a non-local signer also falls outside the truncated cached roster");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH]));
+    let cached_roster: Vec<_> = live_roster.iter().take(local_idx).cloned().collect();
+    assert!(
+        !cached_roster.is_empty(),
+        "test requires a truncated cached roster"
+    );
+    actor.cache_vote_roster(block_hash, height, view, cached_roster);
+
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: ValidatorIndex::try_from(unresolved_remote_idx)
+            .expect("unresolved non-local signer fits u32"),
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote.clone(),
+    );
+    let slot = super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    );
+
+    assert!(
+        actor.vote_signer_peer(&vote).is_none(),
+        "test setup requires cached roster drift to make peer resolution unavailable for the raw signer"
+    );
+    assert!(
+        !actor.frontier_slot_has_local_vote_history_in_slot(&slot),
+        "unresolved raw signers that do not match the live local signer must not be treated as local vote history"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn keep_frontier_pending_active_across_view_change_uses_validation_inflight_for_live_owner_and_stops_after_clear()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    let mut stale_pending =
+        PendingBlock::new(owner_block.clone(), payload_hash, height, owner_view);
+    stale_pending.validation_status = ValidationStatus::Invalid;
+    actor
+        .pending
+        .pending_blocks
+        .insert(owner_hash, stale_pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = later_view;
+        slot.lock_state = super::FrontierOwnerLockState::LocallyVoted;
+        slot.sync_compat_fields();
+    }
+    actor.subsystems.validation.inflight.insert(
+        owner_hash,
+        super::ValidationInFlight {
+            id: 11,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "validation inflight should keep the matching frontier hash active across the view change once the owner is otherwise still live"
+    );
+    assert!(
+        !actor.keep_frontier_pending_active_across_view_change(
+            height,
+            later_view,
+            conflicting_hash
+        ),
+        "validation inflight must not preserve unrelated hashes across the same view change"
+    );
+
+    actor.subsystems.validation.inflight.remove(&owner_hash);
+
+    assert!(
+        !actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "clearing validation inflight should drop the preservation path when no other pending-keep condition remains"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_has_active_owner_state_for_view_uses_exact_fetch_flag_without_other_activity()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let block_hash = sample_block(height, view, actor.state.view().latest_block_hash()).hash();
+    let mut slot = super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    );
+    slot.candidate.exact_fetch_armed = true;
+    slot.phase = super::FrontierSlotPhase::AwaitBlockCreated;
+    slot.sync_compat_fields();
+    actor.frontier_slot = Some(slot);
+
+    assert!(
+        actor.frontier_slot_has_active_owner_state(height),
+        "an exact-fetch repair slot should count as active owner state even before body or vote progress arrives"
+    );
+    assert!(
+        actor.frontier_slot_has_active_owner_state_for_view(height, view),
+        "the exact requested slot view should stay active when exact-fetch recovery is armed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_has_active_owner_state_for_view_treats_deep_catchup_without_body_as_active()
+{
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let now = Instant::now();
+    let block_hash = sample_block(height, view, actor.state.view().latest_block_hash()).hash();
+    let mut slot = super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    );
+    slot.mark_deep_catchup(now, "test_active_deep_catchup");
+    slot.phase = super::FrontierSlotPhase::AwaitBlockCreated;
+    slot.candidate.exact_fetch_armed = false;
+    slot.sync_compat_fields();
+    actor.frontier_slot = Some(slot);
+
+    assert!(
+        actor.frontier_slot_has_active_owner_state(height),
+        "deep catch-up ownership should remain active even before exact body or vote evidence is rebuilt"
+    );
+    assert!(
+        actor.frontier_slot_has_active_owner_state_for_view(height, view),
+        "deep catch-up should preserve active owner state for the exact frontier view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_has_active_owner_state_for_view_ignores_finalized_slot_even_with_progress_flags()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let block_hash = sample_block(height, view, actor.state.view().latest_block_hash()).hash();
+    let mut slot = super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    );
+    slot.mode = super::FrontierSlotMode::Finalized;
+    slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
+    slot.candidate.exact_fetch_armed = true;
+    slot.candidate.body_state = super::FrontierBodyState::Available;
+    slot.quorum_progress.commit_qc_observed = true;
+    slot.sync_compat_fields();
+    actor.frontier_slot = Some(slot);
+
+    assert!(
+        !actor.frontier_slot_has_active_owner_state(height),
+        "finalized slots must not keep active owner state even if legacy progress flags remain populated"
+    );
+    assert!(
+        !actor.frontier_slot_has_active_owner_state_for_view(height, view),
+        "finalized slots must not count as active owner state for exact-view checks"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn keep_frontier_pending_active_across_view_change_uses_pending_commit_qc_observed_for_live_owner_and_rejects_same_view()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    let mut pending = PendingBlock::new(owner_block, payload_hash, height, owner_view);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    actor.pending.pending_blocks.insert(owner_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = later_view;
+        slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
+        slot.quorum_progress.commit_qc_observed = true;
+        slot.sync_compat_fields();
+    }
+
+    assert!(
+        actor.subsystems.commit.inflight.is_none()
+            && actor.subsystems.validation.inflight.is_empty(),
+        "test setup requires pending commit-QC state to be the only preservation path"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "test setup requires commit-QC evidence to keep the owner live into the later view"
+    );
+    assert!(
+        actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "a pending block with observed commit-QC should stay active across the later view while it remains the live frontier owner"
+    );
+    assert!(
+        !actor.keep_frontier_pending_active_across_view_change(height, owner_view, owner_hash),
+        "the pending commit-QC preservation path should only apply after an actual view change"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_has_active_owner_state_for_view_returns_false_for_inert_await_block_created_slot()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let block_hash = sample_block(height, view, actor.state.view().latest_block_hash()).hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    ));
+
+    assert!(
+        !actor.frontier_slot_has_active_owner_state(height),
+        "an untouched AwaitBlockCreated slot should not count as active owner state before any repair, body, or vote evidence exists"
+    );
+    assert!(
+        !actor.frontier_slot_has_active_owner_state_for_view(height, view),
+        "exact-view active-owner checks should stay false for an inert frontier slot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_uses_pending_wrapper_without_other_evidence() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    actor.pending.pending_blocks.insert(
+        owner_hash,
+        PendingBlock::new(owner_block, payload_hash, height, owner_view),
+    );
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    ));
+    let conflicting_hash = block_with_txs(
+        height,
+        later_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    )
+    .hash();
+
+    assert!(
+        !actor.frontier_slot_has_active_owner_state(height),
+        "test setup requires the pending wrapper alone to keep the owner live without slot-state activity flags"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, owner_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "a valid same-height pending wrapper should keep the owner live in its exact slot even without vote or QC evidence"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, later_view)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "the same pending wrapper should also keep the owner live across later views until stronger same-height evidence replaces it"
+    );
+    assert!(
+        actor
+            .frontier_slot_conflicts_with_live_local_owner(height, later_view, conflicting_hash)
+            .is_some_and(
+                |(live_hash, live_view)| live_hash == owner_hash && live_view == owner_view
+            ),
+        "later-view conflicting hashes should still defer to the live owner when the pending wrapper is the only remaining liveness source"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_live_local_owner_for_round_ignores_nonextending_pending_without_other_evidence()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let stray_parent = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xD4; Hash::LENGTH]),
+    ));
+    let owner_block = sample_block(height, owner_view, stray_parent);
+    let owner_hash = owner_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    actor.pending.pending_blocks.insert(
+        owner_hash,
+        PendingBlock::new(owner_block, payload_hash, height, owner_view),
+    );
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&owner_hash),
+        "test setup requires a pending wrapper to exist"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, owner_view)
+            .is_none(),
+        "a non-extending same-height pending wrapper must not keep the frontier owner live by itself"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(height, owner_view.saturating_add(1))
+            .is_none(),
+        "non-extending pending wrappers must also fail the later-view liveness check"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn keep_frontier_pending_active_across_view_change_drops_pending_commit_qc_preservation_after_abort_or_retire()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let later_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&owner_block));
+    let mut pending = PendingBlock::new(owner_block, payload_hash, height, owner_view);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    actor.pending.pending_blocks.insert(owner_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = later_view;
+        slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
+        slot.quorum_progress.commit_qc_observed = true;
+        slot.sync_compat_fields();
+    }
+
+    assert!(
+        actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "test setup requires pending commit-QC state to preserve the live owner's hash before the pending wrapper is invalidated"
+    );
+
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&owner_hash)
+        .expect("pending block")
+        .aborted = true;
+
+    assert!(
+        !actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "aborted pending wrappers must stop using their stale commit-QC marker to preserve the owner across view changes"
+    );
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&owner_hash)
+        .expect("pending block");
+    pending.aborted = false;
+    pending.retired_same_height = true;
+
+    assert!(
+        !actor.keep_frontier_pending_active_across_view_change(height, later_view, owner_hash),
+        "retired same-height pending wrappers must also stop preserving the owner across view changes"
     );
 
     harness.shutdown.send();

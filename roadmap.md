@@ -2,6 +2,175 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 sumeragi pending-owner and inert-slot coverage expansion):
+The same `iroha_core` helper slice in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now also covers the plain pending-wrapper liveness path and the remaining
+negative preservation guards. The module now includes regressions showing that
+an untouched `AwaitBlockCreated` slot stays inactive, that a same-height
+pending wrapper alone can still keep the frontier owner live, that a
+non-extending pending wrapper cannot, and that
+`keep_frontier_pending_active_across_view_change(...)` stops preserving the
+owner once the pending commit-QC wrapper is aborted or retired same-height.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_slot_has_active_owner_state_for_view_returns_false_for_inert_await_block_created_slot -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_uses_pending_wrapper_without_other_evidence -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_ignores_nonextending_pending_without_other_evidence -- --nocapture`
+  - `cargo test -p iroha_core keep_frontier_pending_active_across_view_change_drops_pending_commit_qc_preservation_after_abort_or_retire -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the focused frontier-slot helper coverage
+
+Latest sync (2026-04-22 sumeragi active-owner and pending-commit-QC coverage expansion):
+The same `iroha_core` helper slice in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now also covers the direct active-owner-state helpers and the last
+pending-commit-QC preservation branch. The module now includes regressions
+showing that exact-fetch-only repair state still counts as active owner state,
+that deep catch-up remains active before body recovery completes, that
+`Finalized` suppresses stale active-owner flags, and that
+`keep_frontier_pending_active_across_view_change(...)` keeps the live owner's
+hash only when pending commit-QC state belongs to an older view.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_slot_has_active_owner_state_for_view_uses_exact_fetch_flag_without_other_activity -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_has_active_owner_state_for_view_treats_deep_catchup_without_body_as_active -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_has_active_owner_state_for_view_ignores_finalized_slot_even_with_progress_flags -- --nocapture`
+  - `cargo test -p iroha_core keep_frontier_pending_active_across_view_change_uses_pending_commit_qc_observed_for_live_owner_and_rejects_same_view -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the focused frontier-slot helper coverage
+
+Latest sync (2026-04-22 sumeragi vote-history fallback and validation-keep coverage expansion):
+The same `iroha_core` helper slice in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now also covers the remaining unresolved local-vote-history fallback and the
+last view-change preservation branch. The module now includes a direct
+regression proving that `frontier_slot_has_local_vote_history_in_slot(...)`
+still recognizes a local raw signer when cached roster drift makes
+`vote_signer_peer(...)` return `None`, the matching negative case for a
+different unresolved signer, and a direct
+`keep_frontier_pending_active_across_view_change(...)` regression showing that
+exact-slot `validation.inflight` preserves the live owner's hash only while
+that validation work remains active.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_slot_has_local_vote_history_in_slot_uses_live_local_signer_when_cached_roster_cannot_resolve_peer -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_has_local_vote_history_in_slot_ignores_unresolved_signer_when_live_local_signer_differs -- --nocapture`
+  - `cargo test -p iroha_core keep_frontier_pending_active_across_view_change_uses_validation_inflight_for_live_owner_and_stops_after_clear -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the focused frontier-slot helper coverage
+
+Latest sync (2026-04-22 sumeragi frontier-slot lock-state and commit-inflight coverage expansion):
+The same `iroha_core` test slice in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now also covers the remaining direct helper branches behind same-height
+frontier-owner liveness. The module now includes a regression proving that an
+explicit `FrontierOwnerLockState::LocallyVoted` keeps the owner live even
+without vote-log history, another proving that `commit.inflight` alone keeps
+the owner live after the pending wrapper is gone, and a direct guard test for
+`keep_frontier_pending_active_across_view_change(...)` showing that only the
+live owner's hash stays active across the view change when commit inflight is
+the remaining source of liveness. A small helper now builds matching
+`CommitInFlight` fixtures for these assertions.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_uses_explicit_locally_voted_lock_state_without_vote_history -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_uses_commit_inflight_without_pending_wrapper -- --nocapture`
+  - `cargo test -p iroha_core keep_frontier_pending_active_across_view_change_uses_commit_inflight_for_live_owner_and_rejects_other_hashes -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the focused frontier-slot helper coverage
+
+Latest sync (2026-04-22 sumeragi frontier-slot liveness guard coverage expansion):
+The same `iroha_core` test slice in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now also covers the remaining helper guards around later-view frontier-owner
+liveness. The module now includes a direct regression proving that remote
+near-quorum commit votes only lock out conflicting reproposals in later views,
+not in the exact original slot after the pending wrapper is gone; a direct
+same-hash non-conflict check while that remote vote lock is active; and two
+guard tests proving `PassiveCatchup` and `Finalized` slot modes suppress
+active same-height owner status even when stale local vote history or
+commit-QC evidence would otherwise keep the owner live. A small helper now
+seeds the remote-only vote-locked frontier owner so these assertions stay
+isolated from local signer history.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_requires_later_view_for_remote_near_quorum_lockout_without_pending_wrapper -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_conflicts_with_live_local_owner_returns_none_for_same_hash_when_remote_near_quorum_locks_owner -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_ignores_local_vote_history_when_slot_is_passive_catchup -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_live_local_owner_for_round_ignores_commit_qc_evidence_when_slot_is_finalized -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the focused frontier-slot helper coverage
+
+Latest sync (2026-04-22 sumeragi frontier-owner and cached-roster coverage expansion):
+The same `iroha_core` test slice in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now has broader unit coverage around pending-RBC roster recovery and
+later-view frontier-owner vote locks. The module now includes a cached-roster
+flush regression where the roster bytes exist but the source marker is
+missing, a later-view passive-retention regression where only remote near-
+quorum commit votes lock the frontier owner, and a negative case proving that
+too-few remote commit votes still leave fresh quorum possible so no live-owner
+conflict is reported. A small remote-only commit-vote seeding helper was added
+to keep that vote-lock branch isolated from local signer history.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core flush_pending_rbc_if_roster_ready_uses_cached_roster_when_source_missing -- --nocapture`
+  - `cargo test -p iroha_core later_view_block_created_becomes_passive_when_remote_near_quorum_commit_votes_lock_frontier_owner_without_pending_wrapper -- --nocapture`
+  - `cargo test -p iroha_core frontier_slot_conflicts_with_live_local_owner_returns_none_when_remote_commit_votes_leave_fresh_quorum_possible -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the focused coverage expansion
+
+Latest sync (2026-04-22 sumeragi vote-lock and RBC roster test isolation):
+The reported `iroha_core` reds in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+are fixed. The affected tests now run under the shared commit-history test
+guard with commit-QC, validator-checkpoint, and precommit-signer history reset
+up front, which prevents unrelated concurrent test state from changing roster
+derivation. The later-view passive-retention regression also starts its tracked
+round before seeding commit votes so the vote-lock setup stays deterministic.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core flush_pending_rbc_if_roster_ready_returns_false_when_roster_unresolved -- --nocapture`
+  - `cargo test -p iroha_core later_view_block_created_becomes_passive_when_frontier_owner_has_vote_locked_commit_evidence -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core --lib` or workspace `cargo test`
+    window when there is budget beyond the reported regression fix
+
 Latest sync (2026-04-22 bridge anchor-mutator and empty-helper coverage expansion):
 The same bridge test slice in `crates/iroha_data_model/src/bridge.rs` now also
 covers the remaining state-transition and helper behavior around finality
