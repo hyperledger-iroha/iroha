@@ -14053,27 +14053,30 @@ fn merged_list_response(
     payloads: Vec<Value>,
     routed_by: &'static str,
 ) -> Result<Response, Response> {
-    let mut dedupe = BTreeMap::<Vec<u8>, Value>::new();
+    let mut seen = BTreeSet::<Vec<u8>>::new();
+    let mut merged_items = Vec::new();
     for payload in payloads {
         let Some(obj) = payload.as_object() else {
             return Err(torii_internal_json_error(
                 "expected JSON object payload while merging list response",
             ));
         };
-        let Some(items) = obj.get("items").and_then(Value::as_array) else {
+        let Some(payload_items) = obj.get("items").and_then(Value::as_array) else {
             return Err(torii_internal_json_error(
                 "expected `items` array while merging list response",
             ));
         };
-        for item in items {
-            dedupe.insert(canonical_json_bytes(item)?, item.clone());
+        for item in payload_items {
+            let key = canonical_json_bytes(item)?;
+            if seen.insert(key) {
+                merged_items.push(item.clone());
+            }
         }
     }
 
-    let items = dedupe.into_values().collect::<Vec<_>>();
     let mut root = norito::json::Map::new();
-    root.insert("items".into(), Value::Array(items.clone()));
-    root.insert("total".into(), Value::from(items.len() as u64));
+    root.insert("total".into(), Value::from(merged_items.len() as u64));
+    root.insert("items".into(), Value::Array(merged_items));
     let mut response =
         crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
     insert_routed_by_header(&mut response, routed_by);
@@ -15166,6 +15169,34 @@ mod torii_routed_read_tests {
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
         assert_eq!(json["total"].as_u64(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn merged_list_response_preserves_first_seen_order() {
+        let response = merged_list_response(
+            vec![
+                norito::json!({
+                    "items": [{"id": "b"}, {"id": "a"}],
+                    "total": 2
+                }),
+                norito::json!({
+                    "items": [{"id": "a"}, {"id": "c"}],
+                    "total": 2
+                }),
+            ],
+            "proxy",
+        )
+        .expect("list merge should succeed");
+
+        let json = response_json(response).await;
+        let items = json["items"]
+            .as_array()
+            .expect("merged response should include items");
+        let ids: Vec<&str> = items
+            .iter()
+            .map(|item| item["id"].as_str().expect("each item should have an id"))
+            .collect();
+        assert_eq!(ids, vec!["b", "a", "c"]);
     }
 
     #[tokio::test]

@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Torii asset-definition alias binding and fanout sort preservation
+- `crates/iroha_data_model/src/asset/definition.rs` now validates asset-definition
+  aliases against one or more allowed stems with ASCII case-insensitive
+  matching, so display labels like `CBDC` and projected id stems like `cbdc`
+  can both authorize the same alias literal.
+- `crates/iroha_core/src/smartcontracts/isi/domain.rs` now validates stored and
+  newly bound asset-definition aliases against both the human-facing definition
+  name and the projected asset-id name when present, which clears the reported
+  `InvariantViolation("invalid asset definition alias ...")` regressions.
+- `crates/iroha_torii/src/lib.rs` now deduplicates merged list-response items
+  without reordering them by canonical JSON bytes, so endpoint sorts such as
+  `alias_binding.bound_at_ms desc` survive Torii fanout merging intact.
+- `crates/iroha_torii/tests/asset_definitions_endpoints.rs` now attaches
+  loopback `ConnectInfo<SocketAddr>` to its direct `oneshot(...)` requests, and
+  the Torii filter/routing/unit coverage now includes nested sort-key parsing
+  plus first-seen-order merge regression tests.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints -- --nocapture`
+  - `cargo test -p iroha_data_model asset_alias_validation -- --nocapture`
+  - `cargo test -p iroha_core set_asset_definition_alias_ -- --nocapture`
+  - `cargo test -p iroha_torii merged_list_response_preserves_first_seen_order -- --nocapture`
+
 ## 2026-04-22 Follow-up: SDK transaction receipt and status parity fixes
 - Kotlin transaction submission now honors Torii's authoritative
   `x-iroha-transaction-hash` / `x-iroha-tx-hash` receipt headers, normalizes

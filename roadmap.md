@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii asset-definition alias binding and fanout sort preservation):
+The reported `asset_definitions_endpoints_return_name_and_alias` and
+`asset_definitions_query_supports_alias_binding_sort` reds are fixed.
+Asset-definition alias validation now accepts either the display-name stem or
+the projected asset-id stem with ASCII case-insensitive matching, the direct
+Torii endpoint smoke now attaches loopback `ConnectInfo<SocketAddr>` so it hits
+the mounted handlers, and the fanout list merge now preserves the first-seen
+handler order instead of re-sorting deduplicated items by canonical JSON bytes.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/asset/definition.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/domain.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/filter.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/asset_definitions_endpoints.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints -- --nocapture`
+  - `cargo test -p iroha_data_model asset_alias_validation -- --nocapture`
+  - `cargo test -p iroha_core set_asset_definition_alias_ -- --nocapture`
+  - `cargo test -p iroha_torii merged_list_response_preserves_first_seen_order -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii ...` package-target window when
+    there is budget beyond the reported asset-definition regression
+
 Latest sync (2026-04-22 SDK transaction receipt and status parity fixes):
 The reviewed SDK regressions from `2ea428ea7e` are fixed. Kotlin now uses the
 authoritative Torii transaction-hash receipt header for subsequent status
