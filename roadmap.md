@@ -2,6 +2,72 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 sumeragi RBC roster test-collision isolation):
+The `iroha_core` Sumeragi roster regression was traced to test-only helper
+collisions rather than production roster logic. Harness-created peers now use a
+per-instance seed salt, and the helper heartbeat payload seed now includes the
+elected signer, so parallel harnesses no longer generate the same block hash
+for identical round inputs and cannot cross-feed the process-global
+commit/precommit/checkpoint history caches.
+The same helper slice now has direct unit tests for the seed-salt and
+heartbeat-builder branches, so the isolation fix is covered both through the
+broader harness regression and through narrow deterministic helper assertions.
+The roster-refresh coverage in that slice now also includes stale-cache
+replacement cases, so both `refresh_derived_rbc_session_roster(...)` and
+`ensure_rbc_session_roster(...)` are exercised when authoritative same-epoch
+derivation must overwrite stale cached bytes from either an `Init` source or a
+missing source entry.
+That same slice now also covers the `block_known_locally(...)` authority path,
+so stale-cache replacement is verified not just for authoritative RBC sessions
+but also when the authoritative same-epoch payload exists only as a locally
+known pending block and `promote_rbc_session_roster_and_retry(...)` must
+restore the source without any RBC session record.
+That local-authority path now also covers empty-cache seeding, so
+`refresh_derived_rbc_session_roster(...)`,
+`ensure_rbc_session_roster(...)`, and
+`promote_rbc_session_roster_and_retry(...)` are all exercised when the roster
+cache starts empty and a locally known same-epoch pending block is the only
+authoritative signal.
+The same wrapper slice now also covers the permissioned next-height branch,
+where the active topology is available without payload authority and the
+wrapper helpers seed the roster cache even when there is no RBC session.
+That permissioned branch now also covers stale-cache replacement, so the same
+helpers are exercised when permissioned next-height derivation must overwrite
+stale cached bytes and restore a missing source entry rather than only filling
+an empty cache.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- validation status:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `cargo test -p iroha_core --lib bls_peer_ -- --nocapture`
+  - `cargo test -p iroha_core --lib heartbeat_block_for_state_ -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_replaces_stale_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_replaces_stale_ -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_seeds_missing_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_replaces_stale_missing_source_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_seeds_missing_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_replaces_stale_missing_source_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_seeds_missing_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_seeds_missing_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_seeds_missing_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_replaces_stale_missing_source_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_seeds_missing_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_replaces_stale_missing_source_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib test_actor_harness_uses_unique_peer_seed_salts_per_instance -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_returns_none_when_source_missing_and_derived_unavailable -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_ -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_ -- --nocapture`
+  - `cargo test -p iroha_core --lib source_missing -- --nocapture`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_core` window when there is budget
+    beyond the focused RBC roster isolation coverage
+
 Latest sync (2026-04-22 Torii manifest direct-routing coverage expansion):
 The same `iroha_torii` space-directory manifest slice now has three more
 direct tests around `routing::handle_v1_space_directory_manifests(...)`. The

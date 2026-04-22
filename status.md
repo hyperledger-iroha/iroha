@@ -2,6 +2,72 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: sumeragi RBC roster test-collision isolation
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now salts
+  harness-generated peer seeds per instance and also folds the elected signer
+  into the helper heartbeat seed used by `heartbeat_block_for_state(...)`.
+- This keeps helper-produced signed blocks distinct across parallel harnesses
+  even when they reuse the same height/view/parent inputs, which prevents the
+  process-global commit/precommit/validator-checkpoint history fixtures from
+  leaking into unrelated RBC roster tests through accidental block-hash
+  collisions.
+- The same module now includes
+  `test_actor_harness_uses_unique_peer_seed_salts_per_instance`, a regression
+  that proves separate harnesses no longer reuse the same peer identity or the
+  same helper-produced block hash for an otherwise identical round.
+- The helper slice now also has direct unit coverage for
+  `bls_peer_with_seed_salt(...)` and `heartbeat_block_for_state(...)`, pinning
+  the zero-salt compatibility path, same-input determinism, salt-driven peer
+  identity divergence, and signer-driven heartbeat/block hash divergence for
+  otherwise identical round inputs.
+- The same roster-refresh slice now also covers stale-cache replacement, with
+  direct tests for both `refresh_derived_rbc_session_roster(...)` and
+  `ensure_rbc_session_roster(...)` when an authoritative same-epoch derived
+  roster must overwrite stale cached bytes from either an explicit `Init`
+  source or a missing source entry treated as init.
+- The same wrapper slice now also covers the `block_known_locally(...)` path:
+  locally known pending blocks can now drive stale-cache replacement through
+  `refresh_derived_rbc_session_roster(...)`,
+  `ensure_rbc_session_roster(...)`, and
+  `promote_rbc_session_roster_and_retry(...)` even when no RBC session exists
+  yet.
+- That same local-authority branch now also covers empty-cache seeding, so the
+  wrapper helpers are exercised when a locally known same-epoch pending block
+  is the only authoritative signal and the roster cache starts vacant.
+- The same wrapper slice now also covers permissioned next-height derivation,
+  where `refresh_derived_rbc_session_roster(...)`,
+  `ensure_rbc_session_roster(...)`, and
+  `promote_rbc_session_roster_and_retry(...)` seed the cache from the active
+  topology even without payload authority or an RBC session.
+- That same permissioned branch now also covers stale-cache replacement, so
+  wrapper behavior is pinned when permissioned next-height derivation must
+  overwrite stale cached bytes and restore a missing source entry rather than
+  only seeding an empty cache.
+- Focused validation for this slice:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `cargo test -p iroha_core --lib bls_peer_ -- --nocapture`
+  - `cargo test -p iroha_core --lib heartbeat_block_for_state_ -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_replaces_stale_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_replaces_stale_ -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_seeds_missing_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_replaces_stale_missing_source_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_seeds_missing_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_replaces_stale_missing_source_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_seeds_missing_cache_for_locally_known_same_epoch_block -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_seeds_missing_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_seeds_missing_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_replaces_stale_missing_source_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_seeds_missing_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_replaces_stale_missing_source_cache_for_permissioned_next_height_without_payload -- --nocapture`
+  - `cargo test -p iroha_core --lib test_actor_harness_uses_unique_peer_seed_salts_per_instance -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_returns_none_when_source_missing_and_derived_unavailable -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster_ -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry_ -- --nocapture`
+  - `cargo test -p iroha_core --lib source_missing -- --nocapture`
+
 ## 2026-04-22 Follow-up: sumeragi pending-owner and inert-slot coverage expansion
 - `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now adds another narrow
   frontier-slot helper batch for the plain pending-wrapper liveness path, the
