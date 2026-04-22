@@ -2,6 +2,127 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Sorafs pin-register helper and duplicate-registration coverage
+- `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly covers the
+  remaining nearby `RegisterPinManifest` duplicate-registration branch:
+  re-registering an already stored manifest digest returns the dedicated
+  `already registered` invariant violation.
+- `crates/iroha_torii/src/routing.rs` now has direct unit coverage for the
+  small helper paths behind the same `pin/register` surface: policy conversion
+  across all storage classes, `parse_hex_array(...)` accepting `0x`-prefixed
+  input, and its field-specific conversion errors for invalid hex and wrong
+  lengths.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --lib sorafs_pin_tests --features app_api -- --nocapture`
+
+## 2026-04-22 Follow-up: Sorafs pin-register route validation coverage expansion
+- `crates/iroha_torii/tests/sorafs_discovery.rs` now adds another focused
+  pass over the same `POST /v1/sorafs/pin/register` surface: the route rejects
+  chunker descriptor mismatches with a field-specific validation error, rejects
+  invalid pin-policy payloads before transaction submission, and accepts
+  `0x`-prefixed manifest/chunk digests while returning the canonical manifest
+  digest plus the computed `chunker_handle` in the success response.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+
+## 2026-04-22 Follow-up: Sorafs successor-chain register coverage expansion
+- `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly covers the
+  remaining `RegisterPinManifest` successor-chain branches in the same Sorafs
+  pin-registry slice: the approved-predecessor success path persists
+  `successor_of`, and self-reference, missing predecessor, pending predecessor,
+  retired predecessor, cycle-closing successor chains, and malformed
+  pre-existing predecessor cycles all hit their dedicated rejection paths.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib register_manifest_ -- --nocapture`
+
+## 2026-04-22 Follow-up: Sorafs hex-parse and approval-guard coverage expansion
+- `crates/iroha_torii/tests/sorafs_discovery.rs` now adds two more focused
+  `pin/register` request-validation regressions in the same route slice:
+  malformed `manifest_digest_hex` input returns `400` with the manifest-digest
+  field name in the message, and wrong-sized `chunk_digest_sha3_256_hex` input
+  returns `400` with the chunk-digest field name in the message.
+- `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly covers two
+  additional `ApprovePinManifest` branches that were still nearby and
+  uncovered: approving an unknown manifest returns the dedicated
+  `not registered` invariant violation, and supplying a
+  `council_envelope_digest` that does not match the verified envelope payload
+  returns the specific `approval digest mismatch with provided envelope`
+  rejection.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Sorafs decode-path and pending-approval coverage expansion
+- `crates/iroha_torii/tests/sorafs_discovery.rs` now adds two more focused
+  `pin/register` negatives in the same route slice: malformed JSON requests now
+  assert the extractor-level `400 invalid JSON body` response, and malformed
+  Norito requests under the Norito-enabled transport path now assert the
+  extractor-level `400 invalid Norito body` response.
+- `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now directly covers the
+  remaining nearby `ApprovePinManifest` state branches: pending manifests can
+  be approved with a supplied digest even without an envelope, pending manifests
+  reject approval when neither digest nor envelope is supplied, same-epoch
+  re-approval with a supplied digest but no stored digest hits the specific
+  `because no digest is stored` rejection branch, and retired manifests reject
+  later approvals with the dedicated invariant violation.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Sorafs discovery and approval branch coverage expansion
+- `crates/iroha_torii/tests/sorafs_discovery.rs` now covers the remaining small
+  route-gating branch next to the malformed `pin/register` cases: when
+  `sorafs_storage` is disabled, `POST /v1/sorafs/pin/register` is not mounted
+  and returns `404`, matching the existing capacity-route gating behavior.
+- `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` now has direct unit
+  coverage for the same approval-state branches behind the earlier regression:
+  a manifest already auto-approved at `submitted_epoch` rejects approval at a
+  different epoch, same-epoch re-approval can reuse a stored council digest
+  with or without resupplying that digest, mismatched stored-digest
+  re-approval is rejected, and same-epoch re-approval without any stored digest
+  requires the council envelope payload.
+- `crates/sorafs_manifest/tests/provider_admission_fixtures.rs` now asserts the
+  regenerated renewal and revocation digest metadata as well, plus the stable
+  contents of `renewal_v1.json` and `revocation_v1.json`, so the fixture
+  generator test covers more of the emitted sidecar output.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib approve_manifest_ -- --nocapture`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `cargo test -p sorafs_manifest --test provider_admission_fixtures -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-22 Follow-up: Sorafs discovery fixture and auto-approval refresh
+- `crates/iroha_torii/tests/sorafs_discovery.rs` now keeps its malformed
+  `pin/register` route tests aligned with current route gating by enabling
+  `sorafs_storage`, and its shared manifest setup helper now follows the
+  current `RegisterPinManifest` behavior where registration auto-approves at
+  `submitted_epoch` instead of submitting a stale second approval at a
+  different epoch.
+- `fixtures/sorafs_manifest/provider_admission/` has been regenerated from the
+  current `provider_admission_fixtures` generator output, and
+  `crates/sorafs_manifest/tests/provider_admission_fixtures.rs` now asserts the
+  new deterministic digest values emitted by that generator.
+- Together this fixes the reported `sorafs_discovery` reds: malformed input on
+  `/v1/sorafs/pin/register` again returns `400`, alias/pin manifest fixture
+  setup no longer trips the different-epoch approval invariant, and the disk
+  provider-admission fixture now validates far enough to surface the expected
+  advert key mismatch.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test sorafs_discovery --features app_api -- --nocapture`
+  - `cargo test -p sorafs_manifest --test provider_admission_fixtures -- --nocapture`
+  - `cargo test -p sorafs_car --features cli --bin provider_admission_fixtures -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-22 Follow-up: Torii SNS registrar lifecycle coverage expansion
 - `crates/iroha_core/src/sns.rs` now covers another set of lifecycle helper
   branches in the same registrar area: `set_name_lease_expiry(...)` rejects
