@@ -608,7 +608,7 @@ public final class HttpClientTransport implements IrohaClient {
                   response.statusCode(),
                   response.body(),
                   response.message(),
-                  hashHex,
+                  extractTransactionHash(response).orElse(hashHex),
                   extractRejectCode(response));
           if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
             if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
@@ -890,6 +890,47 @@ public final class HttpClientTransport implements IrohaClient {
     }
     return HttpErrorMessageExtractor.extractRejectCode(
         response.headers(), "x-iroha-reject-code");
+  }
+
+  private static Optional<String> extractTransactionHash(final TransportResponse response) {
+    if (response == null) {
+      return Optional.empty();
+    }
+    for (final String headerName : List.of("x-iroha-transaction-hash", "x-iroha-tx-hash")) {
+      final List<String> values = response.headers().get(headerName);
+      if (values == null) {
+        continue;
+      }
+      for (final String value : values) {
+        final String normalized = normalizeTransactionHashHeader(value);
+        if (normalized != null) {
+          return Optional.of(normalized);
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  private static String normalizeTransactionHashHeader(final String value) {
+    if (value == null) {
+      return null;
+    }
+    String normalized = value.trim();
+    if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
+      normalized = normalized.substring(2);
+    }
+    if (normalized.length() != 64) {
+      return null;
+    }
+    for (int index = 0; index < normalized.length(); index++) {
+      final char ch = normalized.charAt(index);
+      final boolean hex =
+          (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+      if (!hex) {
+        return null;
+      }
+    }
+    return normalized.toLowerCase(java.util.Locale.ROOT);
   }
 
   private static String resolveAuthority(final TransportRequest request) {

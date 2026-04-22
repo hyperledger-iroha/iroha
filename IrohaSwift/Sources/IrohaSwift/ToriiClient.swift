@@ -713,13 +713,13 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         let (policyKind, businessRule) = try parsePolicyId(payload.policyId)
         let execution = payload.execution
 
-        var policyId = OfflineNoritoWriter()
-        policyId.writeField(OfflineNorito.encodeString(policyKind))
-        policyId.writeField(OfflineNorito.encodeString(businessRule))
+        var policyId = OfflineCompactNoritoWriter()
+        policyId.writeField(OfflineCompactNorito.encodeString(policyKind))
+        policyId.writeField(OfflineCompactNorito.encodeString(businessRule))
 
-        var programId = OfflineNoritoWriter()
+        var programId = OfflineCompactNoritoWriter()
         programId.writeField(
-            OfflineNorito.encodeString(
+            OfflineCompactNorito.encodeString(
                 try normalizedNonEmpty(
                     execution.programId,
                     field: "payload.execution.programId"
@@ -727,7 +727,7 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
             )
         )
 
-        var executionPayload = OfflineNoritoWriter()
+        var executionPayload = OfflineCompactNoritoWriter()
         executionPayload.writeField(programId.data)
         executionPayload.writeField(
             try encodeHash(
@@ -736,10 +736,10 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
             )
         )
         executionPayload.writeField(
-            OfflineNorito.encodeUInt32(try backendTag(execution.backend))
+            OfflineCompactNorito.encodeUInt32(try backendTag(execution.backend))
         )
         executionPayload.writeField(
-            OfflineNorito.encodeUInt32(
+            OfflineCompactNorito.encodeUInt32(
                 try verificationModeTag(execution.verificationMode)
             )
         )
@@ -755,15 +755,15 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
                 field: "payload.execution.associatedDataHash"
             )
         )
-        executionPayload.writeField(OfflineNorito.encodeUInt64(execution.executedAtMs))
+        executionPayload.writeField(OfflineCompactNorito.encodeUInt64(execution.executedAtMs))
         executionPayload.writeField(
-            try OfflineNorito.encodeOption(
+            try OfflineCompactNorito.encodeOption(
                 execution.expiresAtMs,
-                encode: OfflineNorito.encodeUInt64
+                encode: OfflineCompactNorito.encodeUInt64
             )
         )
 
-        var payloadWriter = OfflineNoritoWriter()
+        var payloadWriter = OfflineCompactNoritoWriter()
         payloadWriter.writeField(policyId.data)
         payloadWriter.writeField(executionPayload.data)
         payloadWriter.writeField(
@@ -818,7 +818,7 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
     private static func encodeHash(_ raw: String, field: String) throws -> Data {
         let normalized = ToriiIdentifierReceiptWireValue.normalizedHash(raw)
         do {
-            return try OfflineNorito.encodeHash(try decodeHex(normalized, field: field))
+            return try OfflineCompactNorito.encodeHash(try decodeHex(normalized, field: field))
         } catch {
             throw ToriiClientError.invalidPayload(
                 "\(field) must be a canonical 32-byte Iroha hash."
@@ -843,7 +843,9 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         guard normalized.lowercased().hasPrefix(prefix) else {
             throw ToriiClientError.invalidPayload("\(field) must use the \(prefix) prefix.")
         }
-        return try encodeHash(String(normalized.dropFirst(prefix.count)), field: field)
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try encodeHash(String(normalized.dropFirst(prefix.count)), field: field))
+        return writer.data
     }
 
     private static func decodeHex(_ raw: String, field: String) throws -> Data {
@@ -862,7 +864,9 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
 
     private static func encodeAccountId(_ raw: String) throws -> Data {
         do {
-            return try OfflineNorito.encodeAccountId(raw)
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: 0x02F1)
+            return try address.compactNoritoAccountControllerPayload()
         } catch {
             throw ToriiClientError.invalidPayload(
                 "payload.accountId must be a canonical account identifier."
@@ -13739,46 +13743,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func waitForTerminalTransactionStatusEvent(hashHex: String,
                                                       timeout: TimeInterval = 5) async throws -> ToriiPipelineTransactionEvent {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
-        if let snapshot = try await getTransactionStatus(hashHex: normalizedHash),
-           snapshot.content.status.state.isTerminalSuccess || snapshot.content.status.state.isTerminalFailure {
-            return ToriiPipelineTransactionEvent(snapshot: snapshot, hashHex: normalizedHash)
-        }
-
-        let terminalTask = Task { () throws -> ToriiPipelineTransactionEvent in
-            var iterator = streamTransactionStatusEvents(hashHex: normalizedHash).makeAsyncIterator()
-            while let nextEvent = try await iterator.next() {
-                if nextEvent.state.isTerminalSuccess || nextEvent.state.isTerminalFailure {
-                    return nextEvent
-                }
-            }
-            throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
-        }
-
-        guard timeout > 0 else {
-            do {
-                return try await terminalTask.value
-            } catch is CancellationError {
-                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
-            }
-        }
-
-        let nanosDouble = min(max(timeout * 1_000_000_000, 0), Double(UInt64.max))
-        return try await withThrowingTaskGroup(of: ToriiPipelineTransactionEvent.self) { group in
-            group.addTask {
-                try await terminalTask.value
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(nanosDouble))
-                terminalTask.cancel()
-                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
-            }
-            guard let result = try await group.next() else {
-                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
-            }
-            group.cancelAll()
-            terminalTask.cancel()
-            return result
-        }
+        let pollOptions = PipelineStatusPollOptions(
+            pollInterval: 0.5,
+            timeout: max(timeout, 0),
+            successStates: [.committed, .applied, .rejected, .expired],
+            failureStates: []
+        )
+        let snapshot = try await waitForTransactionStatus(
+            hashHex: normalizedHash,
+            pollOptions: pollOptions,
+            mode: .pipeline
+        )
+        return ToriiPipelineTransactionEvent(snapshot: snapshot, hashHex: normalizedHash)
     }
 
     public func getPipelineRecovery(height: UInt64) async throws -> ToriiPipelineRecovery? {

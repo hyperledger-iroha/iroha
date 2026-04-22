@@ -1242,6 +1242,61 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
     }
 
+    func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixture() throws {
+        let accountId = "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463"
+        let receiptJSON = """
+        {
+          "payload":{
+            "policy_id":"email#retail",
+            "execution":{
+              "program_id":"email_retail",
+              "program_digest":"fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
+              "backend":"bfv-programmed-sha3-256-v1",
+              "verification_mode":"signed",
+              "output_hash":"72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
+              "associated_data_hash":"35b8bc8a30685e7cc5679b6e6a45675539548f5a24326bbee1d8c20e55918f55",
+              "executed_at_ms":1776812470694,
+              "expires_at_ms":1776812500694
+            },
+            "opaque_id":"opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
+            "receipt_hash":"51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",
+            "uaid":"uaid:471b620a99c608af1c7a47199f27b3368ae0ea889a497dd774b52a8287a58393",
+            "account_id":"\(accountId)"
+          },
+          "attestation":{
+            "kind":"signed",
+            "signature":"4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00"
+          }
+        }
+        """
+        let receipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(receiptJSON.utf8)
+        )
+        let expectedPayloadHex = """
+        0F0605656D61696C070672657461696C90010E0D0C656D61696C5F72657461696C20FE36CEB3996D101200B895FD2A377CCE4426426A473DA9FE08B2DBD2BD8B9375040200000004000000002072DCDEE1435552E943D5E2E1C978D3F728C6A1CE7E6870B50C63568D4876EEA52035B8BC8A30685E7CC5679B6E6A45675539548F5A24326BBEE1D8C20E55918F5508A6B146B29D0100000A0108D62647B29D0100002120FD14CB369E853352D4B9C578745627D154471CE5FD3462C4DB542C104766E9832051BBE55B70E09D4C2BB75D9C31B2CDE46A7BDD5414134F6786255C679A68AC532120471B620A99C608AF1C7A47199F27B3368AE0EA889A497DD774B52A8287A583934C00000000474665643031323030383033323045393534303742453532333445393945434138314137303133453033393930393546323139313845334241344532433839344338383032303834
+        """
+        XCTAssertEqual(
+            try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload).hexUppercased(),
+            expectedPayloadHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "email#retail",
+            owner: accountId,
+            active: true,
+            normalization: .emailAddress,
+            resolverPublicKey: "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
+            backend: "bfv-programmed-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        XCTAssertEqual(try receipt.verifyAttestation(using: policy), true)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testResolveIdentifierRejectsInvalidAttestationPayload() async throws {
         let accountId = try canonicalOwnerLiteral()
@@ -9196,6 +9251,37 @@ id: 88
         } catch {
             XCTFail("expected CancellationError, got \(error)")
         }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testWaitForTerminalTransactionStatusEventPollsStatusEndpointUntilApplied() async throws {
+        var callCount = 0
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
+            callCount += 1
+            let kind = callCount == 1 ? "Queued" : "Applied"
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {"hash":"deadbeef","resolved_from":"cache","scope":"auto","status":{"block_height":169,"kind":"\(kind)"}}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let event = try await makeClient().waitForTerminalTransactionStatusEvent(
+            hashHex: "deadbeef",
+            timeout: 2
+        )
+
+        XCTAssertEqual(event.hash, "deadbeef")
+        XCTAssertEqual(event.status, "Applied")
+        XCTAssertGreaterThanOrEqual(callCount, 2)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

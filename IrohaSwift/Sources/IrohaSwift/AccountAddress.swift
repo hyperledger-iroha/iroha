@@ -1235,10 +1235,33 @@ extension AccountAddress {
         return writer.data
     }
 
+    func compactNoritoAccountControllerPayload() throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        switch controller {
+        case .singleKey(let curve, let publicKey):
+            let keyPayload = try compactNoritoPublicKeyPayload(curve: curve, publicKey: publicKey)
+            writer.writeUInt32LE(0)
+            writer.writeField(keyPayload)
+        case .multiSig(let version, let threshold, let members):
+            let policyPayload = try compactNoritoMultisigPolicyPayload(version: version,
+                                                                       threshold: threshold,
+                                                                       members: members)
+            writer.writeUInt32LE(1)
+            writer.writeField(policyPayload)
+        }
+        return writer.data
+    }
+
     private func noritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
         let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
         return OfflineNorito.encodeString(multihash)
+    }
+
+    private func compactNoritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
+        let algorithm = try noritoSigningAlgorithm(for: curve)
+        let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
+        return OfflineCompactNorito.encodeString(multihash)
     }
 
     private func noritoMultisigPolicyPayload(
@@ -1254,6 +1277,25 @@ extension AccountAddress {
             let keyPayload = try noritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
             memberWriter.writeField(keyPayload)
             memberWriter.writeField(OfflineNorito.encodeUInt16(member.weight))
+            return memberWriter.data
+        }
+        writer.writeField(membersPayload)
+        return writer.data
+    }
+
+    private func compactNoritoMultisigPolicyPayload(
+        version: UInt8,
+        threshold: UInt16,
+        members: [ControllerPayload.MultisigMember]
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt8(version))
+        writer.writeField(OfflineCompactNorito.encodeUInt16(threshold))
+        let membersPayload = try OfflineCompactNorito.encodeVec(members) { member in
+            var memberWriter = OfflineCompactNoritoWriter()
+            let keyPayload = try compactNoritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
+            memberWriter.writeField(keyPayload)
+            memberWriter.writeField(OfflineCompactNorito.encodeUInt16(member.weight))
             return memberWriter.data
         }
         writer.writeField(membersPayload)
