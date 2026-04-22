@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 bridge finality endpoint verifier parity):
+The reported `bridge_finality_endpoint_roundtrips_into_verifier` red is fixed.
+`crates/iroha_torii/tests/bridge_finality_endpoint.rs` now seeds the same
+loopback request metadata, validator PoP state, chain id, and canonical
+single-signer aggregate-signature bytes that the mounted endpoint expects, and
+`crates/iroha_data_model/src/bridge.rs` now verifies endpoint proofs against
+the consensus header hash plus the full commit-vote preimage used by Sumeragi.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_data_model/src/bridge.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/bridge_finality_endpoint.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model verifier_accepts_consensus_hash_when_result_merkle_root_is_present -- --nocapture`
+  - `cargo test -p iroha_torii --test bridge_finality_endpoint -- --nocapture`
+  - `cargo test -p iroha_torii --test bridge_finality_endpoint --features telemetry -- --nocapture`
+- open work after this slice:
+  - investigate the JSON bridge-finality response path separately if client
+    workflows need proof verification from the JSON representation as well;
+    this fix kept the endpoint smoke on the canonical typed Norito response
+
 Latest sync (2026-04-22 Torii asset-definition alias binding and fanout sort preservation):
 The reported `asset_definitions_endpoints_return_name_and_alias` and
 `asset_definitions_query_supports_alias_binding_sort` reds are fixed.

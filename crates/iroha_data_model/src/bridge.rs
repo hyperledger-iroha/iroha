@@ -221,7 +221,7 @@ pub struct BridgeFinalityProof {
     pub chain_id: crate::ChainId,
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
-    /// Hash of the block header.
+    /// Consensus hash of the block header.
     pub block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
     /// Commit certificate collected for the block.
     pub commit_qc: crate::consensus::Qc,
@@ -588,7 +588,7 @@ impl BridgeFinalityVerifier {
             });
         }
 
-        let header_hash = iroha_crypto::HashOf::new(&proof.block_header);
+        let header_hash = proof.block_header.hash();
         let proof_hash = proof.block_hash;
         let certificate_hash = proof.commit_qc.subject_block_hash;
         if header_hash != proof_hash || header_hash != certificate_hash {
@@ -739,10 +739,12 @@ fn consensus_domain(
 }
 
 fn commit_vote_preimage(chain_id: &ChainId, certificate: &crate::consensus::Qc) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 1);
+    let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3 + 1);
     let domain = consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(certificate.subject_block_hash.as_ref().as_ref());
+    out.extend_from_slice(certificate.parent_state_root.as_ref());
+    out.extend_from_slice(certificate.post_state_root.as_ref());
     out.extend_from_slice(&certificate.height.to_be_bytes());
     out.extend_from_slice(&certificate.view.to_be_bytes());
     out.extend_from_slice(&certificate.epoch.to_be_bytes());
@@ -983,6 +985,48 @@ mod tests {
             err,
             BridgeFinalityVerifyError::ChainIdMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn verifier_accepts_consensus_hash_when_result_merkle_root_is_present() {
+        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
+        proof.block_header = crate::block::BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0xAB; Hash::LENGTH],
+            ))),
+            0,
+            0,
+        );
+        proof.block_hash = proof.block_header.hash();
+        proof.commit_qc.subject_block_hash = proof.block_hash;
+        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
+        let signatures: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|kp| {
+                Signature::new(kp.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect();
+        let signature_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        proof.commit_qc.aggregate.bls_aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate signatures");
+
+        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
+            proof.chain_id.clone(),
+            proof.commit_qc.validator_set_hash,
+            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            0,
+        );
+
+        verifier
+            .verify(&proof)
+            .expect("consensus hash should ignore result merkle root");
     }
 
     #[test]
