@@ -57441,6 +57441,64 @@ mod asset_definitions_query_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"].as_str(), Some("USD"));
     }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn asset_definition_sort_key_orders_alias_binding_bound_at_desc() {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let older = AssetDefinitionListItem {
+            definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
+                "550e8400e29b41d4a7164466554400dd",
+            ))
+            .with_name("CBDC".to_owned())
+            .build(&authority),
+            id: "older".to_owned(),
+            name: "CBDC".to_owned(),
+            alias: Some("cbdc#centralbank".to_owned()),
+            alias_binding: Some(AssetAliasBindingDto {
+                alias: "cbdc#centralbank".to_owned(),
+                status: "permanent".to_owned(),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            }),
+        };
+        let newer = AssetDefinitionListItem {
+            definition: dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
+                "550e8400e29b41d4a7164466554400ee",
+            ))
+            .with_name("USD".to_owned())
+            .build(&authority),
+            id: "newer".to_owned(),
+            name: "USD".to_owned(),
+            alias: Some("usd#lease".to_owned()),
+            alias_binding: Some(AssetAliasBindingDto {
+                alias: "usd#lease".to_owned(),
+                status: "leased_active".to_owned(),
+                lease_expiry_ms: Some(5_000),
+                grace_until_ms: Some(1_328_405_000),
+                bound_at_ms: 1_000,
+            }),
+        };
+
+        let selectors = compile_asset_definition_sort_spec(&[crate::filter::SortKey {
+            key: crate::filter::FieldPath("alias_binding.bound_at_ms".into()),
+            order: crate::filter::Order::Desc,
+        }]);
+        let older_key = asset_definition_sort_key(&older, &selectors);
+        let newer_key = asset_definition_sort_key(&newer, &selectors);
+
+        assert!(newer_key < older_key, "newer binding must sort first");
+
+        let (items, total) = collect_page_streaming(
+            vec![(older_key, "older"), (newer_key, "newer")],
+            0,
+            None,
+            None,
+        );
+        assert_eq!(total, 2);
+        assert_eq!(items, vec!["newer", "older"]);
+    }
 }
 
 #[cfg(feature = "app_api")]

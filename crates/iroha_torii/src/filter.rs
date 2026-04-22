@@ -644,6 +644,46 @@ mod tests {
             aggregate.metrics[0].field,
             Some(FieldPath("account_id".into()))
         );
+        assert_eq!(envelope.sort.len(), 1);
+        assert_eq!(envelope.sort[0].key.0, "primary_alias_domain");
+        assert_eq!(envelope.sort[0].order, Order::Asc);
+    }
+
+    #[test]
+    fn query_envelope_parses_nested_sort_keys() {
+        let json = obj(vec![(
+            "sort",
+            arr(vec![obj(vec![
+                ("key", val("alias_binding.bound_at_ms")),
+                ("order", val("desc")),
+            ])]),
+        )]);
+        let envelope: QueryEnvelope = json::from_value(json).expect("parse sort envelope");
+        assert_eq!(envelope.sort.len(), 1);
+        assert_eq!(envelope.sort[0].key.0, "alias_binding.bound_at_ms");
+        assert_eq!(envelope.sort[0].order, Order::Desc);
+    }
+
+    #[test]
+    fn query_envelope_json_roundtrip_preserves_nested_sort_keys() {
+        let envelope = QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            aggregate: None,
+            sort: vec![SortKey {
+                key: FieldPath("alias_binding.bound_at_ms".into()),
+                order: Order::Desc,
+            }],
+            pagination: Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let bytes = norito::json::to_vec(&envelope).expect("serialize envelope");
+        let decoded: QueryEnvelope = norito::json::from_slice(&bytes).expect("decode envelope");
+        assert_eq!(decoded.sort, envelope.sort);
     }
 }
 
