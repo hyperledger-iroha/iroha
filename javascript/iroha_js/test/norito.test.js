@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.js";
+import { __resetNativeStateForTests } from "../src/native.js";
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
@@ -131,6 +132,33 @@ test("norito encode/decode supports transfer asset instructions", () => {
   const encoded = noritoEncodeInstruction(instruction);
   const decoded = noritoDecodeInstruction(encoded);
   assert.deepEqual(decoded, instruction);
+});
+
+baseTest("norito instruction encode/decode falls back to pure JS when native binding is unavailable", () => {
+  const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+  const instruction = {
+    Transfer: {
+      Asset: {
+        source: loadAssetIdFromFixture("mint_asset_numeric.json"),
+        object: "7",
+        destination: ACCOUNT_ID,
+      },
+    },
+  };
+  process.env.IROHA_JS_NATIVE_DIR = "/definitely/missing/iroha-js-native";
+  __resetNativeStateForTests();
+  try {
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.ok(Buffer.isBuffer(encoded));
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  } finally {
+    if (previousNativeDir === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousNativeDir;
+    }
+    __resetNativeStateForTests();
+  }
 });
 
 test("norito encode/decode supports ExecuteTrigger instructions", () => {
