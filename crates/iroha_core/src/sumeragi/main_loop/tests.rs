@@ -7022,6 +7022,930 @@ async fn rbc_roster_for_session_uses_active_topology_when_complete_rbc_payload_k
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_roster_for_session_does_not_use_active_topology_for_non_authoritative_rbc_same_epoch()
+{
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let session = partial_rbc_session_for_block(actor, &block, 32);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "test precondition: partial RBC recovery should not require block store residency"
+    );
+    assert!(
+        !actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "partial same-epoch RBC sessions must stay non-authoritative"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "non-authoritative same-epoch RBC sessions must not unlock the active-topology fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_roster_for_session_does_not_use_active_topology_for_authoritative_rbc_future_epoch() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 2;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let committed_epoch = actor.epoch_for_height(committed_height);
+    let mut height = committed_height.saturating_add(2).max(2);
+    while actor.epoch_for_height(height) == committed_epoch {
+        height = height.saturating_add(1);
+    }
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_ne!(
+        actor.epoch_for_height(height),
+        committed_epoch,
+        "test requires the target height to advance into a later epoch"
+    );
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "test precondition: RBC-only recovery should not require block store residency"
+    );
+    assert!(
+        actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "complete local RBC payload should remain authoritative before the roster lookup"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "authoritative RBC payloads must not unlock the active-topology fallback across epochs"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_rbc_session_roster_keeps_init_roster_for_non_authoritative_rbc_same_epoch() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let roster = actor.effective_commit_topology();
+    let session = partial_rbc_session_for_block(actor, &block, 32);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(!roster.is_empty(), "test requires an init roster");
+    assert!(
+        !actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "partial same-epoch RBC sessions must stay non-authoritative"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "derived roster should stay unavailable before payload authority is established"
+    );
+
+    let ensured = actor.ensure_rbc_session_roster(key);
+
+    assert_eq!(
+        ensured, roster,
+        "ensure should keep using the cached init roster while no derived roster is available"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Init),
+        "ensure should not promote the roster source without authoritative payload knowledge"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_rbc_session_roster_promotes_init_roster_for_authoritative_rbc_same_epoch() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let roster = actor.effective_commit_topology();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(!roster.is_empty(), "test requires an init roster");
+    assert!(
+        actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "complete same-epoch RBC payload should be authoritative before refresh"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+
+    let ensured = actor.ensure_rbc_session_roster(key);
+
+    assert_eq!(
+        ensured, roster,
+        "ensure should keep the same roster bytes when promoting an init roster to derived"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "authoritative same-epoch payload knowledge should promote the cached init roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn allow_unverified_rbc_roster_is_enabled_for_permissioned_future_height_without_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA3; Hash::LENGTH])),
+        committed_height.saturating_add(2).max(2),
+        0_u64,
+    );
+
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "future permissioned sessions without payload knowledge should not derive a roster"
+    );
+    assert!(
+        actor.allow_unverified_rbc_roster(key),
+        "permissioned future sessions should allow init-roster handling while the derived roster is unavailable"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn allow_unverified_rbc_roster_is_disabled_for_permissioned_same_epoch_authoritative_payload()
+{
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        !actor.rbc_roster_for_session(key).is_empty(),
+        "authoritative same-epoch permissioned payload should derive the active topology"
+    );
+    assert!(
+        !actor.allow_unverified_rbc_roster(key),
+        "permissioned same-epoch sessions should stop allowing init-roster fallback once the derived roster is available"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn allow_unverified_rbc_roster_is_disabled_for_npos_future_height_without_payload() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA4; Hash::LENGTH])),
+        committed_height.saturating_add(2).max(2),
+        0_u64,
+    );
+
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "future NPoS sessions without payload knowledge should not derive a roster"
+    );
+    assert!(
+        !actor.allow_unverified_rbc_roster(key),
+        "NPoS should never allow the permissioned init-roster escape hatch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_derived_rbc_session_roster_returns_none_for_authoritative_source() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH])),
+        committed_height.saturating_add(1),
+        0_u64,
+    );
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires a derived roster");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let refreshed = actor.refresh_derived_rbc_session_roster(key);
+
+    assert!(
+        refreshed.is_none(),
+        "refresh should not run again when the cached roster is already authoritative"
+    );
+    assert_eq!(
+        actor.rbc_session_roster(key),
+        roster,
+        "authoritative cached roster should remain unchanged"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "authoritative source should remain intact"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn promote_rbc_session_roster_and_retry_returns_false_for_authoritative_source() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA6; Hash::LENGTH])),
+        committed_height.saturating_add(1),
+        0_u64,
+    );
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires a derived roster");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let progressed = actor.promote_rbc_session_roster_and_retry(key);
+
+    assert!(
+        !progressed,
+        "promotion should short-circuit when the roster is already authoritative"
+    );
+    assert_eq!(
+        actor.rbc_session_roster(key),
+        roster,
+        "authoritative cached roster should remain unchanged"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "authoritative source should remain intact"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn promote_rbc_session_roster_and_retry_returns_false_when_derived_roster_unavailable() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let roster = actor.effective_commit_topology();
+    let session = partial_rbc_session_for_block(actor, &block, 32);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(!roster.is_empty(), "test requires an init roster");
+    assert!(
+        !actor.rbc_session_has_authoritative_payload_for_progress(key, &session),
+        "partial same-epoch RBC sessions must stay non-authoritative"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "derived roster should stay unavailable before payload authority is established"
+    );
+
+    let progressed = actor.promote_rbc_session_roster_and_retry(key);
+
+    assert!(
+        !progressed,
+        "promotion should report no progress when the derived roster is still unavailable"
+    );
+    assert_eq!(
+        actor.rbc_session_roster(key),
+        roster,
+        "init roster should remain cached while promotion is blocked"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Init),
+        "roster source should remain unverified while promotion is blocked"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_rbc_session_roster_returns_cached_authoritative_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH])),
+        committed_height.saturating_add(1),
+        0_u64,
+    );
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires a derived roster");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let ensured = actor.ensure_rbc_session_roster(key);
+
+    assert_eq!(
+        ensured, roster,
+        "ensure should return the cached authoritative roster unchanged"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "ensure should preserve the authoritative source"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_rbc_session_roster_returns_empty_when_no_cache_and_no_derived_roster() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH])),
+        committed_height.saturating_add(2).max(2),
+        0_u64,
+    );
+
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "future NPoS session without payload knowledge should not derive a roster"
+    );
+
+    let ensured = actor.ensure_rbc_session_roster(key);
+
+    assert!(
+        ensured.is_empty(),
+        "ensure should stay empty when no cached or derived roster is available"
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .get(&key)
+            .is_none(),
+        "ensure should not cache an empty roster"
+    );
+    assert!(
+        actor.rbc_session_roster_source(key).is_none(),
+        "ensure should not create a roster source for an empty result"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_derived_rbc_session_roster_seeds_missing_cache_for_authoritative_same_epoch_rbc() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let expected = actor.effective_commit_topology();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(
+        actor.rbc_session_roster(key).is_empty(),
+        "test requires the roster cache to start empty"
+    );
+    assert!(actor.rbc_session_roster_source(key).is_none());
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let refreshed = actor.refresh_derived_rbc_session_roster(key);
+
+    assert_eq!(
+        refreshed,
+        Some((expected.clone(), true)),
+        "refresh should seed a missing cache from authoritative same-epoch payload knowledge"
+    );
+    assert_eq!(
+        actor.rbc_session_roster(key),
+        expected,
+        "refresh should cache the derived active topology"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "refresh should mark the seeded roster as authoritative"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_derived_rbc_session_roster_promotes_matching_init_cache_for_authoritative_same_epoch_rbc()
+ {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let expected = actor.effective_commit_topology();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, expected.clone(), super::RbcRosterSource::Init);
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Init),
+        "test requires an init roster before refresh"
+    );
+
+    let refreshed = actor.refresh_derived_rbc_session_roster(key);
+
+    assert_eq!(
+        refreshed,
+        Some((expected.clone(), true)),
+        "refresh should upgrade a matching init cache to an authoritative derived roster"
+    );
+    assert_eq!(
+        actor.rbc_session_roster(key),
+        expected,
+        "refresh should keep the same roster bytes when promoting a matching init cache"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "refresh should promote the cached init roster source to derived"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_rbc_session_roster_seeds_missing_cache_for_authoritative_same_epoch_rbc() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let expected = actor.effective_commit_topology();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(
+        actor.rbc_session_roster(key).is_empty(),
+        "test requires the roster cache to start empty"
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let ensured = actor.ensure_rbc_session_roster(key);
+
+    assert_eq!(
+        ensured, expected,
+        "ensure should seed the missing cache from authoritative same-epoch payload knowledge"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "ensure should mark the seeded roster as authoritative"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn promote_rbc_session_roster_and_retry_promotes_same_epoch_authoritative_init_roster() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let key = (block.hash(), height, view);
+    let roster = actor.effective_commit_topology();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    assert!(!roster.is_empty(), "test requires an init roster");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+
+    let progressed = actor.promote_rbc_session_roster_and_retry(key);
+
+    assert!(
+        progressed,
+        "promotion should report progress when authoritative same-epoch payload knowledge upgrades the init roster"
+    );
+    assert_eq!(
+        actor.rbc_session_roster(key),
+        roster,
+        "promotion should retain the roster bytes while upgrading the source"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "promotion should upgrade the cached init roster to authoritative"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn promote_rbc_session_roster_and_retry_flushes_stashed_ready_and_deliver() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 100;
+    consensus_cfg.rbc.chunk_max_bytes = 1_000_000;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(u64::MAX);
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let key = (block_hash, height, view);
+
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() >= 4, "test requires four validators");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Init);
+
+    let epoch = actor.epoch_for_height(height);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("session");
+    assert_eq!(session.total_chunks(), 1, "test expects a single RBC chunk");
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    session.ingest_chunk(0, payload_bytes.clone(), None);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "complete chunks alone should not unlock the derived roster before authoritative metadata is known"
+    );
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let required = actor.rbc_deliver_quorum(&topology).max(1);
+    let mut ready_signatures = Vec::new();
+    let mut stashed_ready = None;
+    let mut deliver_signer = None;
+    for peer in signature_topology
+        .as_ref()
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .take(required)
+    {
+        let signer_idx = signature_sender_index(actor, &roster, height, view, peer);
+        let signer_kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair");
+        let mut ready = crate::sumeragi::consensus::RbcReady {
+            block_hash,
+            height,
+            view,
+            epoch,
+            roster_hash: roster_hash(&roster),
+            chunk_root,
+            sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+            signature: Vec::new(),
+        };
+        let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
+        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        ready.signature = signature.payload().to_vec();
+        if stashed_ready.is_none() {
+            stashed_ready = Some(ready.clone());
+            deliver_signer = Some((peer.clone(), signer_idx));
+        }
+        ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
+            sender: ready.sender,
+            signature: ready.signature.clone(),
+        });
+    }
+    actor
+        .handle_rbc_ready(stashed_ready.expect("stashed ready"))
+        .expect("ready should be deferred");
+
+    let (deliver_peer, deliver_idx) = deliver_signer.expect("deliver signer");
+    let deliver_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == deliver_peer.public_key())
+        .expect("deliver keypair");
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash,
+        height,
+        view,
+        epoch,
+        roster_hash: roster_hash(&roster),
+        chunk_root,
+        sender: u32::try_from(deliver_idx).expect("deliver signer index fits u32"),
+        signature: Vec::new(),
+        ready_signatures,
+    };
+    let deliver_preimage =
+        super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let deliver_signature = Signature::new(deliver_kp.private_key(), &deliver_preimage);
+    deliver.signature = deliver_signature.payload().to_vec();
+
+    actor
+        .handle_rbc_deliver(deliver)
+        .expect("deliver should be deferred");
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "test setup requires READY/DELIVER to remain stashed before promotion"
+    );
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get_mut(&key)
+        .expect("session retained for promotion")
+        .test_set_block_header_and_signature(&block);
+
+    let progressed = actor.promote_rbc_session_roster_and_retry(key);
+
+    assert!(
+        progressed,
+        "promotion should report progress when stashed READY/DELIVER can be flushed"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "promotion should upgrade the cached init roster to authoritative"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "promotion should flush stashed READY/DELIVER immediately"
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session retained");
+    assert!(
+        stored.sent_ready,
+        "promotion should retry local READY emission once the roster becomes authoritative"
+    );
+    assert!(
+        stored.delivered,
+        "promotion should accept the stashed DELIVER once the roster becomes authoritative"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

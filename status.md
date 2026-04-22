@@ -2,6 +2,48 @@
 
 Last updated: 2026-04-22
 
+## 2026-04-22 Follow-up: Sumeragi same-epoch RBC roster active-topology override
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now treats authoritative
+  local RBC payloads for heights beyond `committed_height + 1` but still in the
+  committed epoch as an explicit signal to rejoin the current active topology,
+  even when `roster_for_vote_with_mode(...)` can still surface a non-empty
+  generic commit-history roster.
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now adds direct coverage
+  for the neighboring negative cases as well: non-authoritative same-epoch RBC
+  sessions stay blocked, and authoritative local payloads in a later epoch
+  still do not unlock the active-topology fallback.
+- The same focused unit slice now also covers the adjacent helper behavior:
+  `ensure_rbc_session_roster(...)` keeps cached `Init` rosters when no derived
+  roster is available, promotes matching cached `Init` rosters once same-epoch
+  authoritative payload knowledge appears, returns a cached authoritative
+  roster unchanged, and now also covers the no-cache/no-derived empty path,
+  seeds a missing cache directly from authoritative same-epoch RBC metadata,
+  `refresh_derived_rbc_session_roster(...)` and
+  `promote_rbc_session_roster_and_retry(...)` now have direct early-return
+  coverage for already-authoritative rosters and still-unavailable derived
+  rosters, plus direct success-path coverage for seeding a missing derived
+  roster cache, promoting a matching same-epoch `Init` roster to `Derived`,
+  and flushing stashed READY/DELIVER directly through
+  `promote_rbc_session_roster_and_retry(...)` once authoritative session
+  metadata appears, and
+  `allow_unverified_rbc_roster(...)` now has direct permissioned and NPoS
+  coverage for both the future-height empty-derived case and the same-epoch
+  authoritative-payload case that disables the init-roster escape hatch.
+- This fixes
+  `sumeragi::main_loop::tests::rbc_roster_for_session_uses_active_topology_when_complete_rbc_payload_known_same_epoch`:
+  complete local RBC sessions now unlock the same in-epoch active-topology
+  fallback as pending/block-known payloads instead of staying pinned to a stale
+  partial historical roster.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib rbc_roster_for_session_ -- --nocapture`
+  - `cargo test -p iroha_core --lib ensure_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib allow_unverified_rbc_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_derived_rbc_session_roster -- --nocapture`
+  - `cargo test -p iroha_core --lib promote_rbc_session_roster_and_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_defers_without_targeted_rescue_with_unverified_roster -- --nocapture`
+
 ## 2026-04-22 Follow-up: default genesis structured-instruction compatibility
 - `crates/iroha_genesis/src/lib.rs` now preserves staged Sumeragi
   `NextMode`/`ModeActivationHeight` fields when stripping injected handshake

@@ -13391,32 +13391,52 @@ impl Actor {
 
     fn rbc_roster_for_session(&self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
         let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(key.1);
+        let committed_height = self.committed_height_snapshot();
+        let committed_epoch = self.epoch_for_height(committed_height);
+        let session_epoch = self.epoch_for_height(key.1);
+        let payload_known = self.block_known_locally(key.0)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_some_and(|session| {
+                    self.rbc_session_has_authoritative_payload_for_progress(key, session)
+                });
+        let active_fallback = || {
+            let world = self.state.world_view();
+            let commit_topology = self.state.commit_topology_snapshot();
+            self.active_topology_with_genesis_fallback_from_world(
+                &world,
+                commit_topology.as_slice(),
+                committed_height,
+                consensus_mode,
+            )
+        };
+        // Once a same-epoch future slot is backed by an authoritative local payload, ignore
+        // generic historical vote rosters and rejoin the current active topology instead.
+        if payload_known
+            && session_epoch == committed_epoch
+            && key.1 > committed_height.saturating_add(1)
+        {
+            let fallback = active_fallback();
+            if !fallback.is_empty() {
+                debug!(
+                    height = key.1,
+                    committed_height,
+                    committed_epoch,
+                    "using active topology for RBC roster beyond committed height within epoch"
+                );
+                return fallback;
+            }
+        }
         let mut roster = self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
         if roster.is_empty() {
-            let committed_height = self.committed_height_snapshot();
-            let committed_epoch = self.epoch_for_height(committed_height);
-            let session_epoch = self.epoch_for_height(key.1);
-            let payload_known = self.block_known_locally(key.0)
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .sessions
-                    .get(&key)
-                    .is_some_and(|session| {
-                        self.rbc_session_has_authoritative_payload_for_progress(key, session)
-                    });
             let allow_fallback = key.1 <= committed_height.saturating_add(1)
                 || (payload_known && session_epoch == committed_epoch);
             if allow_fallback {
-                let world = self.state.world_view();
-                let commit_topology = self.state.commit_topology_snapshot();
-                let fallback = self.active_topology_with_genesis_fallback_from_world(
-                    &world,
-                    commit_topology.as_slice(),
-                    committed_height,
-                    consensus_mode,
-                );
+                let fallback = active_fallback();
                 if !fallback.is_empty() {
                     if payload_known && key.1 > committed_height.saturating_add(1) {
                         debug!(
