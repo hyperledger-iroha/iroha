@@ -331,19 +331,9 @@ function resolveNative(method) {
   return native;
 }
 
-function tryResolveNative(method) {
-  try {
-    return resolveNative(method);
-  } catch {
-    return null;
-  }
-}
-
 function encodeNormalizedInstruction(normalized) {
-  const native = tryResolveNative("noritoEncodeInstruction");
-  const encoded = native
-    ? native.noritoEncodeInstruction(JSON.stringify(normalized))
-    : encodePureJsInstruction(normalized);
+  const native = resolveNative("noritoEncodeInstruction");
+  const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
   cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
 }
@@ -414,12 +404,7 @@ export function noritoEncodeInstruction(instruction) {
         if (decoded) {
           return decoded;
         }
-        const native = tryResolveNative("noritoEncodeInstruction");
-        if (!native) {
-          throw new Error(
-            "Native binding required to encode raw instruction strings. Pass instruction JSON or pre-encoded bytes.",
-          );
-        }
+        const native = resolveNative("noritoEncodeInstruction");
         const encoded = native.noritoEncodeInstruction(instruction);
         try {
           cacheInstructionRoundTrip(encoded, JSON.parse(instruction));
@@ -447,11 +432,7 @@ export function noritoEncodeInstruction(instruction) {
  */
 export function noritoDecodeInstruction(bytes, options = {}) {
   const buffer = toBuffer(bytes);
-  const native = tryResolveNative("noritoDecodeInstruction");
-  if (!native) {
-    const decoded = decodePureJsInstruction(buffer);
-    return options.parseJson === false ? JSON.stringify(decoded) : decoded;
-  }
+  const native = resolveNative("noritoDecodeInstruction");
   let json;
   try {
     json = native.noritoDecodeInstruction(buffer);
