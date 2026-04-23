@@ -41,6 +41,7 @@ use iroha_config_base::{
 };
 use iroha_data_model::{
     block::consensus::RbcEncoding,
+    domain::DomainId,
     sorafs::capacity::ProviderId,
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
@@ -15891,6 +15892,20 @@ pub struct ToriiOnboarding {
     pub allowed_permissions: Vec<String>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
     pub fee_sponsor_account: Option<String>,
+    /// Default alias lease term applied during onboarding.
+    #[config(default = "1")]
+    pub alias_lease_term_years: u8,
+    /// Whether onboarding should create a default auto-renew subscription.
+    #[config(default = "true")]
+    pub alias_auto_renew_enabled: bool,
+    /// Retry delay for alias auto-renew after a failed charge.
+    #[config(default = "86_400_000")]
+    pub alias_auto_renew_retry_backoff_ms: u64,
+    /// Maximum consecutive alias auto-renew failures before suspension.
+    #[config(default = "5")]
+    pub alias_auto_renew_max_failures: u32,
+    /// Existing domain used to store internal alias auto-renew subscription NFTs.
+    pub alias_auto_renew_subscription_domain: Option<String>,
 }
 
 impl ToriiOnboarding {
@@ -15919,11 +15934,25 @@ impl ToriiOnboarding {
                 iroha_data_model::account::ParsedAccountId::into_account_id,
             )
         });
+        let alias_auto_renew_subscription_domain =
+            self.alias_auto_renew_subscription_domain.map(|domain| {
+                DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid torii.onboarding.alias_auto_renew_subscription_domain `{domain}`: {}",
+                        err.reason()
+                    )
+                })
+            });
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
             allowed_permissions,
             fee_sponsor_account,
+            alias_lease_term_years: self.alias_lease_term_years,
+            alias_auto_renew_enabled: self.alias_auto_renew_enabled,
+            alias_auto_renew_retry_backoff_ms: self.alias_auto_renew_retry_backoff_ms,
+            alias_auto_renew_max_failures: self.alias_auto_renew_max_failures,
+            alias_auto_renew_subscription_domain,
         })
     }
 }

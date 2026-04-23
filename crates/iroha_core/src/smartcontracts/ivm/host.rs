@@ -45,6 +45,7 @@ use iroha_data_model::{
         asset::prelude::FindAssetById, error::QueryExecutionFail,
     },
     subscription::{
+        ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
     },
@@ -680,20 +681,38 @@ where
 }
 
 /// Snapshot of subscription-related data resolved from the current state.
+#[derive(Clone)]
+enum SubscriptionBillingKind {
+    Generic {
+        plan: SubscriptionPlan,
+        charge_asset_def: AssetDefinition,
+    },
+    AccountAliasAutoRenew {
+        metadata: AccountAliasAutoRenewMetadata,
+        charge_asset_def: AssetDefinition,
+    },
+}
+
+/// Resolved subscription state and billing inputs for the trigger currently being billed.
 pub struct SubscriptionContext {
     executable: Executable,
     authority: AccountId,
     trigger_metadata: Metadata,
     subscription_nft_id: NftId,
     subscription_state: SubscriptionState,
-    plan: SubscriptionPlan,
-    charge_asset_def: AssetDefinition,
+    billing: SubscriptionBillingKind,
     subscriber_balance: Numeric,
     nft_owner: AccountId,
 }
 
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Parse and canonicalize an account alias literal using the current dataspace catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the alias literal is invalid.
+    fn parse_account_alias(&self, alias_literal: &str) -> Result<AccountAlias, ivm::VMError>;
     /// Resolve a stable account alias to the current backing account id.
     ///
     /// # Errors
@@ -729,6 +748,17 @@ pub trait QueryStateRefOps {
         &self,
         plan_id: &AssetDefinitionId,
     ) -> Result<SubscriptionPlan, ivm::VMError>;
+    /// Quote a SNS account-alias renewal using current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the alias is invalid or not renewable.
+    fn quote_account_alias_renewal(
+        &self,
+        alias_literal: &str,
+        term_years: u8,
+        now_ms: u64,
+    ) -> Result<crate::sns::LeaseQuote, ivm::VMError>;
     /// Resolve the fully bound contract record for a deterministic contract subject.
     fn bound_contract_record_by_subject(
         &self,
@@ -742,6 +772,23 @@ pub trait QueryStateRefOps {
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn parse_account_alias(&self, alias_literal: &str) -> Result<AccountAlias, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(view, alias_literal)
+            }
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(view, alias_literal)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(block, alias_literal)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(tx, alias_literal)
+            }
+        }
+    }
+
     fn resolve_account_alias(
         &self,
         authority: &AccountId,
@@ -819,6 +866,46 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
             QueryStateRef::Transaction(tx) => {
                 CoreHostImpl::<NoQueryState>::subscription_plan(tx, plan_id)
+            }
+        }
+    }
+
+    fn quote_account_alias_renewal(
+        &self,
+        alias_literal: &str,
+        term_years: u8,
+        now_ms: u64,
+    ) -> Result<crate::sns::LeaseQuote, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                view,
+                alias_literal,
+                term_years,
+                now_ms,
+            ),
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                    view,
+                    alias_literal,
+                    term_years,
+                    now_ms,
+                )
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                    block,
+                    alias_literal,
+                    term_years,
+                    now_ms,
+                )
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                    tx,
+                    alias_literal,
+                    term_years,
+                    now_ms,
+                )
             }
         }
     }
@@ -3793,6 +3880,179 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(response_bytes))
     }
 
+    fn subscription_bill_account_alias(
+        &mut self,
+        trigger_id: &TriggerId,
+        context: SubscriptionContext,
+        metadata: AccountAliasAutoRenewMetadata,
+        charge_asset_def: AssetDefinition,
+    ) -> Result<u64, ivm::VMError> {
+        let mut subscription_state = context.subscription_state;
+        if subscription_state.subscriber != context.nft_owner {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        subscription_state.billing_trigger_id = trigger_id.clone();
+
+        let scheduled_at_ms = subscription_state.next_charge_ms;
+        let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
+        let attempted_at_ms = now_ms.max(scheduled_at_ms);
+        let previous_period_end_ms = subscription_state.current_period_end_ms;
+        let quote = {
+            let Some(state_ref) = self.query_state.get() else {
+                return Err(ivm::VMError::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                });
+            };
+            state_ref.quote_account_alias_renewal(
+                &metadata.alias,
+                metadata.term_years,
+                attempted_at_ms,
+            )
+        };
+
+        let mut gas = 0_u64;
+        let invoice;
+        match quote {
+            Ok(quote) => {
+                let charge_amount: Numeric = quote.charge_amount.into();
+                let within_cap = charge_amount <= metadata.max_charge_amount.clone();
+                let can_pay = within_cap && charge_amount <= context.subscriber_balance;
+                invoice = SubscriptionInvoice {
+                    subscription_nft_id: context.subscription_nft_id.clone(),
+                    period_start_ms: previous_period_end_ms,
+                    period_end_ms: quote.expires_at_ms,
+                    attempted_at_ms,
+                    amount: charge_amount.clone(),
+                    asset_definition: charge_asset_def.id.clone(),
+                    status: if can_pay {
+                        SubscriptionInvoiceStatus::Paid
+                    } else {
+                        SubscriptionInvoiceStatus::Failed
+                    },
+                    tx_hash: None,
+                };
+                if can_pay {
+                    let alias = {
+                        let Some(state_ref) = self.query_state.get() else {
+                            return Err(ivm::VMError::NotImplemented {
+                                syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                            });
+                        };
+                        state_ref.parse_account_alias(&metadata.alias)?
+                    };
+                    let renew =
+                        iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                            alias,
+                            subscription_state.subscriber.clone(),
+                            metadata.term_years,
+                        );
+                    gas = gas.saturating_add(self.queue_instruction(InstructionBox::from(renew)));
+                    subscription_state.failure_count = 0;
+                    subscription_state.status = SubscriptionStatus::Active;
+                    subscription_state.current_period_start_ms = previous_period_end_ms;
+                    subscription_state.current_period_end_ms = quote.expires_at_ms;
+                    subscription_state.next_charge_ms = quote.expires_at_ms;
+                } else {
+                    subscription_state.failure_count =
+                        subscription_state.failure_count.saturating_add(1);
+                    subscription_state.status =
+                        if subscription_state.failure_count >= metadata.max_failures {
+                            SubscriptionStatus::Suspended
+                        } else {
+                            SubscriptionStatus::PastDue
+                        };
+                    if subscription_state.status != SubscriptionStatus::Suspended {
+                        subscription_state.next_charge_ms =
+                            attempted_at_ms.saturating_add(metadata.retry_backoff_ms);
+                    }
+                }
+            }
+            Err(_) => {
+                invoice = SubscriptionInvoice {
+                    subscription_nft_id: context.subscription_nft_id.clone(),
+                    period_start_ms: previous_period_end_ms,
+                    period_end_ms: previous_period_end_ms,
+                    attempted_at_ms,
+                    amount: Numeric::zero(),
+                    asset_definition: charge_asset_def.id.clone(),
+                    status: SubscriptionInvoiceStatus::Failed,
+                    tx_hash: None,
+                };
+                subscription_state.failure_count = metadata.max_failures.max(1);
+                subscription_state.status = SubscriptionStatus::Suspended;
+            }
+        }
+
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            let outcome = match subscription_state.status {
+                SubscriptionStatus::Active => "paid",
+                SubscriptionStatus::Suspended => "suspended",
+                _ => "failed",
+            };
+            telemetry.record_subscription_billing_outcome("sns_alias", outcome);
+        }
+
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
+        let subscription_isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            subscription_key,
+            subscription_json,
+        );
+        gas = gas.saturating_add(
+            self.queue_instruction(InstructionBox::from(SetKeyValueBox::from(subscription_isi))),
+        );
+
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let invoice_json = iroha_primitives::json::Json::new(invoice);
+        let invoice_isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            invoice_key,
+            invoice_json,
+        );
+        gas = gas.saturating_add(
+            self.queue_instruction(InstructionBox::from(SetKeyValueBox::from(invoice_isi))),
+        );
+
+        if matches!(
+            subscription_state.status,
+            SubscriptionStatus::Suspended | SubscriptionStatus::Canceled
+        ) {
+            let unregister =
+                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+            gas = gas.saturating_add(self.queue_instruction(unregister));
+            return Ok(gas);
+        }
+
+        let schedule = Schedule {
+            start_ms: subscription_state.next_charge_ms,
+            period_ms: None,
+        };
+        let mut next_trigger_metadata = context.trigger_metadata.clone();
+        for key in ["__registered_block_height", "__registered_at_ms"] {
+            let key = key
+                .parse::<Name>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            next_trigger_metadata.remove(&key);
+        }
+        let action = iroha_data_model::trigger::action::Action::new(
+            context.executable.clone(),
+            Repeats::Exactly(1),
+            context.authority.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        )
+        .with_metadata(next_trigger_metadata);
+        let trigger = Trigger::new(trigger_id.clone(), action);
+        let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
+        gas = gas.saturating_add(self.queue_instruction(register));
+        Ok(gas)
+    }
+
     #[allow(clippy::too_many_lines)]
     fn subscription_bill(&mut self) -> Result<u64, ivm::VMError> {
         struct BillingWindow {
@@ -3815,19 +4075,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             state_ref.subscription_context_for_trigger(&trigger_id)?
         };
 
-        let mut subscription_state = context.subscription_state;
+        let mut subscription_state = context.subscription_state.clone();
         if subscription_state.subscriber != context.nft_owner {
             return Err(ivm::VMError::NoritoInvalid);
         }
-        if subscription_state.provider != context.plan.provider {
+        let billing = context.billing.clone();
+        if let SubscriptionBillingKind::Generic { plan, .. } = &billing
+            && subscription_state.provider != plan.provider
+        {
             return Err(ivm::VMError::NoritoInvalid);
         }
         subscription_state.billing_trigger_id = trigger_id.clone();
 
         #[cfg(feature = "telemetry")]
-        let pricing_label = match context.plan.pricing {
-            SubscriptionPricing::Fixed(_) => "fixed",
-            SubscriptionPricing::Usage(_) => "usage",
+        let pricing_label = match &billing {
+            SubscriptionBillingKind::Generic { plan, .. } => match &plan.pricing {
+                SubscriptionPricing::Fixed(_) => "fixed",
+                SubscriptionPricing::Usage(_) => "usage",
+            },
+            SubscriptionBillingKind::AccountAliasAutoRenew { .. } => "sns_alias",
         };
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry.as_ref() {
@@ -3849,7 +4115,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(self.queue_instruction(instr));
         }
 
-        let billing = context.plan.billing;
+        if let SubscriptionBillingKind::AccountAliasAutoRenew {
+            metadata,
+            charge_asset_def,
+        } = billing
+        {
+            return self.subscription_bill_account_alias(
+                &trigger_id,
+                context,
+                metadata,
+                charge_asset_def,
+            );
+        }
+
+        let SubscriptionBillingKind::Generic {
+            plan,
+            charge_asset_def,
+        } = billing
+        else {
+            unreachable!("subscription billing kind is exhaustive");
+        };
+
+        let billing = plan.billing;
         let scheduled_at_ms = subscription_state.next_charge_ms;
         let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
         let attempted_at_ms = now_ms.max(scheduled_at_ms);
@@ -3960,8 +4247,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         }
 
-        let charge_spec = context.charge_asset_def.spec();
-        let (amount, usage_key) = match &context.plan.pricing {
+        let charge_spec = charge_asset_def.spec();
+        let (amount, usage_key) = match &plan.pricing {
             SubscriptionPricing::Fixed(pricing) => {
                 let fixed_amount = pricing.amount.clone();
                 if fixed_amount < Numeric::zero() {
@@ -4004,21 +4291,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             period_end_ms: charge_period.end_ms,
             attempted_at_ms,
             amount: amount.clone(),
-            asset_definition: context.charge_asset_def.id.clone(),
+            asset_definition: charge_asset_def.id.clone(),
             status: invoice_status,
             tx_hash: None,
         };
         if can_pay {
             if !amount.is_zero() {
                 let asset_id = AssetId::of(
-                    context.charge_asset_def.id.clone(),
+                    charge_asset_def.id.clone(),
                     subscription_state.subscriber.clone(),
                 );
-                let isi = Transfer::asset_numeric(
-                    asset_id,
-                    amount.clone(),
-                    context.plan.provider.clone(),
-                );
+                let isi = Transfer::asset_numeric(asset_id, amount.clone(), plan.provider.clone());
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -4224,22 +4507,54 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let subscription_nft_id = trigger_ref.subscription_nft_id;
         let (subscription_state, nft_owner) =
             Self::subscription_state_and_owner(state, &subscription_nft_id)?;
-
-        let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
-        let charge_asset_def = {
-            let charge_asset_id = match &plan.pricing {
-                SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
-                SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
-            };
-            state
+        let nft = state
+            .world()
+            .nft(&subscription_nft_id)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let alias_auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let billing = if let Some(value) = nft.value().content.get(&alias_auto_renew_key) {
+            let metadata = value
+                .try_into_any_norito::<AccountAliasAutoRenewMetadata>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            let charge_asset_def = state
                 .world()
-                .asset_definition(charge_asset_id)
-                .map_err(|_| ivm::VMError::NoritoInvalid)?
+                .asset_definition(&subscription_state.plan_id)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            SubscriptionBillingKind::AccountAliasAutoRenew {
+                metadata,
+                charge_asset_def,
+            }
+        } else {
+            let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
+            let charge_asset_def = {
+                let charge_asset_id = match &plan.pricing {
+                    SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
+                    SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
+                };
+                state
+                    .world()
+                    .asset_definition(charge_asset_id)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?
+            };
+            SubscriptionBillingKind::Generic {
+                plan,
+                charge_asset_def,
+            }
+        };
+        let charge_asset_definition_id = match &billing {
+            SubscriptionBillingKind::Generic {
+                charge_asset_def, ..
+            }
+            | SubscriptionBillingKind::AccountAliasAutoRenew {
+                charge_asset_def, ..
+            } => charge_asset_def.id.clone(),
         };
 
         let balance = {
             let asset_id = AssetId::of(
-                charge_asset_def.id.clone(),
+                charge_asset_definition_id,
                 subscription_state.subscriber.clone(),
             );
             state.world().asset(&asset_id).map_or_else(
@@ -4254,8 +4569,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             trigger_metadata,
             subscription_nft_id,
             subscription_state,
-            plan,
-            charge_asset_def,
+            billing,
             subscriber_balance: balance,
             nft_owner,
         })
@@ -4310,6 +4624,32 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         value
             .try_into_any_norito::<SubscriptionPlan>()
             .map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    fn parse_account_alias<S: StateReadOnly>(
+        state: &S,
+        alias_literal: &str,
+    ) -> Result<AccountAlias, ivm::VMError> {
+        AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
+            .map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    fn quote_account_alias_renewal<S: StateReadOnly>(
+        state: &S,
+        alias_literal: &str,
+        term_years: u8,
+        now_ms: u64,
+    ) -> Result<crate::sns::LeaseQuote, ivm::VMError> {
+        let alias = AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        crate::sns::quote_account_alias_renewal(
+            state.world(),
+            &state.nexus().dataspace_catalog,
+            &alias,
+            term_years,
+            now_ms,
+        )
+        .map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {

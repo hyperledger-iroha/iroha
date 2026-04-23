@@ -6001,6 +6001,16 @@ pub struct ToriiOnboarding {
     pub allowed_permissions: Vec<String>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
     pub fee_sponsor_account: Option<AccountId>,
+    /// Default alias lease term applied during onboarding.
+    pub alias_lease_term_years: u8,
+    /// Whether onboarding should create a default auto-renew subscription.
+    pub alias_auto_renew_enabled: bool,
+    /// Retry delay for alias auto-renew after a failed charge.
+    pub alias_auto_renew_retry_backoff_ms: u64,
+    /// Maximum consecutive alias auto-renew failures before suspension.
+    pub alias_auto_renew_max_failures: u32,
+    /// Existing domain used to store internal alias auto-renew subscription NFTs.
+    pub alias_auto_renew_subscription_domain: Option<DomainId>,
 }
 
 /// App-facing faucet configuration exposed to Torii.
