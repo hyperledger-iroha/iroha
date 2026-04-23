@@ -2,6 +2,12 @@
 
 Last updated: 2026-04-23
 
+## 2026-04-23 Block header Norito golden refresh
+
+- `crates/iroha_data_model/tests/norito_golden_scaffold.rs` now pins the current bare `BlockHeader::encode()` payload instead of a stale pre-compact fixture. The old bytes no longer matched the repo-wide Norito default (`COMPACT_LEN`) or the current default `confidential_features` digest carried by newly constructed headers, so `block_header_golden_bytes` is aligned with the live codec output again.
+- Focused validation for this fix:
+  - `cargo test -p iroha_data_model --test norito_golden_scaffold -- --nocapture`
+
 ## 2026-04-23 Compound predicate Norito roundtrip fix
 
 - `crates/iroha_data_model/src/query/dsl.rs` now routes `CompoundPredicateWire` through direct `norito::NoritoSerialize` / `norito::NoritoDeserialize` instead of the `Encode` / `Decode` derive pair when preserving the custom `CompoundPredicate<T>` wire wrapper. The wrapper also now delegates `encoded_len_hint` / `encoded_len_exact` to the wire enum and uses fallible `try_deserialize(...)` before reconstructing the runtime payload.
