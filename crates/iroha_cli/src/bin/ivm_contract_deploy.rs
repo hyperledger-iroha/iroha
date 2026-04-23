@@ -39,7 +39,7 @@ use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
-const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
+const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 753;
 const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const MAX_DIRECT_REGISTER_BYTES_TX_BYTES: usize = 40_000;
@@ -73,6 +73,8 @@ struct Args {
     out_dir: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     emit_only: bool,
+    #[arg(long, default_value_t = false)]
+    force_direct_register: bool,
 }
 
 fn default_alias_cache_policy() -> AliasCachePolicy {
@@ -318,34 +320,19 @@ fn literal_ptr(offset: usize) -> Result<i16> {
     i16::try_from(offset).map_err(|_| eyre!("literal section grew beyond i16 addressable range"))
 }
 
-fn emit_syscall_for_literal(code: &mut Vec<u8>, ptr: i16, syscall: u32) -> Result<()> {
-    emit_addi(code, 10, 0, i64::from(ptr));
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
-                .map_err(|_| eyre!("input publish syscall id does not fit in u8"))?,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            u8::try_from(syscall).map_err(|_| eyre!("syscall id does not fit in u8"))?,
-        )
-        .to_le_bytes(),
-    );
-    Ok(())
-}
-
 fn build_single_register_program<T: norito::NoritoSerialize>(
     payload: &T,
     syscall: u32,
+    publish_input: bool,
 ) -> Result<Vec<u8>> {
     let tlv = norito_tlv(payload)?;
     let ptr = literal_ptr(LITERAL_DATA_START as usize)?;
     let mut code = Vec::new();
-    emit_syscall_for_literal(&mut code, ptr, syscall)?;
+    emit_addi(&mut code, 10, 0, i64::from(ptr));
+    if publish_input {
+        push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
+    }
+    push_syscall(&mut code, syscall)?;
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     Ok(assemble_program_with_literals(&code, &tlv))
 }
@@ -503,6 +490,13 @@ fn split_bytes(bytes: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
         .collect()
 }
 
+fn padded_chunk_bytes(chunk: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(chunk.len() + COPY_WORD_BYTES);
+    out.extend_from_slice(chunk);
+    out.resize(chunk.len() + COPY_WORD_BYTES, 0);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,7 +524,7 @@ mod tests {
                 .and_then(|any| any.downcast_mut::<ivm::CoreHost>())
                 .expect("downcast core host");
             for (path, chunk) in chunk_paths.iter().zip(&chunks) {
-                host.insert_state_value(path.as_ref(), chunk);
+                host.insert_state_value(path.as_ref(), &padded_chunk_bytes(chunk));
             }
         }
         vm.load_program(&program).expect("load copy program");
@@ -566,7 +560,7 @@ mod tests {
         for (path, chunk) in chunk_paths.iter().zip(&chunks) {
             snapshot.insert(
                 path.clone(),
-                make_tlv(ivm::PointerType::NoritoBytes as u16, chunk),
+                make_tlv(ivm::PointerType::NoritoBytes as u16, &padded_chunk_bytes(chunk)),
             );
         }
 
@@ -595,6 +589,81 @@ mod tests {
         register_vm
             .run()
             .expect("run staged register program");
+    }
+
+    #[test]
+    fn staged_register_program_runs_under_contract_runtime_host_with_nine_chunks() {
+        let authority = AccountId::of(iroha_crypto::KeyPair::random().public_key().clone());
+        let request = RegisterSmartContractBytes {
+            code_hash: Hash::new(b"stage-runtime-large"),
+            code: (0..200_123).map(|index| (index % 251) as u8).collect(),
+        };
+        let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
+        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
+        assert!(chunks.len() >= 9, "expected a live-sized staged register");
+        let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
+        let chunk_paths =
+            staged_chunk_paths(Hash::new(b"stage-runtime-large-test"), chunks.len())
+                .expect("chunk paths");
+        let register_program = build_staged_register_only_program(&chunk_paths, &chunk_sizes)
+            .expect("build staged register");
+
+        let mut snapshot = BTreeMap::new();
+        for (path, chunk) in chunk_paths.iter().zip(&chunks) {
+            snapshot.insert(
+                path.clone(),
+                make_tlv(ivm::PointerType::NoritoBytes as u16, &padded_chunk_bytes(chunk)),
+            );
+        }
+
+        let mut register_vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
+        let mut register_host = iroha_core::smartcontracts::ivm::host::CoreHost::new(authority);
+        register_host.set_durable_state_snapshot(snapshot);
+        register_vm.set_host(register_host);
+        register_vm
+            .load_program(&register_program)
+            .expect("load staged register program");
+        register_vm
+            .run()
+            .expect("run large staged register program");
+    }
+
+    #[test]
+    fn staged_copy_program_reconstructs_large_register_request_tlv() {
+        let request = RegisterSmartContractBytes {
+            code_hash: Hash::new(b"stage-copy-large"),
+            code: (0..200_123).map(|index| (index % 251) as u8).collect(),
+        };
+        let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
+        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
+        assert!(chunks.len() >= 9, "expected a live-sized staged register");
+        let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
+        let chunk_paths =
+            staged_chunk_paths(Hash::new(b"stage-copy-large-test"), chunks.len())
+                .expect("chunk paths");
+        let program =
+            build_staged_copy_program(&chunk_paths, &chunk_sizes).expect("build staged copy");
+
+        let mut vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
+        vm.set_host(ivm::CoreHost::new());
+        {
+            let host = vm
+                .host_mut_any()
+                .and_then(|any| any.downcast_mut::<ivm::CoreHost>())
+                .expect("downcast core host");
+            for (path, chunk) in chunk_paths.iter().zip(&chunks) {
+                host.insert_state_value(path.as_ref(), &padded_chunk_bytes(chunk));
+            }
+        }
+        vm.load_program(&program).expect("load copy program");
+        vm.run().expect("run large staged copy");
+
+        let heap_ptr = vm.register(8);
+        let copied = vm
+            .memory
+            .load_region(heap_ptr, register_request_tlv.len() as u64)
+            .expect("read reconstructed heap bytes");
+        assert_eq!(copied, register_request_tlv);
     }
 }
 
@@ -691,6 +760,7 @@ fn main() -> Result<()> {
     let register_bytes_program = build_single_register_program(
         &register_request,
         ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+        false,
     )?;
     let direct_register_bytes_tx = sign_ivm_transaction(
         &client.chain,
@@ -701,7 +771,8 @@ fn main() -> Result<()> {
     );
     let direct_register_bytes_tx_size = direct_register_bytes_tx.encode_versioned().len();
     let use_staged_register =
-        direct_register_bytes_tx_size > MAX_DIRECT_REGISTER_BYTES_TX_BYTES;
+        !args.force_direct_register
+            && direct_register_bytes_tx_size > MAX_DIRECT_REGISTER_BYTES_TX_BYTES;
 
     let mut register_stage_tx_hashes = Vec::new();
     let mut register_plans: Vec<(String, String, SignedTransaction)> = Vec::new();
@@ -712,7 +783,7 @@ fn main() -> Result<()> {
         let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
         let chunk_paths = staged_chunk_paths(code_hash, chunks.len())?;
         for (index, (path, chunk)) in chunk_paths.iter().zip(chunks.iter()).enumerate() {
-            let chunk_program = build_state_set_program(path, chunk)?;
+            let chunk_program = build_state_set_program(path, &padded_chunk_bytes(chunk))?;
             let chunk_tx = sign_ivm_transaction(
                 &client.chain,
                 &authority,
@@ -757,6 +828,7 @@ fn main() -> Result<()> {
             manifest: manifest.clone(),
         },
         ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+        true,
     )?;
     let register_manifest_tx = sign_ivm_transaction(
         &client.chain,
@@ -815,7 +887,8 @@ fn main() -> Result<()> {
         None
     };
     if !args.emit_only {
-        for (_, _, tx) in &planned_txs {
+        for (name, _, tx) in &planned_txs {
+            eprintln!("submitting {name} hash={}", tx.hash());
             client.submit_transaction_blocking(tx)?;
         }
     }
@@ -828,6 +901,7 @@ fn main() -> Result<()> {
         "authority": (authority),
         "contract_alias": (contract_alias),
         "contract_address": (contract_address),
+        "contract_subject_account": (contract_address.subject_id()),
         "deploy_nonce": (deploy_nonce),
         "next_deploy_nonce": (next_nonce),
         "code_hash_hex": (hex::encode(<[u8; 32]>::from(code_hash))),
