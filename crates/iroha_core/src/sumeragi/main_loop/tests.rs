@@ -25451,7 +25451,8 @@ async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster
     let topology =
         super::network_topology::Topology::new(harness.actor.effective_commit_topology());
     let view = 0;
-    let rotated = super::topology_for_view(&topology, 1, view, super::PERMISSIONED_TAG, None);
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(1);
+    let rotated = super::topology_for_view(&topology, 1, view, mode_tag, prf_seed);
     let local_peer = harness.actor.common_config.peer.id().clone();
     let signer_idx = rotated
         .as_ref()
@@ -25460,7 +25461,6 @@ async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster
         .expect("local peer in topology");
 
     let chain = harness.actor.common_config.chain.clone();
-    let keypair = harness.actor.common_config.key_pair.clone();
 
     let mut vote_a = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
@@ -25474,12 +25474,7 @@ async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster
         signer: u32::try_from(signer_idx).expect("signer index fits u32"),
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(
-        &mut vote_a,
-        &chain,
-        &topology,
-        std::slice::from_ref(&keypair),
-    );
+    sign_vote_for_view(&mut vote_a, &chain, &topology, &harness.key_pairs);
     harness.actor.handle_vote(vote_a);
 
     let mut vote_b = crate::sumeragi::consensus::Vote {
@@ -25494,12 +25489,7 @@ async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster
         signer: u32::try_from(signer_idx).expect("signer index fits u32"),
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(
-        &mut vote_b,
-        &chain,
-        &topology,
-        std::slice::from_ref(&keypair),
-    );
+    sign_vote_for_view(&mut vote_b, &chain, &topology, &harness.key_pairs);
     harness.actor.handle_vote(vote_b);
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
@@ -98980,16 +98970,40 @@ async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
     );
 
     let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
-    let local_peer = actor.common_config.peer.id().clone();
-    let cached_roster: Vec<_> = live_roster
+    let live_topology = super::network_topology::Topology::new(live_roster.clone());
+    let live_signature_topology =
+        super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
+    let (cached_roster, cached_topology, cached_signature_topology, signer) = live_roster
         .iter()
-        .filter(|peer| **peer != local_peer)
-        .cloned()
-        .collect();
-    assert!(
-        !cached_roster.is_empty(),
-        "cached roster should still contain remote validators"
-    );
+        .enumerate()
+        .find_map(|(removed_idx, _)| {
+            let candidate_roster: Vec<_> = live_roster
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != removed_idx)
+                .map(|(_, peer)| peer.clone())
+                .collect();
+            if candidate_roster.is_empty() {
+                return None;
+            }
+            let candidate_topology =
+                super::network_topology::Topology::new(candidate_roster.clone());
+            let candidate_signature_topology =
+                super::topology_for_view(&candidate_topology, height, view, mode_tag, prf_seed);
+            candidate_signature_topology
+                .as_ref()
+                .iter()
+                .enumerate()
+                .find_map(|(idx, peer)| {
+                    (live_signature_topology.as_ref().get(idx) != Some(peer)).then_some((
+                        candidate_roster.clone(),
+                        candidate_topology.clone(),
+                        candidate_signature_topology.clone(),
+                        u32::try_from(idx).expect("signer index fits u32"),
+                    ))
+                })
+        })
+        .expect("test setup requires a cached roster whose signer mapping differs from live");
     assert_ne!(
         cached_roster, live_roster,
         "test setup requires a cached roster that differs from the live frontier roster"
@@ -98999,7 +99013,6 @@ async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
     actor.cache_vote_roster(block_hash, height, view, cached_roster.clone());
 
-    let cached_topology = super::network_topology::Topology::new(cached_roster.clone());
     let mut vote = crate::sumeragi::consensus::Vote {
         phase: Phase::Commit,
         block_hash,
@@ -99009,7 +99022,7 @@ async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
         view,
         epoch,
         highest_qc: None,
-        signer: 0,
+        signer,
         bls_sig: Vec::new(),
     };
     sign_vote_for_view_with_seed(
@@ -99020,12 +99033,6 @@ async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
         mode_tag,
         prf_seed,
     );
-    let cached_signature_topology =
-        super::topology_for_view(&cached_topology, height, view, mode_tag, prf_seed);
-
-    let live_topology = super::network_topology::Topology::new(live_roster.clone());
-    let live_signature_topology =
-        super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
     assert!(
         matches!(
             super::vote_signature_check(
@@ -125249,6 +125256,12 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
         height,
         view_idx,
     );
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending retained")
+        .touch_progress(Instant::now() - quorum_timeout - Duration::from_millis(1));
     let vote_status =
         actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view_idx);
     assert!(
