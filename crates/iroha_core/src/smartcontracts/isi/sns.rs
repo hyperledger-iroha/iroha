@@ -227,6 +227,13 @@ mod tests {
         AccountId::new(public_key)
     }
 
+    fn another_owner() -> AccountId {
+        let public_key = "ed0120C70416DC2D60D9AB2F0C6CED829837F1006DDED2DE794E9D5091A60663FA8C11"
+            .parse()
+            .expect("public key");
+        AccountId::new(public_key)
+    }
+
     fn next_header(state: &State) -> BlockHeader {
         let height = u64::try_from(state.view().height())
             .unwrap_or(0)
@@ -387,6 +394,119 @@ mod tests {
         assert!(
             renewed.expires_at_ms > initial_expiry,
             "renewal must extend the alias expiry"
+        );
+    }
+
+    #[test]
+    fn acquire_account_alias_lease_rejects_mismatched_payer() {
+        let authority = owner();
+        let payer = another_owner();
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let payer_account = Account::new(payer.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id)
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let mut world = World::with(
+            vec![genesis_domain],
+            vec![authority_account, payer_account],
+            vec![payment_definition],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+        let err = AcquireAccountAliasLease::new(
+            AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL),
+            authority.clone(),
+            payer,
+            1,
+            None,
+        )
+        .execute(&authority, &mut stx)
+        .expect_err("mismatched payer must fail");
+
+        assert!(
+            matches!(
+                err,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    _
+                ))
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn renew_account_alias_lease_rejects_non_owner_without_permission() {
+        let owner = owner();
+        let authority = another_owner();
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&owner);
+        let owner_account = Account::new(owner.clone()).build(&owner);
+        let authority_account = Account::new(authority.clone()).build(&owner);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id)
+            .with_name("xor".to_owned())
+            .build(&owner);
+        let mut world = World::with(
+            vec![genesis_domain],
+            vec![owner_account, authority_account],
+            vec![payment_definition],
+        );
+        seed_default_namespace_policies(&mut world);
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let alias =
+            AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let selector = {
+            let view = state.view();
+            crate::sns::selector_for_account_alias(&alias, &view.nexus.dataspace_catalog)
+                .expect("selector")
+        };
+        let address = AccountAddress::from_account_id(&owner).expect("address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            1,
+            5_000,
+            5_000 + (30 * 86_400_000),
+            5_000 + (90 * 86_400_000),
+            Metadata::default(),
+        );
+        state.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+        let err = RenewAccountAliasLease::new(alias, authority.clone(), 1)
+            .execute(&authority, &mut stx)
+            .expect_err("non-owner without permission must fail");
+
+        assert!(
+            matches!(err, InstructionExecutionError::InvariantViolation(_)),
+            "unexpected error: {err:?}"
         );
     }
 }

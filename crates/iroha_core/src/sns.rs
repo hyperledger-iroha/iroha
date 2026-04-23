@@ -1508,7 +1508,8 @@ mod tests {
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         sns::{
             FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
-            NameStatus, PaymentProofV1, RegisterNameRequestV1, TransferNameRequestV1,
+            NameStatus, NameTombstoneStateV1, PaymentProofV1, RegisterNameRequestV1,
+            TransferNameRequestV1,
         },
         transaction::TransactionBuilder,
     };
@@ -1663,6 +1664,40 @@ mod tests {
     }
 
     #[test]
+    fn quote_account_alias_registration_rejects_existing_record() {
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
+        let owner = owner();
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            1,
+            5_000,
+            5_000 + (30 * MS_PER_DAY),
+            5_000 + (90 * MS_PER_DAY),
+            Metadata::default(),
+        );
+        let mut world = World::default();
+        seed_default_namespace_policies(&mut world);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+        let view = world.view();
+
+        let err = quote_account_alias_registration(&view, &catalog, &alias, &owner, 1, None, 100)
+            .expect_err("existing registration must be rejected");
+
+        assert!(
+            err.to_string().contains("already registered"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn quote_account_alias_renewal_extends_from_existing_expiry() {
         let catalog = dataspace_catalog();
         let alias =
@@ -1693,6 +1728,43 @@ mod tests {
         assert_eq!(quote.selector, selector);
         assert_eq!(quote.charge_amount, 360);
         assert_eq!(quote.expires_at_ms, 5_000 + years_to_ms(3));
+    }
+
+    #[test]
+    fn quote_account_alias_renewal_rejects_tombstoned_record() {
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::new(7));
+        let owner = owner();
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let mut record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            1,
+            5_000,
+            5_000 + (30 * MS_PER_DAY),
+            5_000 + (90 * MS_PER_DAY),
+            Metadata::default(),
+        );
+        record.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
+            reason: "retired".to_owned(),
+        });
+        let mut world = World::default();
+        seed_default_namespace_policies(&mut world);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+        let view = world.view();
+
+        let err = quote_account_alias_renewal(&view, &catalog, &alias, 1, 4_000)
+            .expect_err("tombstoned registration must not renew");
+
+        assert!(
+            err.to_string().contains("tombstoned"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

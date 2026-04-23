@@ -4048,6 +4048,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         )
         .with_metadata(next_trigger_metadata);
         let trigger = Trigger::new(trigger_id.clone(), action);
+        let unregister =
+            InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+        gas = gas.saturating_add(self.queue_instruction(unregister));
         let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
         gas = gas.saturating_add(self.queue_instruction(register));
         Ok(gas)
@@ -10774,6 +10777,378 @@ mod tests {
             attempted_at_ms: scheduled_at_ms,
             amount: amount.clone(),
             asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Failed,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_set)
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_account_alias_auto_renew_queues_renewal_and_reschedules() {
+        crate::test_alias::ensure();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
+        let charge_asset_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "alias-renew".parse().unwrap();
+        let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
+            "member".parse().unwrap(),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(
+            &alias,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
+        )
+        .expect("selector");
+        let alias_address = iroha_data_model::account::AccountAddress::from_account_id(&subscriber)
+            .expect("account address");
+        let alias_record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            subscriber.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &alias_address,
+            )],
+            0,
+            1,
+            scheduled_at_ms,
+            scheduled_at_ms + (30 * 86_400_000),
+            scheduled_at_ms + (90 * 86_400_000),
+            Metadata::default(),
+        );
+
+        let subscription_state = SubscriptionState {
+            plan_id: charge_asset_id.clone(),
+            provider: subscriber.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let auto_renew = AccountAliasAutoRenewMetadata {
+            alias: "member@universal".to_owned(),
+            term_years: 1,
+            max_charge_amount: Numeric::new(200_u32, 0),
+            retry_backoff_ms: 500,
+            max_failures: 3,
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(auto_renew_key, Json::new(auto_renew.clone()));
+        let nft_id: NftId = "alias-renew$subscriptions.universal".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let charge_def = AssetDefinition::numeric(charge_asset_id.clone())
+            .with_name("xor".to_owned())
+            .build(&provider);
+        let asset = Asset::new(
+            AssetId::of(charge_asset_id.clone(), subscriber.clone()),
+            Numeric::new(500_u32, 0),
+        );
+
+        let domains = vec![
+            Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
+        ];
+        let mut world = World::with_assets(domains, accounts, [charge_def], [asset], [nft]);
+        crate::sns::seed_default_namespace_policies(&mut world);
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&alias_record),
+        );
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        trigger_metadata.insert(
+            "__registered_block_height".parse().unwrap(),
+            Json::from(42_u64),
+        );
+        trigger_metadata.insert(
+            "__registered_at_ms".parse().unwrap(),
+            Json::from(12_345_u64),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let quote = crate::sns::quote_account_alias_renewal(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            &alias,
+            auto_renew.term_years,
+            scheduled_at_ms,
+        )
+        .expect("renewal quote");
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.current_period_start_ms = scheduled_at_ms;
+        expected_state.current_period_end_ms = quote.expires_at_ms;
+        expected_state.next_charge_ms = quote.expires_at_ms;
+        expected_state.failure_count = 0;
+        expected_state.status = SubscriptionStatus::Active;
+
+        let expected_renew = InstructionBox::from(
+            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                alias.clone(),
+                subscriber.clone(),
+                auto_renew.term_years,
+            ),
+        );
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms,
+            period_end_ms: quote.expires_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: Numeric::from(quote.charge_amount),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_schedule = Schedule {
+            start_ms: quote.expires_at_ms,
+            period_ms: None,
+        };
+        let expected_action = iroha_data_model::trigger::action::Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
+        )
+        .with_metadata({
+            let mut metadata = trigger_metadata;
+            let registered_height_key: Name = "__registered_block_height".parse().unwrap();
+            metadata.remove(&registered_height_key);
+            let registered_time_key: Name = "__registered_at_ms".parse().unwrap();
+            metadata.remove(&registered_time_key);
+            metadata
+        });
+        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_renew.clone(),
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+                expected_register.clone(),
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_renew)
+            .saturating_add(crate::gas::meter_instruction(&expected_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
+            .saturating_add(crate::gas::meter_instruction(&expected_register));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_account_alias_auto_renew_suspends_when_alias_is_missing() {
+        crate::test_alias::ensure();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
+        let charge_asset_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "alias-renew-missing".parse().unwrap();
+
+        let subscription_state = SubscriptionState {
+            plan_id: charge_asset_id.clone(),
+            provider: subscriber.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let auto_renew = AccountAliasAutoRenewMetadata {
+            alias: "ghost@universal".to_owned(),
+            term_years: 1,
+            max_charge_amount: Numeric::new(200_u32, 0),
+            retry_backoff_ms: 500,
+            max_failures: 3,
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(auto_renew_key, Json::new(auto_renew.clone()));
+        let nft_id: NftId = "alias-missing$subscriptions.universal".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let charge_def = AssetDefinition::numeric(charge_asset_id.clone())
+            .with_name("xor".to_owned())
+            .build(&provider);
+        let asset = Asset::new(
+            AssetId::of(charge_asset_id.clone(), subscriber.clone()),
+            Numeric::new(500_u32, 0),
+        );
+
+        let domains = vec![
+            Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
+        ];
+        let mut world = World::with_assets(domains, accounts, [charge_def], [asset], [nft]);
+        crate::sns::seed_default_namespace_policies(&mut world);
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.failure_count = auto_renew.max_failures;
+        expected_state.status = SubscriptionStatus::Suspended;
+
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: Numeric::zero(),
+            asset_definition: charge_asset_id,
             status: SubscriptionInvoiceStatus::Failed,
             tx_hash: None,
         };

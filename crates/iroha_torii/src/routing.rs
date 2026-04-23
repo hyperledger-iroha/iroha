@@ -70190,6 +70190,16 @@ fn resolve_charge_ms(billing: SubscriptionBilling, requested: Option<u64>) -> Re
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_account_alias_auto_renew_resume_charge_ms(
+    subscription_state: &SubscriptionState,
+    requested: Option<u64>,
+) -> Result<u64> {
+    requested
+        .map(Ok)
+        .unwrap_or_else(|| Ok(network_time_ms()?.max(subscription_state.next_charge_ms)))
+}
+
+#[cfg(feature = "app_api")]
 fn initial_period_for_charge(
     billing: SubscriptionBilling,
     charge_at_ms: u64,
@@ -70877,7 +70887,12 @@ pub async fn handle_post_v1_subscription_resume(
     } = req;
     let authority: AccountId = authority.into();
 
-    let (mut subscription_state, owner, plan, billing_trigger_exists) = {
+    enum ResumeBilling {
+        Generic(SubscriptionPlan),
+        AccountAliasAutoRenew,
+    }
+
+    let (mut subscription_state, owner, billing, billing_trigger_exists) = {
         let world = state.world_view();
         let nft = world
             .nfts()
@@ -70886,18 +70901,23 @@ pub async fn handle_post_v1_subscription_resume(
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let plan_def = world
-            .asset_definitions()
-            .get(&subscription_state.plan_id)
-            .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
-        let plan = subscription_plan_from_metadata(plan_def.metadata())?
-            .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
+        let billing = if account_alias_auto_renew_from_metadata(&nft.content)?.is_some() {
+            ResumeBilling::AccountAliasAutoRenew
+        } else {
+            let plan_def = world
+                .asset_definitions()
+                .get(&subscription_state.plan_id)
+                .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
+            let plan = subscription_plan_from_metadata(plan_def.metadata())?
+                .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
+            ResumeBilling::Generic(plan)
+        };
         let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
             .is_some();
-        (subscription_state, owner, plan, billing_trigger_exists)
+        (subscription_state, owner, billing, billing_trigger_exists)
     };
     if owner != authority {
         return Err(conversion_error(
@@ -70908,13 +70928,22 @@ pub async fn handle_post_v1_subscription_resume(
         return Err(conversion_error("subscription is not paused".to_string()));
     }
 
-    let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
-    let (period_start, period_end) = initial_period_for_charge(plan.billing, next_charge_ms)?;
+    let next_charge_ms = match billing {
+        ResumeBilling::Generic(plan) => {
+            let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
+            let (period_start, period_end) =
+                initial_period_for_charge(plan.billing, next_charge_ms)?;
+            subscription_state.current_period_start_ms = period_start;
+            subscription_state.current_period_end_ms = period_end;
+            next_charge_ms
+        }
+        ResumeBilling::AccountAliasAutoRenew => {
+            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, charge_at_ms)?
+        }
+    };
     subscription_state.status = SubscriptionStatus::Active;
     subscription_state.failure_count = 0;
     subscription_state.next_charge_ms = next_charge_ms;
-    subscription_state.current_period_start_ms = period_start;
-    subscription_state.current_period_end_ms = period_end;
 
     let mut instructions = Vec::new();
     instructions.push(InstructionBox::from(SetKeyValue::nft(
@@ -71622,14 +71651,6 @@ mod subscription_api_tests {
         plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
         subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
     ) -> Arc<CoreState> {
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&provider);
-        let provider_account = provider.clone();
-        let subscriber_account = subscriber.clone();
-        let accounts = vec![
-            Account::new(provider_account.account().clone()).build(&provider),
-            Account::new(subscriber_account.account().clone()).build(&subscriber),
-        ];
         let asset_definitions: Vec<AssetDefinition> = plans
             .into_iter()
             .map(|(plan_id, plan)| {
@@ -71651,6 +71672,23 @@ mod subscription_api_tests {
                 Nft::new(nft_id, metadata).build(&subscriber)
             })
             .collect();
+        state_with_asset_definitions_and_nfts(provider, subscriber, asset_definitions, nfts)
+    }
+
+    fn state_with_asset_definitions_and_nfts(
+        provider: AccountId,
+        subscriber: AccountId,
+        asset_definitions: Vec<AssetDefinition>,
+        nfts: Vec<Nft>,
+    ) -> Arc<CoreState> {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id).build(&provider);
+        let provider_account = provider.clone();
+        let subscriber_account = subscriber.clone();
+        let accounts = vec![
+            Account::new(provider_account.account().clone()).build(&provider),
+            Account::new(subscriber_account.account().clone()).build(&subscriber),
+        ];
         let world = World::with_assets([domain], accounts, asset_definitions, [], nfts);
         Arc::new(CoreState::new_for_testing(
             world,
@@ -72259,6 +72297,99 @@ mod subscription_api_tests {
         .into_response();
         assert_eq!(queue.queued_len(), 6);
         assert_action_ok(resp, &active_id).await;
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_resume_supports_alias_auto_renew_nfts() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let charge_asset_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554402fa");
+        let subscription_id: NftId = "sub-alias-resume$wonderland.universal".parse().unwrap();
+        let billing_trigger_id: TriggerId = "bill_alias_resume".parse().unwrap();
+        let mut subscription_state = build_account_alias_auto_renew_state(
+            subscriber.clone(),
+            charge_asset_id.clone(),
+            billing_trigger_id.clone(),
+            1_000,
+            2_000,
+        );
+        subscription_state.status = SubscriptionStatus::Paused;
+        subscription_state.next_charge_ms = 3_000;
+        subscription_state.failure_count = 2;
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(subscription_state),
+        );
+        metadata.insert(
+            (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+            IrohaJson::new(build_account_alias_auto_renew_settings(
+                "member@universal".to_owned(),
+                1,
+                200,
+                500,
+                3,
+            )),
+        );
+
+        let asset_definitions =
+            vec![AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider)];
+        let nfts = vec![Nft::new(subscription_id.clone(), metadata).build(&subscriber)];
+        let state = state_with_asset_definitions_and_nfts(
+            provider,
+            subscriber.clone(),
+            asset_definitions,
+            nfts,
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let req = SubscriptionActionDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: Some(5_000),
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_resume(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry,
+            subscription_id.clone(),
+            NoritoJson(req),
+        )
+        .await
+        .expect("resume ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &subscription_id).await;
+
+        let applied =
+            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
+        assert_eq!(applied, 1, "resume transaction should apply");
+
+        let view = state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should exist");
+        let resumed_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(resumed_state.status, SubscriptionStatus::Active);
+        assert_eq!(resumed_state.failure_count, 0);
+        assert_eq!(resumed_state.next_charge_ms, 5_000);
+        assert_eq!(resumed_state.current_period_start_ms, 1_000);
+        assert_eq!(resumed_state.current_period_end_ms, 2_000);
+        assert!(
+            view.world()
+                .triggers()
+                .time_triggers()
+                .get(&billing_trigger_id)
+                .is_some(),
+            "resume should register a new billing trigger"
+        );
     }
 }
 
