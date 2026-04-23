@@ -105,6 +105,16 @@ Last updated: 2026-04-23
   - `cargo test -p iroha_core handle_vote_uses_cached_roster_for_frontier_commit_vote_validation -- --nocapture`
   - `cargo test -p iroha_core reschedule_stale_pending_blocks_targets_snapshot_roster -- --nocapture`
 
+## 2026-04-23 Sumeragi commit-history test isolation fix
+
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now takes `super::status::commit_history_test_guard()` in the `refresh_derived_rbc_session_roster_*` regression slice and in `reschedule_stale_pending_blocks_targets_snapshot_roster`, isolating those fixtures from the process-global commit-QC history cache that parallel `iroha_core --lib` runs mutate.
+- This keeps the derived-roster-unavailable expectations deterministic and preserves the snapshot-roster reschedule assertions even when neighboring tests seed commit history for the same heights/views.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core refresh_derived_rbc_session_roster_ --lib`
+  - `cargo test -p iroha_core reschedule_stale_pending_blocks_targets_snapshot_roster --lib`
+  - `cargo test -p iroha_core --lib`
+
 ## 2026-04-23 Torii zk prover report-filter coverage follow-up
 
 - `crates/iroha_torii/src/zk_prover.rs` now adds six more direct prover-report regressions in the same report-management slice:

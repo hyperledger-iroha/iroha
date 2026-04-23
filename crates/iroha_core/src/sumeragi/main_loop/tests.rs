@@ -7602,6 +7602,7 @@ async fn allow_unverified_rbc_roster_is_disabled_for_npos_future_height_without_
 
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_returns_none_for_authoritative_source() {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -7640,6 +7641,7 @@ async fn refresh_derived_rbc_session_roster_returns_none_for_authoritative_sourc
 
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_returns_none_when_derived_roster_unavailable() {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 2;
@@ -7687,6 +7689,7 @@ async fn refresh_derived_rbc_session_roster_returns_none_when_derived_roster_una
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_returns_none_when_cache_missing_and_roster_unavailable()
 {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 2;
@@ -7738,6 +7741,7 @@ async fn refresh_derived_rbc_session_roster_returns_none_when_cache_missing_and_
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_seeds_missing_cache_for_permissioned_next_height_without_payload()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -7791,6 +7795,7 @@ async fn refresh_derived_rbc_session_roster_seeds_missing_cache_for_permissioned
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_permissioned_next_height_without_payload()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -8434,6 +8439,7 @@ async fn ensure_rbc_session_roster_returns_empty_when_no_cache_and_no_derived_ro
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_promotes_cached_roster_when_source_missing_for_authoritative_same_epoch_rbc()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8502,6 +8508,7 @@ async fn refresh_derived_rbc_session_roster_promotes_cached_roster_when_source_m
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_returns_none_when_source_missing_and_derived_unavailable()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8567,6 +8574,7 @@ async fn refresh_derived_rbc_session_roster_returns_none_when_source_missing_and
 
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_seeds_missing_cache_for_authoritative_same_epoch_rbc() {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8630,6 +8638,7 @@ async fn refresh_derived_rbc_session_roster_seeds_missing_cache_for_authoritativ
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_promotes_matching_init_cache_for_authoritative_same_epoch_rbc()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8694,6 +8703,7 @@ async fn refresh_derived_rbc_session_roster_promotes_matching_init_cache_for_aut
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_authoritative_same_epoch_rbc()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8760,6 +8770,7 @@ async fn refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_author
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_replaces_stale_missing_source_cache_for_authoritative_same_epoch_rbc()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8835,6 +8846,7 @@ async fn refresh_derived_rbc_session_roster_replaces_stale_missing_source_cache_
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_locally_known_same_epoch_block()
  {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -8900,6 +8912,7 @@ async fn refresh_derived_rbc_session_roster_replaces_stale_init_cache_for_locall
 #[tokio::test(flavor = "current_thread")]
 async fn refresh_derived_rbc_session_roster_seeds_missing_cache_for_locally_known_same_epoch_block()
 {
+    let _history_guard = super::status::commit_history_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 100;
@@ -125182,6 +125195,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_a
 async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
     let _worker_guard = super::status::worker_queue_test_guard();
     let _rbc_guard = super::status::rbc_status_test_guard();
+    let _history_guard = super::status::commit_history_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     super::status::set_tx_queue_backpressure(crate::queue::BackpressureState::Healthy {
         queued: 0,
