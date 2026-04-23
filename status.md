@@ -2,6 +2,73 @@
 
 Last updated: 2026-04-23
 
+## 2026-04-23 Torii zk prover report-filter coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds six more direct prover-report regressions in the same report-management slice:
+  - single-delete recovery coverage proving `delete_report(...)` rebuilds a malformed `reports_index.json` from on-disk reports and only removes the requested report,
+  - count-handler coverage proving zero is returned when no summaries satisfy the request,
+  - count-handler filter composition coverage for `content_type`, `has_tag`, `since`, and `until`,
+  - list-handler coverage proving `latest=true` still respects the `messages_only` filter and returns the newest failed message,
+  - bulk-delete coverage for uppercase `id` normalization,
+  - bulk-delete filter composition coverage for `content_type`, `has_tag`, `since`, and `until`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover malformed-index save recovery coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds seven more direct prover-report regressions in the same report-management slice:
+  - empty-state index rebuild coverage proving `load_report_summaries()` persists an empty index when the reports directory starts empty,
+  - helper coverage proving `remove_report_summary(...)` ignores both invalid ids and valid-but-missing ids without disturbing existing summaries,
+  - save-path coverage proving `save_report(...)` rebuilds from on-disk report files when `reports_index.json` is malformed and then preserves both reports in the recovered index,
+  - GC coverage proving expired summaries are still deleted when the backing report file is already gone,
+  - count-handler coverage for `ok_only=true&errors_only=true`, exercising the “count everything” filter combination,
+  - list-handler coverage for uppercase `id` normalization and the mixed-case `order=Desc` branch.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover pagination and GC-rebuild coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five more direct regressions in the same prover-report slice:
+  - helper coverage proving `delete_report_files(...)` ignores invalid ids without disturbing valid reports or the persisted summary index,
+  - direct `load_report(...)` invalid-id coverage for the early sanitize rejection branch,
+  - direct `gc_reports_once()` malformed-index rebuild coverage proving GC falls back to the on-disk report files and preserves fresh reports,
+  - list-handler coverage for combined `content_type` / `has_tag` / `since_ms` / `before_ms` filtering through the real JSON response path,
+  - list-handler coverage for the normal `offset` + `limit` pagination window, not only the past-end and limit-cap branches.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover report-alias and index-normalization coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five more direct prover-report regressions in the same report-management slice:
+  - valid persisted report-index normalization coverage proving `load_report_summaries()` drops invalid ids, lowercases uppercase ids, and keeps only the last duplicate entry when the index file itself is otherwise valid,
+  - direct `gc_reports_once()` no-op coverage proving fresh reports stay indexed and `deleted == 0` when nothing has expired,
+  - direct `failed_only=true` alias coverage for list, count, and bulk-delete handlers so those paths are exercised independently of `errors_only` and `messages_only`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover report-handler coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds seven more direct report-management regressions in the same prover slice:
+  - invalid report-id rejection coverage for the list, count, and bulk-delete handlers,
+  - happy-path coverage for single-report `GET` payload serialization and single-report `DELETE` index pruning,
+  - direct stale-index helper coverage proving `delete_report_files(...)` removes a persisted summary even when the backing file is already missing,
+  - direct handler coverage proving `latest=true` ignores `order`, `offset`, and `limit` instead of applying pagination first.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover GC test boundary fix
+
+- `crates/iroha_torii/src/zk_prover.rs` now keeps the GC retention regression safely inside the configured TTL window instead of placing the "fresh" report just `1 ms` below expiry, which could age out before `gc_reports_once()` recomputed `now`.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii zk_prover::tests::gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index -- --nocapture`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
 ## 2026-04-23 Torii space-directory public-route coverage follow-up
 
 - `crates/iroha_torii/tests/space_directory_manifests.rs` now adds two more router-level regressions in the same Space Directory slice:
