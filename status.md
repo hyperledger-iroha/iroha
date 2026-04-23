@@ -2,6 +2,88 @@
 
 Last updated: 2026-04-23
 
+## 2026-04-23 Torii zk prover handler combo follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds four more direct prover-report handler regressions around mixed filter/projection combinations that were still only exercised incidentally.
+- Added uppercase `id` query normalization coverage for `handle_count_reports(...)`, direct `messages_only=true` coverage proving successful reports are excluded from the projection even when `ok_only=true` is also present, and `latest=true` coverage for the default full-object list projection.
+- Added bulk-delete coverage proving `ok_only=true&errors_only=true` collapses to deleting both successful and failed reports instead of silently filtering one side out.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover report load-failure follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five more narrow prover-report regressions around valid-but-missing endpoints and unloadable report bodies so those fallback branches stay covered directly.
+- Added `load_report(...)` rejection coverage for non-UTF-8 and malformed-JSON report files, plus direct `handle_get_report(...)` coverage for a valid-but-missing report id.
+- Added list-handler coverage proving the default full-object projection silently skips summary entries whose on-disk report body cannot be decoded, and delete-handler coverage for the `{ deleted: 0, ids: [] }` no-match response path.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover helper filter and upsert follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five more narrow prover-report regressions around helper behavior that was still mostly only covered indirectly: summary upsert replacement, filename discovery normalization, direct filter predicate edges, and single-report delete misses.
+- Added direct `save_report(...)` upsert coverage proving the persisted summary index is updated in place for repeated ids rather than accumulating duplicates, and that the on-disk report body reflects the latest write.
+- Added helper coverage for `list_report_ids(...)` ignoring non-report and invalid-id entries, plus `filter_report_summary(...)` exact-id, content-type, tag, time-bound, and ok/failed matrix branches.
+- Added direct `handle_delete_report(...)` not-found coverage for a valid-but-missing report id.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover helper coverage GC and cap follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds four more unit-style regressions for the remaining cheap helper branches in the prover report slice: invalid-id `save_report(...)` rejection, `gc_reports_once()` expiry pruning, empty-result `latest=true` projection, and the `limit.min(1000)` safety cap.
+- Added direct GC coverage proving expired report files are deleted, fresh reports remain, and the persisted summary index is rewritten to only the retained entries.
+- Added direct list-handler coverage proving `latest=true` with no matches returns an empty ids array and that oversized caller limits are capped to the first 1000 reports.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover helper coverage edge follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds six more narrow unit-style regressions in the prover report helper slice so the remaining normalization, rebuild, alias, and ordering branches are covered directly instead of only incidentally.
+- Added `normalize_report_summaries(...)` coverage proving invalid ids are dropped and duplicate ids collapse to the last entry after canonical lowercase normalization.
+- Added malformed `reports_index.json` rebuild coverage for `load_report_summaries()`, plus defensive persisted-id normalization coverage for `load_report(...)` when on-disk JSON carries uppercase ids.
+- Added `errors_only=true` alias coverage for both `handle_count_reports(...)` and `handle_delete_reports(...)`, plus case-insensitive `order=DESC` coverage for `handle_list_reports(...)`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover helper coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five direct unit-style coverage tests for prover report helper and handler edges that were previously only hit indirectly, if at all.
+- Added stale summary-index cleanup coverage for `load_report_summaries()`, proving missing report files are pruned from `reports_index.json` and the cleaned index is persisted.
+- Added projection precedence coverage proving `ids_only=true` wins over `messages_only=true`, while `messages_only=true` still preserves `error: null` for failed summaries that carry no error string.
+- Added bulk-delete response coverage for `handle_delete_reports(...)`, asserting the returned `{ deleted, ids }` payload matches the exact-id filter and that non-matching reports remain on disk.
+- Added paging edge coverage proving `offset` values past the filtered result length return an empty JSON array instead of leaking stale entries.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover report coverage follow-up
+
+- `crates/iroha_torii/tests/zk_prover_integration.rs` now adds three focused prover-report endpoint regressions around query/filter edge cases instead of only the happy-path list/filter coverage.
+- Added invalid query-id coverage for `GET /v1/zk/prover/reports`, `GET /v1/zk/prover/reports/count`, and `DELETE /v1/zk/prover/reports`, asserting the shared `invalid report id` rejection path stays wired through each app-facing handler.
+- Added a combined `ok_only=true&failed_only=true` list case so the fallback branch that returns both successful and failed reports remains covered.
+- Added a `messages_only=true&latest=true&order=asc&offset=1&limit=1` case proving `latest=true` overrides paging/order inputs before the failed-report message projection runs.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
+## 2026-04-23 Torii zk prover fixture alignment
+
+- `crates/iroha_torii/tests/zk_prover_integration.rs` now uses the supported `halo2/ipa:tiny-add` deterministic Halo2 fixture circuit instead of the unsupported `halo2/ipa:tiny-add-v1` alias, so the shared fixture helper emits inline verifying-key bytes again for the prover report integration coverage.
+- Focused validation for this fix:
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_list_get_delete -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_server_side_filters -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration -- --nocapture`
+
 ## 2026-04-23 Sumeragi main_loop coverage edge follow-up
 
 - `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now adds five more direct unit tests in the recent known-block replay / exact-frontier helper slice so the remaining explicit-target and local-only frontier branches are exercised directly.
