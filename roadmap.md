@@ -2,6 +2,188 @@
 
 Last updated: 2026-04-22
 
+Latest sync (2026-04-22 Torii zk roots alias-error and JSON-negotiation coverage expansion):
+The same `/v1/zk/roots` slice now also pins the remaining small route and
+negotiation cases that were still local to this path. `crates/iroha_torii/src/routing.rs`
+now proves `application/*`, vendor `+json`, and zero-quality Norito `Accept`
+headers all resolve to JSON, and that blanks-only pipeline gas-asset defaults
+still resolve to `None`. `crates/iroha_torii/tests/zk_endpoints.rs` now proves
+parseable-but-missing asset aliases return `404` and blank selectors return
+`403`, while `crates/iroha_torii/tests/zk_roots_handler_integration.rs` now
+proves the route forwards unsupported `Accept` headers and returns `406`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_endpoints.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_roots_handler_integration.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+
+Latest sync (2026-04-22 Torii zk roots accept-negotiation and default-fallback coverage expansion):
+The same `/v1/zk/roots` slice now covers the remaining small local branches
+around selector normalization, default gas-asset fallback, and response
+negotiation. `crates/iroha_torii/src/routing.rs` now proves blank selectors are
+rejected directly, trimmed and canonical Base58 gas-asset literals normalize
+correctly, empty custom gas-asset lists fall back to pipeline defaults, blank
+pipeline entries are skipped, JSON wins when its `Accept` q-value is higher,
+and wildcard `Accept` headers resolve to JSON. The integration file
+`crates/iroha_torii/tests/zk_roots_handler_integration.rs` now also proves that
+the route forwards `Accept` and returns a decodable Norito payload for a
+non-empty roots window.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_roots_handler_integration.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+
+Latest sync (2026-04-22 Torii zk roots trimmed-selector and nonzero-max coverage expansion):
+The same `/v1/zk/roots` slice now also covers the remaining small endpoint and
+default-fallback branches that were still local to this path. The
+`zk_roots_selector_tests` unit module in `crates/iroha_torii/src/routing.rs`
+now proves blank custom gas-asset entries fall back to the pipeline default.
+The integration file `crates/iroha_torii/tests/zk_roots_handler_integration.rs`
+now also proves that nonzero `max` values above the cap are still bounded by
+`root_history_cap` and that trimmed asset-alias literals resolve correctly
+against non-empty shielded state.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_roots_handler_integration.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused zk roots trimmed-selector
+    and nonzero-max coverage expansion
+
+Latest sync (2026-04-22 Torii zk roots default-selection and window-shape coverage expansion):
+The same `/v1/zk/roots` slice now also covers the last narrow default-selection
+and windowing branches that were still local to this endpoint. The
+`zk_roots_selector_tests` unit module in `crates/iroha_torii/src/routing.rs`
+now verifies first-non-empty custom gas-asset selection, invalid custom-entry
+fallback, and the unconfigured `None`/empty-metadata path. The integration file
+`crates/iroha_torii/tests/zk_roots_handler_integration.rs` now also proves the
+handler returns all roots when the requested window exceeds history and returns
+an empty `roots` list while preserving `latest` and `height` when
+`root_history_cap` is zero.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_roots_handler_integration.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused zk roots default-selection
+    and window-shape coverage expansion
+
+Latest sync (2026-04-22 Torii zk roots gas-default and malformed-accept coverage expansion):
+The same `/v1/zk/roots` unit slice in `crates/iroha_torii/src/routing.rs` now
+also covers the remaining nearby gas-default branches: explicit invalid
+`gas_asset_id` conversion failures, custom-parameter precedence over pipeline
+defaults, fallback when the custom parameter payload is malformed, and metadata
+injection of the selected gas asset. The same module now also pins the invalid
+`Accept` header encoding path that returns `406`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused zk roots gas-default and
+    malformed-accept coverage expansion
+
+Latest sync (2026-04-22 Torii zk roots selector and negotiation coverage expansion):
+The same `/v1/zk/roots` unit-test slice in `crates/iroha_torii/src/routing.rs`
+now covers more of the selector and gas-default helper branches directly:
+trimmed alias selectors, canonical-id `NotFound`, blank gas-asset ids, invalid
+pipeline defaults falling back to the trimmed configured literal, Norito
+preference on equal `Accept` q-values, and `406` handling for invalid q-values.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused zk roots selector and
+    negotiation coverage expansion
+
+Latest sync (2026-04-22 Torii zk roots handler coverage expansion):
+The same `/v1/zk/roots` slice now has more focused coverage in both the direct
+handler and route-level tests. `crates/iroha_torii/src/routing.rs` now verifies
+alias-literal handling with empty state, Norito response negotiation, `406`
+handling for unsupported `Accept` headers, and blank-selector rejection. The
+router regression file `crates/iroha_torii/tests/zk_endpoints.rs` now also pins
+the invalid-selector HTTP path as `403`.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_endpoints.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib zk_roots_selector_tests -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused zk roots handler coverage
+    expansion
+
+Latest sync (2026-04-22 Torii zk roots endpoint fixture alignment):
+The lightweight router coverage in `crates/iroha_torii/tests/zk_endpoints.rs`
+now matches the current `/v1/zk/roots` contract by seeding a real asset
+definition for the `200` case and asserting the empty roots payload shape when
+that asset has no shielded state. The same file now also pins the missing-asset
+path as `404` so selector-resolution changes do not silently break the endpoint
+tests again.
+
+- shipped in:
+  - `/home/mtakemiya/dev/iroha/crates/iroha_torii/tests/zk_endpoints.rs`
+  - `/home/mtakemiya/dev/iroha/status.md`
+  - `/home/mtakemiya/dev/iroha/roadmap.md`
+- validation status:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test zk_endpoints --test zk_roots_handler_integration -- --nocapture`
+  - `git diff --check`
+- open work after this slice:
+  - rerun a broader `cargo test -p iroha_torii` or workspace `cargo test`
+    window when there is budget beyond the focused zk endpoint regression fix
+
 Latest sync (2026-04-22 Torii sanitizer spawn and reader coverage expansion):
 The same `iroha_torii` attachment sanitizer subprocess slice now covers two
 more failure branches in
