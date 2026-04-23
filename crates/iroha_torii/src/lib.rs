@@ -4312,6 +4312,108 @@ async fn handler_accounts_onboard_multisig(
 }
 
 #[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_account_aliases(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    path: AxPath<String>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_account_aliases(app.clone(), path).await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        routing::ENDPOINT_ACCOUNT_ALIASES.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_account_aliases(app.clone(), path).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_account_alias_renew(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    path: AxPath<(String, String)>,
+    request: crate::utils::extractors::NoritoJson<crate::routing::AccountAliasRenewRequestDto>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_post_v1_account_alias_renew(
+            app.clone(),
+            path,
+            request,
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        routing::ENDPOINT_ACCOUNT_ALIAS_RENEW.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_account_alias_renew(app.clone(), path, request, app.telemetry.clone())
+        .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_account_alias_auto_renew(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    path: AxPath<(String, String)>,
+    request: crate::utils::extractors::NoritoJson<crate::routing::AccountAliasAutoRenewRequestDto>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_post_v1_account_alias_auto_renew(
+            app.clone(),
+            path,
+            request,
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        routing::ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+
+    routing::handle_post_v1_account_alias_auto_renew(
+        app.clone(),
+        path,
+        request,
+        app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
 #[derive(JsonSerialize, JsonDeserialize)]
 struct AccountsPortfolioQuery {
     #[norito(default)]
@@ -28470,6 +28572,11 @@ struct AccountOnboardingSigner {
     private_key: ExposedPrivateKey,
     allowed_permissions: std::collections::BTreeSet<String>,
     fee_sponsor_account: Option<AccountId>,
+    alias_lease_term_years: u8,
+    alias_auto_renew_enabled: bool,
+    alias_auto_renew_retry_backoff_ms: u64,
+    alias_auto_renew_max_failures: u32,
+    alias_auto_renew_subscription_domain: Option<DomainId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -29763,6 +29870,18 @@ impl Torii {
                 .route(
                     "/v1/accounts/onboard/multisig",
                     post(handler_accounts_onboard_multisig),
+                )
+                .route(
+                    "/v1/accounts/{account_id}/aliases",
+                    get(handler_account_aliases),
+                )
+                .route(
+                    "/v1/accounts/{account_id}/aliases/{literal}/renew",
+                    post(handler_account_alias_renew),
+                )
+                .route(
+                    "/v1/accounts/{account_id}/aliases/{literal}/auto-renew",
+                    post(handler_account_alias_auto_renew),
                 )
                 .route(
                     "/v1/accounts/{uaid}/portfolio",
@@ -31235,6 +31354,13 @@ impl Torii {
                 private_key: cfg.private_key.clone(),
                 allowed_permissions: cfg.allowed_permissions.iter().cloned().collect(),
                 fee_sponsor_account: cfg.fee_sponsor_account.clone(),
+                alias_lease_term_years: cfg.alias_lease_term_years,
+                alias_auto_renew_enabled: cfg.alias_auto_renew_enabled,
+                alias_auto_renew_retry_backoff_ms: cfg.alias_auto_renew_retry_backoff_ms,
+                alias_auto_renew_max_failures: cfg.alias_auto_renew_max_failures,
+                alias_auto_renew_subscription_domain: cfg
+                    .alias_auto_renew_subscription_domain
+                    .clone(),
             });
         #[cfg(feature = "app_api")]
         let offline_issuer = config.offline_issuer.as_ref().map(|cfg| {

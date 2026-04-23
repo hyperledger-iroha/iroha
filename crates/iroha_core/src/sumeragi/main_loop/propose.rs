@@ -2008,7 +2008,7 @@ impl Actor {
             );
             return;
         }
-        let mut topology = super::network_topology::Topology::new(proposal_roster);
+        let mut topology = super::network_topology::Topology::new(proposal_roster.clone());
         let leader_index = match self.leader_index_for(&mut topology, height, view) {
             Ok(idx) => idx,
             Err(err) => {
@@ -2061,9 +2061,11 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let Some(block_created) =
-            self.frontier_block_created_for_proposal_wire(&pending_block, &proposal)
-        else {
+        let Some(block_created) = self.frontier_block_created_for_local_proposal_wire(
+            &pending_block,
+            &proposal,
+            &proposal_roster,
+        ) else {
             warn!(
                 height,
                 view,

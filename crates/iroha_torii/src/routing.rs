@@ -54,6 +54,10 @@ use iroha_core::{
     },
     query::store::LiveQueryStoreHandle,
     queue::RoutingDecision,
+    sns::{
+        LeaseQuote, SnsNamespace, get_name_record, quote_account_alias_registration,
+        quote_account_alias_renewal,
+    },
     state::{
         AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
@@ -2243,6 +2247,80 @@ pub struct AliasLookupByAccountResponseDto {
     pub items: Vec<AliasLookupByAccountItemDto>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasLeaseDto {
+    pub alias: String,
+    pub dataspace: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    pub is_primary: bool,
+    pub lease_status: String,
+    pub expires_at_ms: u64,
+    pub grace_expires_at_ms: u64,
+    pub redemption_expires_at_ms: u64,
+    pub auto_renew_enabled: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub subscription_status: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_charge_ms: Option<u64>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_invoice_status: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub max_charge_amount: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasLeaseListResponseDto {
+    pub account_id: String,
+    pub total: u64,
+    pub items: Vec<AccountAliasLeaseDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct AccountAliasRenewRequestDto {
+    pub authority: String,
+    pub private_key: ExposedPrivateKey,
+    #[norito(default)]
+    pub term_years: Option<u8>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasRenewResponseDto {
+    pub account_id: String,
+    pub alias: String,
+    pub tx_hash_hex: String,
+    pub status: &'static str,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct AccountAliasAutoRenewRequestDto {
+    pub authority: String,
+    pub private_key: ExposedPrivateKey,
+    pub enabled: bool,
+    #[norito(default)]
+    pub term_years: Option<u8>,
+    #[norito(default)]
+    pub max_charge_amount: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasAutoRenewResponseDto {
+    pub account_id: String,
+    pub alias: String,
+    pub auto_renew_enabled: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    pub status: &'static str,
 }
 
 #[derive(
@@ -32282,6 +32360,11 @@ static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_TRIGGER_REF_METADATA_KEY)
         .expect("subscription trigger reference metadata key is valid")
 });
+#[cfg(feature = "app_api")]
+static ACCOUNT_ALIAS_AUTO_RENEW_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(iroha_data_model::subscription::ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY)
+        .expect("account alias auto-renew metadata key is valid")
+});
 
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
@@ -32297,6 +32380,13 @@ pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_ALIAS_RENEW: &str = "/v1/accounts/{account_id}/aliases/{literal}/renew";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW: &str =
+    "/v1/accounts/{account_id}/aliases/{literal}/auto-renew";
 #[cfg(feature = "app_api")]
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
 #[cfg(feature = "app_api")]
@@ -54763,6 +54853,7 @@ pub struct AccountOnboardingResponseDto {
     pub uaid: String,
     pub tx_hash_hex: String,
     pub status: &'static str,
+    pub lease: AccountAliasLeaseDto,
 }
 
 #[cfg(feature = "app_api")]
@@ -54868,6 +54959,8 @@ pub struct MultisigAccountOnboardingResponseDto {
     pub account_id: String,
     pub tx_hash_hex: String,
     pub status: &'static str,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lease: Option<AccountAliasLeaseDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -54904,6 +54997,24 @@ impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardin
             norito::Error::Message(format!(
                 "invalid MultisigAccountOnboardingRequestDto: {err}"
             ))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasRenewRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!("invalid AccountAliasRenewRequestDto: {err}"))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasAutoRenewRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!("invalid AccountAliasAutoRenewRequestDto: {err}"))
         })
     }
 }
@@ -55605,6 +55716,94 @@ fn alias_domain_to_domain_id(
     })
 }
 
+#[cfg(feature = "app_api")]
+fn account_alias_scope_strings(
+    alias: &account::rekey::AccountAlias,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> Result<(String, Option<String>)> {
+    let dataspace = catalog
+        .by_id(alias.dataspace)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| onboarding_invalid_request("alias dataspace is not registered"))?;
+    let domain = alias
+        .domain
+        .as_ref()
+        .map(ToString::to_string)
+        .map(|domain| format!("{domain}.{dataspace}"));
+    Ok((dataspace, domain))
+}
+
+#[cfg(feature = "app_api")]
+fn build_onboarding_alias_auto_renew_instructions(
+    onboarding_authority: &AccountId,
+    subscriber: &AccountId,
+    subscription_domain: &DomainId,
+    alias_literal: &str,
+    lease_quote: &LeaseQuote,
+    term_years: u8,
+    retry_backoff_ms: u64,
+    max_failures: u32,
+    max_charge_amount: u64,
+) -> Result<(Vec<InstructionBox>, NftId)> {
+    use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+
+    let subscription_id =
+        account_alias_auto_renew_subscription_id(subscription_domain, subscriber, alias_literal)?;
+    let billing_trigger_id = derive_trigger_id("sub_bill_", &subscription_id)?;
+    let settings = build_account_alias_auto_renew_settings(
+        alias_literal.to_owned(),
+        term_years,
+        max_charge_amount,
+        retry_backoff_ms,
+        max_failures,
+    );
+    let subscription_state = build_account_alias_auto_renew_state(
+        subscriber.clone(),
+        lease_quote.payment_asset_definition_id.clone(),
+        billing_trigger_id.clone(),
+        network_time_ms()?,
+        lease_quote.expires_at_ms,
+    );
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state),
+    );
+    metadata.insert(
+        (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+        IrohaJson::new(settings),
+    );
+    let permission: Permission = CanRegisterTrigger {
+        authority: subscriber.clone(),
+    }
+    .into();
+    Ok((
+        vec![
+            InstructionBox::from(Grant::account_permission(
+                permission.clone(),
+                onboarding_authority.clone(),
+            )),
+            InstructionBox::from(Register::nft(Nft::new(subscription_id.clone(), metadata))),
+            InstructionBox::from(Register::trigger(build_billing_trigger(
+                billing_trigger_id,
+                subscriber.clone(),
+                subscription_id.clone(),
+                lease_quote.expires_at_ms,
+            ))),
+            InstructionBox::from(Transfer::nft(
+                onboarding_authority.clone(),
+                subscription_id.clone(),
+                subscriber.clone(),
+            )),
+            InstructionBox::from(Revoke::account_permission(
+                permission,
+                onboarding_authority.clone(),
+            )),
+        ],
+        subscription_id,
+    ))
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
@@ -55639,6 +55838,8 @@ pub async fn handle_v1_accounts_onboard(
     let canonical_alias = alias_label
         .to_literal(&nexus.dataspace_catalog)
         .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    let (alias_dataspace, alias_domain) =
+        account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
     let account_id = if let Some(account_literal) = account_id
         .as_deref()
         .map(str::trim)
@@ -55668,6 +55869,18 @@ pub async fn handle_v1_accounts_onboard(
         return Err(onboarding_invalid_request("account already exists"));
     }
 
+    let lease_term_years = signer.alias_lease_term_years.max(1);
+    let lease_quote = quote_account_alias_registration(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias_label,
+        &account_id,
+        lease_term_years,
+        None,
+        network_time_ms()?,
+    )
+    .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+
     let uaid = if let Some(literal) = uaid {
         parse_uaid_literal(&literal)?
     } else {
@@ -55696,7 +55909,7 @@ pub async fn handle_v1_accounts_onboard(
     let register_builder = dm::Account::new(account_id.clone());
     let register = Register::account(
         register_builder
-            .with_label(Some(alias_label))
+            .with_label(Some(alias_label.clone()))
             .with_metadata(metadata)
             .with_uaid(Some(uaid)),
     );
@@ -55737,11 +55950,52 @@ pub async fn handle_v1_accounts_onboard(
         )));
     }
 
+    let auto_renew_enabled = signer.alias_auto_renew_enabled;
+    let mut auto_renew_instructions = Vec::new();
+    let mut auto_renew_cap = None;
+    if auto_renew_enabled {
+        let Some(subscription_domain) = signer.alias_auto_renew_subscription_domain.as_ref() else {
+            return Err(onboarding_invalid_request(
+                "torii onboarding alias auto-renew requires alias_auto_renew_subscription_domain",
+            ));
+        };
+        if app.state.world_view().domain(subscription_domain).is_err() {
+            return Err(onboarding_invalid_request(
+                "configured alias auto-renew subscription domain is not registered",
+            ));
+        }
+        auto_renew_cap = Some(lease_quote.charge_amount);
+        let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
+            &signer.authority,
+            &account_id,
+            subscription_domain,
+            &canonical_alias,
+            &lease_quote,
+            lease_term_years,
+            signer.alias_auto_renew_retry_backoff_ms,
+            signer.alias_auto_renew_max_failures,
+            lease_quote.charge_amount,
+        )?;
+        auto_renew_instructions = instructions;
+    }
+
     let mut instructions = Vec::with_capacity(
-        1 + permission_instructions.len() + usize::from(should_publish_manifest),
+        2 + permission_instructions.len()
+            + auto_renew_instructions.len()
+            + usize::from(should_publish_manifest),
     );
+    instructions.push(InstructionBox::from(
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias_label.clone(),
+            account_id.clone(),
+            signer.authority.clone(),
+            lease_term_years,
+            None,
+        ),
+    ));
     instructions.push(InstructionBox::from(register));
     instructions.extend(permission_instructions);
+    instructions.extend(auto_renew_instructions);
     if should_publish_manifest {
         let activation_epoch = app.state.committed_height().saturating_sub(1) as u64;
         let manifest = AssetPermissionManifest {
@@ -55793,6 +56047,16 @@ pub async fn handle_v1_accounts_onboard(
         uaid: uaid.to_string(),
         tx_hash_hex,
         status: "QUEUED",
+        lease: account_alias_lease_dto_from_quote(
+            canonical_alias,
+            alias_dataspace,
+            alias_domain,
+            true,
+            &lease_quote,
+            auto_renew_enabled,
+            auto_renew_cap,
+            auto_renew_enabled.then_some(lease_quote.expires_at_ms),
+        ),
     };
 
     let mut resp = Response::new(Body::from(
@@ -55990,6 +56254,11 @@ pub async fn handle_v1_accounts_onboard_multisig(
         account::rekey::AccountAlias::from_literal(trimmed_alias, &nexus.dataspace_catalog)
             .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
+    let canonical_alias = alias_label
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    let (alias_dataspace, alias_domain_text) =
+        account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
     if member_account_ids.len() < 2 {
         return Err(onboarding_invalid_request(
             "multisig onboarding requires at least two member accounts",
@@ -56057,6 +56326,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             account_id: multisig_account.to_string(),
             tx_hash_hex: String::new(),
             status: "EXISTS",
+            lease: None,
         };
         let mut resp = Response::new(Body::from(
             norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
@@ -56072,20 +56342,73 @@ pub async fn handle_v1_accounts_onboard_multisig(
         .ok_or_else(|| onboarding_invalid_request("required_signers must be positive"))?;
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
+    let lease_term_years = signer.alias_lease_term_years.max(1);
+    let lease_quote = quote_account_alias_registration(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias_label,
+        &multisig_account,
+        lease_term_years,
+        None,
+        network_time_ms()?,
+    )
+    .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
     let alias_domain = alias_domain_to_domain_id(&alias_label, &nexus.dataspace_catalog)?;
     let register = MultisigRegister::with_account(multisig_account.clone(), alias_domain, spec);
     let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
-        alias: Some(alias_label),
+        alias: Some(alias_label.clone()),
         lease_expiry_ms: None,
     };
 
+    let auto_renew_enabled = signer.alias_auto_renew_enabled;
+    let mut auto_renew_instructions = Vec::new();
+    let mut auto_renew_cap = None;
+    if auto_renew_enabled {
+        let Some(subscription_domain) = signer.alias_auto_renew_subscription_domain.as_ref() else {
+            return Err(onboarding_invalid_request(
+                "torii onboarding alias auto-renew requires alias_auto_renew_subscription_domain",
+            ));
+        };
+        if app.state.world_view().domain(subscription_domain).is_err() {
+            return Err(onboarding_invalid_request(
+                "configured alias auto-renew subscription domain is not registered",
+            ));
+        }
+        auto_renew_cap = Some(lease_quote.charge_amount);
+        let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
+            &signer.authority,
+            &multisig_account,
+            subscription_domain,
+            &canonical_alias,
+            &lease_quote,
+            lease_term_years,
+            signer.alias_auto_renew_retry_backoff_ms,
+            signer.alias_auto_renew_max_failures,
+            lease_quote.charge_amount,
+        )?;
+        auto_renew_instructions = instructions;
+    }
+
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_instructions([
-            InstructionBox::from(register),
-            InstructionBox::from(bind_alias),
-        ]);
+        .with_instructions({
+            let mut instructions = vec![
+                InstructionBox::from(
+                    iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+                        alias_label,
+                        multisig_account.clone(),
+                        signer.authority.clone(),
+                        lease_term_years,
+                        None,
+                    ),
+                ),
+                InstructionBox::from(register),
+                InstructionBox::from(bind_alias),
+            ];
+            instructions.extend(auto_renew_instructions);
+            instructions
+        });
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -56104,11 +56427,414 @@ pub async fn handle_v1_accounts_onboard_multisig(
         account_id: multisig_account.to_string(),
         tx_hash_hex,
         status: "QUEUED",
+        lease: Some(account_alias_lease_dto_from_quote(
+            canonical_alias,
+            alias_dataspace,
+            alias_domain_text,
+            true,
+            &lease_quote,
+            auto_renew_enabled,
+            auto_renew_cap,
+            auto_renew_enabled.then_some(lease_quote.expires_at_ms),
+        )),
     };
 
     let mut resp = Response::new(Body::from(
         norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
     ));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_account_aliases(
+    app: crate::SharedAppState,
+    axum::extract::Path(account_id_literal): axum::extract::Path<String>,
+) -> Result<impl IntoResponse> {
+    let telemetry = MaybeTelemetry::disabled();
+    let (account_id, canonical_account_id) = parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id_literal,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIASES,
+    )?;
+    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    )
+    .execute(&app.state.view())
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+    let now_ms = asset_alias_observation_time_ms(app.state.as_ref());
+    let world = app.state.world_view();
+    let mut items = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let record = get_name_record(
+            &world,
+            &app.state.nexus_snapshot().dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            &binding.alias,
+            now_ms,
+        )
+        .map_err(|err| conversion_error(err.to_string()))?;
+        let auto_renew = lookup_account_alias_auto_renew(&app, &account_id, &binding.alias)?;
+        items.push(account_alias_lease_dto_from_record(
+            binding.alias,
+            binding.dataspace,
+            binding.domain,
+            binding.is_primary,
+            &record,
+            auto_renew
+                .as_ref()
+                .map(|(_, subscription, _, _)| subscription),
+            auto_renew
+                .as_ref()
+                .and_then(|(_, _, invoice, _)| invoice.as_ref()),
+            auto_renew.as_ref().map(|(_, _, _, settings)| settings),
+        ));
+    }
+    let payload = AccountAliasLeaseListResponseDto {
+        account_id: canonical_account_id,
+        total: items.len() as u64,
+        items,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_account_alias_renew(
+    app: crate::SharedAppState,
+    axum::extract::Path((account_id_literal, alias_literal)): axum::extract::Path<(String, String)>,
+    crate::NoritoJson(req): crate::NoritoJson<AccountAliasRenewRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let (account_id, _) = parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id_literal,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )?;
+    let (authority_id, _) = parse_account_literal_with_state(
+        app.state.as_ref(),
+        &req.authority,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid authority `{}`: {}",
+            req.authority,
+            err.reason()
+        ))
+    })?;
+    if authority_id != account_id {
+        return Err(conversion_error(
+            "renew authority must match the account path".to_string(),
+        ));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let alias =
+        account::rekey::AccountAlias::from_literal(alias_literal.trim(), &nexus.dataspace_catalog)
+            .map_err(|err| conversion_error(err.to_string()))?;
+    let canonical_alias = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    )
+    .execute(&app.state.view())
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+    if !bindings
+        .iter()
+        .any(|binding| binding.alias == canonical_alias)
+    {
+        return Err(conversion_error(
+            "alias is not bound to the requested account".to_string(),
+        ));
+    }
+    let term_years = req.term_years.unwrap_or_else(|| {
+        app.uaid_onboarding
+            .as_ref()
+            .map_or(1, |signer| signer.alias_lease_term_years.max(1))
+    });
+    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
+        .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
+        .with_instructions([InstructionBox::from(
+            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                alias,
+                authority_id.clone(),
+                term_years,
+            ),
+        )])
+        .sign(&req.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )
+    .await?;
+    let payload = AccountAliasRenewResponseDto {
+        account_id: authority_id.to_string(),
+        alias: canonical_alias,
+        tx_hash_hex,
+        status: "QUEUED",
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_account_alias_auto_renew(
+    app: crate::SharedAppState,
+    axum::extract::Path((account_id_literal, alias_literal)): axum::extract::Path<(String, String)>,
+    crate::NoritoJson(req): crate::NoritoJson<AccountAliasAutoRenewRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let (account_id, _) = parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id_literal,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )?;
+    let (authority_id, _) = parse_account_literal_with_state(
+        app.state.as_ref(),
+        &req.authority,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid authority `{}`: {}",
+            req.authority,
+            err.reason()
+        ))
+    })?;
+    if authority_id != account_id {
+        return Err(conversion_error(
+            "auto-renew authority must match the account path".to_string(),
+        ));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let alias =
+        account::rekey::AccountAlias::from_literal(alias_literal.trim(), &nexus.dataspace_catalog)
+            .map_err(|err| conversion_error(err.to_string()))?;
+    let canonical_alias = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    )
+    .execute(&app.state.view())
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+    if !bindings
+        .iter()
+        .any(|binding| binding.alias == canonical_alias)
+    {
+        return Err(conversion_error(
+            "alias is not bound to the requested account".to_string(),
+        ));
+    }
+
+    let existing = lookup_account_alias_auto_renew(&app, &account_id, &canonical_alias)?;
+    if !req.enabled && existing.is_none() {
+        let payload = AccountAliasAutoRenewResponseDto {
+            account_id: account_id.to_string(),
+            alias: canonical_alias,
+            auto_renew_enabled: false,
+            subscription_id: None,
+            tx_hash_hex: None,
+            status: "DISABLED",
+        };
+        let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+        let mut resp = Response::new(Body::from(body));
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        return Ok((StatusCode::OK, resp));
+    }
+
+    let Some(subscription_domain) = app
+        .uaid_onboarding
+        .as_ref()
+        .and_then(|signer| signer.alias_auto_renew_subscription_domain.as_ref())
+    else {
+        return Err(conversion_error(
+            "alias auto-renew is not configured on this Torii".to_string(),
+        ));
+    };
+    if app.state.world_view().domain(subscription_domain).is_err() {
+        return Err(conversion_error(
+            "configured alias auto-renew subscription domain is not registered".to_string(),
+        ));
+    }
+
+    let now_ms = asset_alias_observation_time_ms(app.state.as_ref());
+    let record = get_name_record(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        SnsNamespace::AccountAlias,
+        &canonical_alias,
+        now_ms,
+    )
+    .map_err(|err| conversion_error(err.to_string()))?;
+    let term_years = req.term_years.unwrap_or_else(|| {
+        app.uaid_onboarding
+            .as_ref()
+            .map_or(1, |signer| signer.alias_lease_term_years.max(1))
+    });
+    let quote = quote_account_alias_renewal(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias,
+        term_years,
+        now_ms,
+    )
+    .map_err(|err| conversion_error(err.to_string()))?;
+    let max_charge_amount = req.max_charge_amount.unwrap_or(quote.charge_amount);
+    let subscription_id = account_alias_auto_renew_subscription_id(
+        subscription_domain,
+        &account_id,
+        &canonical_alias,
+    )?;
+    let billing_trigger_id = derive_trigger_id("sub_bill_", &subscription_id)?;
+    let billing_trigger_exists = app
+        .state
+        .world_view()
+        .triggers()
+        .time_triggers()
+        .get(&billing_trigger_id)
+        .is_some();
+    let settings = build_account_alias_auto_renew_settings(
+        canonical_alias.clone(),
+        term_years,
+        max_charge_amount,
+        app.uaid_onboarding.as_ref().map_or(86_400_000, |signer| {
+            signer.alias_auto_renew_retry_backoff_ms
+        }),
+        app.uaid_onboarding
+            .as_ref()
+            .map_or(5, |signer| signer.alias_auto_renew_max_failures),
+    );
+
+    let mut instructions = Vec::new();
+    if req.enabled {
+        let state = build_account_alias_auto_renew_state(
+            account_id.clone(),
+            quote.payment_asset_definition_id.clone(),
+            billing_trigger_id.clone(),
+            record.registered_at_ms,
+            record.expires_at_ms,
+        );
+        if existing.is_some() {
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*SUBSCRIPTION_KEY).clone(),
+                IrohaJson::new(state),
+            )));
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+                IrohaJson::new(settings),
+            )));
+            if billing_trigger_exists {
+                instructions.push(InstructionBox::from(Unregister::trigger(
+                    billing_trigger_id.clone(),
+                )));
+            }
+            instructions.push(InstructionBox::from(Register::trigger(
+                build_billing_trigger(
+                    billing_trigger_id.clone(),
+                    account_id.clone(),
+                    subscription_id.clone(),
+                    record.expires_at_ms,
+                ),
+            )));
+        } else {
+            let mut metadata = Metadata::default();
+            metadata.insert((*SUBSCRIPTION_KEY).clone(), IrohaJson::new(state));
+            metadata.insert(
+                (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+                IrohaJson::new(settings),
+            );
+            instructions.push(InstructionBox::from(Register::nft(Nft::new(
+                subscription_id.clone(),
+                metadata,
+            ))));
+            instructions.push(InstructionBox::from(Register::trigger(
+                build_billing_trigger(
+                    billing_trigger_id.clone(),
+                    account_id.clone(),
+                    subscription_id.clone(),
+                    record.expires_at_ms,
+                ),
+            )));
+        }
+    } else if let Some((_, mut state, _, _)) = existing {
+        state.status = SubscriptionStatus::Canceled;
+        state.cancel_at_period_end = false;
+        state.cancel_at_ms = None;
+        instructions.push(InstructionBox::from(SetKeyValue::nft(
+            subscription_id.clone(),
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(state),
+        )));
+        if billing_trigger_exists {
+            instructions.push(InstructionBox::from(Unregister::trigger(
+                billing_trigger_id.clone(),
+            )));
+        }
+    }
+
+    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
+        .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
+        .with_instructions(instructions)
+        .sign(&req.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )
+    .await?;
+    let payload = AccountAliasAutoRenewResponseDto {
+        account_id: account_id.to_string(),
+        alias: canonical_alias,
+        auto_renew_enabled: req.enabled,
+        subscription_id: Some(subscription_id.to_string()),
+        tx_hash_hex: Some(tx_hash_hex),
+        status: "QUEUED",
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
@@ -69243,6 +69969,173 @@ fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<Subs
 }
 
 #[cfg(feature = "app_api")]
+fn account_alias_auto_renew_from_metadata(
+    metadata: &Metadata,
+) -> Result<Option<iroha_data_model::subscription::AccountAliasAutoRenewMetadata>> {
+    let Some(value) = metadata.get(&*ACCOUNT_ALIAS_AUTO_RENEW_KEY) else {
+        return Ok(None);
+    };
+    let settings = value
+        .try_into_any_norito::<iroha_data_model::subscription::AccountAliasAutoRenewMetadata>()
+        .map_err(|err| {
+            conversion_error(format!("invalid account alias auto-renew metadata: {err}"))
+        })?;
+    Ok(Some(settings))
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
+    match status {
+        SubscriptionStatus::Active => "active",
+        SubscriptionStatus::Paused => "paused",
+        SubscriptionStatus::PastDue => "past_due",
+        SubscriptionStatus::Canceled => "canceled",
+        SubscriptionStatus::Suspended => "suspended",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_invoice_status_label(status: SubscriptionInvoiceStatus) -> &'static str {
+    match status {
+        SubscriptionInvoiceStatus::Paid => "paid",
+        SubscriptionInvoiceStatus::Failed => "failed",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn name_status_label(status: &NameStatus) -> &'static str {
+    match status {
+        NameStatus::Active => "active",
+        NameStatus::GracePeriod => "grace_period",
+        NameStatus::Redemption => "redemption",
+        NameStatus::Frozen(_) => "frozen",
+        NameStatus::Tombstoned(_) => "tombstoned",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_auto_renew_subscription_name(
+    account_id: &AccountId,
+    alias_literal: &str,
+) -> Result<Name> {
+    let digest = Hash::new(format!(
+        "account-alias-auto-renew:{}:{}",
+        account_id,
+        alias_literal.trim().to_ascii_lowercase()
+    ));
+    Name::from_str(&format!("aliasrenew_{}", hex::encode(digest.as_ref())))
+        .map_err(|err| conversion_error(format!("invalid auto-renew subscription name: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_auto_renew_subscription_id(
+    domain_id: &DomainId,
+    account_id: &AccountId,
+    alias_literal: &str,
+) -> Result<NftId> {
+    Ok(NftId::of(
+        domain_id.clone(),
+        account_alias_auto_renew_subscription_name(account_id, alias_literal)?,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn lookup_account_alias_auto_renew(
+    app: &crate::SharedAppState,
+    account_id: &AccountId,
+    alias_literal: &str,
+) -> Result<
+    Option<(
+        NftId,
+        SubscriptionState,
+        Option<SubscriptionInvoice>,
+        iroha_data_model::subscription::AccountAliasAutoRenewMetadata,
+    )>,
+> {
+    let Some(signer) = app.uaid_onboarding.as_ref() else {
+        return Ok(None);
+    };
+    let Some(domain_id) = signer.alias_auto_renew_subscription_domain.as_ref() else {
+        return Ok(None);
+    };
+    let subscription_id =
+        account_alias_auto_renew_subscription_id(domain_id, account_id, alias_literal)?;
+    let world = app.state.world_view();
+    let nft = match world.nft(&subscription_id) {
+        Ok(nft) => nft,
+        Err(_) => return Ok(None),
+    };
+    let subscription = subscription_state_from_metadata(&nft.content)?
+        .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+    let invoice = subscription_invoice_from_metadata(&nft.content)?;
+    let settings = account_alias_auto_renew_from_metadata(&nft.content)?
+        .ok_or_else(|| conversion_error("account alias auto-renew metadata missing".to_string()))?;
+    Ok(Some((subscription_id, subscription, invoice, settings)))
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_lease_dto_from_record(
+    alias: String,
+    dataspace: String,
+    domain: Option<String>,
+    is_primary: bool,
+    record: &NameRecordV1,
+    subscription: Option<&SubscriptionState>,
+    invoice: Option<&SubscriptionInvoice>,
+    auto_renew: Option<&iroha_data_model::subscription::AccountAliasAutoRenewMetadata>,
+) -> AccountAliasLeaseDto {
+    let subscription_status =
+        subscription.map(|state| subscription_status_label(state.status).to_owned());
+    let auto_renew_enabled = subscription
+        .map(|state| !matches!(state.status, SubscriptionStatus::Canceled))
+        .unwrap_or(false);
+    AccountAliasLeaseDto {
+        alias,
+        dataspace,
+        domain,
+        is_primary,
+        lease_status: name_status_label(&record.status).to_owned(),
+        expires_at_ms: record.expires_at_ms,
+        grace_expires_at_ms: record.grace_expires_at_ms,
+        redemption_expires_at_ms: record.redemption_expires_at_ms,
+        auto_renew_enabled,
+        subscription_status,
+        next_charge_ms: subscription.map(|state| state.next_charge_ms),
+        last_invoice_status: invoice
+            .map(|item| subscription_invoice_status_label(item.status).to_owned()),
+        max_charge_amount: auto_renew.map(|settings| settings.max_charge_amount.to_string()),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_lease_dto_from_quote(
+    alias: String,
+    dataspace: String,
+    domain: Option<String>,
+    is_primary: bool,
+    quote: &LeaseQuote,
+    auto_renew_enabled: bool,
+    max_charge_amount: Option<u64>,
+    next_charge_ms: Option<u64>,
+) -> AccountAliasLeaseDto {
+    AccountAliasLeaseDto {
+        alias,
+        dataspace,
+        domain,
+        is_primary,
+        lease_status: "active".to_owned(),
+        expires_at_ms: quote.expires_at_ms,
+        grace_expires_at_ms: quote.grace_expires_at_ms,
+        redemption_expires_at_ms: quote.redemption_expires_at_ms,
+        auto_renew_enabled,
+        subscription_status: auto_renew_enabled.then_some("active".to_owned()),
+        next_charge_ms,
+        last_invoice_status: None,
+        max_charge_amount: max_charge_amount.map(|amount| amount.to_string()),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn network_time_ms() -> Result<u64> {
     let now = time::now().now;
     let duration = now
@@ -69403,6 +70296,47 @@ fn build_billing_trigger(
     )
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
+}
+
+#[cfg(feature = "app_api")]
+fn build_account_alias_auto_renew_settings(
+    alias_literal: String,
+    term_years: u8,
+    max_charge_amount: u64,
+    retry_backoff_ms: u64,
+    max_failures: u32,
+) -> iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
+    iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
+        alias: alias_literal,
+        term_years,
+        max_charge_amount: max_charge_amount.into(),
+        retry_backoff_ms,
+        max_failures,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn build_account_alias_auto_renew_state(
+    subscriber: AccountId,
+    charge_asset_definition_id: AssetDefinitionId,
+    billing_trigger_id: TriggerId,
+    current_period_start_ms: u64,
+    current_period_end_ms: u64,
+) -> SubscriptionState {
+    SubscriptionState {
+        plan_id: charge_asset_definition_id,
+        provider: subscriber.clone(),
+        subscriber,
+        status: SubscriptionStatus::Active,
+        current_period_start_ms,
+        current_period_end_ms,
+        next_charge_ms: current_period_end_ms,
+        cancel_at_period_end: false,
+        cancel_at_ms: None,
+        failure_count: 0,
+        usage_accumulated: std::collections::BTreeMap::new(),
+        billing_trigger_id,
+    }
 }
 
 #[cfg(feature = "app_api")]

@@ -57,6 +57,16 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_set_parameter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExecuteTrigger>() {
         visitor.visit_execute_trigger(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::account_alias_lease::AcquireAccountAliasLease>()
+    {
+        visitor.visit_acquire_account_alias_lease(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::account_alias_lease::RenewAccountAliasLease>()
+    {
+        visitor.visit_renew_account_alias_lease(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
@@ -475,6 +485,8 @@ macro_rules! instruction_visitors {
             visit_upgrade(&Upgrade),
             visit_set_parameter(&SetParameter),
             visit_execute_trigger(&ExecuteTrigger),
+            visit_acquire_account_alias_lease(&crate::isi::account_alias_lease::AcquireAccountAliasLease),
+            visit_renew_account_alias_lease(&crate::isi::account_alias_lease::RenewAccountAliasLease),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_publish_pedersen_params(&PublishPedersenParams),

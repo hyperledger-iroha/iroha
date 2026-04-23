@@ -23131,42 +23131,18 @@ async fn commit_vote_targets_collectors_or_topology() {
     );
     assert!(emitted, "expected local commit vote to be emitted");
 
-    let signature_topology =
-        super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
-    let mut expected_targets: Vec<_> = if actor.subsystems.propose.collectors_contacted.is_empty() {
-        signature_topology.as_ref().to_vec()
-    } else {
-        actor
-            .subsystems
-            .propose
-            .collectors_contacted
-            .iter()
-            .cloned()
-            .collect()
-    };
-    let local_peer_id = actor.common_config.peer.id().clone();
-    expected_targets.retain(|peer| peer != &local_peer_id);
-    let fallback_to_topology = expected_targets.is_empty();
-    if fallback_to_topology {
-        expected_targets = signature_topology.as_ref().to_vec();
-        expected_targets.retain(|peer| peer != &local_peer_id);
-    } else {
-        let parallel = actor.config.collectors.parallel_topology_fanout;
-        if parallel > 0 {
-            let mut parallel_targets: Vec<_> = signature_topology
-                .topology_fanout_from_tail(parallel)
-                .into_iter()
-                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                .collect();
-            parallel_targets.retain(|peer| peer != &local_peer_id);
-            for peer in parallel_targets {
-                if !expected_targets.contains(&peer) {
-                    expected_targets.push(peer);
-                }
-            }
-        }
-    }
-    let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
+    let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+    let expected_set: BTreeSet<_> = actor
+        .quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            1,
+            0,
+            topology.as_ref(),
+            min_votes_for_commit,
+            1,
+        )
+        .into_iter()
+        .collect();
 
     let actual_targets: BTreeSet<_> = take_background_log(&background_log)
         .into_iter()
@@ -23180,7 +23156,7 @@ async fn commit_vote_targets_collectors_or_topology() {
 
     assert_eq!(
         actual_targets, expected_set,
-        "initial commit votes should target only the seeded collector set plus parallel fanout or topology fallback"
+        "initial commit votes should target quorum retransmit peers"
     );
 
     harness.shutdown.send();
@@ -27668,42 +27644,18 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     );
     assert!(emitted, "expected local precommit vote to be emitted");
 
-    let signature_topology =
-        super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
-    let mut expected_targets: Vec<_> = if actor.subsystems.propose.collectors_contacted.is_empty() {
-        signature_topology.as_ref().to_vec()
-    } else {
-        actor
-            .subsystems
-            .propose
-            .collectors_contacted
-            .iter()
-            .cloned()
-            .collect()
-    };
-    let local_peer_id = actor.common_config.peer.id().clone();
-    expected_targets.retain(|peer| peer != &local_peer_id);
-    let fallback_to_topology = expected_targets.is_empty();
-    if fallback_to_topology {
-        expected_targets = signature_topology.as_ref().to_vec();
-        expected_targets.retain(|peer| peer != &local_peer_id);
-    } else {
-        let parallel = actor.config.collectors.parallel_topology_fanout;
-        if parallel > 0 {
-            let mut parallel_targets: Vec<_> = signature_topology
-                .topology_fanout_from_tail(parallel)
-                .into_iter()
-                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                .collect();
-            parallel_targets.retain(|peer| peer != &local_peer_id);
-            for peer in parallel_targets {
-                if !expected_targets.contains(&peer) {
-                    expected_targets.push(peer);
-                }
-            }
-        }
-    }
-    let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
+    let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+    let expected_set: BTreeSet<_> = actor
+        .quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            0,
+            topology.as_ref(),
+            min_votes_for_commit,
+            1,
+        )
+        .into_iter()
+        .collect();
 
     let actual_contacted: BTreeSet<_> = actor
         .subsystems
@@ -27732,7 +27684,132 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 
     assert_eq!(
         actual_targets, expected_set,
-        "precommit votes should target the seeded collector set plus parallel fanout or topology fallback"
+        "precommit votes should target quorum retransmit peers even before collector widening"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_falls_back_to_seeded_collectors_when_quorum_targets_are_satisfied() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    actor.config.collectors.parallel_topology_fanout = 0;
+
+    let height = 1;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_peer = actor.common_config.peer.id().clone();
+    let view = (0..256_u64)
+        .find(|candidate_view| {
+            actor.reset_collector_state();
+            let signature_topology = super::topology_for_view(
+                &topology,
+                height,
+                *candidate_view,
+                actor.mode_tag(),
+                actor.npos_prf_seed(),
+            );
+            actor.init_collector_plan(&signature_topology, height, *candidate_view);
+            actor
+                .subsystems
+                .propose
+                .collectors_contacted
+                .iter()
+                .any(|peer| peer != &local_peer)
+        })
+        .expect("expected a view with a remote seeded collector");
+    actor.reset_collector_state();
+
+    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"precommit_vote_falls_back_to_seeded_collectors_when_quorum_targets_are_satisfied",
+    ));
+    let block = sample_block(height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    insert_validated_pending(actor, block.clone());
+
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let epoch = actor.epoch_for_height(height);
+    for (signer_idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        if peer == &local_peer {
+            continue;
+        }
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        actor.vote_log.insert(
+            (Phase::Commit, height, view, epoch, signer),
+            crate::sumeragi::consensus::Vote {
+                phase: Phase::Commit,
+                block_hash,
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+                height,
+                view,
+                epoch,
+                highest_qc: None,
+                signer,
+                bls_sig: Vec::new(),
+            },
+        );
+    }
+
+    assert!(
+        actor
+            .quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view,
+                topology.as_ref(),
+                topology.min_votes_for_commit().max(1),
+                1,
+            )
+            .is_empty(),
+        "cached remote commit votes should leave no quorum retransmit targets for the initial local precommit",
+    );
+
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.emit_precommit_vote(
+            block_hash,
+            height,
+            view,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            block.header().prev_block_hash(),
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "expected local precommit vote to be emitted",
+    );
+
+    let expected_collectors: BTreeSet<_> = actor
+        .subsystems
+        .propose
+        .collectors_contacted
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .cloned()
+        .collect();
+    let actual_targets: BTreeSet<_> = take_background_log(&background_log)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            super::BackgroundRequestLogEntry {
+                kind: super::BackgroundRequestLogKind::Post,
+                msg_kind: Some("QcVote"),
+                peer: Some(peer),
+            } => Some(peer),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        expected_collectors.len(),
+        1,
+        "collector seeding should still preserve exactly one remote fallback target",
+    );
+    assert_eq!(
+        actual_targets, expected_collectors,
+        "initial precommit emit should fall back to the seeded collector subset once quorum retransmit targets are already satisfied",
     );
 
     harness.shutdown.send();
@@ -30292,6 +30369,149 @@ async fn quorum_retransmit_targets_map_view_signers_to_canonical_peers() {
         targets,
         vec![missing_peer.clone()],
         "retransmit targets must include the canonical peer missing from the view-aligned signer set"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn quorum_retransmit_targets_expand_to_full_fanout_near_commit_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let canonical_roster = actor.effective_commit_topology();
+    assert!(
+        canonical_roster.len() >= 4,
+        "test requires at least three remote peers",
+    );
+    let topology = super::network_topology::Topology::new(canonical_roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA6; Hash::LENGTH]));
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let remote_signers: Vec<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter(|(_, peer)| *peer != &local_peer)
+        .collect();
+    assert!(
+        remote_signers.len() >= 3,
+        "test requires three remote peers in the signature topology",
+    );
+
+    let observed_remote_peers: BTreeSet<_> = remote_signers
+        .iter()
+        .take(2)
+        .map(|(signer_idx, peer)| {
+            let signer = u32::try_from(*signer_idx).expect("signer index fits u32");
+            actor.vote_log.insert(
+                (Phase::Commit, height, view, epoch, signer),
+                crate::sumeragi::consensus::Vote {
+                    phase: Phase::Commit,
+                    block_hash,
+                    parent_state_root: zero_state_root(),
+                    post_state_root: zero_state_root(),
+                    height,
+                    view,
+                    epoch,
+                    highest_qc: None,
+                    signer,
+                    bls_sig: Vec::new(),
+                },
+            );
+            (*peer).clone()
+        })
+        .collect();
+    let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+    assert_eq!(
+        min_votes_for_commit, 3,
+        "test expects the default four-peer topology commit quorum",
+    );
+
+    let targets = actor.quorum_retransmit_targets_for_missing_votes(
+        block_hash,
+        height,
+        view,
+        &canonical_roster,
+        min_votes_for_commit,
+        observed_remote_peers.len(),
+    );
+    let actual_targets: BTreeSet<_> = targets.into_iter().collect();
+    let expected_targets: BTreeSet<_> = canonical_roster
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_targets,
+        "near commit quorum should fan retransmit targets back out to every remote peer",
+    );
+    assert!(
+        actual_targets
+            .iter()
+            .any(|peer| observed_remote_peers.contains(peer)),
+        "full-fanout near-quorum recovery must include already observed remote voters instead of targeting only the single missing peer",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn quorum_retransmit_targets_fall_back_to_full_fanout_when_signer_mapping_fails() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let canonical_roster = actor.effective_commit_topology();
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
+    let invalid_signer = 99_u32;
+    actor.vote_log.insert(
+        (Phase::Commit, height, view, epoch, invalid_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: invalid_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    let targets = actor.quorum_retransmit_targets_for_missing_votes(
+        block_hash,
+        height,
+        view,
+        &canonical_roster,
+        3,
+        1,
+    );
+    let actual_targets: BTreeSet<_> = targets.into_iter().collect();
+    let expected_targets: BTreeSet<_> = canonical_roster
+        .iter()
+        .filter(|peer| *peer != actor.common_config.peer.id())
+        .cloned()
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_targets,
+        "failed signer-to-peer mapping should conservatively fall back to full retransmit fanout",
     );
 
     harness.shutdown.send();
@@ -36972,11 +37192,28 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
     let key = session_key();
     let payload_hash = Hash::prehashed([0x21; 32]);
     let chunk_root = Hash::prehashed([0x22; 32]);
-    let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let local_peer = harness.actor.common_config.peer.id().clone();
+    let local_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &local_peer);
+    let remote_peers: Vec<_> = roster
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .take(2)
+        .cloned()
+        .collect();
+    assert_eq!(
+        remote_peers.len(),
+        2,
+        "test requires two remote READY senders"
+    );
 
+    let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
     session.test_note_chunk(0, b"chunk-a".to_vec(), 0);
-    session.record_ready(1, vec![0xA1]);
-    session.record_ready(2, vec![0xA2]);
+    for (signature_byte, peer) in [0xA1_u8, 0xA2].into_iter().zip(remote_peers.iter()) {
+        let sender = signature_sender_index(&harness.actor, &roster, key.1, key.2, peer);
+        session.record_ready(sender, vec![signature_byte]);
+    }
 
     harness
         .actor
@@ -36985,13 +37222,6 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
         .rbc
         .sessions
         .insert(key, session);
-    let roster = harness.actor.effective_commit_topology();
-    assert!(!roster.is_empty());
-    let topology = super::network_topology::Topology::new(roster.clone());
-    let local_idx = harness
-        .actor
-        .local_validator_index_for_topology(&topology)
-        .expect("local sender");
     harness
         .actor
         .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
@@ -97525,11 +97755,28 @@ async fn pacemaker_rebroadcasts_cached_frontier_block_when_leader() {
     let height = committed_height.saturating_add(1);
 
     let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
     let local_pos = roster
         .iter()
-        .position(|peer| peer == actor.common_config.peer.id())
+        .position(|peer| peer == &local_peer)
         .expect("local peer in topology");
-    let view = u64::try_from(local_pos).unwrap_or_default();
+    let search_limit = u64::try_from(roster.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let view = (0..search_limit)
+        .find(|candidate_view| {
+            let mut candidate_topology = topology.clone();
+            actor
+                .leader_index_for(&mut candidate_topology, height, *candidate_view)
+                .ok()
+                .is_some_and(|leader| {
+                    candidate_topology
+                        .position(local_peer.public_key())
+                        .is_some_and(|idx| idx == leader)
+                })
+        })
+        .expect("find view where local peer is leader");
 
     let parent_hash = actor.state.view().latest_block_hash();
     let parent_hash_for_qc = parent_hash.unwrap_or_else(|| {
@@ -97549,7 +97796,7 @@ async fn pacemaker_rebroadcasts_cached_frontier_block_when_leader() {
         epoch: actor.epoch_for_height(committed_height),
         phase: Phase::Commit,
     };
-    let proposer = u32::try_from(local_pos).expect("local index fits u32");
+    let proposer = signature_sender_index(actor, &roster, height, view, &local_peer);
     let epoch = actor.epoch_for_height(height);
     let proposal =
         Actor::build_consensus_proposal(&block, payload_hash, highest_qc, proposer, view, epoch);
@@ -106891,6 +107138,224 @@ async fn frontier_block_created_for_proposal_wire_rebuilds_authoritative_frontie
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_block_created_for_proposal_wire_falls_back_to_authoritative_frontier_cache() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.state.view().height(),
+        0,
+        "test requires the actor state to remain at genesis-precommit height",
+    );
+
+    let height = 2u64;
+    let view = 0u64;
+    let proposal_roster = actor.effective_commit_topology();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x46; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        highest_qc,
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+
+    assert!(
+        actor
+            .frontier_block_created_for_proposal_wire(&block, &proposal)
+            .is_none(),
+        "generic proposal-wire rebuild should stay unavailable before authoritative metadata is cached",
+    );
+
+    let created = actor
+        .frontier_block_created_for_local_proposal_wire(&block, &proposal, &proposal_roster)
+        .expect("local proposal wire should seed authoritative metadata");
+    let expected_frontier = created
+        .frontier
+        .clone()
+        .expect("seeded local proposal wire should carry frontier metadata");
+    actor
+        .handle_block_created(created, None)
+        .expect("handle BlockCreated");
+
+    let rebuilt = actor
+        .frontier_block_created_for_proposal_wire(&block, &proposal)
+        .expect("generic proposal wire should fall back to authoritative frontier metadata");
+    let frontier = rebuilt
+        .frontier
+        .as_ref()
+        .expect("authoritative fallback should preserve frontier metadata");
+
+    assert_eq!(rebuilt.block.hash(), block.hash());
+    assert_eq!(frontier.payload_hash, expected_frontier.payload_hash);
+    assert_eq!(frontier.highest_qc, expected_frontier.highest_qc);
+    assert_eq!(frontier.proposer, expected_frontier.proposer);
+    assert_eq!(frontier.epoch, expected_frontier.epoch);
+    assert_eq!(frontier.roster_hash, expected_frontier.roster_hash);
+    assert_eq!(frontier.total_chunks, expected_frontier.total_chunks);
+    assert_eq!(frontier.chunk_digests, expected_frontier.chunk_digests);
+    assert_eq!(frontier.chunk_root, expected_frontier.chunk_root);
+    assert_eq!(
+        frontier.leader_signature.index(),
+        expected_frontier.leader_signature.index(),
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_block_created_for_proposal_wire_rejects_authoritative_frontier_cache_when_metadata_mismatches()
+ {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.state.view().height(),
+        0,
+        "test requires the actor state to remain at genesis-precommit height",
+    );
+
+    let height = 2u64;
+    let view = 0u64;
+    let proposal_roster = actor.effective_commit_topology();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x47; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        highest_qc,
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+    let created = actor
+        .frontier_block_created_for_local_proposal_wire(&block, &proposal, &proposal_roster)
+        .expect("local proposal wire should seed authoritative metadata");
+    actor
+        .handle_block_created(created, None)
+        .expect("handle BlockCreated");
+
+    let mismatched_highest_qc = QcHeaderRef {
+        height: highest_qc.height,
+        view: highest_qc.view.saturating_add(1),
+        epoch: highest_qc.epoch,
+        subject_block_hash: highest_qc.subject_block_hash,
+        phase: highest_qc.phase,
+    };
+    let mismatched_proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        mismatched_highest_qc,
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+
+    assert!(
+        actor
+            .frontier_block_created_for_proposal_wire(&block, &mismatched_proposal)
+            .is_none(),
+        "generic proposal wire should reject authoritative frontier metadata when the proposal header no longer matches it",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_block_created_for_local_proposal_wire_falls_back_to_first_block_signature() {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.state.view().height(),
+        0,
+        "test requires the actor state to remain at genesis-precommit height",
+    );
+
+    let height = 2u64;
+    let view = 0u64;
+    let proposal_roster = actor.effective_commit_topology();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x48; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    let fallback_signature = block
+        .signatures()
+        .next()
+        .cloned()
+        .expect("block should carry at least one signature");
+    let mismatched_proposer = fallback_signature.index().saturating_add(1);
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        highest_qc,
+        u32::try_from(mismatched_proposer).expect("proposer index fits u32"),
+        view,
+        actor.epoch_for_height(height),
+    );
+
+    let created = actor
+        .frontier_block_created_for_local_proposal_wire(&block, &proposal, &proposal_roster)
+        .expect("local proposal wire should fall back to the first block signature");
+    let frontier = created
+        .frontier
+        .as_ref()
+        .expect("local proposal wire should preserve frontier metadata");
+
+    assert_eq!(created.block.hash(), block.hash());
+    assert_eq!(frontier.proposer, proposal.header.proposer);
+    assert_eq!(
+        frontier.leader_signature.index(),
+        fallback_signature.index(),
+        "missing proposer signatures should fall back to the first block signature when building the frontier wire payload",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frontier_block_created_for_local_proposal_wire_uses_live_roster_when_derived_roster_unavailable()
  {
     let _history_guard = super::status::commit_history_test_guard();
@@ -106967,6 +107432,95 @@ async fn frontier_block_created_for_local_proposal_wire_uses_live_roster_when_de
         "local proposal frontier rebuild should hash the live proposal roster deterministically",
     );
     assert_eq!(frontier.proposer, 0);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_block_created_for_local_proposal_wire_falls_back_to_authoritative_frontier_cache()
+{
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.state.view().height(),
+        0,
+        "test requires the actor state to remain at genesis-precommit height",
+    );
+
+    let height = 2u64;
+    let view = 0u64;
+    let proposal_roster = actor.effective_commit_topology();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x45; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        highest_qc,
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+
+    assert!(
+        actor
+            .rebuild_rbc_init_from_block(&block, Actor::session_key(&block.hash(), height, view))
+            .is_none(),
+        "derived RBC init should stay unavailable when the actor has not committed height one locally",
+    );
+    assert!(
+        actor
+            .frontier_block_created_for_proposal_wire(&block, &proposal)
+            .is_none(),
+        "generic frontier rebuild should remain unavailable before authoritative metadata is cached",
+    );
+
+    let created = actor
+        .frontier_block_created_for_local_proposal_wire(&block, &proposal, &proposal_roster)
+        .expect("local proposal frontier rebuild should seed authoritative metadata");
+    let expected_frontier = created
+        .frontier
+        .clone()
+        .expect("seeded local proposal wire should carry frontier metadata");
+    actor
+        .handle_block_created(created, None)
+        .expect("handle BlockCreated");
+
+    let rebuilt = actor
+        .frontier_block_created_for_local_proposal_wire(&block, &proposal, &[])
+        .expect("local proposal wire should fall back to authoritative frontier metadata");
+    let frontier = rebuilt
+        .frontier
+        .as_ref()
+        .expect("authoritative fallback should preserve frontier metadata");
+
+    assert_eq!(rebuilt.block.hash(), block.hash());
+    assert_eq!(frontier.payload_hash, expected_frontier.payload_hash);
+    assert_eq!(frontier.highest_qc, expected_frontier.highest_qc);
+    assert_eq!(frontier.proposer, expected_frontier.proposer);
+    assert_eq!(frontier.epoch, expected_frontier.epoch);
+    assert_eq!(frontier.roster_hash, expected_frontier.roster_hash);
+    assert_eq!(frontier.total_chunks, expected_frontier.total_chunks);
+    assert_eq!(frontier.chunk_digests, expected_frontier.chunk_digests);
+    assert_eq!(frontier.chunk_root, expected_frontier.chunk_root);
+    assert_eq!(
+        frontier.leader_signature.index(),
+        expected_frontier.leader_signature.index(),
+    );
 
     harness.shutdown.send();
 }
@@ -107271,6 +107825,26 @@ async fn frontier_block_created_for_wire_preserves_cached_frontier_metadata() {
     assert_eq!(created.block.hash(), block.hash());
     assert_eq!(frontier.payload_hash, payload_hash);
     assert_eq!(frontier.highest_qc, highest_qc);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_block_created_for_wire_returns_plain_block_without_frontier_metadata() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+
+    let created = actor.frontier_block_created_for_wire(&block);
+
+    assert_eq!(created.block.hash(), block.hash());
+    assert!(
+        created.frontier.is_none(),
+        "frontier wire fallback should degrade to a plain BlockCreated when no proposal or authoritative metadata is available",
+    );
 
     harness.shutdown.send();
 }

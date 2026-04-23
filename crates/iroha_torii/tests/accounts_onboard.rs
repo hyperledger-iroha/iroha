@@ -2,7 +2,7 @@
 //! Torii account onboarding tests.
 #![cfg(feature = "app_api")]
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::{num::NonZeroU64, str::FromStr, sync::Arc};
 
 use axum::{extract::connect_info::ConnectInfo, http::Request};
 use http::StatusCode;
@@ -11,20 +11,21 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
-    account::{AccountAddress, AccountId, rekey::AccountAlias},
+    account::AccountId,
+    asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::DomainId,
-    metadata::Metadata,
+    name::Name,
     nexus::DataSpaceId,
     peer::PeerId,
     permission::Permission,
-    prelude::{Account, Domain, ExposedPrivateKey},
-    sns::{NameControllerV1, NameRecordV1},
+    prelude::{Account, Domain, ExposedPrivateKey, Mint},
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -37,28 +38,6 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 
-fn seed_account_alias_lease(world: &mut World, owner: &AccountId, literal: &str) {
-    let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
-    let alias = AccountAlias::from_literal(literal, &catalog).expect("valid canonical alias");
-    let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog).expect("selector");
-    let address = AccountAddress::from_account_id(owner).expect("account address");
-    let record = NameRecordV1::new(
-        selector.clone(),
-        owner.clone(),
-        vec![NameControllerV1::account(&address)],
-        0,
-        0,
-        4_000_000_000_000,
-        4_100_000_000_000,
-        4_200_000_000_000,
-        Metadata::default(),
-    );
-    world.smart_contract_state_mut_for_testing().insert(
-        iroha_core::sns::record_storage_key(&selector),
-        norito::codec::Encode::encode(&record),
-    );
-}
-
 #[tokio::test]
 async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -68,12 +47,23 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(authority_kp.public_key().clone());
+    let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-    let mut world = World::with([domain], [authority_account], []);
-    seed_account_alias_lease(&mut world, &authority_id, "p2p-user@universal");
+    let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        .parse()
+        .expect("payment asset definition id");
+    let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+        .with_name("xor".to_owned())
+        .build(&authority_id);
+    let mut world = World::with(
+        [genesis_domain, domain],
+        [authority_account],
+        [payment_definition],
+    );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
@@ -102,6 +92,12 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
+        Mint::asset_numeric(
+            10_000_u64,
+            AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
+        )
+        .execute(&authority_id, &mut stx)
+        .expect("mint onboarding payment balance");
         stx.apply();
         block.commit().expect("commit should persist permission");
     }
@@ -111,6 +107,11 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
         allowed_permissions: Vec::new(),
         fee_sponsor_account: None,
+        alias_lease_term_years: 1,
+        alias_auto_renew_enabled: true,
+        alias_auto_renew_retry_backoff_ms: 86_400_000,
+        alias_auto_renew_max_failures: 5,
+        alias_auto_renew_subscription_domain: Some(domain_id.clone()),
     });
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -242,6 +243,32 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .get(&DataSpaceId::UNIVERSAL)
         .expect("global manifest present");
     assert!(record.is_active(), "global manifest should be active");
+    let lease = iroha_core::sns::get_name_record(
+        view.world(),
+        &view.nexus.dataspace_catalog,
+        iroha_core::sns::SnsNamespace::AccountAlias,
+        "p2p-user@universal",
+        0,
+    )
+    .expect("alias lease should exist");
+    assert_eq!(
+        lease.owner, user_id,
+        "onboarding must create the alias lease"
+    );
+    let auto_renew_nft_count = view
+        .world()
+        .nfts_iter()
+        .filter(|nft| {
+            let subscription_key =
+                Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_METADATA_KEY)
+                    .expect("subscription metadata key");
+            nft.owned_by == user_id && nft.content.get(&subscription_key).is_some()
+        })
+        .count();
+    assert_eq!(
+        auto_renew_nft_count, 1,
+        "onboarding should create exactly one alias auto-renew subscription"
+    );
 }
 
 #[tokio::test]
@@ -253,12 +280,23 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(authority_kp.public_key().clone());
+    let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-    let mut world = World::with([domain], [authority_account], []);
-    seed_account_alias_lease(&mut world, &authority_id, "multisig-company@universal");
+    let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        .parse()
+        .expect("payment asset definition id");
+    let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+        .with_name("xor".to_owned())
+        .build(&authority_id);
+    let mut world = World::with(
+        [genesis_domain, domain],
+        [authority_account],
+        [payment_definition],
+    );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
@@ -281,6 +319,12 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
         );
+        Mint::asset_numeric(
+            10_000_u64,
+            AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
+        )
+        .execute(&authority_id, &mut stx)
+        .expect("mint onboarding payment balance");
         stx.apply();
         block.commit().expect("commit should persist permission");
     }
@@ -290,6 +334,11 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
         allowed_permissions: Vec::new(),
         fee_sponsor_account: None,
+        alias_lease_term_years: 1,
+        alias_auto_renew_enabled: true,
+        alias_auto_renew_retry_backoff_ms: 86_400_000,
+        alias_auto_renew_max_failures: 5,
+        alias_auto_renew_subscription_domain: Some(domain_id.clone()),
     });
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -424,5 +473,17 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     assert!(
         view.world().account(&multisig_id).is_ok(),
         "multisig account should be registered"
+    );
+    let lease = iroha_core::sns::get_name_record(
+        view.world(),
+        &view.nexus.dataspace_catalog,
+        iroha_core::sns::SnsNamespace::AccountAlias,
+        "multisig-company@universal",
+        0,
+    )
+    .expect("multisig alias lease should exist");
+    assert_eq!(
+        lease.owner, multisig_id,
+        "multisig onboarding must create the alias lease"
     );
 }

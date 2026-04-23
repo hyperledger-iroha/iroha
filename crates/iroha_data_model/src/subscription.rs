@@ -20,6 +20,8 @@ pub const SUBSCRIPTION_METADATA_KEY: &str = "subscription";
 pub const SUBSCRIPTION_INVOICE_METADATA_KEY: &str = "subscription_invoice";
 /// Metadata key storing a trigger reference to a subscription.
 pub const SUBSCRIPTION_TRIGGER_REF_METADATA_KEY: &str = "subscription_ref";
+/// Metadata key storing SNS account-alias auto-renew settings on a subscription NFT.
+pub const ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY: &str = "account_alias_auto_renew";
 
 /// Subscription plan metadata stored on asset definitions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -204,6 +206,22 @@ pub struct SubscriptionTriggerRef {
     pub subscription_nft_id: NftId,
 }
 
+/// SNS account-alias auto-renew settings stored on a subscription NFT.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct AccountAliasAutoRenewMetadata {
+    /// Alias literal that should be renewed.
+    pub alias: String,
+    /// Renewal term in years for each successful charge.
+    pub term_years: u8,
+    /// Maximum charge accepted for a single renewal attempt.
+    pub max_charge_amount: Numeric,
+    /// Retry delay in milliseconds after a failed attempt.
+    pub retry_backoff_ms: u64,
+    /// Maximum consecutive failures before suspension.
+    pub max_failures: u32,
+}
+
 /// Subscription invoice metadata stored on subscription or invoice NFTs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -244,10 +262,11 @@ pub enum SubscriptionInvoiceStatus {
 /// Re-exports of commonly used subscription types.
 pub mod prelude {
     pub use super::{
-        SubscriptionBillFor, SubscriptionBilling, SubscriptionCadence,
-        SubscriptionFixedPeriodCadence, SubscriptionFixedPricing, SubscriptionInvoice,
-        SubscriptionInvoiceStatus, SubscriptionMonthlyCalendarCadence, SubscriptionPlan,
-        SubscriptionPricing, SubscriptionState, SubscriptionStatus, SubscriptionTriggerRef,
-        SubscriptionUsageDelta, SubscriptionUsagePricing,
+        ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata, SubscriptionBillFor,
+        SubscriptionBilling, SubscriptionCadence, SubscriptionFixedPeriodCadence,
+        SubscriptionFixedPricing, SubscriptionInvoice, SubscriptionInvoiceStatus,
+        SubscriptionMonthlyCalendarCadence, SubscriptionPlan, SubscriptionPricing,
+        SubscriptionState, SubscriptionStatus, SubscriptionTriggerRef, SubscriptionUsageDelta,
+        SubscriptionUsagePricing,
     };
 }
