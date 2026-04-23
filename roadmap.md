@@ -51,6 +51,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Targeted follow-ups
 
+- Reconcile the app-facing alias auto-renew mutation endpoint with the on-chain NFT/domain permission model.
+  - The new coverage pass confirmed the read path, but a user-signed disable/update flow still hits `Can't modify NFT from domain owned by another account` when the subscription NFT lives in the operator-owned subscription domain.
+  - Decide whether alias auto-renew mutations should be operator-submitted, whether the subscription asset should live in a user-controlled domain, or whether a narrower on-chain permission needs to be granted for this subscription NFT class.
+  - Add an integration test for the chosen enable/disable path once the permission model is settled.
 - Add a live multi-peer multisig test for previously unregistered signatories.
   - Start from the existing materialization coverage in `integration_tests/tests/multisig.rs`.
   - Add a case where a signatory is materialized by registration and then successfully authors `MultisigPropose` / `MultisigApprove` on the network.

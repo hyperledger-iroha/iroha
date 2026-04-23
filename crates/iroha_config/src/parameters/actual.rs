@@ -6004,6 +6004,8 @@ pub struct ToriiOnboarding {
     /// Default alias lease term applied during onboarding.
     pub alias_lease_term_years: u8,
     /// Whether onboarding should create a default auto-renew subscription.
+    ///
+    /// Defaults to disabled until `alias_auto_renew_subscription_domain` is configured.
     pub alias_auto_renew_enabled: bool,
     /// Retry delay for alias auto-renew after a failed charge.
     pub alias_auto_renew_retry_backoff_ms: u64,
