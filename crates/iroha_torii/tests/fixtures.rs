@@ -10,7 +10,7 @@ use axum::{body::Body, http::Request};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::state::World;
 use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::peer::PeerId;
+use iroha_data_model::{account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use rand::RngCore as _;
@@ -150,6 +150,67 @@ pub fn operator_signed_request(
             .encode(signature.payload())
             .parse()
             .expect("operator signature header"),
+    );
+
+    request
+}
+
+/// Attach app-canonical signature headers to a request targeting app-authenticated endpoints.
+#[allow(dead_code)]
+pub fn app_signed_request(
+    account_id: &AccountId,
+    key_pair: &KeyPair,
+    mut request: Request<Body>,
+    body_bytes: &[u8],
+) -> Request<Body> {
+    use std::{
+        sync::LazyLock,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static APP_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
+        LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
+
+    let ts_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    let nonce_seq = APP_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = format!(
+        "itest-{ts_ms}-{nonce_seq}-{}-{}",
+        request.method().as_str(),
+        request.uri().path()
+    );
+    let msg = iroha_torii::canonical_request_signature_message(
+        request.method(),
+        request.uri(),
+        body_bytes,
+        ts_ms,
+        &nonce,
+    );
+    let signature = Signature::new(key_pair.private_key(), &msg);
+
+    let headers = request.headers_mut();
+    headers.insert(
+        iroha_torii::HEADER_ACCOUNT,
+        account_id.to_string().parse().expect("account header"),
+    );
+    headers.insert(
+        iroha_torii::HEADER_SIGNATURE,
+        iroha_torii::signature_header_value(&signature)
+            .parse()
+            .expect("app signature header"),
+    );
+    headers.insert(
+        iroha_torii::HEADER_TIMESTAMP_MS,
+        ts_ms.to_string().parse().expect("timestamp header"),
+    );
+    headers.insert(
+        iroha_torii::HEADER_NONCE,
+        nonce.parse().expect("nonce header"),
     );
 
     request
