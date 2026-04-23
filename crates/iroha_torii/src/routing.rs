@@ -54823,7 +54823,16 @@ mod uaid_parsing_tests {
     }
 
     #[test]
+    fn parses_raw_hex_literal_without_prefix() {
+        let parsed = parse_uaid_literal(SAMPLE_UAID_HEX).expect("parse UAID literal");
+        let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
+        let expected = UniversalAccountId::from_hash(expected_hash);
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
     fn rejects_invalid_inputs() {
+        assert!(parse_uaid_literal("").is_err());
         assert!(parse_uaid_literal("uaid:1234").is_err());
         let invalid_hex = format!("{}g", "0".repeat(63));
         assert!(parse_uaid_literal(&invalid_hex).is_err());
@@ -58303,6 +58312,28 @@ mod space_directory_manifest_helper_tests {
     }
 
     #[test]
+    fn manifest_lifecycle_json_keeps_reasonful_revocation_shape() {
+        let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
+        lifecycle.mark_expired(34);
+        lifecycle.mark_revoked(55, Some("operator request".to_owned()));
+
+        let payload = manifest_lifecycle_json(&lifecycle);
+        let obj = payload.as_object().expect("manifest lifecycle object");
+        assert!(obj.get("activated_epoch").is_some_and(Value::is_null));
+        assert_eq!(obj.get("expired_epoch").and_then(Value::as_u64), Some(34));
+
+        let revocation = obj
+            .get("revocation")
+            .and_then(Value::as_object)
+            .expect("revocation object");
+        assert_eq!(revocation.get("epoch").and_then(Value::as_u64), Some(55));
+        assert_eq!(
+            revocation.get("reason").and_then(Value::as_str),
+            Some("operator request")
+        );
+    }
+
+    #[test]
     fn bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings() {
         let dataspace = DataSpaceId::new(7);
         let other_dataspace = DataSpaceId::new(8);
@@ -58316,16 +58347,24 @@ mod space_directory_manifest_helper_tests {
         bindings.bind_account(other_dataspace, other_account.clone());
 
         let matching = bindings_for_dataspace(Some(&bindings), dataspace);
-        let matching = matching.as_array().expect("matching bindings array");
-        assert_eq!(matching.len(), 2);
-        assert_eq!(
-            matching[0].as_str(),
-            Some(crate::account_literal::display_literal(&primary_account).as_str())
-        );
-        assert_eq!(
-            matching[1].as_str(),
-            Some(crate::account_literal::display_literal(&secondary_account).as_str())
-        );
+        let mut matching: Vec<_> = matching
+            .as_array()
+            .expect("matching bindings array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("matching binding should be an account literal")
+                    .to_owned()
+            })
+            .collect();
+        let mut expected = vec![
+            crate::account_literal::display_literal(&primary_account),
+            crate::account_literal::display_literal(&secondary_account),
+        ];
+        matching.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(matching, expected);
 
         let non_matching = bindings_for_dataspace(Some(&bindings), DataSpaceId::new(999));
         assert_eq!(
@@ -58338,6 +58377,275 @@ mod space_directory_manifest_helper_tests {
 
         let missing = bindings_for_dataspace(None, dataspace);
         assert_eq!(missing.as_array().expect("missing bindings array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_returns_empty_payload_when_bindings_are_missing() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x59; Hash::LENGTH]));
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("missing bindings should still return 200")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
+        assert_eq!(
+            json["dataspaces"]
+                .as_array()
+                .expect("dataspaces array")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_accepts_raw_hex_uaid_literals() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5C; Hash::LENGTH]));
+        let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path(raw_hex),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("raw-hex UAID literal should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
+        assert_eq!(
+            json["dataspaces"]
+                .as_array()
+                .expect("dataspaces array")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_rejects_invalid_uaid_literals() {
+        let state = manifest_state(World::default(), None);
+
+        let error = match handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path("uaid:1234".to_owned()),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid UAID literal should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_returns_aliases_and_sorted_accounts() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5A; Hash::LENGTH]));
+        let primary_dataspace = DataSpaceId::new(7);
+        let secondary_dataspace = DataSpaceId::new(9);
+        let primary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let tertiary_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(primary_dataspace, secondary_account.clone());
+        bindings.bind_account(primary_dataspace, primary_account.clone());
+        bindings.bind_account(secondary_dataspace, tertiary_account.clone());
+
+        let mut primary_manifest = AssetPermissionManifest {
+            dataspace: primary_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        primary_manifest.uaid = uaid;
+        let mut primary_record = SpaceDirectoryManifestRecord::new(primary_manifest);
+        primary_record.lifecycle.mark_activated(13);
+
+        let mut secondary_manifest = AssetPermissionManifest {
+            dataspace: secondary_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        secondary_manifest.uaid = uaid;
+        let mut secondary_record = SpaceDirectoryManifestRecord::new(secondary_manifest);
+        secondary_record.lifecycle.mark_activated(14);
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(primary_record);
+        set.upsert(secondary_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: primary_dataspace,
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+
+        let response = handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("bindings query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let dataspaces = json["dataspaces"].as_array().expect("dataspaces array");
+        assert_eq!(dataspaces.len(), 2);
+        assert_eq!(
+            dataspaces[0]["dataspace_id"].as_u64(),
+            Some(primary_dataspace.as_u64())
+        );
+        assert_eq!(dataspaces[0]["dataspace_alias"].as_str(), Some("retail"));
+        let mut expected_primary_accounts = vec![
+            crate::account_literal::display_literal(&primary_account),
+            crate::account_literal::display_literal(&secondary_account),
+        ];
+        let mut actual_primary_accounts: Vec<_> = dataspaces[0]["accounts"]
+            .as_array()
+            .expect("accounts array")
+            .iter()
+            .map(|value| value.as_str().expect("account literal").to_owned())
+            .collect();
+        expected_primary_accounts.sort_unstable();
+        actual_primary_accounts.sort_unstable();
+        assert_eq!(actual_primary_accounts, expected_primary_accounts);
+
+        assert_eq!(
+            dataspaces[1]["dataspace_id"].as_u64(),
+            Some(secondary_dataspace.as_u64())
+        );
+        assert!(dataspaces[1]["dataspace_alias"].is_null());
+        assert_eq!(
+            dataspaces[1]["accounts"][0].as_str(),
+            Some(crate::account_literal::display_literal(&tertiary_account).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_entry_to_json_includes_alias_hash_status_lifecycle_and_accounts() {
+        let dataspace = DataSpaceId::new(7);
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(dataspace, account.clone());
+
+        let alias_lookup = DataspaceAliasLookup::new(
+            DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace,
+                    alias: "retail".to_owned(),
+                    description: Some("Retail lane".to_owned()),
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+        );
+
+        let mut record = sample_manifest_record();
+        record
+            .lifecycle
+            .mark_revoked(77, Some("operator request".to_owned()));
+
+        let payload = manifest_entry_to_json(dataspace, &record, &alias_lookup, Some(&bindings))
+            .expect("manifest entry should serialize");
+        let obj = payload.as_object().expect("manifest entry object");
+
+        assert_eq!(obj.get("dataspace_id").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            obj.get("dataspace_alias").and_then(Value::as_str),
+            Some("retail")
+        );
+        assert_eq!(obj.get("status").and_then(Value::as_str), Some("Revoked"));
+        assert_eq!(
+            obj.get("manifest_hash").and_then(Value::as_str),
+            Some(
+                record
+                    .manifest_hash
+                    .as_ref()
+                    .encode_hex::<String>()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            obj.get("manifest"),
+            Some(&norito::json::to_value(&record.manifest).expect("manifest value"))
+        );
+        assert_eq!(
+            obj.get("accounts")
+                .and_then(Value::as_array)
+                .and_then(|accounts| accounts.first())
+                .and_then(Value::as_str),
+            Some(crate::account_literal::display_literal(&account).as_str())
+        );
+        assert_eq!(
+            obj.get("lifecycle")
+                .and_then(Value::as_object)
+                .and_then(|lifecycle| lifecycle.get("revocation"))
+                .and_then(Value::as_object)
+                .and_then(|revocation| revocation.get("reason"))
+                .and_then(Value::as_str),
+            Some("operator request")
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_entry_to_json_uses_null_alias_and_empty_accounts_when_context_is_missing() {
+        let record = sample_manifest_record();
+        let payload = manifest_entry_to_json(
+            record.manifest.dataspace,
+            &record,
+            &DataspaceAliasLookup::new(DataSpaceCatalog::default()),
+            None,
+        )
+        .expect("manifest entry should serialize");
+        let obj = payload.as_object().expect("manifest entry object");
+
+        assert!(obj.get("dataspace_alias").is_some_and(Value::is_null));
+        assert_eq!(obj.get("status").and_then(Value::as_str), Some("Active"));
+        assert_eq!(
+            obj.get("accounts")
+                .and_then(Value::as_array)
+                .expect("accounts array")
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -58388,6 +58696,233 @@ mod space_directory_manifest_helper_tests {
         };
 
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_accepts_raw_hex_uaid_literals() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5D; Hash::LENGTH]));
+        let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(raw_hex),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("raw-hex UAID literal should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
+        assert_eq!(json["total"].as_u64(), Some(0));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_rejects_invalid_uaid_literals() {
+        let state = manifest_state(World::default(), None);
+
+        let error = match handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path("uaid:1234".to_owned()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid UAID literal should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_inactive_filter_returns_pending_and_revoked_rows()
+    {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5B; Hash::LENGTH]));
+        let active_dataspace = DataSpaceId::new(7);
+        let pending_dataspace = DataSpaceId::new(8);
+        let revoked_dataspace = DataSpaceId::new(9);
+        let revoked_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut active_manifest = AssetPermissionManifest {
+            dataspace: active_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        active_manifest.uaid = uaid;
+        let mut active_record = SpaceDirectoryManifestRecord::new(active_manifest);
+        active_record.lifecycle.mark_activated(13);
+
+        let mut pending_manifest = AssetPermissionManifest {
+            dataspace: pending_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        pending_manifest.uaid = uaid;
+        let pending_record = SpaceDirectoryManifestRecord::new(pending_manifest);
+
+        let mut revoked_manifest = AssetPermissionManifest {
+            dataspace: revoked_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        revoked_manifest.uaid = uaid;
+        let mut revoked_record = SpaceDirectoryManifestRecord::new(revoked_manifest);
+        revoked_record.lifecycle.mark_activated(14);
+        revoked_record
+            .lifecycle
+            .mark_revoked(15, Some("operator request".to_owned()));
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(revoked_dataspace, revoked_account.clone());
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(active_record);
+        set.upsert(pending_record);
+        set.upsert(revoked_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: revoked_dataspace,
+                alias: "revoked".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                status: Some("Inactive".to_owned()),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("inactive manifest query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(3));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 2);
+
+        assert_eq!(
+            manifests[0]["dataspace_id"].as_u64(),
+            Some(pending_dataspace.as_u64())
+        );
+        assert_eq!(manifests[0]["status"].as_str(), Some("Pending"));
+        assert!(manifests[0]["dataspace_alias"].is_null());
+        assert_eq!(
+            manifests[0]["accounts"]
+                .as_array()
+                .expect("pending accounts array")
+                .len(),
+            0
+        );
+
+        assert_eq!(
+            manifests[1]["dataspace_id"].as_u64(),
+            Some(revoked_dataspace.as_u64())
+        );
+        assert_eq!(manifests[1]["status"].as_str(), Some("Revoked"));
+        assert_eq!(manifests[1]["dataspace_alias"].as_str(), Some("revoked"));
+        assert_eq!(
+            manifests[1]["accounts"][0].as_str(),
+            Some(crate::account_literal::display_literal(&revoked_account).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_applies_dataspace_filter_and_treats_zero_limit_as_unbounded()
+     {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x58; Hash::LENGTH]));
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut first_manifest = AssetPermissionManifest {
+            dataspace: first_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        first_manifest.uaid = uaid;
+        let mut first_record = SpaceDirectoryManifestRecord::new(first_manifest);
+        first_record.lifecycle.mark_activated(13);
+
+        let mut second_manifest = AssetPermissionManifest {
+            dataspace: second_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        second_manifest.uaid = uaid;
+        let mut second_record = SpaceDirectoryManifestRecord::new(second_manifest);
+        second_record.lifecycle.mark_activated(14);
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(second_dataspace, account.clone());
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(first_record);
+        set.upsert(second_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let state = manifest_state(world, None);
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                dataspace: Some(second_dataspace.as_u64()),
+                limit: Some(0),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("dataspace-filtered manifest query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(
+            manifests.len(),
+            1,
+            "limit=0 should be treated as an unbounded page for the filtered result",
+        );
+        assert_eq!(
+            manifests[0]["dataspace_id"].as_u64(),
+            Some(second_dataspace.as_u64())
+        );
+        assert_eq!(manifests[0]["status"].as_str(), Some("Active"));
+        assert_eq!(
+            manifests[0]["accounts"][0].as_str(),
+            Some(crate::account_literal::display_literal(&account).as_str())
+        );
     }
 
     #[tokio::test]

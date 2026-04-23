@@ -53,6 +53,159 @@ Last updated: 2026-04-23
   - `cargo test -p iroha_core handle_vote_uses_cached_roster_for_frontier_commit_vote_validation -- --nocapture`
   - `cargo test -p iroha_core reschedule_stale_pending_blocks_targets_snapshot_roster -- --nocapture`
 
+## 2026-04-23 Torii zk prover report-filter coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds six more direct prover-report regressions in the same report-management slice:
+  - single-delete recovery coverage proving `delete_report(...)` rebuilds a malformed `reports_index.json` from on-disk reports and only removes the requested report,
+  - count-handler coverage proving zero is returned when no summaries satisfy the request,
+  - count-handler filter composition coverage for `content_type`, `has_tag`, `since`, and `until`,
+  - list-handler coverage proving `latest=true` still respects the `messages_only` filter and returns the newest failed message,
+  - bulk-delete coverage for uppercase `id` normalization,
+  - bulk-delete filter composition coverage for `content_type`, `has_tag`, `since`, and `until`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover malformed-index save recovery coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds seven more direct prover-report regressions in the same report-management slice:
+  - empty-state index rebuild coverage proving `load_report_summaries()` persists an empty index when the reports directory starts empty,
+  - helper coverage proving `remove_report_summary(...)` ignores both invalid ids and valid-but-missing ids without disturbing existing summaries,
+  - save-path coverage proving `save_report(...)` rebuilds from on-disk report files when `reports_index.json` is malformed and then preserves both reports in the recovered index,
+  - GC coverage proving expired summaries are still deleted when the backing report file is already gone,
+  - count-handler coverage for `ok_only=true&errors_only=true`, exercising the “count everything” filter combination,
+  - list-handler coverage for uppercase `id` normalization and the mixed-case `order=Desc` branch.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover pagination and GC-rebuild coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five more direct regressions in the same prover-report slice:
+  - helper coverage proving `delete_report_files(...)` ignores invalid ids without disturbing valid reports or the persisted summary index,
+  - direct `load_report(...)` invalid-id coverage for the early sanitize rejection branch,
+  - direct `gc_reports_once()` malformed-index rebuild coverage proving GC falls back to the on-disk report files and preserves fresh reports,
+  - list-handler coverage for combined `content_type` / `has_tag` / `since_ms` / `before_ms` filtering through the real JSON response path,
+  - list-handler coverage for the normal `offset` + `limit` pagination window, not only the past-end and limit-cap branches.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover report-alias and index-normalization coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds five more direct prover-report regressions in the same report-management slice:
+  - valid persisted report-index normalization coverage proving `load_report_summaries()` drops invalid ids, lowercases uppercase ids, and keeps only the last duplicate entry when the index file itself is otherwise valid,
+  - direct `gc_reports_once()` no-op coverage proving fresh reports stay indexed and `deleted == 0` when nothing has expired,
+  - direct `failed_only=true` alias coverage for list, count, and bulk-delete handlers so those paths are exercised independently of `errors_only` and `messages_only`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover report-handler coverage follow-up
+
+- `crates/iroha_torii/src/zk_prover.rs` now adds seven more direct report-management regressions in the same prover slice:
+  - invalid report-id rejection coverage for the list, count, and bulk-delete handlers,
+  - happy-path coverage for single-report `GET` payload serialization and single-report `DELETE` index pruning,
+  - direct stale-index helper coverage proving `delete_report_files(...)` removes a persisted summary even when the backing file is already missing,
+  - direct handler coverage proving `latest=true` ignores `order`, `offset`, and `limit` instead of applying pagination first.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii zk prover GC test boundary fix
+
+- `crates/iroha_torii/src/zk_prover.rs` now keeps the GC retention regression safely inside the configured TTL window instead of placing the "fresh" report just `1 ms` below expiry, which could age out before `gc_reports_once()` recomputed `now`.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii zk_prover::tests::gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index -- --nocapture`
+  - `cargo test -p iroha_torii 'zk_prover::tests::' -- --nocapture`
+
+## 2026-04-23 Torii space-directory public-route coverage follow-up
+
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now adds two more router-level regressions in the same Space Directory slice:
+  - `GET /v1/space-directory/uaids/{uaid}` now covers a multi-dataspace payload with one catalog alias, one missing alias, and deterministic multi-account assertions through `api_router_for_tests()`,
+  - `GET /v1/space-directory/uaids/{uaid}/manifests?status=ACTIVE&limit=1&offset=1` now proves the public route preserves the prefilter `total` count even when status filtering plus pagination returns an empty page.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory revocation-shape coverage follow-up
+
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now adds two more public-route / mutation regressions in the same Space Directory slice:
+  - `GET /v1/space-directory/uaids/{uaid}/manifests?status=Inactive` now has explicit route-level coverage proving a reasonless revocation is serialized with `lifecycle.revocation.reason = null`,
+  - `POST /v1/space-directory/manifests/revoke` now has direct queue-inspection coverage proving a raw 64-hex `uaid` without the prefix is accepted and that omitting `reason` preserves `reason = None` in the queued `RevokeSpaceDirectoryManifest` instruction.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory raw-UAID coverage follow-up
+
+- `crates/iroha_torii/src/routing.rs` now expands `uaid_parsing_tests` and `space_directory_manifest_helper_tests` around the remaining raw-hex branch:
+  - `parse_uaid_literal(...)` accepts raw 64-hex literals without the `uaid:` prefix,
+  - direct bindings/manifests helper tests prove raw-hex UAID path literals are accepted and canonicalized in the JSON response payloads,
+  - the invalid-input parser test now also covers the empty-literal rejection branch.
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now drives the public GET bindings and manifests routes with a raw 64-hex UAID path and asserts the response canonicalizes back to `uaid:<lower-hex>`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii uaid_parsing_tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii space_directory_manifest_helper_tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory GET parse-path coverage follow-up
+
+- `crates/iroha_torii/src/routing.rs` now adds two more narrow `space_directory_manifest_helper_tests` cases for the direct GET handler parse failures:
+  - `handle_v1_space_directory_bindings(...)` rejects malformed UAID path literals with `400`,
+  - `handle_v1_space_directory_manifests(...)` rejects malformed UAID path literals with `400`.
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now adds a router-level regression proving the public GET bindings and manifests routes both surface the same malformed-UAID rejection through `api_router_for_tests()`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'space_directory_manifest_helper_tests::' --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory mutation coverage follow-up
+
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now inspects the queued transaction payloads for the Space Directory mutation endpoints instead of only checking `queued_len()`.
+- Added direct publish-handler coverage for both reason-preprocessing branches:
+  - `reason` is copied only into entries whose `notes` are missing,
+  - omitting `reason` leaves missing `notes` untouched.
+- Added direct revoke-handler coverage for UAID parsing behavior:
+  - mixed-case / padded `uaid:` literals are canonicalized into the queued `RevokeSpaceDirectoryManifest` instruction,
+  - invalid UAID literals fail with `400` and do not enqueue a transaction.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory handler coverage follow-up
+
+- `crates/iroha_torii/src/routing.rs` now adds three more narrow `space_directory_manifest_helper_tests` cases in the same local slice:
+  - direct `handle_v1_space_directory_bindings(...)` coverage for the missing-UAID-bindings response shape,
+  - direct `handle_v1_space_directory_bindings(...)` coverage for multi-dataspace alias/account output, including deterministic account comparisons,
+  - direct `handle_v1_space_directory_manifests(...)` coverage for the `Inactive` filter returning pending and revoked rows while excluding active rows.
+- The bindings multi-dataspace test seeds a minimal manifest set alongside the bindings because `State::new_for_testing(...)` prunes stale standalone `uaid_dataspaces` entries during storage migration when no manifest sets exist.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'space_directory_manifest_helper_tests::' --lib -- --nocapture`
+
+## 2026-04-23 Torii space-directory helper coverage expansion
+
+- `crates/iroha_torii/src/routing.rs` now adds four more narrow `space_directory_manifest_helper_tests` cases around the same helper slice:
+  - direct `manifest_lifecycle_json(...)` coverage for revocations that carry an explicit reason,
+  - direct `manifest_entry_to_json(...)` coverage for alias/hash/status/lifecycle/accounts population,
+  - direct `manifest_entry_to_json(...)` fallback coverage for null alias and empty accounts when context is missing,
+  - direct `handle_v1_space_directory_manifests(...)` coverage for the `dataspace` filter plus `limit=0` being treated as unbounded.
+- These keep the coverage local to the helper/test module and exercise JSON-shaping and query-filter branches that were previously only hit indirectly or not at all.
+- Focused validation for this coverage pass:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'space_directory_manifest_helper_tests::' --lib -- --nocapture`
+
+## 2026-04-23 Torii space-directory helper test ordering fix
+
+- `crates/iroha_torii/src/routing.rs` no longer assumes insertion order in `bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings`; the test now sorts the returned account literals and expected literals before comparing them.
+- This aligns the assertion with `UaidDataspaceBindings`, which stores per-dataspace accounts in a `BTreeSet` and therefore guarantees membership, not random `KeyPair::random()` insertion order.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings --lib`
+
 ## 2026-04-23 Torii ZK attachments smoke auth alignment
 
 - `crates/iroha_torii/tests/fixtures.rs` now provides `app_signed_request(...)`, a shared integration-test helper that attaches canonical `X-Iroha-*` request-signature headers for app-authenticated routes.
