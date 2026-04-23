@@ -2770,7 +2770,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             out.extend_from_slice(&h);
             env = out;
         }
-        let p = vm.alloc_input_tlv(&env)?;
+        let p = vm.alloc_host_tlv(&env)?;
         vm.set_register(10, p);
         Ok(())
     }
@@ -3571,7 +3571,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         out.extend_from_slice(payload);
         let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
         out.extend_from_slice(&h);
-        vm.alloc_input_tlv(&out)
+        vm.alloc_host_tlv(&out)
     }
 
     fn alloc_norito_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
@@ -7194,6 +7194,37 @@ mod pointer_abi_tests {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AssetDefinitionId)
                 .expect("decode asset definition pointer from state");
         assert_eq!(decoded, asset);
+    }
+
+    #[test]
+    fn load_state_value_rejects_wrapped_non_norito_bytes() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(10_000);
+        let stored = make_tlv(
+            PointerType::Name as u16,
+            &norito_blob(&Name::from_str("wrong").expect("valid name")),
+        );
+
+        let err =
+            CoreHost::load_state_value(&mut vm, &stored).expect_err("wrapped non-NoritoBytes TLV");
+        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    }
+
+    #[test]
+    fn load_state_value_wraps_raw_norito_payload_into_norito_bytes_tlv() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(10_000);
+        let expected = vec![1_u8, 2, 3, 4, 5];
+        let stored = norito::to_bytes(&expected).expect("encode raw state value");
+
+        CoreHost::load_state_value(&mut vm, &stored).expect("load raw state value");
+        let tlv = vm
+            .validate_tlv(vm.register(10))
+            .expect("wrapped raw state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let decoded: Vec<u8> =
+            norito::decode_from_bytes(tlv.payload).expect("decode wrapped raw state value");
+        assert_eq!(decoded, expected);
     }
 
     #[test]
@@ -15270,6 +15301,382 @@ seiyaku Vault {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn state_syscall_reads_world_snapshot_spills_to_heap_when_input_fills() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        let expected = vec![0xA5; 96];
+        let value_bytes = norito::to_bytes(&expected).expect("encode state value");
+        world.smart_contract_state.insert(path.clone(), value_bytes);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let filler = make_tlv(PointerType::Blob as u16, b"");
+        while vm.alloc_input_tlv(&filler).is_ok() {}
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "STATE_GET should spill to heap when input space is exhausted"
+        );
+        let out_ptr = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&out_ptr),
+            "contract runtime state_get should return a heap pointer once input is full"
+        );
+        let tlv = vm.validate_tlv(out_ptr).expect("spilled snapshot tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn state_syscall_unscoped_overlay_overrides_base_value_without_context() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode base state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&22_u64).expect("encode overlay state value"),
+        );
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Ok(0),
+            "STATE_SET should stage an unscoped overlay value without runtime context"
+        );
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "unscoped overlay should override the persisted base value"
+        );
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("overlay state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode overlay state");
+        assert_eq!(value, 22);
+
+        let overlay = host.drain_durable_state_overlay();
+        let stored = overlay
+            .get(&path)
+            .and_then(Option::as_ref)
+            .expect("unscoped overlay entry");
+        let stored_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored unscoped overlay tlv");
+        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
+        let stored_value: u64 =
+            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+        assert_eq!(stored_value, 22);
+    }
+
+    #[test]
+    fn state_syscall_unscoped_delete_shadows_base_value_without_context() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode base state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Ok(0),
+            "STATE_DEL should stage an unscoped tombstone without runtime context"
+        );
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "unscoped tombstone should shadow the persisted base value"
+        );
+        assert_eq!(vm.register(10), 0);
+
+        let overlay = host.drain_durable_state_overlay();
+        assert_eq!(
+            overlay.len(),
+            1,
+            "unscoped delete should only record one tombstone"
+        );
+        assert_eq!(overlay.get(&path), Some(&None));
+    }
+
+    #[test]
+    fn state_syscall_reads_scoped_overlay_spills_to_heap_when_input_fills() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(10_000);
+
+        let path: Name = "counter".parse().unwrap();
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let expected = vec![0x3C; 80];
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&expected).expect("encode state value"),
+        );
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            44,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("spill::overlay".parse().expect("contract alias")),
+            entrypoint: "read".to_owned(),
+        }));
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm), Ok(0));
+
+        let filler = make_tlv(PointerType::Blob as u16, b"");
+        while vm.alloc_input_tlv(&filler).is_ok() {}
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "scoped overlay STATE_GET should spill to heap when input space is exhausted"
+        );
+        let out_ptr = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&out_ptr),
+            "scoped overlay state_get should return a heap pointer once input is full"
+        );
+        let tlv = vm.validate_tlv(out_ptr).expect("spilled overlay tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn state_syscall_prefers_scoped_base_value_over_legacy_fallback() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let path: Name = "counter".parse().unwrap();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            46,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("scoped::base".parse().expect("contract alias")),
+            entrypoint: "read".to_owned(),
+        };
+        let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_contract_runtime_context(Some(context.clone()));
+        let scoped_path = scope_host
+            .scoped_durable_state_path(&path)
+            .expect("build scoped path")
+            .expect("scoped path should exist");
+
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode legacy state value"),
+        );
+        world.smart_contract_state.insert(
+            scoped_path,
+            norito::to_bytes(&11_u64).expect("encode scoped state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let filler = make_tlv(PointerType::Blob as u16, b"");
+        while vm.alloc_input_tlv(&filler).is_ok() {}
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "STATE_GET should prefer the scoped persisted value over the legacy fallback"
+        );
+        let out_ptr = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&out_ptr),
+            "scoped base STATE_GET should spill to heap once input is exhausted"
+        );
+        let tlv = vm.validate_tlv(out_ptr).expect("scoped base tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode scoped state");
+        assert_eq!(value, 11);
+    }
+
+    #[test]
+    fn state_syscall_scoped_overlay_overrides_scoped_and_legacy_base_values() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let path: Name = "counter".parse().unwrap();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            47,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("scoped::overlay".parse().expect("contract alias")),
+            entrypoint: "write".to_owned(),
+        };
+        let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_contract_runtime_context(Some(context.clone()));
+        let scoped_path = scope_host
+            .scoped_durable_state_path(&path)
+            .expect("build scoped path")
+            .expect("scoped path should exist");
+
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode legacy state value"),
+        );
+        world.smart_contract_state.insert(
+            scoped_path.clone(),
+            norito::to_bytes(&11_u64).expect("encode scoped state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&22_u64).expect("encode overlay state value"),
+        );
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm), Ok(0));
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "scoped overlay should win over both scoped and legacy persisted state"
+        );
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("overlay state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode overlay state");
+        assert_eq!(value, 22);
+
+        let overlay = host.drain_durable_state_overlay();
+        assert!(
+            !overlay.contains_key(&path),
+            "scoped overlay should not write through the legacy unscoped path"
+        );
+        let stored = overlay
+            .get(&scoped_path)
+            .and_then(Option::as_ref)
+            .expect("scoped overlay entry");
+        let stored_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored scoped overlay tlv");
+        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
+        let stored_value: u64 =
+            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+        assert_eq!(stored_value, 22);
+    }
+
+    #[test]
+    fn state_syscall_scoped_delete_shadows_legacy_raw_base_value() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        let value_bytes = norito::to_bytes(&7_u64).expect("encode state value");
+        world.smart_contract_state.insert(path.clone(), value_bytes);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            45,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("legacy::shadow".parse().expect("contract alias")),
+            entrypoint: "write".to_owned(),
+        }));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        vm.set_register(10, path_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm), Ok(0));
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "scoped tombstone should shadow legacy unscoped base value"
+        );
+        assert_eq!(vm.register(10), 0);
+
+        let overlay = host.drain_durable_state_overlay();
+        assert_eq!(overlay.get(&path), Some(&None));
     }
 
     #[test]
