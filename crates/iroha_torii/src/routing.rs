@@ -8240,7 +8240,11 @@ mod zk_roots_selector_tests {
     use std::str::FromStr;
 
     use super::*;
+    use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
+    use http_body_util::BodyExt as _;
     use iroha_crypto::KeyPair;
+    use iroha_primitives::json::Json;
+    use nonzero_ext::nonzero;
 
     fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -8263,12 +8267,44 @@ mod zk_roots_selector_tests {
         (state, definition_id)
     }
 
+    fn set_gas_accepted_assets_parameter(
+        state: &std::sync::Arc<iroha_core::state::State>,
+        payload: Json,
+    ) {
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            iroha_data_model::parameter::CustomParameterId(
+                "ivm_gas_accepted_assets".parse().expect("parameter id"),
+            ),
+            payload,
+        );
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(custom));
+        block
+            .commit()
+            .expect("commit gas accepted assets parameter");
+    }
+
     #[test]
     fn resolve_asset_definition_selector_accepts_alias_literal() {
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved =
             resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
+        assert_eq!(resolved, definition_id);
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_accepts_trimmed_alias_literal() {
+        let (state, definition_id) = selector_state();
+        let view = state.world_view();
+        let resolved = resolve_asset_definition_selector(&view, "  usd#main  ", 0)
+            .expect("trimmed alias should resolve");
         assert_eq!(resolved, definition_id);
     }
 
@@ -8282,10 +8318,32 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
+    fn resolve_asset_definition_selector_rejects_blank_literal() {
+        let (state, _) = selector_state();
+        let view = state.world_view();
+        let err = resolve_asset_definition_selector(&view, "   ", 0)
+            .expect_err("blank selector should fail");
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(ref message))
+                if message.contains("invalid asset selector")
+        ));
+    }
+
+    #[test]
     fn normalize_contract_call_gas_asset_id_canonicalizes_alias_literal() {
         let (state, definition_id) = selector_state();
         let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#main"))
             .expect("alias should canonicalize");
+
+        assert_eq!(normalized, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_canonicalizes_trimmed_alias_literal() {
+        let (state, definition_id) = selector_state();
+        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("  usd#main  "))
+            .expect("trimmed alias should canonicalize");
 
         assert_eq!(normalized, Some(definition_id.to_string()));
     }
@@ -8324,6 +8382,22 @@ mod zk_roots_selector_tests {
         let view = state.world_view();
         let err = resolve_asset_definition_selector(&view, "usd#missing", 0)
             .expect_err("unknown alias should fail");
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_rejects_unknown_base58_literal() {
+        let (state, _) = selector_state();
+        let view = state.world_view();
+        let missing_definition =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400ef");
+        let err = resolve_asset_definition_selector(&view, &missing_definition, 0)
+            .expect_err("unknown base58 id should fail");
         assert!(matches!(
             err,
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -8375,6 +8449,598 @@ mod zk_roots_selector_tests {
                 == "asset_id is outside the allowed transaction history asset definition"
         ));
         assert_ne!(definition_id, other_definition);
+    }
+
+    #[tokio::test]
+    async fn canonical_gas_asset_definition_id_rejects_blank_literal() {
+        let (state, _) = selector_state();
+        let err = canonical_gas_asset_definition_id(state.as_ref(), "   ")
+            .expect_err("blank gas asset id should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message == "gas_asset_id must not be empty"
+        ));
+    }
+
+    #[test]
+    fn canonical_gas_asset_definition_id_accepts_base58_literal() {
+        let (state, definition_id) = selector_state();
+
+        let canonical =
+            canonical_gas_asset_definition_id(state.as_ref(), &definition_id.to_string())
+                .expect("base58 gas asset id should canonicalize");
+
+        assert_eq!(canonical, definition_id.to_string());
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_preserves_trimmed_invalid_pipeline_default() {
+        let (mut state, _) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["  usd#missing  ".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), None)
+            .expect("default gas asset fallback should not error");
+
+        assert_eq!(normalized, Some("usd#missing".to_owned()));
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_rejects_invalid_explicit_literal() {
+        let (state, _) = selector_state();
+        let err = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#missing"))
+            .expect_err("invalid explicit gas asset should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message
+                == "invalid gas_asset_id `usd#missing`; expected canonical Base58 asset definition id or active asset alias"
+        ));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_prefers_custom_parameter_over_pipeline_default() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#missing".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(&state, Json::new(vec!["usd#main".to_owned()]));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_payload_is_invalid() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(&state, Json::new("not-a-list"));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_entries_are_blank() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(
+            &state,
+            Json::new(vec!["   ".to_owned(), "\t".to_owned(), "".to_owned()]),
+        );
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_list_is_empty() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(&state, Json::new(Vec::<String>::new()));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_uses_first_non_empty_custom_entry() {
+        let (state, definition_id) = selector_state();
+        set_gas_accepted_assets_parameter(
+            &state,
+            Json::new(vec![
+                "   ".to_owned(),
+                "usd#main".to_owned(),
+                "usd#missing".to_owned(),
+            ]),
+        );
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_preserves_trimmed_invalid_custom_entry() {
+        let (state, _) = selector_state();
+        set_gas_accepted_assets_parameter(&state, Json::new(vec!["  usd#missing  ".to_owned()]));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some("usd#missing".to_owned()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_returns_none_when_unconfigured() {
+        let (state, _) = selector_state();
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_skips_blank_pipeline_entries() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["   ".to_owned(), "usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_returns_none_when_pipeline_entries_are_only_blank() {
+        let (mut state, _) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["   ".to_owned(), "\t".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn metadata_with_default_gas_asset_inserts_selected_asset_id() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let metadata = metadata_with_default_gas_asset(state.as_ref());
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+
+        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn metadata_with_default_gas_asset_stays_empty_when_unconfigured() {
+        let (state, _) = selector_state();
+
+        let metadata = metadata_with_default_gas_asset(state.as_ref());
+
+        assert!(metadata.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_accepts_alias_literal_and_returns_empty_json_payload() {
+        let (state, _) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            None,
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: "usd#main".to_owned(),
+                max: 5,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_prefers_norito_when_accept_quality_ties() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(
+                "application/json;q=0.7, application/x-norito;q=0.7",
+            )),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_negotiates_norito_response_when_requested() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::decode_from_bytes(&bytes).expect("norito response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_prefers_json_when_accept_quality_is_higher() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(
+                "application/x-norito;q=0.4, application/json;q=0.8",
+            )),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_treats_wildcard_accept_as_json() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("*/*")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_treats_application_wildcard_accept_as_json() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("application/*")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_accepts_vendor_json_media_type() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("application/problem+json")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_ignores_zero_quality_norito_and_uses_json() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(
+                "application/x-norito;q=0, application/json;q=0.6",
+            )),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_returns_not_acceptable_for_unsupported_accept_header() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("text/plain")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect("accept negotiation should return an HTTP response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = std::str::from_utf8(&bytes).expect("utf8 response body");
+        assert!(body.contains("unsupported Accept header"));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_qvalue() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("application/json;q=bogus")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect("accept negotiation should return an HTTP response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = std::str::from_utf8(&bytes).expect("utf8 response body");
+        assert!(body.contains("invalid q-value"));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_encoding() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_bytes(b"\x80").expect("header value")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect("accept negotiation should return an HTTP response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = std::str::from_utf8(&bytes).expect("utf8 response body");
+        assert!(body.contains("invalid Accept header encoding"));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_rejects_blank_asset_selector() {
+        let (state, _) = selector_state();
+
+        let err = handle_v1_zk_roots(
+            state,
+            None,
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: "   ".to_owned(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect_err("blank selector should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(ref message))
+                if message.contains("invalid asset selector")
+        ));
     }
 }
 
