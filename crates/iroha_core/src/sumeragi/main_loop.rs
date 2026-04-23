@@ -15645,7 +15645,44 @@ impl Actor {
         if slot.body_present && !known_block_commit_qc_repair {
             return None;
         }
-        if Self::frontier_body_fetch_targets(slot).is_empty() {
+        let mut has_targets = !Self::frontier_body_fetch_targets(slot).is_empty();
+        if !has_targets {
+            let mut leader = slot.leader.clone();
+            let mut voters = slot.voters.clone();
+            if leader.is_none() && voters.is_empty() {
+                let mut roster =
+                    self.rbc_roster_for_session((slot.block_hash, slot.height, slot.view));
+                if roster.is_empty() {
+                    let (consensus_mode, _, _) = self.consensus_context_for_height(slot.height);
+                    roster = self.roster_for_live_vote_with_mode(slot.height, consensus_mode);
+                }
+                if roster.is_empty() {
+                    roster = self.effective_commit_topology();
+                }
+                if !roster.is_empty() {
+                    let topology = super::network_topology::Topology::new(roster);
+                    let (derived_leader, derived_voters) = self
+                        .frontier_slot_targets_from_topology(
+                            slot.height,
+                            slot.view,
+                            &BTreeSet::new(),
+                            &topology,
+                        );
+                    leader = derived_leader;
+                    voters = derived_voters;
+                }
+            }
+            has_targets = match slot.fetch_stage {
+                FrontierBodyFetchStage::Leader => leader.is_some() || !voters.is_empty(),
+                FrontierBodyFetchStage::Voters => {
+                    if let Some(leader) = leader.as_ref() {
+                        voters.retain(|peer| peer != leader);
+                    }
+                    !voters.is_empty()
+                }
+            };
+        }
+        if !has_targets {
             return None;
         }
         let ingress_due = slot
@@ -29265,10 +29302,16 @@ impl Actor {
         let live_height = height.min(committed_height.saturating_add(1)).max(1);
         let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
         let commit_topology = self.state.commit_topology_snapshot();
-        let topology_lane_ids = if commit_topology.is_empty() {
+        let active_commit_topology = self.active_topology_with_genesis_fallback_from_world(
+            &world,
+            commit_topology.as_slice(),
+            committed_height,
+            consensus_mode,
+        );
+        let topology_lane_ids = if active_commit_topology.is_empty() {
             BTreeSet::new()
         } else {
-            crate::state::validator_lane_ids_for_peers(&world, commit_topology.iter())
+            crate::state::validator_lane_ids_for_peers(&world, active_commit_topology.iter())
         };
         let local_lane_ids =
             crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id());

@@ -9,6 +9,7 @@ use std::{str::FromStr, time::SystemTime};
 
 use iroha_data_model::{
     account::{AccountAddress, AccountId, rekey::AccountAlias},
+    asset::{AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::DomainId,
     isi::{
@@ -31,6 +32,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_primitives::json::Json as IrohaJson;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
@@ -76,6 +78,29 @@ pub enum SnsNamespace {
     Domain,
     /// Canonical dataspace alias.
     Dataspace,
+}
+
+/// Deterministic billing quote for a SNS lease operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseQuote {
+    /// Canonical selector for the leased name.
+    pub selector: NameSelectorV1,
+    /// Pricing class that applies to the operation.
+    pub pricing_class: u8,
+    /// Canonical payment asset literal required by the policy.
+    pub payment_asset_id: String,
+    /// Asset definition charged for the operation.
+    pub payment_asset_definition_id: AssetDefinitionId,
+    /// Account receiving the lease payment.
+    pub collector_account: AccountId,
+    /// Gross/net charge for the operation.
+    pub charge_amount: u64,
+    /// Lease expiry after the operation succeeds.
+    pub expires_at_ms: u64,
+    /// Grace-period expiry after the operation succeeds.
+    pub grace_expires_at_ms: u64,
+    /// Redemption expiry after the operation succeeds.
+    pub redemption_expires_at_ms: u64,
 }
 
 impl SnsNamespace {
@@ -679,6 +704,65 @@ fn validate_payment_for_term(
     Ok(())
 }
 
+fn required_payment_amount(tier: &PriceTierV1, term_years: u8) -> Result<u64, SnsError> {
+    let required = tier
+        .base_price
+        .amount
+        .checked_mul(u128::from(term_years))
+        .ok_or_else(|| {
+            SnsError::Conflict(format!(
+                "required payment overflowed for pricing class {}",
+                tier.tier_id
+            ))
+        })?;
+    u64::try_from(required).map_err(|_| {
+        SnsError::Conflict(format!(
+            "required payment {required} exceeds supported u64 charge range"
+        ))
+    })
+}
+
+fn payment_asset_definition_id(policy: &SuffixPolicyV1) -> Result<AssetDefinitionId, SnsError> {
+    if let Ok(asset_id) = AssetId::parse_literal(&policy.payment_asset_id) {
+        return Ok(asset_id.definition().clone());
+    }
+    AssetDefinitionId::parse_address_literal(&policy.payment_asset_id).map_err(|err| {
+        SnsError::Conflict(format!(
+            "suffix `{}` has invalid payment asset `{}`: {err}",
+            policy.suffix_key(),
+            policy.payment_asset_id
+        ))
+    })
+}
+
+fn lease_quote(
+    selector: NameSelectorV1,
+    policy: &SuffixPolicyV1,
+    tier: &PriceTierV1,
+    term_years: u8,
+    base_expires_at_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    validate_term_bounds(policy, tier, term_years)?;
+    let charge_amount = required_payment_amount(tier, term_years)?;
+    let payment_asset_definition_id = payment_asset_definition_id(policy)?;
+    let expires_at_ms = base_expires_at_ms.saturating_add(years_to_ms(term_years));
+    let grace_expires_at_ms =
+        expires_at_ms.saturating_add(u64::from(policy.grace_period_days) * MS_PER_DAY);
+    let redemption_expires_at_ms =
+        grace_expires_at_ms.saturating_add(u64::from(policy.redemption_period_days) * MS_PER_DAY);
+    Ok(LeaseQuote {
+        selector,
+        pricing_class: tier.tier_id,
+        payment_asset_id: policy.payment_asset_id.clone(),
+        payment_asset_definition_id,
+        collector_account: policy.fund_splitter_account.clone(),
+        charge_amount,
+        expires_at_ms,
+        grace_expires_at_ms,
+        redemption_expires_at_ms,
+    })
+}
+
 fn maybe_auction_state(tier: &PriceTierV1, now_ms: u64) -> Option<NameAuctionStateV1> {
     match tier.auction_kind {
         AuctionKind::VickreyCommitReveal => None,
@@ -867,6 +951,95 @@ pub fn get_name_record(
     let mut record = record_or_not_found(world, &selector)?;
     refresh_lifecycle(&mut record, now_ms);
     Ok(record)
+}
+
+/// Build a deterministic payment proof that satisfies the current quote.
+#[must_use]
+pub fn payment_proof_for_quote(quote: &LeaseQuote, payer: AccountId) -> PaymentProofV1 {
+    PaymentProofV1 {
+        asset_id: quote.payment_asset_id.clone(),
+        gross_amount: quote.charge_amount,
+        net_amount: quote.charge_amount,
+        settlement_tx: IrohaJson::from("canonical-sns-lease"),
+        payer,
+        signature: IrohaJson::from("canonical-sns-lease"),
+    }
+}
+
+/// Quote the cost and resulting lifecycle for acquiring an account-alias lease.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the alias is invalid, already registered, or does
+/// not satisfy the active suffix policy.
+pub fn quote_account_alias_registration(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    owner: &AccountId,
+    term_years: u8,
+    pricing_class_hint: Option<u8>,
+    now_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    let selector = selector_for_account_alias(alias, catalog)
+        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
+    ensure_selector_is_mutable(&selector)?;
+    let policy = policy_or_not_found(world, selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    enforce_reserved_label_assignment(
+        SnsNamespace::AccountAlias,
+        &policy,
+        &selector,
+        owner,
+        now_ms,
+    )?;
+    if record_by_selector(world, &selector).is_some() {
+        return Err(SnsError::Conflict(format!(
+            "selector `{}` is already registered",
+            selector.normalized_label()
+        )));
+    }
+    let tier = pick_pricing_tier(&policy, &selector, pricing_class_hint)?;
+    lease_quote(selector, &policy, &tier, term_years, now_ms)
+}
+
+/// Quote the cost and resulting lifecycle for renewing an account-alias lease.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the alias is missing, immutable, or no longer
+/// eligible for renewal.
+pub fn quote_account_alias_renewal(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    term_years: u8,
+    now_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    let selector = selector_for_account_alias(alias, catalog)
+        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
+    ensure_selector_is_mutable(&selector)?;
+    let policy = policy_or_not_found(world, selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    let mut record = record_or_not_found(world, &selector)?;
+    refresh_lifecycle(&mut record, now_ms);
+    match record.status {
+        NameStatus::Tombstoned(_) => {
+            return Err(SnsError::Conflict(format!(
+                "registration `{}` is tombstoned",
+                selector.normalized_label()
+            )));
+        }
+        NameStatus::Frozen(_) => {
+            return Err(SnsError::Conflict(format!(
+                "registration `{}` is frozen",
+                selector.normalized_label()
+            )));
+        }
+        _ => {}
+    }
+    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
+    lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
 }
 
 fn persist_record(state_transaction: &mut StateTransaction<'_, '_>, record: &NameRecordV1) {
@@ -1335,7 +1508,8 @@ mod tests {
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         sns::{
             FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
-            NameStatus, PaymentProofV1, RegisterNameRequestV1, TransferNameRequestV1,
+            NameStatus, NameTombstoneStateV1, PaymentProofV1, RegisterNameRequestV1,
+            TransferNameRequestV1,
         },
         transaction::TransactionBuilder,
     };
@@ -1467,6 +1641,129 @@ mod tests {
         assert_eq!(
             active_dataspace_owner_by_id(&view, &catalog, DataSpaceId::new(7), 50),
             Some(owner)
+        );
+    }
+
+    #[test]
+    fn quote_account_alias_registration_uses_default_policy_price_and_term() {
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
+        let owner = owner();
+        let mut world = World::default();
+        seed_default_namespace_policies(&mut world);
+        let view = world.view();
+
+        let quote = quote_account_alias_registration(&view, &catalog, &alias, &owner, 2, None, 100)
+            .expect("registration quote");
+
+        assert_eq!(quote.selector.label, "treasury@banking");
+        assert_eq!(quote.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
+        assert_eq!(quote.charge_amount, 240);
+        assert_eq!(quote.expires_at_ms, 100 + years_to_ms(2));
+    }
+
+    #[test]
+    fn quote_account_alias_registration_rejects_existing_record() {
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
+        let owner = owner();
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            1,
+            5_000,
+            5_000 + (30 * MS_PER_DAY),
+            5_000 + (90 * MS_PER_DAY),
+            Metadata::default(),
+        );
+        let mut world = World::default();
+        seed_default_namespace_policies(&mut world);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+        let view = world.view();
+
+        let err = quote_account_alias_registration(&view, &catalog, &alias, &owner, 1, None, 100)
+            .expect_err("existing registration must be rejected");
+
+        assert!(
+            err.to_string().contains("already registered"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn quote_account_alias_renewal_extends_from_existing_expiry() {
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::new(7));
+        let owner = owner();
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            1,
+            5_000,
+            5_000 + (30 * MS_PER_DAY),
+            5_000 + (90 * MS_PER_DAY),
+            Metadata::default(),
+        );
+        let mut world = World::default();
+        seed_default_namespace_policies(&mut world);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+        let view = world.view();
+
+        let quote =
+            quote_account_alias_renewal(&view, &catalog, &alias, 3, 4_000).expect("renewal quote");
+
+        assert_eq!(quote.selector, selector);
+        assert_eq!(quote.charge_amount, 360);
+        assert_eq!(quote.expires_at_ms, 5_000 + years_to_ms(3));
+    }
+
+    #[test]
+    fn quote_account_alias_renewal_rejects_tombstoned_record() {
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("merchant".parse().expect("label"), DataSpaceId::new(7));
+        let owner = owner();
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let mut record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            1,
+            5_000,
+            5_000 + (30 * MS_PER_DAY),
+            5_000 + (90 * MS_PER_DAY),
+            Metadata::default(),
+        );
+        record.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
+            reason: "retired".to_owned(),
+        });
+        let mut world = World::default();
+        seed_default_namespace_policies(&mut world);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&selector), record.encode());
+        let view = world.view();
+
+        let err = quote_account_alias_renewal(&view, &catalog, &alias, 1, 4_000)
+            .expect_err("tombstoned registration must not renew");
+
+        assert!(
+            err.to_string().contains("tombstoned"),
+            "unexpected error: {err}"
         );
     }
 

@@ -2,9 +2,9 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, account_recovery, asset_alias,
-        asset_transfer_control, bridge, consensus_keys, contract_alias, domain_link, endorsement,
-        identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe, repo,
+        InstructionRegistry, RegisterPeerWithPop, account_alias_lease, account_recovery,
+        asset_alias, asset_transfer_control, bridge, consensus_keys, contract_alias, domain_link,
+        endorsement, identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe, repo,
         runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, sorafs,
         space_directory,
         transparent::{
@@ -181,6 +181,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<endorsement::SubmitDomainEndorsement>,
     InstructionRegistry::register::<domain_link::SetAccountAliasBinding>,
     InstructionRegistry::register::<domain_link::SetPrimaryAccountAlias>,
+    InstructionRegistry::register::<account_alias_lease::AcquireAccountAliasLease>,
+    InstructionRegistry::register::<account_alias_lease::RenewAccountAliasLease>,
     InstructionRegistry::register::<account_recovery::ReplaceAccountController>,
     InstructionRegistry::register::<account_recovery::SetAccountRecoveryPolicy>,
     InstructionRegistry::register::<account_recovery::ClearAccountRecoveryPolicy>,
