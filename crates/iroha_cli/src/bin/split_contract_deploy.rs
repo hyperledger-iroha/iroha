@@ -176,7 +176,10 @@ fn main() -> Result<()> {
 
     let written = if let Some(out_dir) = args.out_dir.as_deref() {
         Some(vec![
-            ("register_bytes", write_tx(out_dir, "01-register-bytes", &register_bytes_tx)?),
+            (
+                "register_bytes",
+                write_tx(out_dir, "01-register-bytes", &register_bytes_tx)?,
+            ),
             (
                 "register_manifest",
                 write_tx(out_dir, "02-register-manifest", &register_manifest_tx)?,
@@ -218,7 +221,10 @@ fn main() -> Result<()> {
             "register_manifest_tx_hash".to_owned(),
             register_manifest_hash.to_string().into(),
         ),
-        ("activate_tx_hash".to_owned(), activate_hash.to_string().into()),
+        (
+            "activate_tx_hash".to_owned(),
+            activate_hash.to_string().into(),
+        ),
     ]);
     if let Some(written) = written {
         let files = written
