@@ -2,6 +2,92 @@
 
 Last updated: 2026-04-23
 
+## 2026-04-23 Torii space-directory public-route coverage follow-up
+
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now adds two more router-level regressions in the same Space Directory slice:
+  - `GET /v1/space-directory/uaids/{uaid}` now covers a multi-dataspace payload with one catalog alias, one missing alias, and deterministic multi-account assertions through `api_router_for_tests()`,
+  - `GET /v1/space-directory/uaids/{uaid}/manifests?status=ACTIVE&limit=1&offset=1` now proves the public route preserves the prefilter `total` count even when status filtering plus pagination returns an empty page.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory revocation-shape coverage follow-up
+
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now adds two more public-route / mutation regressions in the same Space Directory slice:
+  - `GET /v1/space-directory/uaids/{uaid}/manifests?status=Inactive` now has explicit route-level coverage proving a reasonless revocation is serialized with `lifecycle.revocation.reason = null`,
+  - `POST /v1/space-directory/manifests/revoke` now has direct queue-inspection coverage proving a raw 64-hex `uaid` without the prefix is accepted and that omitting `reason` preserves `reason = None` in the queued `RevokeSpaceDirectoryManifest` instruction.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory raw-UAID coverage follow-up
+
+- `crates/iroha_torii/src/routing.rs` now expands `uaid_parsing_tests` and `space_directory_manifest_helper_tests` around the remaining raw-hex branch:
+  - `parse_uaid_literal(...)` accepts raw 64-hex literals without the `uaid:` prefix,
+  - direct bindings/manifests helper tests prove raw-hex UAID path literals are accepted and canonicalized in the JSON response payloads,
+  - the invalid-input parser test now also covers the empty-literal rejection branch.
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now drives the public GET bindings and manifests routes with a raw 64-hex UAID path and asserts the response canonicalizes back to `uaid:<lower-hex>`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii uaid_parsing_tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii space_directory_manifest_helper_tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory GET parse-path coverage follow-up
+
+- `crates/iroha_torii/src/routing.rs` now adds two more narrow `space_directory_manifest_helper_tests` cases for the direct GET handler parse failures:
+  - `handle_v1_space_directory_bindings(...)` rejects malformed UAID path literals with `400`,
+  - `handle_v1_space_directory_manifests(...)` rejects malformed UAID path literals with `400`.
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now adds a router-level regression proving the public GET bindings and manifests routes both surface the same malformed-UAID rejection through `api_router_for_tests()`.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'space_directory_manifest_helper_tests::' --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory mutation coverage follow-up
+
+- `crates/iroha_torii/tests/space_directory_manifests.rs` now inspects the queued transaction payloads for the Space Directory mutation endpoints instead of only checking `queued_len()`.
+- Added direct publish-handler coverage for both reason-preprocessing branches:
+  - `reason` is copied only into entries whose `notes` are missing,
+  - omitting `reason` leaves missing `notes` untouched.
+- Added direct revoke-handler coverage for UAID parsing behavior:
+  - mixed-case / padded `uaid:` literals are canonicalized into the queued `RevokeSpaceDirectoryManifest` instruction,
+  - invalid UAID literals fail with `400` and do not enqueue a transaction.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture`
+
+## 2026-04-23 Torii space-directory handler coverage follow-up
+
+- `crates/iroha_torii/src/routing.rs` now adds three more narrow `space_directory_manifest_helper_tests` cases in the same local slice:
+  - direct `handle_v1_space_directory_bindings(...)` coverage for the missing-UAID-bindings response shape,
+  - direct `handle_v1_space_directory_bindings(...)` coverage for multi-dataspace alias/account output, including deterministic account comparisons,
+  - direct `handle_v1_space_directory_manifests(...)` coverage for the `Inactive` filter returning pending and revoked rows while excluding active rows.
+- The bindings multi-dataspace test seeds a minimal manifest set alongside the bindings because `State::new_for_testing(...)` prunes stale standalone `uaid_dataspaces` entries during storage migration when no manifest sets exist.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'space_directory_manifest_helper_tests::' --lib -- --nocapture`
+
+## 2026-04-23 Torii space-directory helper coverage expansion
+
+- `crates/iroha_torii/src/routing.rs` now adds four more narrow `space_directory_manifest_helper_tests` cases around the same helper slice:
+  - direct `manifest_lifecycle_json(...)` coverage for revocations that carry an explicit reason,
+  - direct `manifest_entry_to_json(...)` coverage for alias/hash/status/lifecycle/accounts population,
+  - direct `manifest_entry_to_json(...)` fallback coverage for null alias and empty accounts when context is missing,
+  - direct `handle_v1_space_directory_manifests(...)` coverage for the `dataspace` filter plus `limit=0` being treated as unbounded.
+- These keep the coverage local to the helper/test module and exercise JSON-shaping and query-filter branches that were previously only hit indirectly or not at all.
+- Focused validation for this coverage pass:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii 'space_directory_manifest_helper_tests::' --lib -- --nocapture`
+
+## 2026-04-23 Torii space-directory helper test ordering fix
+
+- `crates/iroha_torii/src/routing.rs` no longer assumes insertion order in `bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings`; the test now sorts the returned account literals and expected literals before comparing them.
+- This aligns the assertion with `UaidDataspaceBindings`, which stores per-dataspace accounts in a `BTreeSet` and therefore guarantees membership, not random `KeyPair::random()` insertion order.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings --lib`
+
 ## 2026-04-23 Torii ZK attachments smoke auth alignment
 
 - `crates/iroha_torii/tests/fixtures.rs` now provides `app_signed_request(...)`, a shared integration-test helper that attaches canonical `X-Iroha-*` request-signature headers for app-authenticated routes.
