@@ -71508,6 +71508,50 @@ mod subscription_api_tests {
     }
 
     #[test]
+    fn resolve_account_alias_auto_renew_resume_charge_ms_preserves_future_schedule() {
+        let future_charge_ms = network_time_ms().unwrap().saturating_add(60_000);
+        let subscription_state = sample_subscription_state(
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403f1"),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+            SubscriptionStatus::Paused,
+            "bill_alias_future".parse().unwrap(),
+        );
+        let subscription_state = SubscriptionState {
+            next_charge_ms: future_charge_ms,
+            ..subscription_state
+        };
+
+        let resolved =
+            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, None).unwrap();
+        assert_eq!(resolved, future_charge_ms);
+    }
+
+    #[test]
+    fn resolve_account_alias_auto_renew_resume_charge_ms_clamps_stale_schedule_to_now() {
+        let subscription_state = sample_subscription_state(
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403f2"),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+            SubscriptionStatus::Paused,
+            "bill_alias_stale".parse().unwrap(),
+        );
+        let subscription_state = SubscriptionState {
+            next_charge_ms: 1,
+            ..subscription_state
+        };
+
+        let before = network_time_ms().unwrap();
+        let resolved =
+            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, None).unwrap();
+        let after = network_time_ms().unwrap();
+        assert!(
+            (before..=after).contains(&resolved),
+            "resolved charge {resolved} should be clamped to current time between {before} and {after}",
+        );
+    }
+
+    #[test]
     fn resolve_trigger_id_prefers_explicit() {
         let subscription_id: NftId = "sub2$wonderland.universal".parse().unwrap();
         let explicit: TriggerId = "explicit_trigger".parse().unwrap();
@@ -72300,6 +72344,69 @@ mod subscription_api_tests {
     }
 
     #[tokio::test]
+    async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403fa");
+        let plan = sample_plan(provider.clone());
+        let subscription_id: NftId = "sub-cancel-period-end$wonderland.universal"
+            .parse()
+            .unwrap();
+        let subscription_state = sample_subscription_state(
+            plan_id.clone(),
+            provider.clone(),
+            subscriber.clone(),
+            SubscriptionStatus::Active,
+            "bill_cancel_period_end".parse().unwrap(),
+        );
+        let expected_cancel_at_ms = subscription_state.current_period_end_ms;
+        let state = state_with_plans_and_subscriptions(
+            provider,
+            subscriber.clone(),
+            vec![(plan_id, plan)],
+            vec![(subscription_id.clone(), subscription_state, None)],
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let req = SubscriptionActionDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: Some(SubscriptionCancelMode::PeriodEnd),
+        };
+        let resp = handle_post_v1_subscription_cancel(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry,
+            subscription_id.clone(),
+            NoritoJson(req),
+        )
+        .await
+        .expect("cancel at period end ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &subscription_id).await;
+
+        let applied =
+            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
+        assert_eq!(applied, 1, "cancel transaction should apply");
+
+        let view = state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should exist");
+        let updated_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(updated_state.status, SubscriptionStatus::Active);
+        assert!(updated_state.cancel_at_period_end);
+        assert_eq!(updated_state.cancel_at_ms, Some(expected_cancel_at_ms));
+    }
+
+    #[tokio::test]
     async fn handle_post_v1_subscription_resume_supports_alias_auto_renew_nfts() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
@@ -72390,6 +72497,95 @@ mod subscription_api_tests {
                 .is_some(),
             "resume should register a new billing trigger"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_resume_alias_auto_renew_without_charge_at_preserves_future_schedule()
+     {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let charge_asset_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403fb");
+        let subscription_id: NftId = "sub-alias-resume-default$wonderland.universal"
+            .parse()
+            .unwrap();
+        let billing_trigger_id: TriggerId = "bill_alias_resume_default".parse().unwrap();
+        let future_charge_ms = network_time_ms().unwrap().saturating_add(60_000);
+        let mut subscription_state = build_account_alias_auto_renew_state(
+            subscriber.clone(),
+            charge_asset_id.clone(),
+            billing_trigger_id.clone(),
+            1_000,
+            2_000,
+        );
+        subscription_state.status = SubscriptionStatus::Paused;
+        subscription_state.next_charge_ms = future_charge_ms;
+        subscription_state.failure_count = 2;
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(subscription_state),
+        );
+        metadata.insert(
+            (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+            IrohaJson::new(build_account_alias_auto_renew_settings(
+                "member@universal".to_owned(),
+                1,
+                200,
+                500,
+                3,
+            )),
+        );
+
+        let asset_definitions =
+            vec![AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider)];
+        let nfts = vec![Nft::new(subscription_id.clone(), metadata).build(&subscriber)];
+        let state = state_with_asset_definitions_and_nfts(
+            provider,
+            subscriber.clone(),
+            asset_definitions,
+            nfts,
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let req = SubscriptionActionDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_resume(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry,
+            subscription_id.clone(),
+            NoritoJson(req),
+        )
+        .await
+        .expect("resume ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &subscription_id).await;
+
+        let applied =
+            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
+        assert_eq!(applied, 1, "resume transaction should apply");
+
+        let view = state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should exist");
+        let resumed_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(resumed_state.status, SubscriptionStatus::Active);
+        assert_eq!(resumed_state.failure_count, 0);
+        assert_eq!(resumed_state.next_charge_ms, future_charge_ms);
+        assert_eq!(resumed_state.current_period_start_ms, 1_000);
+        assert_eq!(resumed_state.current_period_end_ms, 2_000);
     }
 }
 

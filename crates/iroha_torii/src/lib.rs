@@ -30269,12 +30269,39 @@ impl Torii {
                 // Subscriptions
                 .route(
                     "/v1/subscriptions/plans",
-                    get(handler_subscription_plans_list),
+                    get(handler_subscription_plans_list).post(handler_subscription_plans_create),
                 )
-                .route("/v1/subscriptions", get(handler_subscriptions_list))
+                .route(
+                    "/v1/subscriptions",
+                    get(handler_subscriptions_list).post(handler_subscriptions_create),
+                )
                 .route(
                     "/v1/subscriptions/{subscription_id}",
                     get(handler_subscription_get),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/pause",
+                    post(handler_subscription_pause),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/resume",
+                    post(handler_subscription_resume),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/cancel",
+                    post(handler_subscription_cancel),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/keep",
+                    post(handler_subscription_keep),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/usage",
+                    post(handler_subscription_usage),
+                )
+                .route(
+                    "/v1/subscriptions/{subscription_id}/charge-now",
+                    post(handler_subscription_charge_now),
                 )
                 .route("/v1/parameters", get(handler_parameters))
                 // Explorer endpoints
