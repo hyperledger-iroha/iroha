@@ -421,7 +421,7 @@ impl<T> CompoundPredicate<T> {
     }
 }
 
-#[derive(Encode, Decode)]
+#[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
 enum CompoundPredicateWire {
     Pass,
     Json(String),
@@ -433,18 +433,31 @@ enum CompoundPredicateWire {
 impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
     fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
         let wire = self.to_wire();
-        let bytes = norito::codec::Encode::encode(&wire);
-        std::io::Write::write_all(&mut writer, &bytes)?;
-        Ok(())
+        norito::core::NoritoSerialize::serialize(&wire, &mut writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.to_wire().encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.to_wire().encoded_len_exact()
     }
 }
 
 impl<'de, T> norito::core::NoritoDeserialize<'de> for CompoundPredicate<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("compound predicate wire should deserialize")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
         let wire_archived = archived.cast::<CompoundPredicateWire>();
-        let wire =
-            <CompoundPredicateWire as norito::core::NoritoDeserialize>::deserialize(wire_archived);
-        Self::from_wire(wire)
+        let wire = <CompoundPredicateWire as norito::core::NoritoDeserialize>::try_deserialize(
+            wire_archived,
+        )?;
+        Ok(Self::from_wire(wire))
     }
 }
 
