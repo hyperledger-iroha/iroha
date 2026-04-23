@@ -92821,27 +92821,29 @@ async fn assemble_proposal_defers_when_candidate_conflicts_with_local_vote_histo
     let actor = &mut harness.actor;
 
     let height = 1u64;
-    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let (_, _, prf_seed) = actor.consensus_context_for_height(height);
-    let seed = prf_seed.expect("PRF seed available");
-    topology.canonicalize_order();
-    topology.shuffle_prf(seed, height);
-    let vote_topology = topology.clone();
-    let local_pos = topology
-        .position(actor.common_config.peer.id().public_key())
-        .expect("local peer in topology");
-    let view = u64::try_from(local_pos).expect("view fits u64");
-    let leader_index = actor
-        .leader_index_for(&mut topology, height, view)
-        .expect("leader index");
-    let local_idx = actor
-        .local_validator_index_for_topology(&topology)
-        .expect("local validator index");
-    assert_eq!(
-        u32::try_from(leader_index).expect("leader index fits u32"),
-        local_idx,
-        "test requires the local peer to own the proposal slot"
-    );
+    let roster = actor.effective_commit_topology();
+    let vote_topology = {
+        let mut topology = super::network_topology::Topology::new(roster.clone());
+        let (_, _, prf_seed) = actor.consensus_context_for_height(height);
+        let seed = prf_seed.expect("PRF seed available");
+        topology.canonicalize_order();
+        topology.shuffle_prf(seed, height);
+        topology
+    };
+    let (mut topology, view, leader_index, local_idx) = (1..=roster.len().saturating_mul(3))
+        .find_map(|view| {
+            let view = u64::try_from(view).ok()?;
+            let mut topology = super::network_topology::Topology::new(roster.clone());
+            let leader_index = actor.leader_index_for(&mut topology, height, view).ok()?;
+            let local_idx = actor.local_validator_index_for_topology(&topology)?;
+            (u32::try_from(leader_index).ok()? == local_idx).then_some((
+                topology,
+                view,
+                leader_index,
+                local_idx,
+            ))
+        })
+        .expect("test requires a later view led by the local peer");
 
     let conflicting_block = sample_block(height, 0, None);
     let conflicting_hash = insert_validated_pending(actor, conflicting_block);
@@ -100072,13 +100074,27 @@ async fn precommit_vote_ignores_remote_same_height_vote_when_cached_roster_diffe
     let height = actor.state.view().height() as u64 + 1;
     let epoch = actor.current_epoch();
     let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let local_peer = actor.common_config.peer.id().clone();
+    if matches!(consensus_mode, ConsensusMode::Permissioned) {
+        let mut active_roster = actor.effective_commit_topology();
+        if active_roster.first() == Some(&local_peer) {
+            active_roster.rotate_left(1);
+            let mut topo_block = actor.state.commit_topology.block();
+            let mut tx = topo_block.transaction();
+            *tx = active_roster;
+            tx.apply();
+            topo_block.commit();
+        }
+    }
     let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
     let live_topology = super::network_topology::Topology::new(live_roster.clone());
-    let local_peer = actor.common_config.peer.id().clone();
 
-    let (remote_view, remote_signer, cached_roster, remote_peer) = (0..live_roster.len())
+    let search_limit = u64::try_from(live_roster.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let (remote_view, remote_signer, cached_roster, remote_peer) = (0..search_limit)
         .find_map(|view_idx| {
-            let view = u64::try_from(view_idx).ok()?;
+            let view = view_idx;
             let live_signature_topology =
                 super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
             let local_idx = actor.local_validator_index_for_topology(&live_signature_topology)?;

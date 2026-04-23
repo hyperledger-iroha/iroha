@@ -109,6 +109,12 @@ pub enum ToriiReadEndpointV1 {
     RwasList,
     /// `POST /v1/rwas/query`
     RwasQuery,
+    /// `POST /v1/aliases/resolve`
+    AliasResolve,
+    /// `POST /v1/aliases/resolve_index`
+    AliasResolveIndex,
+    /// `POST /v1/aliases/by_account`
+    AliasLookupByAccount,
 }
 
 /// Canonical routed read executed on an authoritative Torii peer.

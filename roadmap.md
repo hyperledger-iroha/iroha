@@ -6,6 +6,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
+- Fold the new Nexus-routed alias-read coverage into the next wider validation sweep once the current tree is stable.
+  - Keep `cargo test -p iroha_torii --lib --features app_api -- --nocapture` in the rerun window so the new `/v1/aliases/resolve`, `/v1/aliases/resolve_index`, and `/v1/aliases/by_account` fanout/permission tests stay exercised alongside the broader Torii surface.
+  - When validation budget allows, carry the alias-routing slice through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
 - Broaden validation for the new canonical account-alias lease flow beyond the focused onboarding and executor checks.
   - Rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
   - Add or rerun focused coverage for the SNS subscription auto-renew billing path in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, not just the onboarding enqueue path.
