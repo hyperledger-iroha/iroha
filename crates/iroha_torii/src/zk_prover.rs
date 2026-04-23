@@ -1678,6 +1678,7 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
 
 #[cfg(test)]
 mod tests {
+    use http_body_util::BodyExt as _;
     use iroha_core::zk::test_utils::halo2_fixture_envelope;
     use iroha_data_model::proof::ProofAttachment;
 
@@ -1729,6 +1730,31 @@ mod tests {
             .expect("attachments tenant dir");
     }
 
+    fn sample_report(
+        id: String,
+        ok: bool,
+        error: Option<&str>,
+        content_type: &str,
+        processed_ms: u64,
+    ) -> ProverReport {
+        ProverReport {
+            id,
+            ok,
+            error: error.map(str::to_owned),
+            content_type: content_type.to_owned(),
+            size: 64,
+            created_ms: processed_ms.saturating_sub(1),
+            processed_ms,
+            latency_ms: 1,
+            zk1_tags: None,
+            backend: None,
+            vk_ref: None,
+            proof_hash: None,
+            circuit_id: None,
+            proofs: Vec::new(),
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn get_report_rejects_invalid_id() {
         let response = axum::response::IntoResponse::into_response(
@@ -1738,11 +1764,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn get_report_returns_not_found_for_missing_report() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let response = axum::response::IntoResponse::into_response(
+            super::handle_get_report(axum::extract::Path("fd".repeat(32))).await,
+        );
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn delete_report_rejects_invalid_id() {
         let response = axum::response::IntoResponse::into_response(
             super::handle_delete_report(axum::extract::Path("../bad".to_string())).await,
         );
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_report_returns_not_found_for_missing_report() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let response = axum::response::IntoResponse::into_response(
+            super::handle_delete_report(axum::extract::Path("fe".repeat(32))).await,
+        );
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -1796,10 +1844,365 @@ mod tests {
         );
     }
 
+    #[test]
+    fn load_report_rejects_non_utf8_report_file() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+
+        let id = "ac".repeat(32);
+        fs::write(report_path_from_sanitized(&id), [0xff, 0xfe, 0xfd]).expect("write report");
+        assert!(
+            load_report(&id).is_none(),
+            "non-utf8 report payload must be rejected"
+        );
+    }
+
+    #[test]
+    fn load_report_rejects_malformed_report_json() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+
+        let id = "ad".repeat(32);
+        fs::write(report_path_from_sanitized(&id), "{not json").expect("write report");
+        assert!(
+            load_report(&id).is_none(),
+            "malformed report json must be rejected"
+        );
+    }
+
+    #[test]
+    fn normalize_report_summaries_drops_invalid_ids_and_keeps_last_duplicate() {
+        let dup_id = "cd".repeat(32);
+        let normalized = normalize_report_summaries(vec![
+            ProverReportSummary {
+                id: "bad".to_string(),
+                ok: false,
+                error: Some("invalid".to_string()),
+                content_type: "application/json".to_string(),
+                processed_ms: 1,
+                zk1_tags: None,
+            },
+            ProverReportSummary {
+                id: dup_id.to_ascii_uppercase(),
+                ok: true,
+                error: None,
+                content_type: "application/json".to_string(),
+                processed_ms: 2,
+                zk1_tags: None,
+            },
+            ProverReportSummary {
+                id: dup_id.clone(),
+                ok: false,
+                error: Some("latest".to_string()),
+                content_type: "application/x-zk1".to_string(),
+                processed_ms: 3,
+                zk1_tags: Some(vec!["PROF".to_string()]),
+            },
+        ]);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].id, dup_id);
+        assert!(!normalized[0].ok);
+        assert_eq!(normalized[0].error.as_deref(), Some("latest"));
+        assert_eq!(normalized[0].content_type, "application/x-zk1");
+        assert_eq!(
+            normalized[0].zk1_tags.as_deref(),
+            Some(&["PROF".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn load_report_summaries_rebuilds_when_reports_index_is_malformed() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let report = sample_report("bb".repeat(32), true, None, "application/json", now_ms());
+        save_report(&report).expect("save report");
+        fs::write(report_index_path(), "{not json").expect("write malformed report index");
+
+        let summaries = load_report_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, report.id);
+
+        let persisted = read_report_summaries_locked().expect("rebuilt index");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].id, report.id);
+    }
+
+    #[test]
+    fn load_report_summaries_prunes_missing_report_files_from_index() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let keep_id = "33".repeat(32);
+        let missing_id = "44".repeat(32);
+        let keep = sample_report(keep_id.clone(), true, None, "application/json", now_ms());
+        save_report(&keep).expect("save kept report");
+
+        persist_report_summaries_locked(&[
+            report_summary_from_report(&keep),
+            ProverReportSummary {
+                id: missing_id,
+                ok: false,
+                error: Some("missing".to_string()),
+                content_type: "application/x-zk1".to_string(),
+                processed_ms: keep.processed_ms.saturating_add(1),
+                zk1_tags: Some(vec!["PROF".to_string()]),
+            },
+        ])
+        .expect("persist stale index");
+
+        let summaries = load_report_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, keep_id);
+
+        let persisted = read_report_summaries_locked().expect("read cleaned index");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].id, keep_id);
+    }
+
+    #[test]
+    fn load_report_normalizes_persisted_uppercase_id() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+
+        let id = "ef".repeat(32);
+        let persisted = sample_report(
+            id.to_ascii_uppercase(),
+            true,
+            None,
+            "application/json",
+            now_ms(),
+        );
+        fs::write(
+            report_path_from_sanitized(&id),
+            norito::json::to_json_pretty(&persisted).expect("report json"),
+        )
+        .expect("write report");
+
+        let loaded = load_report(&id.to_ascii_uppercase()).expect("load report");
+        assert_eq!(loaded.id, id);
+    }
+
+    #[test]
+    fn save_report_rejects_invalid_id() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let err = save_report(&sample_report(
+            "bad".to_string(),
+            true,
+            None,
+            "application/json",
+            now_ms(),
+        ))
+        .expect_err("invalid report id should be rejected");
+        assert_eq!(err.kind(), IoErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn save_report_updates_existing_summary_without_duplicates() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let id = "ca".repeat(32);
+        let first = sample_report(id.clone(), true, None, "application/json", now_ms());
+        let mut updated = sample_report(
+            id.clone(),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            first.processed_ms.saturating_add(10),
+        );
+        updated.zk1_tags = Some(vec!["PROF".to_string()]);
+
+        save_report(&first).expect("save initial report");
+        save_report(&updated).expect("save updated report");
+
+        let summaries = load_report_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, id);
+        assert!(!summaries[0].ok);
+        assert_eq!(summaries[0].error.as_deref(), Some("verification failed"));
+        assert_eq!(summaries[0].content_type, "application/x-zk1");
+        assert_eq!(summaries[0].processed_ms, updated.processed_ms);
+        assert_eq!(
+            summaries[0].zk1_tags.as_deref(),
+            Some(&["PROF".to_string()][..])
+        );
+
+        let loaded = load_report(&id).expect("load updated report");
+        assert!(!loaded.ok);
+        assert_eq!(loaded.error.as_deref(), Some("verification failed"));
+        assert_eq!(loaded.processed_ms, updated.processed_ms);
+        assert_eq!(loaded.zk1_tags.as_deref(), Some(&["PROF".to_string()][..]));
+    }
+
+    #[test]
+    fn list_report_ids_ignores_invalid_entries_and_normalizes_case() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+
+        let uppercase_id = "AB".repeat(32);
+        let clean_id = uppercase_id.to_ascii_lowercase();
+        fs::write(report_path_from_sanitized(&clean_id), b"{}").expect("write report file");
+        fs::write(reports_dir().join("bad.json"), b"{}").expect("write invalid report id");
+        fs::write(reports_dir().join("not-a-report.txt"), b"{}").expect("write non-report file");
+
+        let ids = list_report_ids();
+        assert_eq!(ids, vec![clean_id]);
+    }
+
+    #[test]
+    fn filter_report_summary_applies_requested_id_content_type_tag_and_time_bounds() {
+        let id = "db".repeat(32);
+        let summary = ProverReportSummary {
+            id: id.clone(),
+            ok: false,
+            error: Some("verification failed".to_string()),
+            content_type: "application/x-zk1+json".to_string(),
+            processed_ms: 42,
+            zk1_tags: Some(vec!["PROF".to_string(), "IPAK".to_string()]),
+        };
+        let query = ProverListQuery {
+            content_type: Some("x-zk1".to_string()),
+            has_tag: Some("PROF".to_string()),
+            since_ms: Some(42),
+            before_ms: Some(42),
+            ..Default::default()
+        };
+
+        assert!(filter_report_summary(
+            &summary,
+            &query,
+            Some(&id),
+            false,
+            false,
+        ));
+        assert!(!filter_report_summary(
+            &summary,
+            &query,
+            Some(&"ef".repeat(32)),
+            false,
+            false,
+        ));
+        assert!(!filter_report_summary(
+            &summary,
+            &ProverListQuery {
+                content_type: Some("text/plain".to_string()),
+                ..query.clone()
+            },
+            Some(&id),
+            false,
+            false,
+        ));
+        assert!(!filter_report_summary(
+            &summary,
+            &ProverListQuery {
+                has_tag: Some("KIND".to_string()),
+                ..query.clone()
+            },
+            Some(&id),
+            false,
+            false,
+        ));
+        assert!(!filter_report_summary(
+            &summary,
+            &ProverListQuery {
+                since_ms: Some(43),
+                ..query.clone()
+            },
+            Some(&id),
+            false,
+            false,
+        ));
+        assert!(!filter_report_summary(
+            &summary,
+            &ProverListQuery {
+                before_ms: Some(41),
+                ..query
+            },
+            Some(&id),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn filter_report_summary_status_flags_follow_ok_failed_matrix() {
+        let ok = ProverReportSummary {
+            id: "01".repeat(32),
+            ok: true,
+            error: None,
+            content_type: "application/json".to_string(),
+            processed_ms: 10,
+            zk1_tags: None,
+        };
+        let failed = ProverReportSummary {
+            id: "02".repeat(32),
+            ok: false,
+            error: Some("verification failed".to_string()),
+            content_type: "application/x-zk1".to_string(),
+            processed_ms: 11,
+            zk1_tags: Some(vec!["PROF".to_string()]),
+        };
+        let query = ProverListQuery::default();
+
+        assert!(filter_report_summary(&ok, &query, None, false, false));
+        assert!(filter_report_summary(&failed, &query, None, false, false));
+        assert!(filter_report_summary(&ok, &query, None, true, false));
+        assert!(!filter_report_summary(&failed, &query, None, true, false));
+        assert!(!filter_report_summary(&ok, &query, None, false, true));
+        assert!(filter_report_summary(&failed, &query, None, false, true));
+        assert!(filter_report_summary(&ok, &query, None, true, true));
+        assert!(filter_report_summary(&failed, &query, None, true, true));
+    }
+
+    #[test]
+    fn gc_reports_once_deletes_only_expired_reports_and_retains_fresh_index() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let ttl_ms = Duration::from_secs(cfg_reports_ttl_secs()).as_millis() as u64;
+        let now = now_ms();
+        let expired = sample_report(
+            "10".repeat(32),
+            false,
+            Some("old"),
+            "application/x-zk1",
+            now.saturating_sub(ttl_ms.saturating_add(10)),
+        );
+        let fresh = sample_report(
+            "20".repeat(32),
+            true,
+            None,
+            "application/json",
+            now.saturating_sub(ttl_ms.saturating_sub(1)),
+        );
+        save_report(&expired).expect("save expired report");
+        save_report(&fresh).expect("save fresh report");
+
+        let deleted = gc_reports_once();
+        assert_eq!(deleted, 1);
+        assert!(
+            load_report(&expired.id).is_none(),
+            "expired report should be removed"
+        );
+        assert!(
+            load_report(&fresh.id).is_some(),
+            "fresh report should remain"
+        );
+        let summaries = load_report_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, fresh.id);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn count_reports_filters_using_report_summaries() {
-        use http_body_util::BodyExt as _;
-
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         let report_with_tag = ProverReport {
@@ -1854,6 +2257,557 @@ mod tests {
         let parsed: norito::json::Value =
             norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
         assert_eq!(parsed["count"].as_u64(), Some(1));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn count_reports_errors_only_alias_counts_failed_reports() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let ok = sample_report("12".repeat(32), true, None, "application/json", now_ms());
+        let failed = sample_report(
+            "34".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            ok.processed_ms.saturating_add(1),
+        );
+        save_report(&ok).expect("save ok report");
+        save_report(&failed).expect("save failed report");
+
+        let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
+            errors_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["count"].as_u64(), Some(1));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn count_reports_id_filter_accepts_uppercase_hex() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let report = sample_report("13".repeat(32), true, None, "application/json", now_ms());
+        save_report(&report).expect("save report");
+
+        let response = super::handle_count_reports(NoritoQuery(ProverListQuery {
+            id: Some(report.id.to_ascii_uppercase()),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["count"].as_u64(), Some(1));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_ids_only_takes_precedence_over_messages_only() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let failed = sample_report(
+            "55".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            now_ms(),
+        );
+        let ok = sample_report(
+            "66".repeat(32),
+            true,
+            None,
+            "application/json",
+            failed.processed_ms.saturating_add(1),
+        );
+        save_report(&failed).expect("save failed report");
+        save_report(&ok).expect("save ok report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            ids_only: Some(true),
+            messages_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let ids: Vec<String> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(ids, vec![failed.id]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_messages_only_preserves_null_error_field() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let report = sample_report("77".repeat(32), false, None, "application/x-zk1", now_ms());
+        save_report(&report).expect("save report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            messages_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        let arr = parsed.as_array().expect("message array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].get("id").and_then(|v| v.as_str()),
+            Some(report.id.as_str())
+        );
+        assert!(matches!(
+            arr[0].get("error"),
+            Some(norito::json::Value::Null)
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_messages_only_excludes_successful_reports() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let ok = sample_report("79".repeat(32), true, None, "application/json", now_ms());
+        let failed = sample_report(
+            "7a".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            ok.processed_ms.saturating_add(1),
+        );
+        save_report(&ok).expect("save ok report");
+        save_report(&failed).expect("save failed report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            ok_only: Some(true),
+            messages_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        let arr = parsed.as_array().expect("message array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].get("id").and_then(|v| v.as_str()),
+            Some(failed.id.as_str())
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_desc_order_accepts_uppercase_desc() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let first = sample_report("56".repeat(32), true, None, "application/json", now_ms());
+        let second = sample_report(
+            "78".repeat(32),
+            true,
+            None,
+            "application/json",
+            first.processed_ms.saturating_add(1),
+        );
+        save_report(&first).expect("save first report");
+        save_report(&second).expect("save second report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            ids_only: Some(true),
+            order: Some("DESC".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let ids: Vec<String> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(ids, vec![second.id, first.id]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_latest_returns_latest_full_report() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let first = sample_report("57".repeat(32), true, None, "application/json", now_ms());
+        let second = sample_report(
+            "58".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            first.processed_ms.saturating_add(1),
+        );
+        save_report(&first).expect("save first report");
+        save_report(&second).expect("save second report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            latest: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let reports: Vec<norito::json::Value> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            reports[0].get("id").and_then(|v| v.as_str()),
+            Some(second.id.as_str())
+        );
+        assert_eq!(reports[0].get("ok").and_then(|v| v.as_bool()), Some(false));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_reports_returns_deleted_ids_and_keeps_non_matching_reports() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let keep = sample_report("88".repeat(32), true, None, "application/json", now_ms());
+        let delete = sample_report(
+            "99".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            keep.processed_ms.saturating_add(1),
+        );
+        save_report(&keep).expect("save kept report");
+        save_report(&delete).expect("save deleted report");
+
+        let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
+            id: Some(delete.id.clone()),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["deleted"].as_u64(), Some(1));
+        assert_eq!(
+            parsed["ids"].as_array(),
+            Some(&vec![norito::json::Value::from(delete.id.clone())])
+        );
+        assert!(
+            load_report(&delete.id).is_none(),
+            "matched report should be deleted"
+        );
+        assert!(
+            load_report(&keep.id).is_some(),
+            "non-matching report should remain"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_reports_errors_only_alias_deletes_only_failed_reports() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let ok = sample_report("9a".repeat(32), true, None, "application/json", now_ms());
+        let failed = sample_report(
+            "bc".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            ok.processed_ms.saturating_add(1),
+        );
+        save_report(&ok).expect("save ok report");
+        save_report(&failed).expect("save failed report");
+
+        let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
+            errors_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["deleted"].as_u64(), Some(1));
+        assert_eq!(
+            parsed["ids"].as_array(),
+            Some(&vec![norito::json::Value::from(failed.id.clone())])
+        );
+        assert!(load_report(&ok.id).is_some(), "ok report should remain");
+        assert!(
+            load_report(&failed.id).is_none(),
+            "failed report should be deleted"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_reports_ok_and_errors_filters_together_delete_all_reports() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let ok = sample_report("bd".repeat(32), true, None, "application/json", now_ms());
+        let failed = sample_report(
+            "be".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            ok.processed_ms.saturating_add(1),
+        );
+        save_report(&ok).expect("save ok report");
+        save_report(&failed).expect("save failed report");
+
+        let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
+            ok_only: Some(true),
+            errors_only: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["deleted"].as_u64(), Some(2));
+        let ids = parsed["ids"].as_array().expect("ids array");
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&norito::json::Value::from(ok.id.clone())));
+        assert!(ids.contains(&norito::json::Value::from(failed.id.clone())));
+        assert!(load_report(&ok.id).is_none(), "ok report should be deleted");
+        assert!(
+            load_report(&failed.id).is_none(),
+            "failed report should be deleted"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_reports_with_no_matches_returns_zero_and_empty_ids() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let report = sample_report("ce".repeat(32), true, None, "application/json", now_ms());
+        save_report(&report).expect("save report");
+
+        let response = super::handle_delete_reports(NoritoQuery(ProverListQuery {
+            id: Some("cf".repeat(32)),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(parsed["deleted"].as_u64(), Some(0));
+        assert_eq!(parsed["ids"].as_array(), Some(&vec![]));
+        assert!(
+            load_report(&report.id).is_some(),
+            "unmatched report should remain"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_offset_past_end_returns_empty_array() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let report = sample_report("aa".repeat(32), true, None, "application/json", now_ms());
+        save_report(&report).expect("save report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            offset: Some(5),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let reports: Vec<norito::json::Value> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert!(reports.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_skips_unloadable_report_bodies_in_full_projection() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+
+        let id = "ae".repeat(32);
+        fs::write(report_path_from_sanitized(&id), "{not json").expect("write report");
+        persist_report_summaries_locked(&[ProverReportSummary {
+            id: id.clone(),
+            ok: true,
+            error: None,
+            content_type: "application/json".to_string(),
+            processed_ms: now_ms(),
+            zk1_tags: None,
+        }])
+        .expect("persist report index");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery::default()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let reports: Vec<norito::json::Value> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert!(reports.is_empty(), "unloadable reports should be skipped");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_latest_with_no_matches_returns_empty_ids_array() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let report = sample_report("de".repeat(32), true, None, "application/json", now_ms());
+        save_report(&report).expect("save report");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            latest: Some(true),
+            ids_only: Some(true),
+            has_tag: Some("PROF".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let ids: Vec<String> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_reports_limit_is_capped_to_one_thousand() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+        ensure_dirs();
+
+        let mut reports = Vec::with_capacity(1001);
+        let base_ms = now_ms();
+        for idx in 0..1001u64 {
+            let id = format!("{:064x}", idx + 1_000);
+            let report = sample_report(
+                id,
+                true,
+                None,
+                "application/json",
+                base_ms.saturating_add(idx),
+            );
+            fs::write(
+                report_path_from_sanitized(&report.id),
+                norito::json::to_json_pretty(&report).expect("report json"),
+            )
+            .expect("write report file");
+            reports.push(report);
+        }
+        let summaries: Vec<ProverReportSummary> =
+            reports.iter().map(report_summary_from_report).collect();
+        persist_report_summaries_locked(&summaries).expect("persist report index");
+
+        let response = super::handle_list_reports(NoritoQuery(ProverListQuery {
+            ids_only: Some(true),
+            limit: Some(5_000),
+            ..Default::default()
+        }))
+        .await
+        .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let ids: Vec<String> =
+            norito::json::from_json(std::str::from_utf8(&bytes).expect("utf8")).expect("json");
+        assert_eq!(ids.len(), 1000);
+        assert_eq!(ids.first(), Some(&reports[0].id));
+        assert_eq!(ids.last(), Some(&reports[999].id));
+        assert!(!ids.contains(&reports[1000].id));
     }
 
     #[test]

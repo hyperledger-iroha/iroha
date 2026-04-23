@@ -69,6 +69,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Default: 2.
 - `torii.attachments_sanitizer_mode` (string)
   - Sanitizer execution mode (`subprocess` or `in_process`).
+  - `subprocess` prefers an OS sandbox wrapper when available and otherwise falls back to a dedicated child process with the same request/response protocol and resource limits.
   - Default: `subprocess`.
 - `torii.attachments_sanitize_timeout_ms` (u64)
   - Sanitization timeout in milliseconds.
