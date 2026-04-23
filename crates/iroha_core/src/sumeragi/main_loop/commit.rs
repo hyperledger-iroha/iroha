@@ -4496,16 +4496,43 @@ impl Actor {
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         self.ensure_collector_plan(&signature_topology, height, view);
         self.restore_initial_precommit_collector_state();
-        let min_votes_for_commit = signature_topology.min_votes_for_commit().max(1);
-        let vote_count = self.pending_block_commit_votes_count(block_hash, height, view);
-        let vote_targets = self.quorum_retransmit_targets_for_missing_votes(
-            block_hash,
-            height,
-            view,
-            topology.as_ref(),
-            min_votes_for_commit,
-            vote_count,
-        );
+        let local_peer_id = self.common_config.peer.id().clone();
+        let mut vote_targets: Vec<_> = self
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect();
+        let mut fallback_to_topology = false;
+        if vote_targets.is_empty() {
+            fallback_to_topology = true;
+            vote_targets = signature_topology.as_ref().to_vec();
+        }
+        vote_targets.retain(|peer| peer != &local_peer_id);
+        if vote_targets.is_empty() {
+            fallback_to_topology = true;
+            vote_targets = signature_topology.as_ref().to_vec();
+            vote_targets.retain(|peer| peer != &local_peer_id);
+        }
+        let mut parallel_added = 0usize;
+        if !fallback_to_topology {
+            let parallel = self.config.collectors.parallel_topology_fanout;
+            if parallel > 0 {
+                let mut parallel_targets: Vec<_> = signature_topology
+                    .topology_fanout_from_tail(parallel)
+                    .into_iter()
+                    .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                    .collect();
+                parallel_targets.retain(|peer| peer != &local_peer_id);
+                for peer in parallel_targets {
+                    if !vote_targets.contains(&peer) {
+                        vote_targets.push(peer);
+                        parallel_added = parallel_added.saturating_add(1);
+                    }
+                }
+            }
+        }
         let initial_targets = u64::try_from(vote_targets.len()).unwrap_or(u64::MAX);
         super::status::set_collectors_targeted_current(initial_targets);
         #[cfg(feature = "telemetry")]
@@ -4517,8 +4544,8 @@ impl Actor {
             block = ?block_hash,
             signer = local_idx,
             initial_targets = vote_targets.len(),
-            commit_votes = vote_count,
-            min_votes_for_commit,
+            fallback_to_topology,
+            parallel_added,
             "sending initial precommit vote"
         );
         if vote_targets.is_empty() {

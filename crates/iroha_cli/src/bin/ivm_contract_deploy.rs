@@ -1,7 +1,12 @@
 //! Deploy a contract by registering code/manifest through an IVM transaction,
 //! then activating and alias-binding it through a plain instruction batch.
 
-use std::{fs, path::{Path, PathBuf}, str::FromStr, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
@@ -125,7 +130,11 @@ fn make_client(
     Ok(Client::new(config))
 }
 
-fn insert_string_metadata(metadata: &mut Metadata, key: &str, value: impl Into<String>) -> Result<()> {
+fn insert_string_metadata(
+    metadata: &mut Metadata,
+    key: &str,
+    value: impl Into<String>,
+) -> Result<()> {
     metadata.insert(Name::from_str(key)?, Json::new(value.into()));
     Ok(())
 }
@@ -217,7 +226,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn typed_tlv<T: norito::NoritoSerialize>(pointer_type: ivm::PointerType, value: &T) -> Result<Vec<u8>> {
+fn typed_tlv<T: norito::NoritoSerialize>(
+    pointer_type: ivm::PointerType,
+    value: &T,
+) -> Result<Vec<u8>> {
     let payload = norito::to_bytes(value)?;
     Ok(make_tlv(pointer_type as u16, &payload))
 }
@@ -240,24 +252,14 @@ fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
     if rd != rs1 {
         push_word(
             code,
-            ivm::encoding::wide::encode_ri(
-                ivm::instruction::wide::arithmetic::ADDI,
-                rd,
-                rs1,
-                0,
-            ),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rs1, 0),
         );
     }
     while value != 0 {
         let chunk = chunk_immediate(value);
         push_word(
             code,
-            ivm::encoding::wide::encode_ri(
-                ivm::instruction::wide::arithmetic::ADDI,
-                rd,
-                rd,
-                chunk,
-            ),
+            ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rd, chunk),
         );
         value -= chunk as i64;
     }
@@ -388,7 +390,9 @@ fn build_staged_register_program_inner(
     let mut literal_data = Vec::new();
     let mut path_ptrs = Vec::with_capacity(paths.len());
     for path in paths {
-        path_ptrs.push(literal_ptr(LITERAL_DATA_START as usize + literal_data.len())?);
+        path_ptrs.push(literal_ptr(
+            LITERAL_DATA_START as usize + literal_data.len(),
+        )?);
         literal_data.extend_from_slice(&typed_tlv(ivm::PointerType::Name, path)?);
     }
 
@@ -417,45 +421,25 @@ fn build_staged_register_program_inner(
 
         emit_load64(&mut code, 3, 2, 0);
         emit_load64(&mut code, 7, 2, 8);
-        emit_rr(
-            &mut code,
-            ivm::instruction::wide::arithmetic::SRL,
-            9,
-            3,
-            6,
-        );
-        emit_rr(
-            &mut code,
-            ivm::instruction::wide::arithmetic::SLL,
-            12,
-            7,
-            5,
-        );
-        emit_rr(
-            &mut code,
-            ivm::instruction::wide::arithmetic::OR,
-            9,
-            9,
-            12,
-        );
+        emit_rr(&mut code, ivm::instruction::wide::arithmetic::SRL, 9, 3, 6);
+        emit_rr(&mut code, ivm::instruction::wide::arithmetic::SLL, 12, 7, 5);
+        emit_rr(&mut code, ivm::instruction::wide::arithmetic::OR, 9, 9, 12);
         emit_store64(&mut code, 1, 9, 0);
         emit_addi(&mut code, 2, 2, COPY_WORD_BYTES as i64);
         emit_addi(&mut code, 1, 1, COPY_WORD_BYTES as i64);
         emit_addi(&mut code, 4, 4, -1);
         push_word(
             &mut code,
-            ivm::encoding::wide::encode_branch(
-                ivm::instruction::wide::control::BNE,
-                4,
-                0,
-                -9,
-            ),
+            ivm::encoding::wide::encode_branch(ivm::instruction::wide::control::BNE, 4, 0, -9),
         );
     }
 
     if emit_register {
         emit_addi(&mut code, 10, 8, 0);
-        push_syscall(&mut code, ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES)?;
+        push_syscall(
+            &mut code,
+            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+        )?;
     }
 
     if emit_cleanup {
@@ -555,8 +539,8 @@ mod tests {
         let register_request_tlv = norito_tlv(&request).expect("encode register request tlv");
         let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
         let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
-        let chunk_paths =
-            staged_chunk_paths(Hash::new(b"stage-runtime-test"), chunks.len()).expect("chunk paths");
+        let chunk_paths = staged_chunk_paths(Hash::new(b"stage-runtime-test"), chunks.len())
+            .expect("chunk paths");
         let copy_program =
             build_staged_copy_program(&chunk_paths, &chunk_sizes).expect("build staged copy");
         let register_program = build_staged_register_only_program(&chunk_paths, &chunk_sizes)
@@ -592,9 +576,7 @@ mod tests {
         register_vm
             .load_program(&register_program)
             .expect("load staged register program");
-        register_vm
-            .run()
-            .expect("run staged register program");
+        register_vm.run().expect("run staged register program");
     }
 }
 
@@ -673,8 +655,8 @@ fn main() -> Result<()> {
     .map_err(|err| eyre!(err.to_string()))
     .wrap_err("failed to derive contract address")?;
 
-    let code = fs::read(&args.code_file)
-        .wrap_err_with(|| format!("read {}", args.code_file.display()))?;
+    let code =
+        fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
     let verified = ivm::verify_contract_artifact(&code)
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
     let manifest = verified.manifest.signed(&key_pair);
@@ -700,8 +682,7 @@ fn main() -> Result<()> {
         register_bytes_program,
     );
     let direct_register_bytes_tx_size = direct_register_bytes_tx.encode_versioned().len();
-    let use_staged_register =
-        direct_register_bytes_tx_size > MAX_DIRECT_REGISTER_BYTES_TX_BYTES;
+    let use_staged_register = direct_register_bytes_tx_size > MAX_DIRECT_REGISTER_BYTES_TX_BYTES;
 
     let mut register_stage_tx_hashes = Vec::new();
     let mut register_plans: Vec<(String, String, SignedTransaction)> = Vec::new();
@@ -838,7 +819,10 @@ fn main() -> Result<()> {
         "register_manifest_via_ivm_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
     });
-    let mut result = result.as_object().cloned().ok_or_else(|| eyre!("expected object"))?;
+    let mut result = result
+        .as_object()
+        .cloned()
+        .ok_or_else(|| eyre!("expected object"))?;
     if let Some(written) = written {
         let files = written
             .into_iter()
