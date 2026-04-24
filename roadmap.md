@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-23
+Last updated: 2026-04-24
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -24,6 +24,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Consensus and Izanami
 
+- Close the exact-reproduction gaps in the Izanami communication vulnerability matrix.
+  - Add a timed fault scheduler that can reproduce the paper's 133s-266s injection window instead of relying only on randomized Izanami fault-loop timing.
+  - Add an OS `netem` or in-process P2P packet-drop injector so the `packet-loss` scenario can run 25%, 50%, and 75% loss between selected peer groups.
+  - Wire Sumeragi proposer/leader telemetry into the `leader-isolation` scenario so Izanami isolates the active proposer rather than a fixed selected peer.
+  - Rerun at least quick mode on a host that permits local loopback socket binds; the 2026-04-24 sandbox run was blocked before node startup by `Operation not permitted` on `127.0.0.1:30000`.
+  - After those exact injectors land, run `scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper` and record Iroha's classification against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.
 - Rerun the permissioned preserved-peer stable envelope with fresh binaries from the current tree.
   - Build fresh `izanami` / `iroha3d` binaries instead of reusing prior artifacts.
   - Confirm the previously observed height-533 zero-local-vote `missing_qc` loop does not recur on the current branch.
