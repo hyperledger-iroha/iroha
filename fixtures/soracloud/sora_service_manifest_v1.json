@@ -80,9 +80,7 @@
       "max_total_bytes": 16777216
     }
   ],
-  "lease_volumes": [
-    
-  ],
+  "lease_volumes": [],
   "handlers": [
     {
       "handler_name": "assets",

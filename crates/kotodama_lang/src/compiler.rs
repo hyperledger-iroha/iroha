@@ -982,6 +982,222 @@ seiyaku JsonAssetDefinitionTest {
     }
 
     #[test]
+    fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = account_id("merchant@sbp"); }"#)
+            .expect("compile alias shorthand");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected RESOLVE_ACCOUNT_ALIAS syscall for alias shorthand"
+        );
+    }
+
+    #[test]
+    fn account_id_domain_qualified_alias_literal_emits_resolve_account_alias_syscall() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = account_id("merchant@bank.sbp"); }"#)
+            .expect("compile domain-qualified alias shorthand");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected RESOLVE_ACCOUNT_ALIAS syscall for domain-qualified alias shorthand"
+        );
+    }
+
+    #[test]
+    fn resolve_account_alias_builtin_emits_syscall() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = resolve_account_alias("merchant@sbp"); }"#)
+            .expect("compile builtin alias resolution");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected RESOLVE_ACCOUNT_ALIAS syscall for builtin alias resolution"
+        );
+    }
+
+    #[test]
+    fn resolve_account_alias_invalid_literal_emits_syscall() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = resolve_account_alias("merchant@"); }"#)
+            .expect("compile malformed builtin alias resolution");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected RESOLVE_ACCOUNT_ALIAS syscall for malformed builtin alias literals"
+        );
+    }
+
+    #[test]
+    fn resolve_account_alias_domain_qualified_builtin_emits_syscall() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(
+                r#"fn main() { let _acct = resolve_account_alias("merchant@bank.sbp"); }"#,
+            )
+            .expect("compile domain-qualified builtin alias resolution");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected RESOLVE_ACCOUNT_ALIAS syscall for domain-qualified builtin"
+        );
+    }
+
+    #[test]
+    fn resolve_account_alias_invalid_domain_qualified_literal_emits_syscall() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = resolve_account_alias("merchant@bank."); }"#)
+            .expect("compile malformed domain-qualified builtin alias resolution");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected RESOLVE_ACCOUNT_ALIAS syscall for malformed domain-qualified builtin alias literals"
+        );
+    }
+
+    #[test]
+    fn account_id_canonical_literal_stays_static_without_alias_resolution() {
+        let canonical = iroha_data_model::account::AccountId::new(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string();
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(&format!(
+                r#"fn main() {{ let _acct = account_id("{canonical}"); }}"#
+            ))
+            .expect("compile canonical account literal");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let resolve = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            !bytes[parsed.code_offset..]
+                .windows(resolve.len())
+                .any(|window| window == resolve),
+            "canonical AccountId literals must not emit alias resolution syscalls"
+        );
+
+        let static_tlv =
+            super::encode_pointer_tlv_bytes(super::ir::DataRefKind::Account, &canonical)
+                .expect("encode static AccountId tlv");
+        assert!(
+            bytes
+                .windows(static_tlv.len())
+                .any(|window| window == static_tlv),
+            "canonical AccountId literals should be embedded as static TLVs"
+        );
+    }
+
+    #[test]
+    fn account_id_invalid_alias_shaped_literal_compiles_for_runtime_resolution() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = account_id("merchant@"); }"#)
+            .expect("compile invalid alias-shaped literal");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let resolve = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(resolve.len())
+                .any(|window| window == resolve),
+            "alias-shaped literals should defer validation to runtime resolution"
+        );
+    }
+
+    #[test]
+    fn account_id_invalid_domain_qualified_alias_shaped_literal_compiles_for_runtime_resolution() {
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(r#"fn main() { let _acct = account_id("merchant@bank."); }"#)
+            .expect("compile invalid domain-qualified alias-shaped literal");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let resolve = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(resolve.len())
+                .any(|window| window == resolve),
+            "invalid domain-qualified alias-shaped literals should defer validation to runtime resolution"
+        );
+    }
+
+    #[test]
+    fn account_id_invalid_non_alias_literal_fails_compile_time_encoding() {
+        let compiler = Compiler::new();
+        let err = compiler
+            .compile_source(r#"fn main() { let _acct = account_id("merchant"); }"#)
+            .expect_err("invalid non-alias account literal should fail compile-time encoding");
+        assert!(
+            err.contains("invalid AccountId literal"),
+            "expected AccountId literal error, got: {err}"
+        );
+        assert!(
+            err.contains("merchant"),
+            "expected failing literal in error, got: {err}"
+        );
+    }
+
+    #[test]
     fn detect_vector_usage_includes_vector_gated_crypto_ops() {
         let ops = [
             instruction::wide::crypto::SHA256BLOCK,
@@ -1692,6 +1908,241 @@ seiyaku Test {
             .iter()
             .find(|entry| entry.name == "main")
             .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_alias_shorthand_account_id() {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@sbp"), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_invalid_alias_shorthand_account_id_transfer() {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@"), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_domain_qualified_alias_shorthand_account_id() {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank.sbp"), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_invalid_domain_qualified_alias_shorthand_account_id_transfer()
+     {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank."), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_resolve_account_alias_builtin_transfer() {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@sbp"), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_invalid_resolve_account_alias_builtin_transfer() {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@"), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_domain_qualified_resolve_account_alias_builtin_transfer()
+     {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank.sbp"), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn manifest_access_set_hints_wildcard_for_invalid_domain_qualified_resolve_account_alias_builtin_transfer()
+     {
+        let from_literal = sample_account_literal();
+        let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank."), asset_definition("{asset_literal}"), 1); }}"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert_eq!(hints.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(hints.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.read_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
+        assert_eq!(main.write_keys, vec![GLOBAL_WILDCARD_KEY.to_string()]);
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
     }

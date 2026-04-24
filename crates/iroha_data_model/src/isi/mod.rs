@@ -35,7 +35,6 @@ use rustc_hash::FxHashMap as HashMap;
 
 use super::prelude::*;
 use crate::{Level, Registered, seal};
-
 /// Consensus key lifecycle instructions.
 pub mod consensus_keys;
 /// Domain endorsement management instructions.
@@ -853,6 +852,16 @@ impl From<crate::isi::domain_link::SetAccountAliasBinding> for InstructionBox {
 }
 impl From<crate::isi::domain_link::SetPrimaryAccountAlias> for InstructionBox {
     fn from(i: crate::isi::domain_link::SetPrimaryAccountAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_alias_lease::AcquireAccountAliasLease> for InstructionBox {
+    fn from(i: crate::isi::account_alias_lease::AcquireAccountAliasLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_alias_lease::RenewAccountAliasLease> for InstructionBox {
+    fn from(i: crate::isi::account_alias_lease::RenewAccountAliasLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2061,6 +2070,8 @@ macro_rules! enum_type {
     };
 }
 
+/// Canonical paid account-alias lease instructions.
+pub mod account_alias_lease;
 /// Native account controller replacement and social recovery instructions.
 pub mod account_recovery;
 /// Asset-definition alias binding instructions.
@@ -2128,6 +2139,7 @@ pub mod verifying_keys;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
 
+pub use account_alias_lease::*;
 pub use account_recovery::*;
 pub use asset_alias::*;
 pub use asset_transfer_control::*;
@@ -2907,6 +2919,7 @@ pub mod prelude {
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
+        account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
         account_recovery::{
             ApproveAccountRecovery, CancelAccountRecovery, ClearAccountRecoveryPolicy,
             FinalizeAccountRecovery, ProposeAccountRecovery, ReplaceAccountController,

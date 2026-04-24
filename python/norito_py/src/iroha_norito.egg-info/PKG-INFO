@@ -238,7 +238,7 @@ Python tooling and tests can produce deterministic, interoperable payloads.
 - Header parsing/serialization (`NRT0`, major 0 with default layout-bit minor) with CRC64-XZ validation
 - Encoding/decoding primitives (bool, signed/unsigned 8–64 bit integers, IEEE-754 floats)
 - Strings, bytes, options (`None`), results (`Ok`/`Err` wrappers)
-- Packed and compat sequences with compact lengths and varint offsets
+- Packed and compat sequences with compact lengths and fixed u64 offsets
 - Struct adapters honouring the PACKED_STRUCT/ FIELD_BITSET hybrid layout
 - Optional Zstandard compression (enable the `compression` extra, requires the `zstandard` package)
 - Maps and tuples built from composable adapters
@@ -337,6 +337,21 @@ VCS metadata to skip the check; manual overrides are no longer supported.
 - Verified parity after the Rust codec consolidated ChaCha20/XChaCha20 key and
   nonce helpers. No Python API surface changes were required; this note keeps
   the binding sync check satisfied for the corresponding Rust update.
+
+#### December 2026
+
+- Rust Norito now confines debug-only environment toggles (`NORITO_TRACE`,
+  `NORITO_DISABLE_PACKED_STRUCT`, stage1 GPU/parallel cutover knobs) to
+  debug/test builds and defaults to deterministic constants in release builds.
+  The Python binding already relied on explicit adapter configuration and has
+  no environment shims, so no code changes were required; this entry records
+  the parity check for the release-mode behaviour tweak.
+
+#### December 2027
+
+- Revalidated parity after the Rust Norito bare decode fallback for exact-length
+  drift; Python bindings required no code changes beyond rerunning the parity
+  suite.
 
 ## License
 

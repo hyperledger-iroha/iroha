@@ -36,11 +36,19 @@ fn ensure_quota_config() {
 }
 
 fn fixture_attachment_bytes() -> Vec<u8> {
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let proof = fixture.proof_box("halo2/ipa");
     let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
     let attachment = ProofAttachment::new_inline("halo2/ipa".into(), proof, vk);
     norito::to_bytes(&attachment).expect("proof attachment bytes")
+}
+
+async fn created_attachment_id(resp: axum::response::Response) -> String {
+    assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
+    let (_parts, body) = resp.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    let meta: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    meta.get("id").and_then(|v| v.as_str()).unwrap().to_string()
 }
 
 #[tokio::test]
@@ -491,6 +499,205 @@ async fn prover_reports_error_for_truncated_tlv() {
         .and_then(|x| x.as_str())
         .unwrap_or("");
     assert!(errv.contains("truncated TLV"));
+}
+
+#[tokio::test]
+async fn prover_reports_invalid_query_id_is_rejected() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    ensure_quota_config();
+
+    let app = Router::new()
+        .route(
+            "/v1/zk/prover/reports",
+            get(
+                |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                    iroha_torii::zk_prover::handle_list_reports(q).await
+                },
+            ),
+        )
+        .route(
+            "/v1/zk/prover/reports",
+            delete(
+                |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                    iroha_torii::zk_prover::handle_delete_reports(q).await
+                },
+            ),
+        )
+        .route(
+            "/v1/zk/prover/reports/count",
+            get(
+                |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                    iroha_torii::zk_prover::handle_count_reports(q).await
+                },
+            ),
+        );
+
+    for (method, uri) in [
+        ("GET", "/v1/zk/prover/reports?id=bad"),
+        ("GET", "/v1/zk/prover/reports/count?id=bad"),
+        ("DELETE", "/v1/zk/prover/reports?id=bad"),
+    ] {
+        let req = http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.contains("invalid report id"));
+    }
+}
+
+#[tokio::test]
+async fn prover_reports_ok_and_failed_filters_together_return_all_reports() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    ensure_quota_config();
+
+    let app = Router::new().route(
+        "/v1/zk/prover/reports",
+        get(
+            |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                iroha_torii::zk_prover::handle_list_reports(q).await
+            },
+        ),
+    );
+
+    iroha_torii::zk_attachments::init_persistence();
+    let headers_norito = {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/x-norito"),
+        );
+        h
+    };
+    let headers_zk1 = {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/x-zk1"),
+        );
+        h
+    };
+
+    let proof_resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers_norito,
+        axum::body::Bytes::from(fixture_attachment_bytes()),
+    )
+    .await
+    .into_response();
+    let _proof_id = created_attachment_id(proof_resp).await;
+
+    let mut body = b"ZK1\0".to_vec();
+    body.extend_from_slice(b"PROF");
+    body.extend_from_slice(&0u32.to_le_bytes());
+    let zk1_resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers_zk1,
+        axum::body::Bytes::from(body),
+    )
+    .await
+    .into_response();
+    let _zk1_id = created_attachment_id(zk1_resp).await;
+
+    let created = iroha_torii::zk_prover::scan_once();
+    assert!(created >= 2);
+
+    let req = http::Request::builder()
+        .method("GET")
+        .uri("/v1/zk/prover/reports?ok_only=true&failed_only=true&order=asc")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let arr: Vec<norito::json::Value> = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(arr.len(), 2);
+    assert!(arr.iter().any(|report| {
+        report.get("ok").and_then(norito::json::Value::as_bool) == Some(true)
+            && report.get("content_type").and_then(|x| x.as_str()) == Some("application/x-norito")
+    }));
+    assert!(arr.iter().any(|report| {
+        report.get("ok").and_then(norito::json::Value::as_bool) == Some(false)
+            && report.get("content_type").and_then(|x| x.as_str()) == Some("application/x-zk1")
+    }));
+}
+
+#[tokio::test]
+async fn prover_reports_latest_messages_only_ignores_order_offset_and_limit() {
+    use std::time::Duration;
+
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    ensure_quota_config();
+
+    let app = Router::new().route(
+        "/v1/zk/prover/reports",
+        get(
+            |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                iroha_torii::zk_prover::handle_list_reports(q).await
+            },
+        ),
+    );
+
+    iroha_torii::zk_attachments::init_persistence();
+    let headers_zk1 = {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/x-zk1"),
+        );
+        h
+    };
+
+    let mut unsupported_body = b"ZK1\0".to_vec();
+    unsupported_body.extend_from_slice(b"PROF");
+    unsupported_body.extend_from_slice(&0u32.to_le_bytes());
+    let first_resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers_zk1.clone(),
+        axum::body::Bytes::from(unsupported_body),
+    )
+    .await
+    .into_response();
+    let first_id = created_attachment_id(first_resp).await;
+
+    let mut truncated_body = b"ZK1\0".to_vec();
+    truncated_body.extend_from_slice(b"PROF");
+    truncated_body.extend_from_slice(&10u32.to_le_bytes());
+    let second_resp = iroha_torii::zk_attachments::handle_post_attachment(
+        AttachmentTenant::anonymous(),
+        headers_zk1,
+        axum::body::Bytes::from(truncated_body),
+    )
+    .await
+    .into_response();
+    let second_id = created_attachment_id(second_resp).await;
+
+    let first = iroha_torii::zk_prover::process_attachment_once(&first_id).expect("first report");
+    std::thread::sleep(Duration::from_millis(2));
+    let second =
+        iroha_torii::zk_prover::process_attachment_once(&second_id).expect("second report");
+    assert!(first.processed_ms <= second.processed_ms);
+
+    let req = http::Request::builder()
+        .method("GET")
+        .uri("/v1/zk/prover/reports?messages_only=true&latest=true&order=asc&offset=1&limit=1")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let arr: Vec<norito::json::Value> = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(
+        arr[0].get("id").and_then(|x| x.as_str()),
+        Some(second_id.as_str())
+    );
+    let error = arr[0].get("error").and_then(|x| x.as_str()).unwrap_or("");
+    assert!(error.contains("truncated TLV"));
 }
 
 #[tokio::test]

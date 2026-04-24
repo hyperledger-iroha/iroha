@@ -2277,7 +2277,7 @@ impl WsvHost {
             out.extend_from_slice(&h);
             env = out;
         }
-        let p = vm.alloc_input_tlv(&env)?;
+        let p = vm.alloc_host_tlv(&env)?;
         vm.set_register(10, p);
         Ok(())
     }
@@ -2901,7 +2901,7 @@ impl WsvHost {
         out.extend_from_slice(payload);
         let h: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(payload).into();
         out.extend_from_slice(&h);
-        vm.alloc_input_tlv(&out)
+        vm.alloc_host_tlv(&out)
     }
 
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {

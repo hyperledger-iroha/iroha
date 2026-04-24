@@ -2593,6 +2593,24 @@ impl IVM {
         Ok(Memory::INPUT_START + off)
     }
 
+    /// Allocate a host-produced TLV, preferring INPUT and spilling to HEAP when the
+    /// INPUT bump allocator is exhausted.
+    ///
+    /// This keeps small host returns in the traditional read-only INPUT region while
+    /// allowing large streamed reads, such as staged durable-state chunks, to continue
+    /// without exhausting the fixed INPUT window.
+    pub fn alloc_host_tlv(&mut self, tlv: &[u8]) -> Result<u64, VMError> {
+        match self.alloc_input_tlv(tlv) {
+            Ok(ptr) => Ok(ptr),
+            Err(VMError::MemoryOutOfBounds) => {
+                let addr = self.alloc_heap(tlv.len() as u64)?;
+                self.store_bytes(addr, tlv)?;
+                Ok(addr)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Validate a pointer-ABI TLV in any readable region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
         let hdr = self
@@ -6435,6 +6453,88 @@ mod tests {
             .load_bytes(Memory::INPUT_START, &mut buf)
             .expect("read first TLV");
         assert_eq!(buf, tlv);
+    }
+
+    #[test]
+    fn alloc_host_tlv_prefers_input_when_space_is_available() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let tlv = empty_blob_tlv();
+        let ptr = vm.alloc_host_tlv(&tlv).expect("allocate host TLV");
+
+        assert!(
+            (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&ptr),
+            "host TLV should stay in input while space remains"
+        );
+        assert_eq!(ptr, Memory::INPUT_START);
+        let loaded = vm
+            .memory
+            .load_region(ptr, tlv.len() as u64)
+            .expect("read input TLV");
+        assert_eq!(loaded, tlv);
+    }
+
+    #[test]
+    fn alloc_host_tlv_spills_to_heap_after_input_fills() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let filler = vec![0u8; Memory::INPUT_SIZE as usize];
+        vm.alloc_input_tlv(&filler)
+            .expect("fill the input allocator exactly");
+
+        let tlv = empty_blob_tlv();
+        let ptr = vm.alloc_host_tlv(&tlv).expect("spill host TLV to heap");
+
+        assert!(
+            (Memory::HEAP_START..Memory::INPUT_START).contains(&ptr),
+            "host spill pointer should land in heap"
+        );
+        let spilled = vm
+            .memory
+            .load_region(ptr, tlv.len() as u64)
+            .expect("read spilled TLV");
+        assert_eq!(spilled, tlv);
+    }
+
+    #[test]
+    fn alloc_host_tlv_spills_when_input_tail_cannot_fit_next_tlv() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let tlv = empty_blob_tlv();
+        let filler = vec![0u8; Memory::INPUT_SIZE as usize - (tlv.len() - 1)];
+        vm.alloc_input_tlv(&filler)
+            .expect("leave a too-small tail in the input allocator");
+
+        let ptr = vm
+            .alloc_host_tlv(&tlv)
+            .expect("spill host TLV when the remaining input tail is too small");
+
+        assert!(
+            (Memory::HEAP_START..Memory::INPUT_START).contains(&ptr),
+            "host spill pointer should land in heap when only an undersized input tail remains"
+        );
+        let spilled = vm
+            .memory
+            .load_region(ptr, tlv.len() as u64)
+            .expect("read spilled TLV");
+        assert_eq!(spilled, tlv);
+    }
+
+    #[test]
+    fn alloc_host_tlv_propagates_out_of_memory_when_heap_spill_cannot_fit() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let filler = vec![0u8; Memory::INPUT_SIZE as usize];
+        vm.alloc_input_tlv(&filler)
+            .expect("fill the input allocator exactly");
+        vm.memory
+            .set_heap_limit(0)
+            .expect("shrink heap limit to zero");
+
+        let err = vm
+            .alloc_host_tlv(&empty_blob_tlv())
+            .expect_err("host TLV spill should fail without heap space");
+        assert!(matches!(err, VMError::OutOfMemory));
     }
 
     #[test]

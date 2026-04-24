@@ -1017,14 +1017,14 @@ impl Actor {
                             context.topology.as_ref(),
                             "commit_vote_accepted",
                         );
+                        let _ = self.maybe_replay_known_block_commit_evidence(
+                            vote.block_hash,
+                            vote.height,
+                            vote.view,
+                            &topology_peers,
+                            "commit_vote_accepted",
+                        );
                     }
-                    let _ = self.maybe_replay_known_block_commit_evidence(
-                        vote.block_hash,
-                        vote.height,
-                        vote.view,
-                        &topology_peers,
-                        "commit_vote_accepted",
-                    );
                 }
             }
             Phase::NewView => {
