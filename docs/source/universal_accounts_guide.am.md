@@ -92,8 +92,8 @@ print` run (roadmap reference: `roadmap.md:2209`)።
 
 ሁለንተናዊ-መለያ መልቀቅ የቀኖናዊ መለያ መለያ ሞዴልን አይለውጠውም፡-- `AccountId` ቀኖናዊ፣ ጎራ የለሽ መለያ ርዕሰ ጉዳይ ሆኖ ይቆያል።
 - `AccountAlias` እሴቶች በዚያ ርዕሰ ጉዳይ ላይ የተለያዩ የኤስኤንኤስ ማሰሪያዎች ናቸው። ሀ
-  እንደ `merchant@banka.sbp` እና ዳታስፔስ-ስር ተለዋጭ ስም ያሉ ለጎራ ብቃት ያላቸው ተለዋጭ ስሞች
-  እንደ `merchant@sbp` ያሉ ሁለቱም ወደ ተመሳሳይ ቀኖናዊ `AccountId` መፍታት ይችላሉ።
+  እንደ `merchant@banka.paynet` እና ዳታስፔስ-ስር ተለዋጭ ስም ያሉ ለጎራ ብቃት ያላቸው ተለዋጭ ስሞች
+  እንደ `merchant@paynet` ያሉ ሁለቱም ወደ ተመሳሳይ ቀኖናዊ `AccountId` መፍታት ይችላሉ።
 - ቀኖናዊ መለያ ምዝገባ ሁል ጊዜ `Account::new(AccountId)` / ነው
   `NewAccount::new(AccountId)`; ለጎራ ብቁ ወይም ጎራ-ቁስ የለም።
   የምዝገባ መንገድ.

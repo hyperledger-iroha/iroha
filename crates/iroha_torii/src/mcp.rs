@@ -12447,7 +12447,7 @@ fn iroha_asset_holders_tool() -> ToolSpec {
 fn iroha_asset_holders_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.holders.query".to_owned(),
-        description: "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported). Supports exact aggregate DSL queries, for example SBP PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. Production aggregate reads serve local DA projection shards as `query_source=projection_da_cache` and hydrate missing shards from approved SoraFS providers as `query_source=projection_da_hydrated`; incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.".to_owned(),
+        description: "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported). Supports exact aggregate DSL queries, for example PAYNET PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. Production aggregate reads serve local DA projection shards as `query_source=projection_da_cache` and hydrate missing shards from approved SoraFS providers as `query_source=projection_da_hydrated`; incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.".to_owned(),
         method: Method::POST,
         path_template: "/v1/assets/{definition_id}/holders/query".to_owned(),
         input_schema: norito::json!({

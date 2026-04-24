@@ -198,13 +198,13 @@ Sobre común: `InstructionExecutionError` con variantes para errores de evaluaci
 - Actualización de parámetros:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` actualiza y emite `ConfigurationEvent::Changed`.CLI / Torii ejemplos de identificación de definición de activo + alias:
 - Regístrese con identificación canónica Base58 + nombre explícito + alias largo:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - Regístrese con identificación canónica Base58 + nombre explícito + alias corto:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - Accionado por alias + componentes de cuenta:
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - Resolver alias de identificación canónica de Base58:
-  - `POST /v1/assets/aliases/resolve` con JSON `{ "alias": "pkr#bankb.sbp" }`
+  - `POST /v1/assets/aliases/resolve` con JSON `{ "alias": "pkr#bankb.paynet" }`
 
 Nota de migración:
 - Los ID de definición de recursos textuales `name#domain` siguen sin ser compatibles intencionalmente en la primera versión; utilice ID canónicos de Base58 o resuelva un alias de puntos.

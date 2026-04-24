@@ -176,15 +176,15 @@ public sealed class ToriiClientTests
         {
             Page = 2,
             PerPage = 5,
-            Domain = " wonderland.sbp ",
-            WithAsset = " rose#wonderland.sbp ",
+            Domain = " wonderland.paynet ",
+            WithAsset = " rose#wonderland.paynet ",
         });
 
         Assert.Equal((ulong)11, page.Pagination.TotalItems);
         Assert.Single(page.Items);
         Assert.Equal("i105:sorauロ1Nholder", page.Items[0].I105Address);
         Assert.Equal("gold", page.Items[0].Metadata!["tier"]!.GetValue<string>());
-        Assert.Equal("/v1/explorer/accounts?page=2&per_page=5&domain=wonderland.sbp&with_asset=rose%23wonderland.sbp", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/accounts?page=2&per_page=5&domain=wonderland.paynet&with_asset=rose%23wonderland.paynet", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public sealed class ToriiClientTests
                   "pagination": { "page": 1, "per_page": 10, "total_pages": 1, "total_items": 1 },
                   "items": [
                     {
-                      "id": "wonderland.sbp",
+                      "id": "wonderland.paynet",
                       "logo": "https://cdn.example/logo.svg",
                       "metadata": { "region": "jp" },
                       "owned_by": "sorauロ1Nowner",
@@ -246,7 +246,7 @@ public sealed class ToriiClientTests
         });
 
         Assert.Single(page.Items);
-        Assert.Equal("wonderland.sbp", page.Items[0].Id);
+        Assert.Equal("wonderland.paynet", page.Items[0].Id);
         Assert.Equal("jp", page.Items[0].Metadata!["region"]!.GetValue<string>());
         Assert.Equal("/v1/explorer/domains?page=1&per_page=10&owned_by=owner%40universal", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
@@ -258,7 +258,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent("""
                 {
-                  "id": "wonderland.sbp",
+                  "id": "wonderland.paynet",
                   "logo": null,
                   "metadata": { "region": "jp" },
                   "owned_by": "sorauロ1Nowner",
@@ -270,11 +270,11 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var domain = await client.GetExplorerDomainAsync(" wonderland.sbp ");
+        var domain = await client.GetExplorerDomainAsync(" wonderland.paynet ");
 
         Assert.Equal("sorauロ1Nowner", domain.OwnedBy);
         Assert.Equal((uint)4, domain.Accounts);
-        Assert.Equal("/v1/explorer/domains/wonderland.sbp", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/explorer/domains/wonderland.paynet", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public sealed class ToriiClientTests
                   "pagination": { "page": 3, "per_page": 2, "total_pages": 4, "total_items": 8 },
                   "items": [
                     {
-                      "id": "rose#wonderland.sbp",
+                      "id": "rose#wonderland.paynet",
                       "mintable": "Infinitely",
                       "logo": "https://cdn.example/rose.svg",
                       "metadata": { "category": "flora" },
@@ -307,7 +307,7 @@ public sealed class ToriiClientTests
         {
             Page = 3,
             PerPage = 2,
-            Domain = " wonderland.sbp ",
+            Domain = " wonderland.paynet ",
             OwnedBy = " issuer@universal ",
         });
 
@@ -315,7 +315,7 @@ public sealed class ToriiClientTests
         Assert.Single(page.Items);
         Assert.Equal("975", page.Items[0].CirculatingQuantity);
         Assert.Equal("flora", page.Items[0].Metadata!["category"]!.GetValue<string>());
-        Assert.Equal("/v1/explorer/asset-definitions?page=3&per_page=2&domain=wonderland.sbp&owned_by=issuer%40universal", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/asset-definitions?page=3&per_page=2&domain=wonderland.paynet&owned_by=issuer%40universal", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -325,7 +325,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent("""
                 {
-                  "id": "rose#wonderland.sbp",
+                  "id": "rose#wonderland.paynet",
                   "mintable": "Infinitely",
                   "logo": null,
                   "metadata": { "category": "flora" },
@@ -339,11 +339,11 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var definition = await client.GetExplorerAssetDefinitionAsync(" rose#wonderland.sbp ");
+        var definition = await client.GetExplorerAssetDefinitionAsync(" rose#wonderland.paynet ");
 
         Assert.Equal("Infinitely", definition.Mintable);
         Assert.Equal("975", definition.CirculatingQuantity);
-        Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.sbp", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.paynet", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -353,7 +353,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent("""
                 {
-                  "definition_id": "rose#wonderland.sbp",
+                  "definition_id": "rose#wonderland.paynet",
                   "computed_at_ms": 123456,
                   "velocity_windows": [
                     {
@@ -391,13 +391,13 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var snapshot = await client.GetExplorerAssetDefinitionEconometricsAsync(" rose#wonderland.sbp ");
+        var snapshot = await client.GetExplorerAssetDefinitionEconometricsAsync(" rose#wonderland.paynet ");
 
         Assert.Equal((ulong)123456, snapshot.ComputedAtMilliseconds);
         Assert.Single(snapshot.VelocityWindows);
         Assert.Equal((ulong)2, snapshot.VelocityWindows[0].Transfers);
         Assert.Equal("100", snapshot.IssuanceWindows[0].Net);
-        Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.sbp/econometrics", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.paynet/econometrics", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -407,7 +407,7 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent("""
                 {
-                  "definition_id": "rose#wonderland.sbp",
+                  "definition_id": "rose#wonderland.paynet",
                   "computed_at_ms": 123456,
                   "holders_total": 2,
                   "total_supply": "1000",
@@ -439,13 +439,13 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var snapshot = await client.GetExplorerAssetDefinitionSnapshotAsync(" rose#wonderland.sbp ");
+        var snapshot = await client.GetExplorerAssetDefinitionSnapshotAsync(" rose#wonderland.paynet ");
 
         Assert.Equal((ulong)2, snapshot.HoldersTotal);
         Assert.Equal("700", snapshot.TopHolders[0].Balance);
         Assert.Equal(0.7, snapshot.Distribution.Top1);
         Assert.Equal(2, snapshot.Distribution.Lorenz.Count);
-        Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.sbp/snapshot", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/explorer/asset-definitions/rose%23wonderland.paynet/snapshot", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
@@ -459,7 +459,7 @@ public sealed class ToriiClientTests
                   "items": [
                     {
                       "id": "asset-001",
-                      "definition_id": "rose#wonderland.sbp",
+                      "definition_id": "rose#wonderland.paynet",
                       "account_id": "sorauロ1Nholder",
                       "value": "25"
                     }
@@ -474,14 +474,14 @@ public sealed class ToriiClientTests
             Page = 4,
             PerPage = 1,
             OwnedBy = " holder@universal ",
-            Definition = " rose#wonderland.sbp ",
+            Definition = " rose#wonderland.paynet ",
             AssetId = " asset-001 ",
         });
 
         Assert.Equal((ulong)9, page.Pagination.TotalItems);
         Assert.Single(page.Items);
         Assert.Equal("25", page.Items[0].Value);
-        Assert.Equal("/v1/explorer/assets?page=4&per_page=1&owned_by=holder%40universal&definition=rose%23wonderland.sbp&asset_id=asset-001", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/assets?page=4&per_page=1&owned_by=holder%40universal&definition=rose%23wonderland.paynet&asset_id=asset-001", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -492,7 +492,7 @@ public sealed class ToriiClientTests
             Content = new StringContent("""
                 {
                   "id": "asset-001",
-                  "definition_id": "rose#wonderland.sbp",
+                  "definition_id": "rose#wonderland.paynet",
                   "account_id": "sorauロ1Nholder",
                   "value": "25"
                 }
@@ -502,7 +502,7 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var asset = await client.GetExplorerAssetAsync(" asset-001 ");
 
-        Assert.Equal("rose#wonderland.sbp", asset.DefinitionId);
+        Assert.Equal("rose#wonderland.paynet", asset.DefinitionId);
         Assert.Equal("25", asset.Value);
         Assert.Equal("/v1/explorer/assets/asset-001", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
@@ -532,12 +532,12 @@ public sealed class ToriiClientTests
             Page = 2,
             PerPage = 2,
             OwnedBy = " holder@universal ",
-            Domain = " wonderland.sbp ",
+            Domain = " wonderland.paynet ",
         });
 
         Assert.Single(page.Items);
         Assert.Equal("A1", page.Items[0].Metadata!["seat"]!.GetValue<string>());
-        Assert.Equal("/v1/explorer/nfts?page=2&per_page=2&owned_by=holder%40universal&domain=wonderland.sbp", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/nfts?page=2&per_page=2&owned_by=holder%40universal&domain=wonderland.paynet", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -595,13 +595,13 @@ public sealed class ToriiClientTests
             Page = 1,
             PerPage = 5,
             OwnedBy = " custodian@universal ",
-            Domain = " wonderland.sbp ",
+            Domain = " wonderland.paynet ",
         });
 
         Assert.Single(page.Items);
         Assert.Equal("vault-7", page.Items[0].PrimaryReference);
         Assert.Equal("ore$mine#wonderland", page.Items[0].Parents[0].Rwa);
-        Assert.Equal("/v1/explorer/rwas?page=1&per_page=5&owned_by=custodian%40universal&domain=wonderland.sbp", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("/v1/explorer/rwas?page=1&per_page=5&owned_by=custodian%40universal&domain=wonderland.paynet", handler.LastRequest!.RequestUri!.PathAndQuery);
     }
 
     [Fact]
@@ -706,7 +706,7 @@ public sealed class ToriiClientTests
                 {
                   "items": [
                     {
-                      "asset": "rose#wonderland.sbp",
+                      "asset": "rose#wonderland.paynet",
                       "account_id": "sorauロ1Nholder",
                       "scope": "global",
                       "asset_name": "rose",
@@ -720,14 +720,14 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var balances = await client.GetAccountAssetsAsync("sorauロ1Nholder", limit: 10, offset: 1, asset: "rose#wonderland.sbp", scope: "global");
+        var balances = await client.GetAccountAssetsAsync("sorauロ1Nholder", limit: 10, offset: 1, asset: "rose#wonderland.paynet", scope: "global");
 
         Assert.Single(balances.Items);
-        Assert.Equal("rose#wonderland.sbp", balances.Items[0].Asset);
+        Assert.Equal("rose#wonderland.paynet", balances.Items[0].Asset);
         Assert.Equal("10", balances.Items[0].Quantity);
         Assert.Contains("/v1/accounts/", handler.LastRequest!.RequestUri!.AbsoluteUri);
         Assert.Contains("/assets", handler.LastRequest.RequestUri.AbsoluteUri);
-        Assert.Equal("limit=10&offset=1&asset=rose%23wonderland.sbp&scope=global", handler.LastRequest.RequestUri.Query.TrimStart('?'));
+        Assert.Equal("limit=10&offset=1&asset=rose%23wonderland.paynet&scope=global", handler.LastRequest.RequestUri.Query.TrimStart('?'));
     }
 
     [Fact]
@@ -751,14 +751,14 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var transactions = await client.GetAccountTransactionsAsync("sorauロ1Nholder", limit: 50, offset: 3, assetId: "rose#wonderland.sbp");
+        var transactions = await client.GetAccountTransactionsAsync("sorauロ1Nholder", limit: 50, offset: 3, assetId: "rose#wonderland.paynet");
 
         Assert.Single(transactions.Items);
         Assert.Equal("hash", transactions.Items[0].EntrypointHash);
         Assert.True(transactions.Items[0].ResultOk);
         Assert.Contains("/v1/accounts/", handler.LastRequest!.RequestUri!.AbsoluteUri);
         Assert.Contains("/transactions", handler.LastRequest.RequestUri.AbsoluteUri);
-        Assert.Equal("limit=50&offset=3&asset_id=rose%23wonderland.sbp", handler.LastRequest.RequestUri.Query.TrimStart('?'));
+        Assert.Equal("limit=50&offset=3&asset_id=rose%23wonderland.paynet", handler.LastRequest.RequestUri.Query.TrimStart('?'));
     }
 
     [Fact]
@@ -791,7 +791,7 @@ public sealed class ToriiClientTests
             Authority = " sorauロ1Nholder ",
             Block = 5,
             Status = ToriiExplorerTransactionStatusFilter.Committed,
-            AssetId = " rose#wonderland.sbp ",
+            AssetId = " rose#wonderland.paynet ",
         });
 
         Assert.Equal((ulong)21, page.Pagination.TotalItems);
@@ -799,7 +799,7 @@ public sealed class ToriiClientTests
         Assert.Equal("tx-1", page.Items[0].Hash);
         Assert.Equal("Committed", page.Items[0].Status);
         Assert.Equal(
-            "page=1&per_page=20&authority=sorau%E3%83%AD1Nholder&block=5&status=committed&asset_id=rose%23wonderland.sbp",
+            "page=1&per_page=20&authority=sorau%E3%83%AD1Nholder&block=5&status=committed&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -950,7 +950,7 @@ public sealed class ToriiClientTests
             TransactionStatus = ToriiExplorerTransactionStatusFilter.Committed,
             Block = 12,
             Kind = " transfer ",
-            AssetId = " rose#wonderland.sbp ",
+            AssetId = " rose#wonderland.paynet ",
         });
 
         Assert.Equal((ulong)48, page.Pagination.TotalItems);
@@ -958,7 +958,7 @@ public sealed class ToriiClientTests
         Assert.Equal("Transfer", page.Items[0].Kind);
         Assert.Equal("tx-ins", page.Items[0].TransactionHash);
         Assert.Equal(
-            "page=3&per_page=10&authority=sorau%E3%83%AD1Nauthority&account=sorau%E3%83%AD1Naccount&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.sbp",
+            "page=3&per_page=10&authority=sorau%E3%83%AD1Nauthority&account=sorau%E3%83%AD1Naccount&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -1183,7 +1183,7 @@ public sealed class ToriiClientTests
             Assert.Equal("/v1/aliases/by_account", request.RequestUri!.AbsolutePath);
             Assert.Equal("sorauロ1Nholder", payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal("universal", payload.RootElement.GetProperty("dataspace").GetString());
-            Assert.Equal("sbp", payload.RootElement.GetProperty("domain").GetString());
+            Assert.Equal("paynet", payload.RootElement.GetProperty("domain").GetString());
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -1194,9 +1194,9 @@ public sealed class ToriiClientTests
                       "source": "on_chain",
                       "items": [
                         {
-                          "alias": "merchant@sbp.universal",
+                          "alias": "merchant@paynet.universal",
                           "dataspace": "universal",
-                          "domain": "sbp",
+                          "domain": "paynet",
                           "is_primary": true
                         },
                         {
@@ -1212,12 +1212,12 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var aliases = await client.LookupAliasesByAccountAsync("sorauロ1Nholder", dataspace: "universal", domain: "sbp");
+        var aliases = await client.LookupAliasesByAccountAsync("sorauロ1Nholder", dataspace: "universal", domain: "paynet");
 
         Assert.NotNull(aliases);
         Assert.Equal("sorauロ1Nholder", aliases!.AccountId);
         Assert.Equal(2, aliases.Total);
-        Assert.Equal("merchant@sbp.universal", aliases.Items[0].Alias);
+        Assert.Equal("merchant@paynet.universal", aliases.Items[0].Alias);
         Assert.True(aliases.Items[0].IsPrimary);
         Assert.Equal("on_chain", aliases.Source);
     }
@@ -2029,7 +2029,7 @@ public sealed class ToriiClientTests
                 Content = new StringContent("""
                     {
                       "index": 7,
-                      "alias": "merchant@sbp.universal",
+                      "alias": "merchant@paynet.universal",
                       "account_id": "sorauﾛ1Nmerchant",
                       "source": "on_chain"
                     }
@@ -2042,7 +2042,7 @@ public sealed class ToriiClientTests
 
         Assert.NotNull(resolved);
         Assert.Equal((ulong)7, resolved!.Index);
-        Assert.Equal("merchant@sbp.universal", resolved.Alias);
+        Assert.Equal("merchant@paynet.universal", resolved.Alias);
         Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
         Assert.Equal("on_chain", resolved.Source);
     }
@@ -2267,7 +2267,7 @@ public sealed class ToriiClientTests
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("merchant@sbp", payload.RootElement.GetProperty("alias").GetString());
+            Assert.Equal("merchant@paynet", payload.RootElement.GetProperty("alias").GetString());
             Assert.Equal("sorauﾛ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal("merchant@example.com", payload.RootElement.GetProperty("identity").GetProperty("email").GetString());
 
@@ -2287,7 +2287,7 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.RegisterAccountAsync(new ToriiAccountOnboardingRequest
         {
-            Alias = "merchant@sbp",
+            Alias = "merchant@paynet",
             AccountId = "sorauﾛ1Nmerchant",
             Identity = new JsonObject
             {
@@ -2525,7 +2525,7 @@ public sealed class ToriiClientTests
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard/multisig", request.RequestUri!.AbsolutePath);
-            Assert.Equal("treasury@sbp", payload.RootElement.GetProperty("alias").GetString());
+            Assert.Equal("treasury@paynet", payload.RootElement.GetProperty("alias").GetString());
             Assert.Equal(2, payload.RootElement.GetProperty("required_signers").GetInt32());
             Assert.Equal(2, payload.RootElement.GetProperty("member_weights")[1].GetInt32());
 
@@ -2544,7 +2544,7 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.RegisterMultisigAccountAsync(new ToriiMultisigAccountOnboardingRequest
         {
-            Alias = "treasury@sbp",
+            Alias = "treasury@paynet",
             RequiredSigners = 2,
             MemberAccountIds = ["sorauロ1Nmember1", "sorauロ1Nmember2"],
             MemberWeights = [1, 2],
@@ -2562,13 +2562,13 @@ public sealed class ToriiClientTests
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
-            Assert.Equal("merchant@sbp.universal", payload.RootElement.GetProperty("alias").GetString());
+            Assert.Equal("merchant@paynet.universal", payload.RootElement.GetProperty("alias").GetString());
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("""
                     {
-                      "alias": "merchant@sbp.universal",
+                      "alias": "merchant@paynet.universal",
                       "account_id": "sorauﾛ1Nmerchant",
                       "index": 7,
                       "source": "on_chain"
@@ -2578,10 +2578,10 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var resolved = await client.ResolveAccountAliasAsync("merchant@sbp.universal");
+        var resolved = await client.ResolveAccountAliasAsync("merchant@paynet.universal");
 
         Assert.NotNull(resolved);
-        Assert.Equal("merchant@sbp.universal", resolved!.Alias);
+        Assert.Equal("merchant@paynet.universal", resolved!.Alias);
         Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
         Assert.Equal((long)7, resolved.Index);
         Assert.Equal("on_chain", resolved.Source);

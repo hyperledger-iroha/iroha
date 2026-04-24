@@ -11114,13 +11114,27 @@ fn contract_state_logical_map_entry_value(
     if let Some(Some(_)) = registry.get(logical_path) {
         return get_value(logical_path);
     }
-    let (base, key_suffix) = logical_path.rsplit_once('/')?;
-    let Some(Some(ivm::EmbeddedStateType::Map { key, .. })) = registry.get(base) else {
-        return None;
-    };
+    let (base, key, key_suffix) = contract_state_logical_map_parts(registry, logical_path)?;
     let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
         .unwrap_or_else(|| key_suffix.to_owned());
     get_value(&format!("{base}/{stored_key_suffix}"))
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_logical_map_parts<'a>(
+    registry: &'a BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    logical_path: &'a str,
+) -> Option<(&'a str, &'a ivm::EmbeddedStateType, &'a str)> {
+    registry
+        .iter()
+        .filter_map(|(base, schema)| {
+            let key_suffix = logical_path.strip_prefix(&format!("{base}/"))?;
+            let Some(ivm::EmbeddedStateType::Map { key, .. }) = schema.as_ref() else {
+                return None;
+            };
+            Some((base.as_str(), key.as_ref(), key_suffix))
+        })
+        .max_by_key(|(base, _, _)| base.len())
 }
 
 #[cfg(feature = "app_api")]
@@ -11161,6 +11175,14 @@ fn decode_contract_state_scalar_json(
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::Json => {
+            if tlv.type_id == PointerType::NoritoBytes {
+                if let Ok(value) = norito::decode_from_bytes(tlv.payload) {
+                    let value: iroha_primitives::json::Json = value;
+                    return value
+                        .try_into_any_norito::<norito::json::Value>()
+                        .map_err(|err| format!("convert json payload: {err}"));
+                }
+            }
             let payload = decode_contract_state_pointer_payload(bytes, PointerType::Json, "Json")?;
             let value: iroha_primitives::json::Json =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode json: {err}"))?;
@@ -11353,29 +11375,18 @@ fn decode_contract_state_path_json(
         }
     }
 
-    let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
+    let Some((base, key, key_suffix)) = contract_state_logical_map_parts(registry, logical_path)
+    else {
         return Err(format!(
             "no embedded state schema found for path `{logical_path}`"
         ));
     };
-    let Some(state_schema) = registry.get(base) else {
-        return Err(format!(
-            "no embedded state schema found for path `{logical_path}`"
-        ));
-    };
-    let Some(schema) = state_schema else {
+    let Some(Some(ivm::EmbeddedStateType::Map { value, .. })) = registry.get(base) else {
         return Err(format!("state schema for `{base}` is ambiguous"));
     };
-    match schema {
-        ivm::EmbeddedStateType::Map { key, value } => {
-            let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
-                .unwrap_or_else(|| key_suffix.to_owned());
-            decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
-        }
-        _ => Err(format!(
-            "path `{logical_path}` does not refer to a state map entry"
-        )),
-    }
+    let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
+        .unwrap_or_else(|| key_suffix.to_owned());
+    decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
 }
 
 #[cfg(feature = "app_api")]
@@ -11440,14 +11451,16 @@ fn contract_state_logical_path_exists(
     has_value: &impl Fn(&str) -> bool,
 ) -> bool {
     let Some(schema) = registry.get(logical_path) else {
-        let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
+        let Some((base, key, key_suffix)) =
+            contract_state_logical_map_parts(registry, logical_path)
+        else {
             return false;
         };
         let Some(Some(state_schema)) = registry.get(base) else {
             return false;
         };
         return match state_schema {
-            ivm::EmbeddedStateType::Map { key, value } => {
+            ivm::EmbeddedStateType::Map { value, .. } => {
                 let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
                     .unwrap_or_else(|| key_suffix.to_owned());
                 contract_state_map_entry_exists(base, value, &stored_key_suffix, has_value)
@@ -12039,6 +12052,61 @@ mod contract_state_tests {
     }
 
     #[test]
+    fn decode_contract_state_path_json_resolves_name_map_keys_containing_slashes() {
+        let mut registry = BTreeMap::<String, Option<ivm::EmbeddedStateType>>::new();
+        registry.insert(
+            "BeneficiaryTrancheIndexByLookupKey".to_owned(),
+            Some(ivm::EmbeddedStateType::Map {
+                key: Box::new(ivm::EmbeddedStateType::Name),
+                value: Box::new(ivm::EmbeddedStateType::Int),
+            }),
+        );
+
+        let logical_key = "cf793f7d78c9c80f01ea2633d15951e0c51136aa24e385e78e85f8910d8a2ed9/0";
+        let stored_key =
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Name, logical_key)
+                .expect("name map key should encode");
+        let value_payload = norito::to_bytes(&5_i64).expect("encode tranche index");
+        let storage = BTreeMap::from([(
+            format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
+            make_tlv(PointerType::NoritoBytes, &value_payload),
+        )]);
+
+        let decoded = decode_contract_state_path_json(
+            &registry,
+            &format!("BeneficiaryTrancheIndexByLookupKey/{logical_key}"),
+            &|path| storage.get(path).cloned(),
+        )
+        .expect("decode slash-containing logical key");
+
+        assert_eq!(decoded, Value::from("5"));
+    }
+
+    #[test]
+    fn decode_contract_state_logical_path_exists_handles_name_keys_with_slashes() {
+        let mut registry = BTreeMap::<String, Option<ivm::EmbeddedStateType>>::new();
+        registry.insert(
+            "BeneficiaryTrancheIndexByLookupKey".to_owned(),
+            Some(ivm::EmbeddedStateType::Map {
+                key: Box::new(ivm::EmbeddedStateType::Name),
+                value: Box::new(ivm::EmbeddedStateType::Int),
+            }),
+        );
+
+        let logical_key = "beneficiary-lookup/1";
+        let stored_key =
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Name, logical_key)
+                .expect("name map key should encode");
+        let stored_path = format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}");
+
+        assert!(contract_state_logical_path_exists(
+            &registry,
+            &format!("BeneficiaryTrancheIndexByLookupKey/{logical_key}"),
+            &|path| path == stored_path
+        ));
+    }
+
+    #[test]
     fn decode_contract_state_scalar_json_unwraps_nested_json_payloads() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"marketId\":\"mkt-1\",\"status\":\"open\"}",
@@ -12055,6 +12123,25 @@ mod contract_state_tests {
         let mut expected = Map::new();
         expected.insert("marketId".into(), Value::from("mkt-1"));
         expected.insert("status".into(), Value::from("open"));
+        assert_eq!(decoded, Value::Object(expected));
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_decodes_direct_norito_json_payloads() {
+        let json_value = iroha_primitives::json::Json::from_str_norito(
+            "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
+        )
+        .expect("valid json payload");
+        let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
+        let decoded = decode_contract_state_scalar_json(
+            &make_tlv(PointerType::NoritoBytes, &json_payload),
+            &ivm::EmbeddedStateType::Json,
+        )
+        .expect("decode direct json");
+
+        let mut expected = Map::new();
+        expected.insert("tranche_id".into(), Value::from("benefit-1"));
+        expected.insert("beneficiary_account_id".into(), Value::from("i105-user"));
         assert_eq!(decoded, Value::Object(expected));
     }
 }
@@ -15084,7 +15171,7 @@ fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 }
 
 #[cfg(feature = "app_api")]
-const MULTISIG_PACS009_MARKER_PREFIX: &str = "SBP_PACS009_MINT_V1:";
+const MULTISIG_PACS009_MARKER_PREFIX: &str = "PAYNET_PACS009_MINT_V1:";
 #[cfg(feature = "app_api")]
 const MULTISIG_PACS009_MINT_OPERATION_TYPE: &str = "ISO20022_PACS009_MINT";
 
@@ -15244,7 +15331,9 @@ fn multisig_execute_trigger_is_issuance_swap(
         && !trigger_id
             .trim()
             .eq_ignore_ascii_case("issuance_swap_centralbank")
-        && !trigger_id.trim().eq_ignore_ascii_case("issuance_swap_sbp")
+        && !trigger_id
+            .trim()
+            .eq_ignore_ascii_case("issuance_swap_paynet")
     {
         return false;
     }
@@ -40334,10 +40423,16 @@ mod app_api_integration_tests {
 
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.paynet")
+        );
         assert_eq!(items[0]["user_count"].as_u64(), Some(2));
         assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.paynet")
+        );
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
     }
@@ -40358,10 +40453,16 @@ mod app_api_integration_tests {
 
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.paynet")
+        );
         assert_eq!(items[0]["user_count"].as_u64(), Some(2));
         assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.paynet")
+        );
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
         clear_query_projection_archive_cache_for_tests();
@@ -40399,10 +40500,16 @@ mod app_api_integration_tests {
         assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.paynet")
+        );
         assert_eq!(items[0]["user_count"].as_u64(), Some(2));
         assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.paynet")
+        );
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
         clear_query_projection_archive_cache_for_tests();
@@ -40634,7 +40741,7 @@ mod app_api_integration_tests {
         let pkr_definition = AssetDefinition::numeric(pkr_def.clone())
             .with_name("pkr".to_owned())
             .build(&alice_id);
-        let sbp_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
+        let paynet_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
         let assets = vec![
             Asset::new(
                 AssetId::new(pkr_def.clone(), alice_id.clone()),
@@ -40644,7 +40751,7 @@ mod app_api_integration_tests {
                 AssetId::with_scope(
                     pkr_def.clone(),
                     alice_id.clone(),
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(sbp_dataspace_id),
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet_dataspace_id),
                 ),
                 Numeric::from(3_u32),
             ),
@@ -40692,13 +40799,13 @@ mod app_api_integration_tests {
         let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: sbp_dataspace_id,
-                alias: "sbp".to_owned(),
+                id: paynet_dataspace_id,
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
         ])
-        .expect("sbp dataspace catalog");
+        .expect("paynet dataspace catalog");
         Arc::get_mut(&mut state)
             .expect("unique state")
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -40706,13 +40813,13 @@ mod app_api_integration_tests {
                 dataspace_catalog,
                 ..iroha_config::parameters::actual::Nexus::default()
             })
-            .expect("install sbp nexus config");
-        bind_permanent_asset_alias_for_test(&state, &alice_id, &pkr_def, "pkr#sbp");
-        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.sbp");
-        bind_account_alias_for_test(&state, &bob_id, "bilal@hbl.sbp");
-        bind_account_alias_for_test(&state, &ubl_user_id, "amir@ubl.sbp");
-        bind_account_alias_for_test(&state, &hbl_settlement_id, "cbdc@hbl.sbp");
-        bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.sbp");
+            .expect("install paynet nexus config");
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &pkr_def, "pkr#paynet");
+        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.paynet");
+        bind_account_alias_for_test(&state, &bob_id, "bilal@hbl.paynet");
+        bind_account_alias_for_test(&state, &ubl_user_id, "amir@ubl.paynet");
+        bind_account_alias_for_test(&state, &hbl_settlement_id, "cbdc@hbl.paynet");
+        bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.paynet");
 
         (state, alice_id, bob_id)
     }
@@ -40724,15 +40831,15 @@ mod app_api_integration_tests {
                 crate::filter::FilterExpr::In(
                     crate::filter::FieldPath("primary_alias_domain".into()),
                     vec![
-                        norito::json::Value::from("hbl.sbp"),
-                        norito::json::Value::from("ubl.sbp"),
+                        norito::json::Value::from("hbl.paynet"),
+                        norito::json::Value::from("ubl.paynet"),
                     ],
                 ),
                 crate::filter::FilterExpr::Nin(
                     crate::filter::FieldPath("primary_alias".into()),
                     vec![
-                        norito::json::Value::from("cbdc@hbl.sbp"),
-                        norito::json::Value::from("cbdc@ubl.sbp"),
+                        norito::json::Value::from("cbdc@hbl.paynet"),
+                        norito::json::Value::from("cbdc@ubl.paynet"),
                     ],
                 ),
             ])),
@@ -40772,7 +40879,7 @@ mod app_api_integration_tests {
         let response = handle_v1_asset_holders_query_with_app(
             app,
             state,
-            axum::extract::Path("pkr#sbp".to_owned()),
+            axum::extract::Path("pkr#paynet".to_owned()),
             crate::utils::extractors::NoritoJson(asset_holder_alias_aggregate_query()),
             MaybeTelemetry::for_tests(),
         )
@@ -41081,7 +41188,7 @@ mod app_api_integration_tests {
             state.clone(),
             "asset_holders".to_owned(),
             crate::runtime::NodeProjectionShardCatalogQuery {
-                asset_definition_id: Some("pkr#sbp".to_owned()),
+                asset_definition_id: Some("pkr#paynet".to_owned()),
                 offset: None,
                 limit: None,
             },
@@ -41101,7 +41208,7 @@ mod app_api_integration_tests {
                 "asset_holders".to_owned(),
                 entry.partition_id,
                 crate::runtime::NodeProjectionShardExportQuery {
-                    asset_definition_id: Some("pkr#sbp".to_owned()),
+                    asset_definition_id: Some("pkr#paynet".to_owned()),
                 },
             )
             .await

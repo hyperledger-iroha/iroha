@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - Модель псевдонима:
   – Идентификация канонической учетной записи никогда не включает сегмент домена или пространства данных.
   — Значения `AccountAlias` — это отдельные привязки SNS, расположенные поверх `AccountId`.
-  - Псевдонимы с указанием домена, такие как `merchant@banka.sbp`, содержат в привязке псевдонима как домен, так и пространство данных.
-  - Псевдонимы корня пространства данных, такие как `merchant@sbp`, несут только пространство данных и, следовательно, естественным образом сочетаются с `Account::new(...)`.
+  - Псевдонимы с указанием домена, такие как `merchant@banka.paynet`, содержат в привязке псевдонима как домен, так и пространство данных.
+  - Псевдонимы корня пространства данных, такие как `merchant@paynet`, несут только пространство данных и, следовательно, естественным образом сочетаются с `Account::new(...)`.
   - Тесты и исправления должны сначала инициализировать универсальный `AccountId`, а затем отдельно добавлять аренду псевдонимов, разрешения псевдонимов и любое состояние, принадлежащее домену, вместо кодирования предположений о домене в саму идентификацию учетной записи.
   - Поиск общедоступных учетных записей теперь фокусируется на псевдонимах (`FindAliasesByAccountId`); Идентификация учетной записи сама по себе остается бездоменной.### Определения и активы активов
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` отображается в текстовом виде как адрес Base58 без префикса с указанием версий и контрольной суммой.
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Примечание по миграции:
 — Старые идентификаторы определения актива `name#domain` не принимаются в версии 1.
 - Селекторы общедоступных активов используют только один формат определения активов: канонические идентификаторы Base58. Псевдонимы остаются необязательными селекторами, но разрешаются к тому же каноническому идентификатору.

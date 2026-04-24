@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - نموذج الاسم المستعار:
   - لا تشتمل هوية الحساب Canonical مطلقًا على مجال أو مقطع مساحة بيانات.
   - قيم `AccountAlias` هي روابط SNS منفصلة موضوعة أعلى `AccountId`.
-  - الأسماء المستعارة المؤهلة للمجال مثل `merchant@banka.sbp` تحمل كلاً من المجال ومساحة البيانات في ربط الاسم المستعار.
-  - الأسماء المستعارة لجذر مساحة البيانات مثل `merchant@sbp` تحمل مساحة البيانات فقط وبالتالي تقترن بشكل طبيعي مع `Account::new(...)`.
+  - الأسماء المستعارة المؤهلة للمجال مثل `merchant@banka.paynet` تحمل كلاً من المجال ومساحة البيانات في ربط الاسم المستعار.
+  - الأسماء المستعارة لجذر مساحة البيانات مثل `merchant@paynet` تحمل مساحة البيانات فقط وبالتالي تقترن بشكل طبيعي مع `Account::new(...)`.
   - يجب أن تقوم الاختبارات والتركيبات بتثبيت `AccountId` العالمي أولاً، ثم إضافة عقود إيجار الاسم المستعار وأذونات الاسم المستعار وأي حالة مملوكة للنطاق بشكل منفصل بدلاً من تشفير افتراضات المجال في هوية الحساب نفسها.
   - يركز البحث العام عن الحساب المفرد الآن على الأسماء المستعارة (`FindAliasesByAccountId`)؛ تظل هوية الحساب نفسها بلا مجال.### تعريفات الأصول والأصول
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كعنوان Base58 غير مسبوق مع الإصدار والمجموع الاختباري.
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```مذكرة الهجرة:
 - لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
 - تستخدم محددات الأصول العامة تنسيقًا واحدًا لتعريف الأصول فقط: معرفات Base58 الأساسية. تظل الأسماء المستعارة محددات اختيارية، ولكنها تتوافق مع نفس المعرف الأساسي.

@@ -5929,7 +5929,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_builtin_uses_string_literal() {
-        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@sbp"); }"#;
+        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -5940,7 +5940,7 @@ mod tests {
         for bb in &f.blocks {
             for instr in &bb.instrs {
                 match instr {
-                    Instr::StringConst { value, .. } if value == "merchant@sbp" => {
+                    Instr::StringConst { value, .. } if value == "merchant@paynet" => {
                         saw_alias_string = true;
                     }
                     Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
@@ -6005,7 +6005,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_domain_qualified_builtin_uses_string_literal() {
-        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@bank.sbp"); }"#;
+        let src = r#"fn main() { let _acct = resolve_account_alias("merchant@bank.paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6016,7 +6016,7 @@ mod tests {
         for bb in &f.blocks {
             for instr in &bb.instrs {
                 match instr {
-                    Instr::StringConst { value, .. } if value == "merchant@bank.sbp" => {
+                    Instr::StringConst { value, .. } if value == "merchant@bank.paynet" => {
                         saw_alias_string = true;
                     }
                     Instr::ResolveAccountAlias { .. } => saw_resolve_account_alias = true,
@@ -6081,7 +6081,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = account_id("merchant@sbp"); }"#;
+        let src = r#"fn main() { let _acct = account_id("merchant@paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6093,7 +6093,7 @@ mod tests {
             for instr in &bb.instrs {
                 match instr {
                     Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::Blob && value == "merchant@sbp" =>
+                        if *kind == DataRefKind::Blob && value == "merchant@paynet" =>
                     {
                         saw_alias_blob = true;
                     }
@@ -6118,7 +6118,7 @@ mod tests {
 
     #[test]
     fn lower_account_id_domain_qualified_alias_literal_to_resolve_account_alias() {
-        let src = r#"fn main() { let _acct = account_id("merchant@bank.sbp"); }"#;
+        let src = r#"fn main() { let _acct = account_id("merchant@bank.paynet"); }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -6130,7 +6130,7 @@ mod tests {
             for instr in &bb.instrs {
                 match instr {
                     Instr::DataRef { kind, value, .. }
-                        if *kind == DataRefKind::Blob && value == "merchant@bank.sbp" =>
+                        if *kind == DataRefKind::Blob && value == "merchant@bank.paynet" =>
                     {
                         saw_alias_blob = true;
                     }

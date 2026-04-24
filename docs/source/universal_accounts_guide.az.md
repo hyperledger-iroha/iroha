@@ -92,8 +92,8 @@ Konkret olaraq:
 
 Universal hesabın tətbiqi kanonik hesab şəxsiyyət modelini dəyişmir:- `AccountId` kanonik, domensiz hesab mövzusu olaraq qalır.
 - `AccountAlias` dəyərləri bu mövzunun üstündəki ayrı SNS bağlamalarıdır. A
-  `merchant@banka.sbp` və dataspace-kök ləqəbi kimi domenə uyğun ləqəb
-  `merchant@sbp` kimi hər ikisi eyni kanonik `AccountId` ilə həll edə bilər.
+  `merchant@banka.paynet` və dataspace-kök ləqəbi kimi domenə uyğun ləqəb
+  `merchant@paynet` kimi hər ikisi eyni kanonik `AccountId` ilə həll edə bilər.
 - Canonical hesab qeydiyyatı həmişə `Account::new(AccountId)` /
   `NewAccount::new(AccountId)`; heç bir domenə uyğunlaşdırılmış və ya domen materiallaşdırılmış yoxdur
   qeydiyyat yolu.

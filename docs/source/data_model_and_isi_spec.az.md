@@ -198,13 +198,13 @@ Növ: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
 - Parametr yeniləməsi:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` yeniləyir və `ConfigurationEvent::Changed` yayır.CLI / Torii aktiv tərifi id + ləqəb nümunələri:
 - Kanonik Base58 id + açıq ad + uzun ləqəb ilə qeydiyyatdan keçin:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - Kanonik Base58 id + açıq ad + qısa ləqəb ilə qeydiyyatdan keçin:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - Ləqəb + hesab komponentləri ilə nanə:
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - Kanonik Base58 id-ə ləqəbi həll edin:
-  - JSON `{ "alias": "pkr#bankb.sbp" }` ilə `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#bankb.paynet" }` ilə `POST /v1/assets/aliases/resolve`
 
 Miqrasiya qeydi:
 - `name#domain` mətn aktivi tərifi identifikatorları ilk buraxılışda qəsdən dəstəklənmir; kanonik Base58 ID-lərindən istifadə edin və ya nöqtəli ləqəbi həll edin.

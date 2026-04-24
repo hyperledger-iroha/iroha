@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - Алс загвар:
   - Каноник дансны таниулбар нь хэзээ ч домэйн эсвэл өгөгдлийн орон зайн сегментийг агуулдаггүй.
   - `AccountAlias` утгууд нь `AccountId` дээр давхарласан тусдаа SNS холболтууд юм.
-  - `merchant@banka.sbp` зэрэг домэйны шаардлага хангасан нэрс нь домайн болон өгөгдлийн орон зайг хоёуланг нь холбогч нэрээр холбодог.
-  - `merchant@sbp` гэх мэт өгөгдлийн орон зайн эх нэрс нь зөвхөн өгөгдлийн орон зайг агуулж байдаг тул `Account::new(...)`-тэй байгалийн жамаар хослодог.
+  - `merchant@banka.paynet` зэрэг домэйны шаардлага хангасан нэрс нь домайн болон өгөгдлийн орон зайг хоёуланг нь холбогч нэрээр холбодог.
+  - `merchant@paynet` гэх мэт өгөгдлийн орон зайн эх нэрс нь зөвхөн өгөгдлийн орон зайг агуулж байдаг тул `Account::new(...)`-тэй байгалийн жамаар хослодог.
   - Туршилтууд болон бэхэлгээ нь эхлээд бүх нийтийн `AccountId`-ийг суулгаж, дараа нь дансны таниулбарт домэйн таамаглалыг кодлохын оронд өөр нэрийн түрээс, бусад нэрийн зөвшөөрөл болон домэйн эзэмшдэг аливаа мужийг тусад нь нэмнэ.
   - Нийтийн дансны хайлт нь одоо өөр нэр дээр төвлөрч байна (`FindAliasesByAccountId`); дансны таниулбар өөрөө домэйнгүй хэвээр үлдэнэ.### Хөрөнгийн тодорхойлолт ба хөрөнгө
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` хувилбар болон шалгах нийлбэр бүхий угтваргүй Base58 хаяг хэлбэрээр текстийн хувьд ил гарсан.
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Шилжилтийн тэмдэглэл:
 - Хуучин `name#domain` хөрөнгийн тодорхойлолтыг v1-д хүлээн зөвшөөрдөггүй.
 - Нийтийн өмч сонгогчид зөвхөн нэг хөрөнгийн тодорхойлолтын форматыг ашигладаг: каноник Base58 ids. Гадна нэр нь нэмэлт сонгогч хэвээр байх боловч ижил каноник id-д шийдэгддэг.

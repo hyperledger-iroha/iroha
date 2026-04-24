@@ -9,7 +9,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ciborium::{de::from_reader, value::Value as CborValue};
-use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
 use iroha_config::parameters::actual::Offline as OfflineSettlementConfig;
 #[cfg(feature = "zk-stark")]
 use iroha_core::zk_stark::{
@@ -55,6 +55,9 @@ use iroha_data_model::{
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use mv::storage::StorageReadOnly;
 use norito::json::{self};
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use x509_parser::{certificate::X509Certificate, prelude::FromDer, time::ASN1Time};
@@ -913,35 +916,6 @@ struct RevocationBundleUnsignedPayload {
     asset_send_limits: Vec<OfflineAssetSendLimit>,
 }
 
-#[derive(crate::json_macros::JsonSerialize)]
-struct TransferReceiptUnsignedPayload {
-    version: i32,
-    transfer_id: String,
-    direction: String,
-    lineage_id: String,
-    account_id: String,
-    device_id: String,
-    offline_public_key: String,
-    pre_balance: String,
-    post_balance: String,
-    pre_locked_balance: String,
-    post_locked_balance: String,
-    pre_state_hash: String,
-    post_state_hash: String,
-    local_revision: u64,
-    counterparty_lineage_id: String,
-    counterparty_account_id: String,
-    counterparty_device_id: String,
-    counterparty_offline_public_key: String,
-    amount: String,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authorization: Option<OfflineSpendAuthorization>,
-    attestation: OfflineDeviceAttestation,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    source_payload: Option<String>,
-    created_at_ms: u64,
-}
-
 #[derive(Clone, crate::json_macros::JsonSerialize)]
 struct CashTransferReceiptAuthorizationPayload {
     authorization_id: String,
@@ -980,52 +954,6 @@ struct CashTransferReceiptUnsignedPayload {
     amount: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     authorization: Option<CashTransferReceiptAuthorizationPayload>,
-    attestation: OfflineDeviceAttestation,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    source_payload: Option<String>,
-    created_at_ms: u64,
-}
-
-#[derive(Clone, crate::json_macros::JsonSerialize)]
-struct LegacyCashTransferReceiptAuthorizationPayload {
-    authorization_id: String,
-    lineage_id: String,
-    account_id: String,
-    device_id: String,
-    offline_public_key: String,
-    verdict_id: String,
-    max_balance: String,
-    max_tx_value: String,
-    issued_at_ms: u64,
-    refresh_at_ms: u64,
-    expires_at_ms: u64,
-    app_attest_key_id: String,
-    issuer_signature_base64: String,
-}
-
-#[derive(crate::json_macros::JsonSerialize)]
-struct LegacyCashTransferReceiptUnsignedPayload {
-    version: i32,
-    transfer_id: String,
-    direction: String,
-    lineage_id: String,
-    account_id: String,
-    device_id: String,
-    offline_public_key: String,
-    pre_balance: String,
-    post_balance: String,
-    pre_locked_balance: String,
-    post_locked_balance: String,
-    pre_state_hash: String,
-    post_state_hash: String,
-    local_revision: u64,
-    counterparty_lineage_id: String,
-    counterparty_account_id: String,
-    counterparty_device_id: String,
-    counterparty_offline_public_key: String,
-    amount: String,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    authorization: Option<LegacyCashTransferReceiptAuthorizationPayload>,
     attestation: OfflineDeviceAttestation,
     #[norito(skip_serializing_if = "Option::is_none")]
     source_payload: Option<String>,
@@ -2909,6 +2837,7 @@ fn validate_local_continuity(
             })?;
             validate_source_payload(
                 source_payload,
+                &receipt.transfer_id,
                 &receipt.lineage_id,
                 &receipt.amount,
                 issuer_public_key_base64,
@@ -2959,12 +2888,18 @@ fn validate_local_continuity(
 
 fn validate_source_payload(
     raw_payload: &str,
+    expected_transfer_id: &str,
     recipient_lineage_id: &str,
     amount: &str,
     issuer_public_key_base64: &str,
     revoked_verdict_ids: &BTreeSet<String>,
 ) -> Result<(), Error> {
     let payload = decode_transfer_payload(raw_payload)?;
+    if payload.receipt.transfer_id != expected_transfer_id {
+        return Err(conversion_error(
+            "source payload transfer_id does not match the incoming receipt".to_owned(),
+        ));
+    }
     ensure_canonical_lineage_state_identifiers(&payload.anchor, "source_payload.anchor")?;
     validate_issuer_signature(
         authorization_unsigned_payload(&payload.anchor.authorization)?,
@@ -3140,19 +3075,8 @@ fn validate_counter(
 }
 
 fn validate_receipt_signature(receipt: &OfflineTransferReceipt) -> Result<(), Error> {
-    let lineage_payload = transfer_receipt_unsigned_payload(receipt)?;
-    if validate_signature(
-        "offline receipt sender signature",
-        &lineage_payload,
-        &receipt.sender_signature_base64,
-        &receipt.offline_public_key,
-    )
-    .is_ok()
-    {
-        return Ok(());
-    }
     let cash_payload = cash_transfer_receipt_unsigned_payload(receipt)?;
-    match validate_signature(
+    match validate_receipt_sender_signature(
         "offline receipt sender signature",
         &cash_payload,
         &receipt.sender_signature_base64,
@@ -3160,14 +3084,41 @@ fn validate_receipt_signature(receipt: &OfflineTransferReceipt) -> Result<(), Er
     ) {
         Ok(()) => Ok(()),
         Err(err) => Err(conversion_error(format!(
-            "invalid offline receipt sender signature: transfer_id={} direction={} local_revision={} lineage_payload_hash={} cash_payload_hash={} reason={err}",
+            "invalid offline receipt sender signature: transfer_id={} direction={} local_revision={} cash_payload_hash={} reason={err}",
             receipt.transfer_id,
             receipt.direction,
             receipt.local_revision,
-            sha256_hex(&lineage_payload),
             sha256_hex(&cash_payload),
         ))),
     }
+}
+
+fn validate_receipt_sender_signature(
+    label: &str,
+    payload: &[u8],
+    signature_base64: &str,
+    public_key_base64: &str,
+) -> Result<(), Error> {
+    let public_key_bytes = BASE64_STANDARD
+        .decode(public_key_base64)
+        .map_err(|err| conversion_error(format!("invalid base64 public key: {err}")))?;
+    let signature_bytes = BASE64_STANDARD
+        .decode(signature_base64)
+        .map_err(|err| conversion_error(format!("invalid base64 signature: {err}")))?;
+
+    if public_key_bytes.len() == 32 {
+        return validate_ed25519_signature(label, payload, &signature_bytes, &public_key_bytes);
+    }
+
+    let verifying_key = P256VerifyingKey::from_sec1_bytes(&public_key_bytes)
+        .map_err(|err| conversion_error(format!("invalid p256 public key: {err}")))?;
+    let signature = P256Signature::from_der(&signature_bytes)
+        .or_else(|_| P256Signature::from_slice(&signature_bytes))
+        .map_err(|err| conversion_error(format!("invalid p256 signature: {err}")))?;
+    verifying_key
+        .verify(payload, &signature)
+        .map_err(|err| conversion_error(format!("invalid {label}: {err}")))?;
+    Ok(())
 }
 
 fn validate_signature(
@@ -3182,14 +3133,22 @@ fn validate_signature(
     let signature_bytes = BASE64_STANDARD
         .decode(signature_base64)
         .map_err(|err| conversion_error(format!("invalid base64 signature: {err}")))?;
+    validate_ed25519_signature(label, payload, &signature_bytes, &public_key_bytes)
+}
+
+fn validate_ed25519_signature(
+    label: &str,
+    payload: &[u8],
+    signature_bytes: &[u8],
+    public_key_bytes: &[u8],
+) -> Result<(), Error> {
     let verifying_key = VerifyingKey::from_bytes(
         &public_key_bytes
-            .as_slice()
             .try_into()
             .map_err(|_| conversion_error("ed25519 public key must be 32 bytes".to_owned()))?,
     )
     .map_err(|err| conversion_error(format!("invalid ed25519 public key: {err}")))?;
-    let signature = DalekSignature::from_slice(&signature_bytes)
+    let signature = DalekSignature::from_slice(signature_bytes)
         .map_err(|err| conversion_error(format!("invalid ed25519 signature: {err}")))?;
     verifying_key
         .verify(payload, &signature)
@@ -3210,114 +3169,16 @@ fn validate_issuer_signature(
     )
 }
 
-fn transfer_receipt_unsigned_payload(receipt: &OfflineTransferReceipt) -> Result<Vec<u8>, Error> {
-    canonical_json_bytes(&TransferReceiptUnsignedPayload {
-        version: receipt.version,
-        transfer_id: receipt.transfer_id.clone(),
-        direction: receipt.direction.clone(),
-        lineage_id: receipt.lineage_id.clone(),
-        account_id: receipt.account_id.clone(),
-        device_id: receipt.device_id.clone(),
-        offline_public_key: receipt.offline_public_key.clone(),
-        pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
-        post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
-        pre_locked_balance: canonical_amount_string(&parse_numeric(&receipt.pre_locked_balance)?),
-        post_locked_balance: canonical_amount_string(&parse_numeric(&receipt.post_locked_balance)?),
-        pre_state_hash: receipt.pre_state_hash.clone(),
-        post_state_hash: receipt.post_state_hash.clone(),
-        local_revision: receipt.local_revision,
-        counterparty_lineage_id: receipt.counterparty_lineage_id.clone(),
-        counterparty_account_id: receipt.counterparty_account_id.clone(),
-        counterparty_device_id: receipt.counterparty_device_id.clone(),
-        counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
-        amount: canonical_amount_string(&parse_numeric(&receipt.amount)?),
-        authorization: receipt.authorization.clone(),
-        attestation: receipt.attestation.clone(),
-        source_payload: receipt.source_payload.clone(),
-        created_at_ms: receipt.created_at_ms,
-    })
-}
-
 fn cash_transfer_receipt_unsigned_payload(
     receipt: &OfflineTransferReceipt,
 ) -> Result<Vec<u8>, Error> {
-    if let Some(authorization) = receipt.authorization.as_ref() {
-        if let Some(device_binding) = authorization.device_binding.clone() {
-            return canonical_json_bytes(&CashTransferReceiptUnsignedPayload {
-                version: receipt.version,
-                transfer_id: receipt.transfer_id.clone(),
-                direction: receipt.direction.clone(),
-                lineage_id: receipt.lineage_id.clone(),
-                account_id: receipt.account_id.clone(),
-                device_id: receipt.device_id.clone(),
-                offline_public_key: receipt.offline_public_key.clone(),
-                pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
-                post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
-                pre_locked_balance: canonical_amount_string(&parse_numeric(
-                    &receipt.pre_locked_balance,
-                )?),
-                post_locked_balance: canonical_amount_string(&parse_numeric(
-                    &receipt.post_locked_balance,
-                )?),
-                pre_state_hash: receipt.pre_state_hash.clone(),
-                post_state_hash: receipt.post_state_hash.clone(),
-                local_revision: receipt.local_revision,
-                counterparty_lineage_id: receipt.counterparty_lineage_id.clone(),
-                counterparty_account_id: receipt.counterparty_account_id.clone(),
-                counterparty_device_id: receipt.counterparty_device_id.clone(),
-                counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
-                amount: canonical_amount_string(&parse_amount(&receipt.amount)?),
-                authorization: Some(CashTransferReceiptAuthorizationPayload {
-                    authorization_id: authorization.authorization_id.clone(),
-                    lineage_id: authorization.lineage_id.clone(),
-                    account_id: authorization.account_id.clone(),
-                    verdict_id: authorization.verdict_id.clone(),
-                    max_balance: canonical_amount_string(&parse_amount(
-                        &authorization.max_balance,
-                    )?),
-                    max_tx_value: canonical_amount_string(&parse_amount(
-                        &authorization.max_tx_value,
-                    )?),
-                    issued_at_ms: authorization.issued_at_ms,
-                    refresh_at_ms: authorization.refresh_at_ms,
-                    expires_at_ms: authorization.expires_at_ms,
-                    device_binding,
-                    issuer_signature_base64: authorization.issuer_signature_base64.clone(),
-                }),
-                attestation: receipt.attestation.clone(),
-                source_payload: receipt.source_payload.clone(),
-                created_at_ms: receipt.created_at_ms,
-            });
-        }
-    }
-    let authorization = receipt
-        .authorization
-        .as_ref()
-        .map(
-            |authorization| -> Result<LegacyCashTransferReceiptAuthorizationPayload, Error> {
-                Ok(LegacyCashTransferReceiptAuthorizationPayload {
-                    authorization_id: authorization.authorization_id.clone(),
-                    lineage_id: authorization.lineage_id.clone(),
-                    account_id: authorization.account_id.clone(),
-                    device_id: authorization.device_id.clone(),
-                    offline_public_key: authorization.offline_public_key.clone(),
-                    verdict_id: authorization.verdict_id.clone(),
-                    max_balance: canonical_amount_string(&parse_amount(
-                        &authorization.max_balance,
-                    )?),
-                    max_tx_value: canonical_amount_string(&parse_amount(
-                        &authorization.max_tx_value,
-                    )?),
-                    issued_at_ms: authorization.issued_at_ms,
-                    refresh_at_ms: authorization.refresh_at_ms,
-                    expires_at_ms: authorization.expires_at_ms,
-                    app_attest_key_id: authorization.app_attest_key_id.clone(),
-                    issuer_signature_base64: authorization.issuer_signature_base64.clone(),
-                })
-            },
-        )
-        .transpose()?;
-    canonical_json_bytes(&LegacyCashTransferReceiptUnsignedPayload {
+    let authorization = receipt.authorization.as_ref().ok_or_else(|| {
+        conversion_error("offline transfer receipt is missing an authorization snapshot".to_owned())
+    })?;
+    let device_binding = authorization.device_binding.clone().ok_or_else(|| {
+        conversion_error("offline transfer authorization is missing device_binding".to_owned())
+    })?;
+    canonical_json_bytes(&CashTransferReceiptUnsignedPayload {
         version: receipt.version,
         transfer_id: receipt.transfer_id.clone(),
         direction: receipt.direction.clone(),
@@ -3337,7 +3198,19 @@ fn cash_transfer_receipt_unsigned_payload(
         counterparty_device_id: receipt.counterparty_device_id.clone(),
         counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
         amount: canonical_amount_string(&parse_amount(&receipt.amount)?),
-        authorization,
+        authorization: Some(CashTransferReceiptAuthorizationPayload {
+            authorization_id: authorization.authorization_id.clone(),
+            lineage_id: authorization.lineage_id.clone(),
+            account_id: authorization.account_id.clone(),
+            verdict_id: authorization.verdict_id.clone(),
+            max_balance: canonical_amount_string(&parse_amount(&authorization.max_balance)?),
+            max_tx_value: canonical_amount_string(&parse_amount(&authorization.max_tx_value)?),
+            issued_at_ms: authorization.issued_at_ms,
+            refresh_at_ms: authorization.refresh_at_ms,
+            expires_at_ms: authorization.expires_at_ms,
+            device_binding,
+            issuer_signature_base64: authorization.issuer_signature_base64.clone(),
+        }),
         attestation: receipt.attestation.clone(),
         source_payload: receipt.source_payload.clone(),
         created_at_ms: receipt.created_at_ms,
@@ -5178,12 +5051,101 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::{Level, Log, TransactionBuilder};
+    use p256::ecdsa::{SigningKey, signature::Signer as _};
 
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
 
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    fn ios_binding_for_test(
+        device_id: &str,
+        offline_public_key: &str,
+        attestation_key_id: &str,
+    ) -> OfflineCashAndroidDeviceBinding {
+        OfflineCashAndroidDeviceBinding {
+            platform: "ios".to_owned(),
+            attestation_key_id: attestation_key_id.to_owned(),
+            device_id: device_id.to_owned(),
+            offline_public_key: offline_public_key.to_owned(),
+            attestation_report_base64: String::new(),
+            ios_team_id: None,
+            ios_bundle_id: None,
+            ios_environment: None,
+        }
+    }
+
+    fn authorization_for_receipt_test(
+        account_id: &str,
+        device_id: &str,
+        offline_public_key: &str,
+        attestation_key_id: &str,
+    ) -> OfflineSpendAuthorization {
+        OfflineSpendAuthorization {
+            authorization_id: "auth-1".to_owned(),
+            lineage_id: "lineage-1".to_owned(),
+            account_id: account_id.to_owned(),
+            device_id: device_id.to_owned(),
+            offline_public_key: offline_public_key.to_owned(),
+            verdict_id: "verdict-1".to_owned(),
+            max_balance: "1000000".to_owned(),
+            max_tx_value: "1000000".to_owned(),
+            issued_at_ms: 1,
+            refresh_at_ms: 2,
+            expires_at_ms: 3,
+            device_binding: Some(ios_binding_for_test(
+                device_id,
+                offline_public_key,
+                attestation_key_id,
+            )),
+            app_attest_key_id: attestation_key_id.to_owned(),
+            issuer_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+        }
+    }
+
+    fn receipt_for_signature_test(offline_public_key: String) -> OfflineTransferReceipt {
+        OfflineTransferReceipt {
+            version: 1,
+            transfer_id: "transfer-1".to_owned(),
+            direction: "incoming".to_owned(),
+            lineage_id: "lineage-1".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: offline_public_key.clone(),
+            pre_balance: "25".to_owned(),
+            post_balance: "35".to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
+            pre_state_hash: "pre".to_owned(),
+            post_state_hash: "post".to_owned(),
+            local_revision: 1,
+            counterparty_lineage_id: "lineage-2".to_owned(),
+            counterparty_account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+            counterparty_device_id: "device-2".to_owned(),
+            counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
+            amount: "10".to_owned(),
+            authorization: Some(authorization_for_receipt_test(
+                TEST_ACCOUNT_I105,
+                "device-1",
+                &offline_public_key,
+                "key-1",
+            )),
+            attestation: OfflineDeviceAttestation {
+                key_id: "key-1".to_owned(),
+                counter: 3,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: "challenge".to_owned(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_payload: None,
+            sender_signature_base64: String::new(),
+            created_at_ms: 1,
+        }
+    }
 
     #[test]
     fn sync_request_hash_is_stable_for_reordered_receipts() {
@@ -5242,7 +5204,59 @@ mod tests {
     }
 
     #[test]
+    fn source_payload_rejects_mismatched_transfer_id() {
+        let offline_public_key = BASE64_STANDARD.encode([7u8; 32]);
+        let mut receipt = receipt_for_signature_test(offline_public_key.clone());
+        receipt.transfer_id = "source-transfer".to_owned();
+        receipt.direction = "outgoing".to_owned();
+        receipt.counterparty_lineage_id = "receiver-lineage".to_owned();
+        receipt.amount = "10".to_owned();
+        let anchor = OfflineLineageState {
+            lineage_id: receipt.lineage_id.clone(),
+            account_id: receipt.account_id.clone(),
+            device_id: receipt.device_id.clone(),
+            offline_public_key,
+            asset_definition_id: "pkr#paynet".to_owned(),
+            balance: "25".to_owned(),
+            locked_balance: "0".to_owned(),
+            server_revision: 1,
+            server_state_hash: "pre".to_owned(),
+            pending_local_revision: 0,
+            authorization: receipt
+                .authorization
+                .clone()
+                .expect("receipt authorization"),
+            issuer_signature_base64: "issuer-signature".to_owned(),
+        };
+        let payload = OfflineOutgoingTransferPayload {
+            version: 1,
+            anchor,
+            ancestry_receipts: Vec::new(),
+            receipt,
+        };
+        let raw_payload =
+            String::from_utf8(canonical_json_bytes(&payload).expect("source payload json"))
+                .expect("utf8 payload");
+
+        let err = validate_source_payload(
+            &raw_payload,
+            "incoming-transfer",
+            "receiver-lineage",
+            "10",
+            "unused-issuer-key",
+            &BTreeSet::new(),
+        )
+        .expect_err("mismatched source transfer_id must be rejected");
+
+        assert!(
+            format!("{err:?}").contains("transfer_id"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     fn cash_receipt_payload_omits_empty_attestation_option_fields() {
+        let offline_public_key = BASE64_STANDARD.encode([7u8; 32]);
         let receipt = OfflineTransferReceipt {
             version: 1,
             transfer_id: "transfer-1".to_owned(),
@@ -5250,7 +5264,7 @@ mod tests {
             lineage_id: "lineage-1".to_owned(),
             account_id: TEST_ACCOUNT_I105.to_owned(),
             device_id: "device-1".to_owned(),
-            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            offline_public_key: offline_public_key.clone(),
             pre_balance: "25".to_owned(),
             post_balance: "15".to_owned(),
             pre_locked_balance: "0".to_owned(),
@@ -5263,7 +5277,12 @@ mod tests {
             counterparty_device_id: "device-2".to_owned(),
             counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
             amount: "10".to_owned(),
-            authorization: None,
+            authorization: Some(authorization_for_receipt_test(
+                TEST_ACCOUNT_I105,
+                "device-1",
+                &offline_public_key,
+                "key-1",
+            )),
             attestation: OfflineDeviceAttestation {
                 key_id: "key-1".to_owned(),
                 counter: 3,
@@ -5296,6 +5315,24 @@ mod tests {
         assert!(attestation.get("ios_team_id").is_none());
         assert!(attestation.get("ios_bundle_id").is_none());
         assert!(attestation.get("ios_environment").is_none());
+    }
+
+    #[test]
+    fn cash_receipt_signature_accepts_p256_der_sender_signature() {
+        let signing_key = SigningKey::from_slice(&[7u8; 32]).expect("p256 signing key");
+        let encoded_point = signing_key.verifying_key().to_encoded_point(false);
+        let offline_public_key = BASE64_STANDARD.encode(encoded_point.as_bytes());
+        let mut receipt = receipt_for_signature_test(offline_public_key);
+        let payload = cash_transfer_receipt_unsigned_payload(&receipt).expect("cash payload");
+        let signature: P256Signature = signing_key.sign(&payload);
+        receipt.sender_signature_base64 = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+
+        validate_receipt_signature(&receipt).expect("p256 receipt signature should verify");
+
+        let mut tampered = receipt;
+        tampered.amount = "11".to_owned();
+        validate_receipt_signature(&tampered)
+            .expect_err("p256 receipt signature must bind the cash payload");
     }
 
     #[test]

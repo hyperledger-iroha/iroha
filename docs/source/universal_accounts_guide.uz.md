@@ -92,8 +92,8 @@ Aniq ma'noda:
 
 Universal hisobni ishga tushirish kanonik hisob identifikatsiya modelini o'zgartirmaydi:- `AccountId` kanonik, domensiz hisob mavzusi bo'lib qoladi.
 - `AccountAlias` qiymatlari ushbu mavzu ustidagi alohida SNS ulanishlaridir. A
-  `merchant@banka.sbp` kabi domenga tegishli taxallus va maʼlumotlar maydoni ildizi taxalluslari
-  `merchant@sbp` kabi ikkalasi ham bir xil kanonik `AccountId` ni hal qilishi mumkin.
+  `merchant@banka.paynet` kabi domenga tegishli taxallus va maʼlumotlar maydoni ildizi taxalluslari
+  `merchant@paynet` kabi ikkalasi ham bir xil kanonik `AccountId` ni hal qilishi mumkin.
 - Kanonik hisob qaydnomasi har doim `Account::new(AccountId)` /
   `NewAccount::new(AccountId)`; domenga moslashtirilgan yoki domenga moslashtirilgan yo'q
   ro'yxatga olish yo'li.

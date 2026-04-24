@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - Alias մոդելը:
   - Կանոնական հաշվի ինքնությունը երբեք չի ներառում տիրույթի կամ տվյալների տարածության հատված:
   - `AccountAlias` արժեքները առանձին SNS կապեր են՝ շերտավորված `AccountId`-ի վերևում:
-  - Դոմեյնին համապատասխանող այլանունները, ինչպիսին է `merchant@banka.sbp`, կրում են և՛ տիրույթ, և՛ տվյալների տարածություն՝ կապի անունի մեջ:
-  - Տվյալների տարածություն-արմատ կեղծանունները, ինչպիսիք են `merchant@sbp`-ը, կրում են միայն տվյալների տարածությունը և, հետևաբար, բնականաբար զուգակցվում են `Account::new(...)`-ի հետ:
+  - Դոմեյնին համապատասխանող այլանունները, ինչպիսին է `merchant@banka.paynet`, կրում են և՛ տիրույթ, և՛ տվյալների տարածություն՝ կապի անունի մեջ:
+  - Տվյալների տարածություն-արմատ կեղծանունները, ինչպիսիք են `merchant@paynet`-ը, կրում են միայն տվյալների տարածությունը և, հետևաբար, բնականաբար զուգակցվում են `Account::new(...)`-ի հետ:
   - Թեստերը և հարմարանքները պետք է նախ տեղադրեն համընդհանուր `AccountId`-ը, այնուհետև առանձին-առանձին ավելացնեն այլ անունների վարձակալություն, այլանունների թույլտվություններ և տիրույթին պատկանող ցանկացած պետություն՝ բուն հաշվի ինքնության մեջ տիրույթի ենթադրությունները կոդավորելու փոխարեն:
   - Հանրային եզակի հաշվի որոնումն այժմ կենտրոնանում է այլանունների վրա (`FindAliasesByAccountId`); հաշվի ինքնությունը ինքնին մնում է առանց տիրույթի:### Ակտիվների սահմանումներ և ակտիվներ
 - `AssetDefinitionId { aid_bytes: [u8; 16] }`-ը ցուցադրվում է տեքստային ձևով որպես առանց նախածանցի Base58 հասցե՝ տարբերակման և ստուգման գումարով:
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Միգրացիոն նշում.
 - Հին `name#domain` ակտիվների սահմանման ID-ները չեն ընդունվում v1-ում:
 - Հանրային ակտիվների ընտրիչներն օգտագործում են ակտիվների սահմանման միայն մեկ ձևաչափ՝ կանոնական Base58 ID-ներ: Փոխանունները մնում են ընտրովի ընտրիչներ, բայց լուծվում են նույն կանոնական ID-ով:

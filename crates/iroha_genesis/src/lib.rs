@@ -1688,7 +1688,7 @@ pub mod genesis_instructions_json {
                 r#"{{
                     "Register": {{
                         "account": "{account_literal}",
-                        "home_domain": "hbl.sbp",
+                        "home_domain": "hbl.paynet",
                         "spec": {{
                             "signatories": ["{account_literal}"],
                             "quorum": 1,

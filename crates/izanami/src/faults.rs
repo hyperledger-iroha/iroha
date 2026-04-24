@@ -1,7 +1,6 @@
 //! Fault-injection utilities used by Izanami to emulate Byzantine peers.
 
 use std::{
-    fs,
     io::{self, Write},
     ops::RangeInclusive,
     path::PathBuf,
@@ -56,7 +55,7 @@ pub enum FaultScenarioKind {
     SpamInvalidTransactions,
     /// Restart with exaggerated gossip delays for a short period.
     NetworkLatencySpike,
-    /// Restart with an empty trusted peer roster for a short period.
+    /// Restart with a self-only trusted peer roster for a short period.
     NetworkPartition,
     /// Burn CPU locally for a short period.
     CpuStress,
@@ -503,12 +502,15 @@ async fn network_partition<P: FaultPeer>(
         "isolating peer from trusted network"
     );
 
+    let trusted_peer = peer
+        .isolated_trusted_peer_entry()
+        .wrap_err("peer missing self trusted-peer entry required for partition restart")?;
     let trusted_peers_pop = peer
-        .trusted_peers_pop_entries()
-        .wrap_err("peer missing trusted_peers_pop roster required for partition restart")?;
+        .isolated_trusted_peers_pop_entries()
+        .wrap_err("peer missing self PoP required for partition restart")?;
     peer.shutdown().await;
     let overrides = Table::new()
-        .write(["trusted_peers"], Vec::<String>::new())
+        .write(["trusted_peers"], vec![trusted_peer])
         .write(["trusted_peers_pop"], Value::Array(trusted_peers_pop));
     let result = peer
         .restart_with_layers(config_layers, std::slice::from_ref(&overrides), genesis)
@@ -671,6 +673,16 @@ fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
     rng.random_range(start..=end)
 }
 
+fn hex_lower(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(TABLE[(byte >> 4) as usize] as char);
+        out.push(TABLE[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 /// Minimal client surface used by fault helpers that need to submit invalid traffic.
 pub trait FaultClient: Clone + Send + Sync + 'static {
     /// Submit one instruction and surface any failure to the fault harness.
@@ -703,13 +715,18 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
     fn kura_store_dir(&self) -> PathBuf;
     /// Client handle for submitting invalid traffic during a fault run.
     fn client(&self) -> Self::Client;
-    /// The peer's current trusted-peer roster expressed as TOML values.
+    /// Trusted-peer entry for the local peer while it is isolated from the rest of the network.
     ///
     /// # Errors
     ///
-    /// Returns an error when the peer configuration cannot be inspected or converted to TOML
-    /// values for the fault harness.
-    fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>>;
+    /// Returns an error when the peer cannot provide its local network identity.
+    fn isolated_trusted_peer_entry(&self) -> Result<String>;
+    /// PoP entries that remain valid when the peer is restarted in isolation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the peer cannot provide its own BLS proof-of-possession.
+    fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>>;
     /// Stop the peer process and return once shutdown has been requested.
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
     /// Restart the peer using the supplied config layers and overlay tables.
@@ -736,26 +753,26 @@ impl FaultPeer for NetworkPeer {
         NetworkPeer::client(self)
     }
 
-    fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
-        let kura_store_dir = NetworkPeer::kura_store_dir(self);
-        let config_dir = kura_store_dir
-            .parent()
-            .ok_or_else(|| eyre!("peer kura store dir is missing a parent"))?;
-        let config = fs::read_to_string(config_dir.join("config.base.toml"))
-            .wrap_err("read peer base config for trusted_peers_pop roster")?;
-        let table: Table =
-            toml::from_str(&config).wrap_err("parse peer base config for trusted_peers_pop")?;
-        let entries = table
-            .get("trusted_peers_pop")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| eyre!("peer base config missing trusted_peers_pop roster"))?;
-        if entries.is_empty() {
-            return Err(eyre!(
-                "peer base config trusted_peers_pop roster must not be empty"
-            ));
-        }
-        Ok(entries)
+    fn isolated_trusted_peer_entry(&self) -> Result<String> {
+        Ok(format!(
+            "{}@{}",
+            self.network_peer_id(),
+            self.p2p_address().to_literal()
+        ))
+    }
+
+    fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
+        let public_key = self
+            .bls_public_key()
+            .ok_or_else(|| eyre!("peer missing BLS public key"))?;
+        let pop = self
+            .bls_pop()
+            .ok_or_else(|| eyre!("peer missing BLS proof-of-possession"))?;
+        Ok(vec![Value::Table(
+            Table::new()
+                .write("public_key", public_key.to_string())
+                .write("pop_hex", format!("0x{}", hex_lower(pop))),
+        )])
     }
 
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -877,19 +894,16 @@ mod tests {
             self.client.clone()
         }
 
-        fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
-            Ok(vec![
-                Value::Table(
-                    Table::new()
-                        .write("public_key", "mock-partition-public-key")
-                        .write("pop_hex", "mock-partition-pop-hex"),
-                ),
-                Value::Table(
-                    Table::new()
-                        .write("public_key", "mock-partition-peer-2")
-                        .write("pop_hex", "mock-partition-peer-2-pop-hex"),
-                ),
-            ])
+        fn isolated_trusted_peer_entry(&self) -> Result<String> {
+            Ok("mock-partition-public-key@127.0.0.1:1337".to_string())
+        }
+
+        fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
+            Ok(vec![Value::Table(
+                Table::new()
+                    .write("public_key", "mock-partition-public-key")
+                    .write("pop_hex", "mock-partition-pop-hex"),
+            )])
         }
 
         fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -1321,17 +1335,21 @@ mod tests {
                     .get("trusted_peers")
                     .and_then(toml::Value::as_array)
                     .expect("trusted_peers array");
-                assert!(
-                    trusted.is_empty(),
-                    "partition should clear trusted peers temporarily"
+                assert_eq!(
+                    trusted
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .collect::<Vec<_>>(),
+                    vec!["mock-partition-public-key@127.0.0.1:1337"],
+                    "partition should keep only the isolated peer trusted temporarily"
                 );
                 let trusted_pop = extra_layers[0]
                     .get("trusted_peers_pop")
                     .and_then(toml::Value::as_array)
                     .expect("trusted_peers_pop array");
                 assert!(
-                    trusted_pop.len() == 2,
-                    "partition should preserve the full trusted_peers_pop roster"
+                    trusted_pop.len() == 1,
+                    "partition should preserve the isolated peer's own PoP"
                 );
                 let trusted_pop_entry = trusted_pop[0]
                     .as_table()
@@ -1347,21 +1365,6 @@ mod tests {
                         .get("pop_hex")
                         .and_then(toml::Value::as_str),
                     Some("mock-partition-pop-hex")
-                );
-                let trusted_pop_entry = trusted_pop[1]
-                    .as_table()
-                    .expect("trusted_peers_pop entry should be a table");
-                assert_eq!(
-                    trusted_pop_entry
-                        .get("public_key")
-                        .and_then(toml::Value::as_str),
-                    Some("mock-partition-peer-2")
-                );
-                assert_eq!(
-                    trusted_pop_entry
-                        .get("pop_hex")
-                        .and_then(toml::Value::as_str),
-                    Some("mock-partition-peer-2-pop-hex")
                 );
             }
             other => panic!("unexpected restart payload: {other:?}"),

@@ -66,7 +66,7 @@ public sealed class SignedQueryBuilderTests
     public void BuildSignedEncodesFindAliasesByAccountIdWithFilters()
     {
         var envelope = new SignedQueryBuilder(FixtureAccountId)
-            .FindAliasesByAccountId(FixtureAccountId, dataspace: "sbp", domain: "banka")
+            .FindAliasesByAccountId(FixtureAccountId, dataspace: "paynet", domain: "banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (singularDiscriminant, singularPayload) = ReadSingularQuery(envelope);
@@ -77,7 +77,7 @@ public sealed class SignedQueryBuilderTests
         var dataspaceOption = ReadField(structPayload[offsetAfterAccountId..], out var offsetAfterDataspace);
         var domainOption = ReadField(structPayload[(offsetAfterAccountId + offsetAfterDataspace)..], out _);
 
-        Assert.Equal("sbp", ReadOptionalString(dataspaceOption));
+        Assert.Equal("paynet", ReadOptionalString(dataspaceOption));
         Assert.Equal("banka", ReadOptionalString(domainOption));
 
         AssertSignatureVerifies(envelope);
