@@ -12084,10 +12084,11 @@ pub mod isi {
             let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
             let key = key.to_string();
             let expected_prefix = format!(
-                "pkdeploy_verified_lane_relay_{}_{}_{}_",
+                "{}_{}_{}_{}_",
+                iroha_data_model::nexus::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
                 record.relay_ref.dataspace_id.as_u64(),
                 record.relay_ref.lane_id.as_u32(),
-                record.relay_ref.block_height
+                record.relay_ref.block_height,
             );
             assert!(key.starts_with(&expected_prefix));
             assert!(!key.contains('/'));
