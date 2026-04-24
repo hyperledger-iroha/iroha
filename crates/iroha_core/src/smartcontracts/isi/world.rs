@@ -81,6 +81,7 @@ pub mod isi {
         zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     use iroha_primitives::{
+        json::Json,
         numeric::{Numeric, NumericSpec},
         unique_vec::PushResult,
     };
@@ -201,48 +202,32 @@ pub mod isi {
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
     }
 
-    const VERIFIED_LANE_RELAY_STATE_ROOT: &str = "pkdeploy/verified-lane-relays";
-
-    fn build_state_path_key(base: &Name, key: i64) -> Result<Name, Error> {
-        Name::from_str(&format!("{base}/{key}")).map_err(|_| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "invalid smart-contract state path".into(),
-            ))
-            .into()
-        })
-    }
-
-    fn build_state_path_key_norito(base: &Name, key_bytes: &[u8]) -> Result<Name, Error> {
-        let digest: [u8; 32] = CryptoHash::new(key_bytes).into();
-        let suffix = hex::encode(digest);
-        Name::from_str(&format!("{base}/{suffix}")).map_err(|_| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "invalid smart-contract state path".into(),
-            ))
-            .into()
-        })
-    }
-
     fn verified_lane_relay_state_key(relay_ref: &LaneRelayEnvelopeRef) -> Result<Name, Error> {
-        let root = Name::from_str(VERIFIED_LANE_RELAY_STATE_ROOT).expect("static state root");
-        let ds_path = build_state_path_key(
-            &root,
-            i64::try_from(relay_ref.dataspace_id.as_u64()).map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "dataspace id does not fit contract-state path".into(),
-                ))
-            })?,
-        )?;
-        let lane_path = build_state_path_key(&ds_path, i64::from(relay_ref.lane_id.as_u32()))?;
-        let block_path = build_state_path_key(
-            &lane_path,
-            i64::try_from(relay_ref.block_height).map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "block height does not fit contract-state path".into(),
-                ))
-            })?,
-        )?;
-        build_state_path_key_norito(&block_path, relay_ref.settlement_hash.as_ref())
+        let key = relay_ref.relay_state_key();
+        Name::from_str(&key).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "invalid verified lane relay state key".into(),
+            ))
+            .into()
+        })
+    }
+
+    fn encode_verified_lane_relay_record_state(
+        record: &VerifiedLaneRelayRecord,
+    ) -> Result<Vec<u8>, String> {
+        let json = Json::try_new(record.clone())
+            .map_err(|err| format!("verified lane relay JSON encode failed: {err}"))?;
+        norito::to_bytes(&json)
+            .map_err(|err| format!("verified lane relay state encode failed: {err}"))
+    }
+
+    fn decode_verified_lane_relay_record_state(
+        payload: &[u8],
+    ) -> Result<VerifiedLaneRelayRecord, String> {
+        let json: Json = norito::decode_from_bytes(payload)
+            .map_err(|err| format!("verified lane relay JSON decode failed: {err}"))?;
+        norito::json::from_slice(json.get().as_bytes())
+            .map_err(|err| format!("verified lane relay JSON materialization failed: {err}"))
     }
 
     fn load_verified_lane_relay_record(
@@ -260,7 +245,7 @@ pub mod isi {
             .smart_contract_state()
             .get(&key)
             .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)?;
-        norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload).map_err(|err| {
+        decode_verified_lane_relay_record_state(payload).map_err(|err| {
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                 "verified lane relay decode failed: {err}"
             ))
@@ -10792,20 +10777,17 @@ pub mod isi {
                 binding,
             );
             let key = verified_lane_relay_state_key(&record.relay_ref)?;
-            let encoded = norito::to_bytes(&record).map_err(|err| {
+            let encoded = encode_verified_lane_relay_record_state(&record).map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("verified lane relay encode failed: {err}"),
+                    err,
                 ))
             })?;
             if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
-                let decoded = norito::decode_from_bytes::<VerifiedLaneRelayRecord>(existing)
-                    .map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "stored verified lane relay decode failed: {err}"
-                            )),
-                        )
-                    })?;
+                let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!("stored {err}")),
+                    )
+                })?;
                 if decoded != record {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "conflicting verified lane relay already exists".into(),
@@ -12030,6 +12012,104 @@ pub mod isi {
 
         fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(2).unwrap())
+        }
+
+        fn sample_verified_lane_relay_record() -> VerifiedLaneRelayRecord {
+            let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+            let block_header = valid_block.as_ref().header().clone();
+            let manifest_root = [0x42; 32];
+            let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
+                block_height: block_header.height().get(),
+                lane_id: LaneId::new(4),
+                dataspace_id: DataSpaceId::new(12),
+                tx_count: 1,
+                total_local_micro: 1,
+                total_xor_due_micro: 76,
+                total_xor_after_haircut_micro: 76,
+                total_xor_variance_micro: 0,
+                swap_metadata: None,
+                receipts: Vec::new(),
+            };
+            let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
+                block_header,
+                None,
+                None,
+                settlement_commitment,
+                0,
+            )
+            .expect("valid envelope")
+            .with_manifest_root(Some(manifest_root));
+            let verified_at_height = Some(base_envelope.block_height);
+            let proof_digest = base_envelope.expected_fastpq_proof_digest(verified_at_height);
+            let envelope = base_envelope.with_fastpq_proof_material(Some(
+                iroha_data_model::nexus::LaneFastpqProofMaterial {
+                    proof_digest,
+                    verified_at_height,
+                },
+            ));
+            let fastpq_binding = iroha_data_model::nexus::AxtFastpqBinding {
+                parameter: "fastpq-lane-balanced".to_string(),
+                source_dsid: 12,
+                source_dataspace: "cbuae".to_string(),
+                source_receipt_id:
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                source_tx_commitment:
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                claim_type: "value_conservation".to_string(),
+                claim_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    .to_string(),
+                witness_commitment:
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+                policy_commitment:
+                    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+                verified_effect_type: "aed_to_pkr_settlement".to_string(),
+                corridor: "paynet-aed-to-pkr-interceptor".to_string(),
+                verifier_id: "fastpq".to_string(),
+                verifier_version: "v1".to_string(),
+                target_dsids: vec![10],
+                effect_binding: None,
+            };
+            VerifiedLaneRelayRecord::new(
+                envelope,
+                Hash::new(b"proof"),
+                42,
+                manifest_root,
+                fastpq_binding,
+            )
+        }
+
+        #[test]
+        fn verified_lane_relay_state_key_is_single_contract_name() {
+            let record = sample_verified_lane_relay_record();
+            let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
+            let key = key.to_string();
+            let expected_prefix = format!(
+                "{}_{}_{}_{}_",
+                iroha_data_model::nexus::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+                record.relay_ref.dataspace_id.as_u64(),
+                record.relay_ref.lane_id.as_u32(),
+                record.relay_ref.block_height,
+            );
+            assert!(key.starts_with(&expected_prefix));
+            assert!(!key.contains('/'));
+            let suffix = key.rsplit('_').next().expect("hash suffix");
+            assert_eq!(suffix.len(), 64);
+            assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+        }
+
+        #[test]
+        fn verified_lane_relay_state_encoding_is_contract_visible_json() {
+            let record = sample_verified_lane_relay_record();
+            let encoded = super::encode_verified_lane_relay_record_state(&record).expect("encode");
+            let stored_json: Json = norito::decode_from_bytes(&encoded).expect("stored JSON");
+            assert!(stored_json.get().contains("\"relay_ref\""));
+            assert!(stored_json.get().contains("\"fastpq_binding\""));
+            let decoded =
+                super::decode_verified_lane_relay_record_state(&encoded).expect("decode record");
+            assert_eq!(decoded, record);
+
+            let old_shape = norito::to_bytes(&record).expect("old record bytes");
+            assert!(super::decode_verified_lane_relay_record_state(&old_shape).is_err());
         }
 
         fn new_account_in_domain(account_id: &AccountId) -> NewAccount {

@@ -6134,12 +6134,12 @@ mod tests_permission_json {
 
     #[test]
     fn parse_custom_permission_variants_ok() {
-        let direct = parse_permission_json("\"BispAdmin\"").expect("parse direct custom");
-        assert!(matches!(direct, PermissionToken::Custom(name) if name == "BispAdmin"));
+        let direct = parse_permission_json("\"BenefitAdmin\"").expect("parse direct custom");
+        assert!(matches!(direct, PermissionToken::Custom(name) if name == "BenefitAdmin"));
 
-        let wrapped = parse_permission_json("{\"type\":\"custom\",\"name\":\"BispSpend\"}")
+        let wrapped = parse_permission_json("{\"type\":\"custom\",\"name\":\"BenefitSpend\"}")
             .expect("parse wrapped custom");
-        assert!(matches!(wrapped, PermissionToken::Custom(name) if name == "BispSpend"));
+        assert!(matches!(wrapped, PermissionToken::Custom(name) if name == "BenefitSpend"));
     }
 }
 

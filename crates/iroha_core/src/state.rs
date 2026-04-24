@@ -27267,7 +27267,7 @@ impl StateTransaction<'_, '_> {
                         .iter()
                         .find(|domain| {
                             let (name, _) = domain.split_once('.').unwrap_or((domain.as_str(), ""));
-                            matches!(name, "banka" | "bankb" | "sbp")
+                            matches!(name, "banka" | "bankb" | "paynet")
                         })
                         .cloned()
                 })
@@ -35737,7 +35737,7 @@ mod tests {
             vec![crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
                 resource: crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
                 partition_id: 4,
-                asset_definition_id: Some("pkr#sbp".to_string()),
+                asset_definition_id: Some("pkr#paynet".to_string()),
                 manifest_digest: BlobDigest::new([0x11; 32]),
                 storage_ticket: StorageTicketId::new([0x22; 32]),
                 blob_hash: BlobDigest::new([0x33; 32]),
@@ -35889,7 +35889,7 @@ mod tests {
                 1_714_002_222,
                 crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
                 7,
-                Some("pkr#sbp".to_string()),
+                Some("pkr#paynet".to_string()),
                 2,
                 b"rows".to_vec(),
             );
@@ -35924,7 +35924,7 @@ mod tests {
                 resource:
                     crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
                 partition_id: 7,
-                asset_definition_id: Some("pkr#sbp".to_string()),
+                asset_definition_id: Some("pkr#paynet".to_string()),
                 manifest_digest: BlobDigest::new([0x51; 32]),
                 storage_ticket: StorageTicketId::new([0x52; 32]),
                 blob_hash: expected_blob_hash,

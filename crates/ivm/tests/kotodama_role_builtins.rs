@@ -83,7 +83,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
 fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let src = r#"
         fn grant_it(AccountId who) {
-          grant_permission(who, name("BispSpend"));
+          grant_permission(who, name("BenefitSpend"));
         }
 
         fn main() {
@@ -110,7 +110,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     let src = r#"
         fn grant_it(AccountId who) {
           let _now = current_time_ms();
-          grant_permission(who, name("BispSpend"));
+          grant_permission(who, name("BenefitSpend"));
         }
 
         fn main() {

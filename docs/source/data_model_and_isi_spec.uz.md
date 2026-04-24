@@ -198,13 +198,13 @@ Umumiy konvert: `InstructionExecutionError` baholash xatolari, soʻrovlar xatosi
 - Parametrlarni yangilash:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` yangilanadi va `ConfigurationEvent::Changed` chiqaradi.CLI / Torii aktiv ta'rifi identifikatori + taxallusga misollar:
 - Kanonik Base58 id + aniq ism + uzun taxallus bilan ro'yxatdan o'ting:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - Kanonik Base58 identifikatori + aniq ism + qisqa taxallus bilan ro'yxatdan o'ting:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - Taxallus + hisob komponentlari bo'yicha mint:
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - Kanonik Base58 identifikatoriga taxallusni hal qiling:
-  - JSON `{ "alias": "pkr#bankb.sbp" }` bilan `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#bankb.paynet" }` bilan `POST /v1/assets/aliases/resolve`
 
 Migratsiya eslatmasi:
 - `name#domain` matnli obyekt taʼrifi identifikatorlari birinchi versiyada ataylab qoʻllab-quvvatlanmaydi; kanonik Base58 identifikatorlaridan foydalaning yoki nuqtali taxallusni hal qiling.

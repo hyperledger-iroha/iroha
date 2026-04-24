@@ -50,8 +50,8 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - Modèle d'alias :
   - L'identité canonique du compte n'inclut jamais de domaine ou de segment d'espace de données.
   - Les valeurs `AccountAlias` sont des liaisons SNS distinctes superposées à `AccountId`.
-  - Les alias qualifiés de domaine tels que `merchant@banka.sbp` transportent à la fois un domaine et un espace de données dans la liaison d'alias.
-  - Les alias racine de l'espace de données tels que `merchant@sbp` transportent uniquement l'espace de données et s'associent donc naturellement avec `Account::new(...)`.
+  - Les alias qualifiés de domaine tels que `merchant@banka.paynet` transportent à la fois un domaine et un espace de données dans la liaison d'alias.
+  - Les alias racine de l'espace de données tels que `merchant@paynet` transportent uniquement l'espace de données et s'associent donc naturellement avec `Account::new(...)`.
   - Les tests et les appareils doivent d'abord amorcer le `AccountId` universel, puis ajouter séparément les baux d'alias, les autorisations d'alias et tout état appartenant au domaine au lieu de coder les hypothèses de domaine dans l'identité du compte lui-même.
   - La recherche de comptes publics singuliers se concentre désormais sur les alias (`FindAliasesByAccountId`) ; l'identité du compte elle-même reste sans domaine.### Définitions et actifs des actifs
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` exposé textuellement sous la forme d'une adresse Base58 sans préfixe avec gestion des versions et somme de contrôle.
@@ -249,24 +249,24 @@ Référence rapide de l'identifiant de définition d'actif/alias (CLI + Torii) 
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Remarque sur la migration :
 - Les anciens ID de définition d'actif `name#domain` ne sont pas acceptés dans la v1.
 - Les sélecteurs d'actifs publics utilisent un seul format de définition d'actifs : les identifiants canoniques Base58. Les alias restent des sélecteurs facultatifs, mais se résolvent avec le même identifiant canonique.

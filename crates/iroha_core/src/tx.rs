@@ -4998,12 +4998,12 @@ pub mod tests {
             TestLaneId::SINGLE,
             LaneManifestStatus {
                 lane: TestLaneId::SINGLE,
-                alias: "sbp".to_string(),
+                alias: "paynet".to_string(),
                 dataspace: TestDataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
-                manifest_path: Some(std::path::PathBuf::from("/tmp/sbp.manifest.json")),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/paynet.manifest.json")),
                 governance_rules: Some(GovernanceRules {
                     validators: vec![validator_a.clone(), validator_b.clone()],
                     quorum: Some(2),

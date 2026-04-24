@@ -46,8 +46,8 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Alias model:
   - Canonical account identity never includes a domain or dataspace segment.
   - `AccountAlias` values are separate SNS bindings layered on top of `AccountId`.
-  - Domain-qualified aliases such as `merchant@banka.sbp` carry both a domain and dataspace in the alias binding.
-  - Dataspace-root aliases such as `merchant@sbp` carry only the dataspace and therefore pair naturally with `Account::new(...)`.
+  - Domain-qualified aliases such as `merchant@banka.paynet` carry both a domain and dataspace in the alias binding.
+  - Dataspace-root aliases such as `merchant@paynet` carry only the dataspace and therefore pair naturally with `Account::new(...)`.
   - Tests and fixtures should seed the universal `AccountId` first, then add alias leases, alias permissions, and any domain-owned state separately instead of encoding domain assumptions into the account identity itself.
   - Public singular account lookup now focuses on aliases (`FindAliasesByAccountId`); account identity itself stays domainless.
 
@@ -266,24 +266,24 @@ Asset-definition id / alias quick reference (CLI + Torii):
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```
 
 Migration note:

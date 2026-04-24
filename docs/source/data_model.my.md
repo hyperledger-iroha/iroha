@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - Alias မော်ဒယ်
   - Canonical အကောင့်အထောက်အထားတွင် domain သို့မဟုတ် dataspace အပိုင်း ဘယ်သောအခါမှ မပါဝင်ပါ။
   - `AccountAlias` တန်ဖိုးများသည် `AccountId` ၏ထိပ်တွင် သီးခြား SNS ချည်နှောင်မှု အလွှာများဖြစ်သည်။
-  - `merchant@banka.sbp` ကဲ့သို့သော ဒိုမိန်းအရည်အချင်းပြည့်မီသော aliases များသည် alias binding တွင် domain တစ်ခုနှင့် dataspace နှစ်ခုလုံးကို သယ်ဆောင်သည်။
-  - `merchant@sbp` ကဲ့သို့သော Dataspace-root aliases များသည် dataspace ကိုသာသယ်ဆောင်သောကြောင့် `Account::new(...)` နှင့် သဘာဝကျကျတွဲဖက်ပါ။
+  - `merchant@banka.paynet` ကဲ့သို့သော ဒိုမိန်းအရည်အချင်းပြည့်မီသော aliases များသည် alias binding တွင် domain တစ်ခုနှင့် dataspace နှစ်ခုလုံးကို သယ်ဆောင်သည်။
+  - `merchant@paynet` ကဲ့သို့သော Dataspace-root aliases များသည် dataspace ကိုသာသယ်ဆောင်သောကြောင့် `Account::new(...)` နှင့် သဘာဝကျကျတွဲဖက်ပါ။
   - စမ်းသပ်မှုများနှင့် တပ်ဆင်မှုများသည် universal `AccountId` ကို ဦးစွာ စေ့စပ်ထားပြီး၊ ထို့နောက် အမည်တူငှားရမ်းမှုများ၊ အမည်တူခွင့်ပြုချက်များနှင့် မည်သည့်ဒိုမိန်းပိုင်ဆိုင်သည့်ပြည်နယ်ကိုမဆို အကောင့်အထောက်အထားကိုယ်တိုင်ကုဒ်သွင်းမည့်အစား ဒိုမိန်း၏ယူဆချက်များအား သီးခြားစီထည့်သွင်းသင့်သည်။
   - ယခု အများသူငှာ အကောင့်ရှာဖွေမှုသည် နာမည်တူများ (`FindAliasesByAccountId`) ကို အာရုံစိုက်ထားသည်။ အကောင့်အထောက်အထားကိုယ်တိုင်က domainless ဖြစ်နေပါတယ်။### ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်များနှင့် ပိုင်ဆိုင်မှုများ
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` ကို ဗားရှင်းရေးဆွဲခြင်းနှင့် checksum ဖြင့် ရှေ့မဆက်သော Base58 လိပ်စာအဖြစ် စာသားအတိုင်း ဖော်ထုတ်ထားသည်။
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```ပြောင်းရွှေ့မှုမှတ်စု-
 - `name#domain` ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက် ID အဟောင်းများကို v1 တွင် လက်မခံပါ။
 - အများသူငှာ ပိုင်ဆိုင်မှုရွေးချယ်သူများသည် ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက်ဖော်မတ်တစ်ခုသာ အသုံးပြုသည်- canonical Base58 ids။ နာမည်တူများသည် စိတ်ကြိုက်ရွေးချယ်ခွင့်များ ရှိနေသော်လည်း တူညီသော canonical id ကို ဖြေရှင်းပါ။

@@ -985,7 +985,7 @@ seiyaku JsonAssetDefinitionTest {
     fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = Compiler::new();
         let bytes = compiler
-            .compile_source(r#"fn main() { let _acct = account_id("merchant@sbp"); }"#)
+            .compile_source(r#"fn main() { let _acct = account_id("merchant@paynet"); }"#)
             .expect("compile alias shorthand");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -1005,7 +1005,7 @@ seiyaku JsonAssetDefinitionTest {
     fn account_id_domain_qualified_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = Compiler::new();
         let bytes = compiler
-            .compile_source(r#"fn main() { let _acct = account_id("merchant@bank.sbp"); }"#)
+            .compile_source(r#"fn main() { let _acct = account_id("merchant@bank.paynet"); }"#)
             .expect("compile domain-qualified alias shorthand");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -1025,7 +1025,9 @@ seiyaku JsonAssetDefinitionTest {
     fn resolve_account_alias_builtin_emits_syscall() {
         let compiler = Compiler::new();
         let bytes = compiler
-            .compile_source(r#"fn main() { let _acct = resolve_account_alias("merchant@sbp"); }"#)
+            .compile_source(
+                r#"fn main() { let _acct = resolve_account_alias("merchant@paynet"); }"#,
+            )
             .expect("compile builtin alias resolution");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
@@ -1066,7 +1068,7 @@ seiyaku JsonAssetDefinitionTest {
         let compiler = Compiler::new();
         let bytes = compiler
             .compile_source(
-                r#"fn main() { let _acct = resolve_account_alias("merchant@bank.sbp"); }"#,
+                r#"fn main() { let _acct = resolve_account_alias("merchant@bank.paynet"); }"#,
             )
             .expect("compile domain-qualified builtin alias resolution");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
@@ -1917,7 +1919,7 @@ seiyaku Test {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@sbp"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
         let compiler = Compiler::new();
@@ -1975,7 +1977,7 @@ seiyaku Test {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank.sbp"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), account_id("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
         let compiler = Compiler::new();
@@ -2034,7 +2036,7 @@ seiyaku Test {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@sbp"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
         let compiler = Compiler::new();
@@ -2093,7 +2095,7 @@ seiyaku Test {
         let from_literal = sample_account_literal();
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
-            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank.sbp"), asset_definition("{asset_literal}"), 1); }}"#
+            r#"fn main() {{ transfer_asset(account_id("{from_literal}"), resolve_account_alias("merchant@bank.paynet"), asset_definition("{asset_literal}"), 1); }}"#
         );
 
         let compiler = Compiler::new();

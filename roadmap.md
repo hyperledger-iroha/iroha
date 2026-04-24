@@ -6,6 +6,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
+- Carry the verified lane relay JSON-state/key change through the next UC6 integration corridor.
+  - The focused crate checks are green as of 2026-04-24, but no live UC6 settlement-smoke run or topology reset has been performed from this tree.
+  - Before any live deployment, confirm the deploy/Core API smoke path still uses `relay_state_key`, JSON relay state, and the simulation gate against the exact finalization payload.
+  - If a topology plan selects reset mode while validating this change, stop before approval and reassess the rollout scope.
 - Carry the Torii routed-read and telemetry fixes through the next workspace validation corridor.
   - The crate-local sweep is green as of 2026-04-24 with `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`.
   - When validation budget allows, carry the alias-routing and Torii telemetry slices through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
@@ -27,9 +31,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Close the exact-reproduction gaps in the Izanami communication vulnerability matrix.
   - Add a timed fault scheduler that can reproduce the paper's 133s-266s injection window instead of relying only on randomized Izanami fault-loop timing.
   - Add an OS `netem` or in-process P2P packet-drop injector so the `packet-loss` scenario can run 25%, 50%, and 75% loss between selected peer groups.
-  - Fix the current partition/restart fault path so Izanami peers always have a restartable `trusted_peers_pop` roster; the 2026-04-24 quick run reported `peer missing trusted_peers_pop roster required for partition restart` in both `packet-loss` and `leader-isolation`.
+  - Replace the current self-only trusted-peer restart approximation with a network-level relay/proxy partition so packet loss and isolation do not mutate the peer's validator view while simulating communication loss.
   - Wire Sumeragi proposer/leader telemetry into the `leader-isolation` scenario so Izanami isolates the active proposer rather than a fixed selected peer.
-  - Rerun at least quick mode on a host that permits local loopback socket binds; the 2026-04-24 sandbox run was blocked before node startup by `Operation not permitted` on `127.0.0.1:30000`.
+  - Rerun a single all-scenario quick matrix on the current tree when a fresh combined artifact is needed for publication; the two fixed quick-only reruns are already recorded in `status.md`.
   - After those exact injectors land, run `scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper` and record Iroha's classification against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.
 - Rerun the permissioned preserved-peer stable envelope with fresh binaries from the current tree.
   - Build fresh `izanami` / `iroha3d` binaries instead of reusing prior artifacts.

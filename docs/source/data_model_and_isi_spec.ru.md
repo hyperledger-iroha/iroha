@@ -198,13 +198,13 @@ translator: machine-google-reviewed
 - Обновление параметров:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` обновляет и выдает `ConfigurationEvent::Changed`.CLI/Torii идентификатор определения актива + примеры псевдонимов:
 - Зарегистрируйтесь с каноническим идентификатором Base58 + явным именем + длинным псевдонимом:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - Зарегистрируйтесь с каноническим идентификатором Base58 + явным именем + коротким псевдонимом:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - Mint по псевдониму + компоненты аккаунта:
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - Преобразовать псевдоним в канонический идентификатор Base58:
-  - `POST /v1/assets/aliases/resolve` с JSON `{ "alias": "pkr#bankb.sbp" }`
+  - `POST /v1/assets/aliases/resolve` с JSON `{ "alias": "pkr#bankb.paynet" }`
 
 Примечание по миграции:
 — Текстовые идентификаторы определения активов `name#domain` намеренно не поддерживаются в первом выпуске; используйте канонические идентификаторы Base58 или разрешайте псевдонимы с точками.

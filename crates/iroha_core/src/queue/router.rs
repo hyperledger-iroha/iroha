@@ -3673,7 +3673,7 @@ mod tests {
     fn matches_dataspace_root_account_alias_scope_rule() {
         let (dataspace_id, dataspace_keypair) = gen_account_in("wonderland");
         let (domain_id, domain_keypair) = gen_account_in("wonderland");
-        let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "sbp")]);
+        let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "paynet")]);
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -3682,7 +3682,7 @@ mod tests {
                 lane: LaneId::new(1),
                 dataspace: Some(DataSpaceId::new(10)),
                 matcher: LaneRoutingMatcher {
-                    account: Some("*@sbp".to_string()),
+                    account: Some("*@paynet".to_string()),
                     instruction: None,
                     description: None,
                 },
@@ -3699,7 +3699,7 @@ mod tests {
             &dataspace_id,
             dataspace_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                DomainId::try_new("sbp-match", "universal").expect("domain id"),
+                DomainId::try_new("paynet-match", "universal").expect("domain id"),
             )))],
         );
         let domain_tx = sample_transaction(
@@ -3712,10 +3712,13 @@ mod tests {
 
         let state = state_with_account_aliases(
             &[
-                (dataspace_id.clone(), account_alias("issuer@sbp", &catalog)),
+                (
+                    dataspace_id.clone(),
+                    account_alias("issuer@paynet", &catalog),
+                ),
                 (
                     domain_id.clone(),
-                    account_alias("operator@banka.sbp", &catalog),
+                    account_alias("operator@banka.paynet", &catalog),
                 ),
             ],
             catalog,
@@ -3736,7 +3739,7 @@ mod tests {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
-        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
         let state_lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
@@ -3749,7 +3752,7 @@ mod tests {
                 lane: lane_id,
                 dataspace: Some(dataspace_id),
                 matcher: LaneRoutingMatcher {
-                    account: Some("*@sbp".to_string()),
+                    account: Some("*@paynet".to_string()),
                     instruction: None,
                     description: None,
                 },
@@ -3773,7 +3776,7 @@ mod tests {
         let state = state_with_account_aliases(
             &[(
                 authority_id.clone(),
-                account_alias("operator@sbp", &catalog),
+                account_alias("operator@paynet", &catalog),
             )],
             catalog,
         );
@@ -3789,7 +3792,7 @@ mod tests {
     #[test]
     fn legacy_bare_domain_account_scope_does_not_match() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "sbp")]);
+        let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "paynet")]);
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -3821,7 +3824,7 @@ mod tests {
         let state = state_with_account_aliases(
             &[(
                 authority_id.clone(),
-                account_alias("operator@banka.sbp", &catalog),
+                account_alias("operator@banka.paynet", &catalog),
             )],
             catalog,
         );
@@ -4403,7 +4406,7 @@ mod tests {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
         let (holder_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
-        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -4412,7 +4415,7 @@ mod tests {
                 lane: LaneId::new(1),
                 dataspace: Some(dataspace_id),
                 matcher: LaneRoutingMatcher {
-                    account: Some("*@hbl.sbp".to_string()),
+                    account: Some("*@hbl.paynet".to_string()),
                     instruction: None,
                     description: None,
                 },
@@ -4426,7 +4429,7 @@ mod tests {
 
         let permission = Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Domain(
-                DomainId::try_new("hbl", "sbp").expect("domain id"),
+                DomainId::try_new("hbl", "paynet").expect("domain id"),
             ),
         });
         let tx = sample_transaction(
@@ -4453,11 +4456,11 @@ mod tests {
                 .expect("scope hierarchy"),
             BTreeMap::from([(
                 dataspace_id,
-                BTreeSet::from([DomainId::try_new("hbl", "sbp").expect("domain id")]),
+                BTreeSet::from([DomainId::try_new("hbl", "paynet").expect("domain id")]),
             )])
         );
         assert!(account_matches_alias_scope(
-            "hbl.sbp",
+            "hbl.paynet",
             &holder_id,
             &state_view
         ));

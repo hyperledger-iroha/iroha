@@ -1173,15 +1173,15 @@ mod tests {
             vec![
                 row(&[
                     ("id", Value::from("a")),
-                    ("primary_alias_domain", Value::from("hbl.sbp")),
+                    ("primary_alias_domain", Value::from("hbl.paynet")),
                 ]),
                 row(&[
                     ("id", Value::from("b")),
-                    ("primary_alias_domain", Value::from("hbl.sbp")),
+                    ("primary_alias_domain", Value::from("hbl.paynet")),
                 ]),
                 row(&[
                     ("id", Value::from("a")),
-                    ("primary_alias_domain", Value::from("hbl.sbp")),
+                    ("primary_alias_domain", Value::from("hbl.paynet")),
                 ]),
             ],
             100,
@@ -1223,15 +1223,15 @@ mod tests {
             vec![
                 row(&[
                     ("id", Value::from("a")),
-                    ("primary_alias_domain", Value::from("hbl.sbp")),
+                    ("primary_alias_domain", Value::from("hbl.paynet")),
                 ]),
                 row(&[
                     ("id", Value::from("b")),
-                    ("primary_alias_domain", Value::from("hbl.sbp")),
+                    ("primary_alias_domain", Value::from("hbl.paynet")),
                 ]),
                 row(&[
                     ("id", Value::from("c")),
-                    ("primary_alias_domain", Value::from("ubl.sbp")),
+                    ("primary_alias_domain", Value::from("ubl.paynet")),
                 ]),
             ],
             100,
@@ -1242,7 +1242,7 @@ mod tests {
         assert_eq!(payload["total"].as_u64(), Some(1));
         assert_eq!(
             payload["items"][0]["primary_alias_domain"].as_str(),
-            Some("hbl.sbp")
+            Some("hbl.paynet")
         );
     }
 
