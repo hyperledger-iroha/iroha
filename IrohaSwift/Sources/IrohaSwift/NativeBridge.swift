@@ -5158,6 +5158,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func applyAccelerationSettings(_ settings: AccelerationSettings) {
         #if canImport(Darwin)
+        guard isAvailable else {
+            return
+        }
         guard let setAccelerationConfigFn else {
             preconditionFailure("Required native symbol missing: connect_norito_set_acceleration_config")
         }
@@ -5202,6 +5205,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func currentAccelerationSettings() -> AccelerationSettings? {
         #if canImport(Darwin)
+        guard isAvailable else {
+            return nil
+        }
         guard let getAccelerationConfigFn else {
             preconditionFailure("Required native symbol missing: connect_norito_get_acceleration_config")
         }
@@ -5236,6 +5242,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func currentAccelerationState() -> AccelerationState? {
         #if canImport(Darwin)
+        guard isAvailable else {
+            return nil
+        }
         guard let getAccelerationStateFn else {
             preconditionFailure("Required native symbol missing: connect_norito_get_acceleration_state")
         }

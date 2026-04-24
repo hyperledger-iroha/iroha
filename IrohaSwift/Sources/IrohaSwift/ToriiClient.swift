@@ -13745,18 +13745,47 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func waitForTerminalTransactionStatusEvent(hashHex: String,
                                                       timeout: TimeInterval = 5) async throws -> ToriiPipelineTransactionEvent {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
-        let pollOptions = PipelineStatusPollOptions(
-            pollInterval: 0.5,
-            timeout: max(timeout, 0),
-            successStates: [.committed, .applied, .rejected, .expired],
-            failureStates: []
-        )
-        let snapshot = try await waitForTransactionStatus(
-            hashHex: normalizedHash,
-            pollOptions: pollOptions,
-            mode: .pipeline
-        )
-        return ToriiPipelineTransactionEvent(snapshot: snapshot, hashHex: normalizedHash)
+        if let snapshot = try await getTransactionStatus(hashHex: normalizedHash, mode: .pipeline) {
+            let event = ToriiPipelineTransactionEvent(snapshot: snapshot, hashHex: normalizedHash)
+            if event.state.isTerminalSuccess || event.state.isTerminalFailure {
+                return event
+            }
+        }
+
+        return try await withThrowingTaskGroup(of: ToriiPipelineTransactionEvent.self) { group in
+            group.addTask { [self] in
+                for try await event in streamTransactionStatusEvents(hashHex: normalizedHash) {
+                    guard event.hash == normalizedHash else {
+                        continue
+                    }
+                    if event.state.isTerminalSuccess || event.state.isTerminalFailure {
+                        return event
+                    }
+                }
+                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+            }
+
+            let normalizedTimeout = max(timeout, 0)
+            if normalizedTimeout > 0 {
+                group.addTask {
+                    let nanosDouble = normalizedTimeout * 1_000_000_000
+                    let clamped = min(max(nanosDouble, 0), Double(UInt64.max))
+                    try await Task.sleep(nanoseconds: UInt64(clamped))
+                    throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+                }
+            }
+
+            do {
+                guard let event = try await group.next() else {
+                    throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+                }
+                group.cancelAll()
+                return event
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
     }
 
     public func getPipelineRecovery(height: UInt64) async throws -> ToriiPipelineRecovery? {

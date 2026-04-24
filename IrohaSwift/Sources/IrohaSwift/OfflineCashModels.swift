@@ -853,7 +853,7 @@ public enum ToriiOfflineCashCodec {
 
     public static func verifyReceiptSignature(_ receipt: ToriiOfflineTransferReceipt) throws {
         try verifySignature(
-            payload: transferReceiptUnsignedPayload(receipt),
+            payload: cashTransferReceiptUnsignedPayload(receipt),
             signatureBase64: receipt.senderSignatureBase64,
             publicKeyBase64: receipt.offlinePublicKey
         )
@@ -916,9 +916,9 @@ public enum ToriiOfflineCashCodec {
         )
     }
 
-    public static func transferReceiptUnsignedPayload(_ receipt: ToriiOfflineTransferReceipt) throws -> Data {
+    public static func cashTransferReceiptUnsignedPayload(_ receipt: ToriiOfflineTransferReceipt) throws -> Data {
         try canonicalData(
-            TransferReceiptUnsignedPayload(
+            CashTransferReceiptUnsignedPayload(
                 version: receipt.version,
                 transferId: receipt.transferId,
                 direction: receipt.direction.rawValue,
@@ -938,7 +938,21 @@ public enum ToriiOfflineCashCodec {
                 counterpartyDeviceId: receipt.counterpartyDeviceId,
                 counterpartyOfflinePublicKey: receipt.counterpartyOfflinePublicKey,
                 amount: try canonicalAmountString(receipt.amount),
-                authorization: receipt.authorization,
+                authorization: try receipt.authorization.map { authorization in
+                    CashTransferReceiptAuthorizationPayload(
+                        authorizationId: authorization.authorizationId,
+                        lineageId: authorization.lineageId,
+                        accountId: authorization.accountId,
+                        verdictId: authorization.verdictId,
+                        policyMaxBalance: try canonicalAmountString(authorization.policyMaxBalance),
+                        policyMaxTxValue: try canonicalAmountString(authorization.policyMaxTxValue),
+                        issuedAtMs: authorization.issuedAtMs,
+                        refreshAtMs: authorization.refreshAtMs,
+                        expiresAtMs: authorization.expiresAtMs,
+                        deviceBinding: authorization.deviceBinding,
+                        issuerSignatureBase64: authorization.issuerSignatureBase64
+                    )
+                },
                 attestation: TransferReceiptAttestationPayload(
                     keyId: receipt.deviceProof.attestationKeyId,
                     counter: receipt.deviceProof.counter ?? 0,
@@ -1035,7 +1049,35 @@ private extension ToriiOfflineCashCodec {
         }
     }
 
-    struct TransferReceiptUnsignedPayload: Encodable {
+    struct CashTransferReceiptAuthorizationPayload: Encodable {
+        let authorizationId: String
+        let lineageId: String
+        let accountId: String
+        let verdictId: String
+        let policyMaxBalance: String
+        let policyMaxTxValue: String
+        let issuedAtMs: UInt64
+        let refreshAtMs: UInt64
+        let expiresAtMs: UInt64
+        let deviceBinding: ToriiOfflineDeviceBinding
+        let issuerSignatureBase64: String
+
+        enum CodingKeys: String, CodingKey {
+            case authorizationId = "authorization_id"
+            case lineageId = "lineage_id"
+            case accountId = "account_id"
+            case verdictId = "verdict_id"
+            case policyMaxBalance = "max_balance"
+            case policyMaxTxValue = "max_tx_value"
+            case issuedAtMs = "issued_at_ms"
+            case refreshAtMs = "refresh_at_ms"
+            case expiresAtMs = "expires_at_ms"
+            case deviceBinding = "device_binding"
+            case issuerSignatureBase64 = "issuer_signature_base64"
+        }
+    }
+
+    struct CashTransferReceiptUnsignedPayload: Encodable {
         let version: Int
         let transferId: String
         let direction: String
@@ -1055,7 +1097,7 @@ private extension ToriiOfflineCashCodec {
         let counterpartyDeviceId: String
         let counterpartyOfflinePublicKey: String
         let amount: String
-        let authorization: ToriiOfflineSpendAuthorization?
+        let authorization: CashTransferReceiptAuthorizationPayload?
         let attestation: TransferReceiptAttestationPayload
         let sourcePayload: String?
         let createdAtMs: UInt64
