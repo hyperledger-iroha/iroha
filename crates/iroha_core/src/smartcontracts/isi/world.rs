@@ -10793,12 +10793,10 @@ pub mod isi {
             })?;
             if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
                 let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "stored {err}"
-                            )),
-                        )
-                    })?;
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!("stored {err}")),
+                    )
+                })?;
                 if decoded != record {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "conflicting verified lane relay already exists".into(),
@@ -12062,17 +12060,17 @@ pub mod isi {
                 parameter: "fastpq-lane-balanced".to_string(),
                 source_dsid: 12,
                 source_dataspace: "cbuae".to_string(),
-                source_receipt_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .to_string(),
-                source_tx_commitment: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
+                source_receipt_id:
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                source_tx_commitment:
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
                 claim_type: "value_conservation".to_string(),
                 claim_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                     .to_string(),
-                witness_commitment: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-                    .to_string(),
-                policy_commitment: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-                    .to_string(),
+                witness_commitment:
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+                policy_commitment:
+                    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
                 verified_effect_type: "aed_to_pkr_settlement".to_string(),
                 corridor: "sbp-aed-to-pkr-interceptor".to_string(),
                 verifier_id: "fastpq".to_string(),
@@ -12094,7 +12092,14 @@ pub mod isi {
             let record = sample_verified_lane_relay_record();
             let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
             let key = key.to_string();
-            assert!(key.starts_with("pkdeploy_verified_lane_relay_12_4_1_"));
+            let expected_prefix = format!(
+                "{}_{}_{}_{}_",
+                super::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+                record.relay_ref.dataspace_id.as_u64(),
+                record.relay_ref.lane_id.as_u32(),
+                record.relay_ref.block_height,
+            );
+            assert!(key.starts_with(&expected_prefix));
             assert!(!key.contains('/'));
             let suffix = key.rsplit('_').next().expect("hash suffix");
             assert_eq!(suffix.len(), 64);
