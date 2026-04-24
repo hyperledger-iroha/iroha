@@ -79005,8 +79005,10 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
     let actor = &mut harness.actor;
     actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
     let _guard = super::status::view_change_cause_test_guard();
+    let _worker_guard = super::status::worker_queue_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
     seed_genesis_block_for_state(&actor.state);
     while harness.background_rx.try_recv().is_ok() {}
 
@@ -79023,29 +79025,31 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
     let base_roster = actor.effective_commit_topology();
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
-    let search_limit = u64::try_from(base_roster.len().saturating_mul(8))
-        .unwrap_or(0)
-        .max(1);
-    let (current_view, roster) = (0..base_roster.len())
-        .find_map(|rotate_by| {
-            let mut candidate = base_roster.clone();
-            candidate.rotate_left(rotate_by);
-            {
-                let mut topo_block = actor.state.commit_topology.block();
-                topo_block.mutate_vec(|vec| *vec = candidate.clone());
-                topo_block.commit();
+    let current_view = 0_u64;
+    let roster = (0..64_u64)
+        .scan(base_roster.clone(), |candidate, extra_idx| {
+            if extra_idx > 0 {
+                let port = 32_000_u16
+                    .saturating_add(u16::try_from(extra_idx).expect("extra peer index fits u16"));
+                let addr = format!("127.0.0.1:{port}");
+                let (peer, _pop, _kp) =
+                    bls_peer_with_seed_salt(&addr, 10_000_u64.saturating_add(extra_idx));
+                if !candidate.iter().any(|existing| existing == peer.id()) {
+                    candidate.push(peer.id().clone());
+                }
             }
-            (0..search_limit).find_map(|candidate_view| {
-                let mut signature_topology =
-                    super::network_topology::Topology::new(actor.effective_commit_topology());
-                let leader_index = actor
-                    .leader_index_for(&mut signature_topology, height, candidate_view)
-                    .ok()?;
-                let local_signature_pos = signature_topology.position(local_peer.public_key())?;
-                (local_signature_pos != leader_index).then_some((candidate_view, candidate.clone()))
-            })
+            let mut signature_topology = super::network_topology::Topology::new(candidate.clone());
+            let leader_index = actor
+                .leader_index_for(&mut signature_topology, height, current_view)
+                .expect("leader index");
+            let local_signature_pos = signature_topology
+                .position(local_peer.public_key())
+                .expect("local position");
+            Some((local_signature_pos != leader_index).then(|| candidate.clone()))
         })
-        .expect("find topology/view where local peer is a non-leader");
+        .flatten()
+        .next()
+        .expect("find view-0 roster where local peer is a non-leader");
     {
         let mut topo_block = actor.state.commit_topology.block();
         topo_block.mutate_vec(|vec| *vec = roster.clone());
@@ -79134,6 +79138,7 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -105862,6 +105867,7 @@ async fn later_view_block_created_becomes_passive_when_frontier_owner_only_has_c
 #[tokio::test(flavor = "current_thread")]
 async fn later_view_block_created_conflicts_with_stale_frontier_owner_backed_only_by_old_vote_history()
  {
+    let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -121793,6 +121799,9 @@ async fn zero_vote_quorum_timeout_does_not_drop_while_same_slot_ingress_backlog_
 
 #[tokio::test(flavor = "current_thread")]
 async fn zero_vote_quorum_timeout_defers_drop_when_progress_is_recent() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     super::status::reset_view_change_cause_counters_for_tests();
@@ -121847,6 +121856,7 @@ async fn zero_vote_quorum_timeout_defers_drop_when_progress_is_recent() {
     );
 
     harness.shutdown.send();
+    super::status::reset_worker_loop_snapshot_for_tests();
 }
 
 #[tokio::test(flavor = "current_thread")]
