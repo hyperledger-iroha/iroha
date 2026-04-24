@@ -331,10 +331,10 @@ mod tests {
             7,
             vec![QueryProjectionAccountRow {
                 account_id: "alice@wonderland".to_owned(),
-                primary_alias: Some("alice@hbl.sbp".to_owned()),
+                primary_alias: Some("alice@hbl.paynet".to_owned()),
                 primary_alias_name: Some("alice".to_owned()),
-                primary_alias_dataspace: Some("sbp".to_owned()),
-                primary_alias_domain: Some("hbl.sbp".to_owned()),
+                primary_alias_dataspace: Some("paynet".to_owned()),
+                primary_alias_domain: Some("hbl.paynet".to_owned()),
                 has_primary_alias: true,
             }],
         ));
@@ -354,23 +354,23 @@ mod tests {
         let rowset =
             QueryProjectionShardRowSet::AssetHolders(QueryProjectionAssetHoldersShardRowSet::new(
                 9,
-                "pkr#sbp".to_owned(),
-                Some("pkr@sbp".to_owned()),
+                "pkr#paynet".to_owned(),
+                Some("pkr@paynet".to_owned()),
                 vec![QueryProjectionAssetHolderRow {
                     account_id: "alice@wonderland".to_owned(),
                     scope: "global".to_owned(),
                     quantity: Numeric::new(123_45, 2),
-                    primary_alias: Some("alice@hbl.sbp".to_owned()),
+                    primary_alias: Some("alice@hbl.paynet".to_owned()),
                     primary_alias_name: Some("alice".to_owned()),
-                    primary_alias_dataspace: Some("sbp".to_owned()),
-                    primary_alias_domain: Some("hbl.sbp".to_owned()),
+                    primary_alias_dataspace: Some("paynet".to_owned()),
+                    primary_alias_domain: Some("hbl.paynet".to_owned()),
                     has_primary_alias: true,
                 }],
             ));
 
         assert_eq!(rowset.resource(), QueryProjectionResourceKind::AssetHolders);
         assert_eq!(rowset.partition_id(), 9);
-        assert_eq!(rowset.asset_definition_id(), Some("pkr#sbp"));
+        assert_eq!(rowset.asset_definition_id(), Some("pkr#paynet"));
         assert_eq!(rowset.row_count(), 1);
     }
 
@@ -383,7 +383,7 @@ mod tests {
                     account_id: "alice@wonderland".to_owned(),
                     asset: "pkr#wonderland".to_owned(),
                     asset_name: "pkr".to_owned(),
-                    asset_alias: Some("pkr@sbp".to_owned()),
+                    asset_alias: Some("pkr@paynet".to_owned()),
                     scope: "global".to_owned(),
                     quantity: Numeric::new(42, 0),
                     primary_alias: None,
@@ -415,8 +415,8 @@ mod tests {
                 vec![QueryProjectionAssetDefinitionRow {
                     id: "pkr#wonderland".to_owned(),
                     name: "pkr".to_owned(),
-                    alias: Some("pkr@sbp".to_owned()),
-                    alias_binding_alias: Some("pkr@sbp".to_owned()),
+                    alias: Some("pkr@paynet".to_owned()),
+                    alias_binding_alias: Some("pkr@paynet".to_owned()),
                     alias_binding_status: Some("active".to_owned()),
                     alias_binding_lease_expiry_ms: Some(1_800_000_000_000),
                     alias_binding_grace_until_ms: None,

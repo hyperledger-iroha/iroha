@@ -12129,7 +12129,7 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_scalar_json_decodes_direct_norito_json_payloads() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
-            "{\"tranche_id\":\"bisp-1\",\"beneficiary_account_id\":\"i105-user\"}",
+            "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
@@ -12140,7 +12140,7 @@ mod contract_state_tests {
         .expect("decode direct json");
 
         let mut expected = Map::new();
-        expected.insert("tranche_id".into(), Value::from("bisp-1"));
+        expected.insert("tranche_id".into(), Value::from("benefit-1"));
         expected.insert("beneficiary_account_id".into(), Value::from("i105-user"));
         assert_eq!(decoded, Value::Object(expected));
     }
@@ -15171,7 +15171,7 @@ fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 }
 
 #[cfg(feature = "app_api")]
-const MULTISIG_PACS009_MARKER_PREFIX: &str = "SBP_PACS009_MINT_V1:";
+const MULTISIG_PACS009_MARKER_PREFIX: &str = "PAYNET_PACS009_MINT_V1:";
 #[cfg(feature = "app_api")]
 const MULTISIG_PACS009_MINT_OPERATION_TYPE: &str = "ISO20022_PACS009_MINT";
 
@@ -15331,7 +15331,9 @@ fn multisig_execute_trigger_is_issuance_swap(
         && !trigger_id
             .trim()
             .eq_ignore_ascii_case("issuance_swap_centralbank")
-        && !trigger_id.trim().eq_ignore_ascii_case("issuance_swap_sbp")
+        && !trigger_id
+            .trim()
+            .eq_ignore_ascii_case("issuance_swap_paynet")
     {
         return false;
     }
@@ -40421,10 +40423,16 @@ mod app_api_integration_tests {
 
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.paynet")
+        );
         assert_eq!(items[0]["user_count"].as_u64(), Some(2));
         assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.paynet")
+        );
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
     }
@@ -40445,10 +40453,16 @@ mod app_api_integration_tests {
 
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.paynet")
+        );
         assert_eq!(items[0]["user_count"].as_u64(), Some(2));
         assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.paynet")
+        );
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
         clear_query_projection_archive_cache_for_tests();
@@ -40486,10 +40500,16 @@ mod app_api_integration_tests {
         assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
         let items = parsed["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0]["primary_alias_domain"].as_str(), Some("hbl.sbp"));
+        assert_eq!(
+            items[0]["primary_alias_domain"].as_str(),
+            Some("hbl.paynet")
+        );
         assert_eq!(items[0]["user_count"].as_u64(), Some(2));
         assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(items[1]["primary_alias_domain"].as_str(), Some("ubl.sbp"));
+        assert_eq!(
+            items[1]["primary_alias_domain"].as_str(),
+            Some("ubl.paynet")
+        );
         assert_eq!(items[1]["user_count"].as_u64(), Some(1));
         assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
         clear_query_projection_archive_cache_for_tests();
@@ -40721,7 +40741,7 @@ mod app_api_integration_tests {
         let pkr_definition = AssetDefinition::numeric(pkr_def.clone())
             .with_name("pkr".to_owned())
             .build(&alice_id);
-        let sbp_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
+        let paynet_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
         let assets = vec![
             Asset::new(
                 AssetId::new(pkr_def.clone(), alice_id.clone()),
@@ -40731,7 +40751,7 @@ mod app_api_integration_tests {
                 AssetId::with_scope(
                     pkr_def.clone(),
                     alice_id.clone(),
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(sbp_dataspace_id),
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(paynet_dataspace_id),
                 ),
                 Numeric::from(3_u32),
             ),
@@ -40779,13 +40799,13 @@ mod app_api_integration_tests {
         let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: sbp_dataspace_id,
-                alias: "sbp".to_owned(),
+                id: paynet_dataspace_id,
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
         ])
-        .expect("sbp dataspace catalog");
+        .expect("paynet dataspace catalog");
         Arc::get_mut(&mut state)
             .expect("unique state")
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -40793,13 +40813,13 @@ mod app_api_integration_tests {
                 dataspace_catalog,
                 ..iroha_config::parameters::actual::Nexus::default()
             })
-            .expect("install sbp nexus config");
-        bind_permanent_asset_alias_for_test(&state, &alice_id, &pkr_def, "pkr#sbp");
-        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.sbp");
-        bind_account_alias_for_test(&state, &bob_id, "bilal@hbl.sbp");
-        bind_account_alias_for_test(&state, &ubl_user_id, "amir@ubl.sbp");
-        bind_account_alias_for_test(&state, &hbl_settlement_id, "cbdc@hbl.sbp");
-        bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.sbp");
+            .expect("install paynet nexus config");
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &pkr_def, "pkr#paynet");
+        bind_account_alias_for_test(&state, &alice_id, "alice@hbl.paynet");
+        bind_account_alias_for_test(&state, &bob_id, "bilal@hbl.paynet");
+        bind_account_alias_for_test(&state, &ubl_user_id, "amir@ubl.paynet");
+        bind_account_alias_for_test(&state, &hbl_settlement_id, "cbdc@hbl.paynet");
+        bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.paynet");
 
         (state, alice_id, bob_id)
     }
@@ -40811,15 +40831,15 @@ mod app_api_integration_tests {
                 crate::filter::FilterExpr::In(
                     crate::filter::FieldPath("primary_alias_domain".into()),
                     vec![
-                        norito::json::Value::from("hbl.sbp"),
-                        norito::json::Value::from("ubl.sbp"),
+                        norito::json::Value::from("hbl.paynet"),
+                        norito::json::Value::from("ubl.paynet"),
                     ],
                 ),
                 crate::filter::FilterExpr::Nin(
                     crate::filter::FieldPath("primary_alias".into()),
                     vec![
-                        norito::json::Value::from("cbdc@hbl.sbp"),
-                        norito::json::Value::from("cbdc@ubl.sbp"),
+                        norito::json::Value::from("cbdc@hbl.paynet"),
+                        norito::json::Value::from("cbdc@ubl.paynet"),
                     ],
                 ),
             ])),
@@ -40859,7 +40879,7 @@ mod app_api_integration_tests {
         let response = handle_v1_asset_holders_query_with_app(
             app,
             state,
-            axum::extract::Path("pkr#sbp".to_owned()),
+            axum::extract::Path("pkr#paynet".to_owned()),
             crate::utils::extractors::NoritoJson(asset_holder_alias_aggregate_query()),
             MaybeTelemetry::for_tests(),
         )
@@ -41168,7 +41188,7 @@ mod app_api_integration_tests {
             state.clone(),
             "asset_holders".to_owned(),
             crate::runtime::NodeProjectionShardCatalogQuery {
-                asset_definition_id: Some("pkr#sbp".to_owned()),
+                asset_definition_id: Some("pkr#paynet".to_owned()),
                 offset: None,
                 limit: None,
             },
@@ -41188,7 +41208,7 @@ mod app_api_integration_tests {
                 "asset_holders".to_owned(),
                 entry.partition_id,
                 crate::runtime::NodeProjectionShardExportQuery {
-                    asset_definition_id: Some("pkr#sbp".to_owned()),
+                    asset_definition_id: Some("pkr#paynet".to_owned()),
                 },
             )
             .await

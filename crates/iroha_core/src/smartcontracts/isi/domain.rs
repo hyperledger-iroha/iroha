@@ -199,7 +199,7 @@ pub mod isi {
         let domain_alias = label.domain.as_ref().map(|domain| domain.name().as_ref());
         matches!(
             (dataspace_alias, domain_alias),
-            ("sbp", None) | ("sbp", Some("hbl" | "ubl")) | ("cbuae", None)
+            ("paynet", None) | ("paynet", Some("hbl" | "ubl")) | ("cbuae", None)
         )
     }
 
@@ -3183,13 +3183,13 @@ mod tests {
     fn install_retail_dataspace_catalog(
         tx: &mut StateTransaction<'_, '_>,
     ) -> (DataSpaceId, DataSpaceId) {
-        let sbp = DataSpaceId::new(12);
+        let paynet = DataSpaceId::new(12);
         let cbuae = DataSpaceId::new(13);
         let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
-                id: sbp,
-                alias: "sbp".to_owned(),
+                id: paynet,
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
@@ -3203,7 +3203,7 @@ mod tests {
         .expect("retail dataspace catalog");
         tx.nexus.dataspace_catalog = catalog.clone();
         tx.world.dataspace_catalog = catalog;
-        (sbp, cbuae)
+        (paynet, cbuae)
     }
 
     fn seed_account_alias_manage_permissions(
@@ -3230,13 +3230,13 @@ mod tests {
         }
     }
 
-    fn open_retail_account_aliases(sbp: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
-        let hbl = DomainId::try_new("hbl", "sbp").expect("hbl domain");
-        let ubl = DomainId::try_new("ubl", "sbp").expect("ubl domain");
+    fn open_retail_account_aliases(paynet: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
+        let hbl = DomainId::try_new("hbl", "paynet").expect("hbl domain");
+        let ubl = DomainId::try_new("ubl", "paynet").expect("ubl domain");
         vec![
-            AccountAlias::domainless("retailsbp".parse::<Name>().expect("label"), sbp),
-            alias_in_dataspace_domain(&hbl, sbp, "retailhbl".parse::<Name>().expect("label")),
-            alias_in_dataspace_domain(&ubl, sbp, "retailubl".parse::<Name>().expect("label")),
+            AccountAlias::domainless("retailpaynet".parse::<Name>().expect("label"), paynet),
+            alias_in_dataspace_domain(&hbl, paynet, "retailhbl".parse::<Name>().expect("label")),
+            alias_in_dataspace_domain(&ubl, paynet, "retailubl".parse::<Name>().expect("label")),
             AccountAlias::domainless("retailcbuae".parse::<Name>().expect("label"), cbuae),
         ]
     }
@@ -3527,9 +3527,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let (sbp, cbuae) = install_retail_dataspace_catalog(&mut tx);
+        let (paynet, cbuae) = install_retail_dataspace_catalog(&mut tx);
 
-        for alias in open_retail_account_aliases(sbp, cbuae) {
+        for alias in open_retail_account_aliases(paynet, cbuae) {
             let account_id = AccountId::new(KeyPair::random().public_key().clone());
             seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
@@ -3723,10 +3723,10 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let (sbp, _) = install_retail_dataspace_catalog(&mut tx);
+        let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
 
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let alias = AccountAlias::domainless("bindretail".parse::<Name>().expect("label"), sbp);
+        let alias = AccountAlias::domainless("bindretail".parse::<Name>().expect("label"), paynet);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
@@ -3748,9 +3748,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let (sbp, _) = install_retail_dataspace_catalog(&mut tx);
-        let hbl = DomainId::try_new("hbl", "sbp").expect("hbl domain");
-        let alias = alias_in_dataspace_domain(&hbl, sbp, "cbdc".parse::<Name>().expect("label"));
+        let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
+        let hbl = DomainId::try_new("hbl", "paynet").expect("hbl domain");
+        let alias = alias_in_dataspace_domain(&hbl, paynet, "cbdc".parse::<Name>().expect("label"));
         let current_account_id = AccountId::new(KeyPair::random().public_key().clone());
         let replacement_account_id = AccountId::new(KeyPair::random().public_key().clone());
 

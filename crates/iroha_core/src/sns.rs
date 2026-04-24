@@ -1547,7 +1547,7 @@ mod tests {
             },
             DataSpaceMetadata {
                 id: DataSpaceId::new(10),
-                alias: "sbp".to_owned(),
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
@@ -2013,7 +2013,7 @@ mod tests {
                     selector: NameSelectorV1 {
                         version: NameSelectorV1::VERSION,
                         suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
-                        label: "pk_gov_pharmacy@sbp".to_owned(),
+                        label: "pk_gov_pharmacy@paynet".to_owned(),
                     },
                     owner: owner.clone(),
                     controllers: vec![controller(&owner)],
@@ -2027,7 +2027,7 @@ mod tests {
         })
         .expect("register underscore account alias name");
 
-        assert_eq!(record.selector.label, "pk_gov_pharmacy@sbp");
+        assert_eq!(record.selector.label, "pk_gov_pharmacy@paynet");
         assert_eq!(record.pricing_class, 0);
     }
 

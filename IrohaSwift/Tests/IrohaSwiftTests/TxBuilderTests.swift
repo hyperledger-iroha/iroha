@@ -941,7 +941,7 @@ final class TxBuilderTests: XCTestCase {
             alias: "ayesha",
             ttlMs: 60
         )
-        let sbpRequest = SetPrimaryAccountAliasRequest(
+        let paynetRequest = SetPrimaryAccountAliasRequest(
             chainId: Self.fixtureChainId,
             authority: authority,
             accountId: authority,
@@ -956,14 +956,14 @@ final class TxBuilderTests: XCTestCase {
             keypair: keypair,
             creationTimeMs: Self.fixtureCreationTimeMs
         )
-        let sbp = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
-            request: sbpRequest,
+        let paynet = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: paynetRequest,
             keypair: keypair,
             creationTimeMs: Self.fixtureCreationTimeMs
         )
 
-        XCTAssertNotEqual(global.transactionHash, sbp.transactionHash)
-        XCTAssertNotEqual(global.signedTransaction, sbp.signedTransaction)
+        XCTAssertNotEqual(global.transactionHash, paynet.transactionHash)
+        XCTAssertNotEqual(global.signedTransaction, paynet.signedTransaction)
     }
 
     func testSetPrimaryAccountAliasRejectsDottedAliasDomain() throws {
@@ -973,7 +973,7 @@ final class TxBuilderTests: XCTestCase {
             chainId: Self.fixtureChainId,
             authority: authority,
             accountId: authority,
-            aliasDomain: "hbl.sbp",
+            aliasDomain: "hbl.paynet",
             aliasDataspaceId: 7,
             alias: "ayesha",
             ttlMs: 60

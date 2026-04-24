@@ -319,7 +319,7 @@ mod tests {
             shards: vec![QueryProjectionCheckpointShard {
                 resource: QueryProjectionResourceKind::AssetHolders,
                 partition_id: 9,
-                asset_definition_id: Some("pkr#sbp".to_string()),
+                asset_definition_id: Some("pkr#paynet".to_string()),
                 manifest_digest: sample_digest(0x11),
                 storage_ticket: sample_ticket(0x22),
                 blob_hash: sample_digest(0x33),

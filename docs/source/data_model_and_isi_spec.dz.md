@@ -198,13 +198,13 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 - ཚད་གཞི་དུས་མཐུན་བཟོ་ནི།
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` དུས་མཐུན་བཟོ་སྟེ་ `ConfigurationEvent::Changed` བཏོནམ་ཨིན།CLI / Torii རྒྱུ་དངོས་-ངེས་ཚིག་ id + མིང་གཞན་དཔེ་:
 - ཀེ་ནོ་ནིཀ་ Base58 id + གསལ་ཏོག་ཏོ་མིང་ + མིང་གཞན་རིངམོ་དང་གཅིག་ཁར་ཐོ་བཀོད་འབད།
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - ཀེ་ནོ་ནིཀ་ Base58 id + གསལ་ཏོག་ཏོ་མིང་ + མིང་གཞན་ཐུང་ཀུ་དང་གཅིག་ཁར་ཐོ་བཀོད་འབད།
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - མིང་གཞན་གྱིས་ མིན་ཊི་ + རྩིས་ཐོའི་ཆ་ཤས་ཚུ།
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - ཀེ་ནོ་ནིཀ་ Base58 id ལུ་ མིང་གཞན་འདི་སེལ་འཐུ་འབད།
-  - `POST /v1/assets/aliases/resolve` དང་གཅིག་ཁར་ JSON `{ "alias": "pkr#bankb.sbp" }`
+  - `POST /v1/assets/aliases/resolve` དང་གཅིག་ཁར་ JSON `{ "alias": "pkr#bankb.paynet" }`
 
 གནས་སྤོ་དྲན་ཐོ།
 - `name#domain` ཚིག་ཡིག་རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ བསམ་བཞིན་དུ་རྒྱབ་སྐྱོར་མ་འབད་བར་ལུས་ཡོདཔ་ཨིན། ཀེ་ནོ་ནིཀ་ Base58 IDs ལག་ལེན་འཐབ་ ཡང་ན་ ཚག་ཅན་གྱི་མིང་གཞན་ཅིག་སེལ་འཐུ་འབད།

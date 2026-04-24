@@ -198,13 +198,13 @@ AssetDefinition ባለቤትነት፡ `AssetDefinition.owned_by` ወደ መድ�
 - የመለኪያ ማሻሻያ;
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` አዘምኗል እና `ConfigurationEvent::Changed` ያወጣል።CLI / Torii የንብረት-ፍቺ መታወቂያ + ተለዋጭ ምሳሌዎች፡-
 - በቀኖናዊ Base58 መታወቂያ + ግልጽ ስም + ረጅም ተለዋጭ ስም ይመዝገቡ።
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - በቀኖናዊ Base58 መታወቂያ + ግልጽ ስም + አጭር ቅጽል ይመዝገቡ:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - ሚንት በቅፅል ስም + መለያ ክፍሎች
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - በቀኖናዊ Base58 መታወቂያ ቅጽል መፍታት፡-
-  - `POST /v1/assets/aliases/resolve` ከJSON `{ "alias": "pkr#bankb.sbp" }` ጋር
+  - `POST /v1/assets/aliases/resolve` ከJSON `{ "alias": "pkr#bankb.paynet" }` ጋር
 
 የስደት ማስታወሻ፡-
 - `name#domain` የጽሑፍ ንብረት-መግለጫ መታወቂያዎች በመጀመሪያ ልቀት ላይ ሆን ተብሎ ያልተደገፉ ይቆያሉ; ቀኖናዊ Base58 መታወቂያዎችን ይጠቀሙ ወይም ነጥብ ያለበትን ስም ይፍቱ።

@@ -50,8 +50,8 @@ Bu sənəd `iroha_data_model` qutusunda həyata keçirilən və iş sahəsində 
 - Alias modeli:
   - Canonical hesab identifikasiyası heç vaxt domen və ya verilənlər məkanı seqmentini ehtiva etmir.
   - `AccountAlias` dəyərləri `AccountId`-in üstünə qoyulmuş ayrı SNS bağlamalarıdır.
-  - `merchant@banka.sbp` kimi domenə uyğun ləqəblər həm domen, həm də ləqəb bağlamasında məlumat məkanını daşıyır.
-  - `merchant@sbp` kimi verilənlər məkanı-kök ləqəbləri yalnız məlumat məkanını daşıyır və buna görə də təbii olaraq `Account::new(...)` ilə cütləşir.
+  - `merchant@banka.paynet` kimi domenə uyğun ləqəblər həm domen, həm də ləqəb bağlamasında məlumat məkanını daşıyır.
+  - `merchant@paynet` kimi verilənlər məkanı-kök ləqəbləri yalnız məlumat məkanını daşıyır və buna görə də təbii olaraq `Account::new(...)` ilə cütləşir.
   - Testlər və qurğular əvvəlcə universal `AccountId`-ni səpməlidir, sonra hesab identifikasiyasının özünə domen fərziyyələrini kodlaşdırmaq əvəzinə ləqəb icarələri, ləqəb icazələri və domenə məxsus hər hansı dövləti ayrıca əlavə etməlidir.
   - İctimai tək hesab axtarışı indi ləqəblərə diqqət yetirir (`FindAliasesByAccountId`); hesab şəxsiyyətinin özü domensiz qalır.### Aktiv anlayışları və aktivlər
 - `AssetDefinitionId { aid_bytes: [u8; 16] }`, versiya və yoxlama məbləği ilə prefikssiz Base58 ünvanı kimi mətndə ifşa olunur.
@@ -249,24 +249,24 @@ Aktiv tərifi id / ləqəb sürətli arayış (CLI + Torii):
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Miqrasiya qeydi:
 - Köhnə `name#domain` aktiv tərifi identifikatorları v1-də qəbul edilmir.
 - İctimai aktiv seçiciləri yalnız bir aktiv təyini formatından istifadə edir: kanonik Base58 idləri. Ləqəblər isteğe bağlı seçicilər olaraq qalır, lakin eyni kanonik identifikatorla həll olunur.

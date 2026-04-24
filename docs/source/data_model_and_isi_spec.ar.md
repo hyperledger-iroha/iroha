@@ -198,13 +198,13 @@ translator: machine-google-reviewed
 - تحديث المعلمة:
   - يتم تحديث `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` ويصدر `ConfigurationEvent::Changed`.أمثلة على معرف تعريف الأصول CLI / Torii + الاسم المستعار:
 - سجل باستخدام معرف Base58 الأساسي + الاسم الصريح + الاسم المستعار الطويل:
-  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - سجل باستخدام معرف Base58 الأساسي + الاسم الصريح + الاسم المستعار القصير:
-  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - النعناع بالاسم المستعار + مكونات الحساب:
-  -`iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  -`iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - حل الاسم المستعار لمعرف Base58 الكنسي:
-  - `POST /v1/assets/aliases/resolve` مع JSON `{ "alias": "pkr#bankb.sbp" }`
+  - `POST /v1/assets/aliases/resolve` مع JSON `{ "alias": "pkr#bankb.paynet" }`
 
 مذكرة الهجرة:
 - تظل معرفات تعريف الأصول النصية `name#domain` غير مدعومة عمدًا في الإصدار الأول؛ استخدم معرفات Base58 الأساسية أو قم بحل الاسم المستعار المنقط.

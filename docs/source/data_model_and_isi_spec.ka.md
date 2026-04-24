@@ -198,13 +198,13 @@ ID-ებს აქვთ სტაბილური სიმებიან�
 - პარამეტრის განახლება:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` განაახლებს და გამოსცემს `ConfigurationEvent::Changed`.CLI / Torii აქტივის განსაზღვრის ID + მეტსახელის მაგალითები:
 - დარეგისტრირდით კანონიკური Base58 id + აშკარა სახელით + გრძელი მეტსახელით:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - დარეგისტრირდით კანონიკური Base58 id + აშკარა სახელით + მოკლე მეტსახელით:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - ზარაფხანა მეტსახელით + ანგარიშის კომპონენტები:
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - გადაწყვიტეთ მეტსახელი კანონიკური Base58 id-ით:
-  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#bankb.sbp" }`-ით
+  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#bankb.paynet" }`-ით
 
 მიგრაციის შენიშვნა:
 - `name#domain` ტექსტური აქტივების განსაზღვრის ID-ები განზრახ მხარდაჭერილი რჩება პირველ გამოშვებაში; გამოიყენეთ კანონიკური Base58 ID-ები ან ამოიღეთ წერტილოვანი მეტსახელი.

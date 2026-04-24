@@ -49,9 +49,9 @@ where
 #[test]
 fn typed_payload_smoke_matches_serde_json() {
     let aliases = BTreeMap::from([
-        ("default", "demo@sbp"),
-        ("fi", "ops@hbl.sbp"),
-        ("merchant", "shop@ubl.sbp"),
+        ("default", "demo@paynet"),
+        ("fi", "ops@hbl.paynet"),
+        ("merchant", "shop@ubl.paynet"),
     ]);
     let payload = TypedPayload {
         id: 7,
@@ -85,7 +85,7 @@ fn float_edge_case_regression_matches_serde_json() {
 #[test]
 fn deterministic_btreemap_regression_matches_serde_json() {
     let payload = BTreeMap::from([
-        ("alias", "mint-signer1@sbp"),
+        ("alias", "mint-signer1@paynet"),
         ("escaped", "tab\tnewline\nslash\\"),
         ("unicode", "emoji \u{1f389}"),
     ]);

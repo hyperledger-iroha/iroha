@@ -198,13 +198,13 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
 - Параметр шинэчлэх:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` шинэчлэгдэж, `ConfigurationEvent::Changed` ялгаруулдаг.CLI / Torii хөрөнгийн тодорхойлолтын id + бусад нэрийн жишээнүүд:
 - Каноник Base58 id + тодорхой нэр + урт нэрээр бүртгүүлнэ үү:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - Каноник Base58 id + тодорхой нэр + богино нэрээр бүртгүүлнэ үү:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - Гаалийн нэр + дансны бүрэлдэхүүн хэсгүүд:
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - Каноник Base58 id-д өөр нэрийг шийдвэрлэх:
-  - JSON `{ "alias": "pkr#bankb.sbp" }`-тэй `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#bankb.paynet" }`-тэй `POST /v1/assets/aliases/resolve`
 
 Шилжилтийн тэмдэглэл:
 - `name#domain` текстийн хөрөнгийн тодорхойлолтын ID нь эхний хувилбар дээр санаатайгаар дэмжигдээгүй хэвээр байна; каноник Base58 ID-г ашиглах эсвэл тасархай нэрсийг шийдвэрлэх.

@@ -492,9 +492,9 @@ mod tests {
 
     #[test]
     fn partition_helper_is_stable_and_bounded() {
-        let first = query_projection_default_partition_for_account("alice@hbl.sbp");
-        let second = query_projection_default_partition_for_account("alice@hbl.sbp");
-        let other = query_projection_default_partition_for_account("bob@ubl.sbp");
+        let first = query_projection_default_partition_for_account("alice@hbl.paynet");
+        let second = query_projection_default_partition_for_account("alice@hbl.paynet");
+        let other = query_projection_default_partition_for_account("bob@ubl.paynet");
 
         assert_eq!(first, second, "partition mapping must be stable");
         assert!(first < QUERY_PROJECTION_DEFAULT_PARTITION_COUNT);
@@ -551,7 +551,7 @@ mod tests {
             shards: vec![QueryProjectionCheckpointShard {
                 resource: QueryProjectionResourceKind::AssetHolders,
                 partition_id: 12,
-                asset_definition_id: Some("pkr#sbp".to_string()),
+                asset_definition_id: Some("pkr#paynet".to_string()),
                 manifest_digest: sample_digest(0x11),
                 storage_ticket: sample_ticket(0x22),
                 blob_hash: sample_digest(0x33),
@@ -580,7 +580,7 @@ mod tests {
                     status,
                     QueryProjectionResourceKind::AssetHolders,
                     11,
-                    Some("pkr#sbp"),
+                    Some("pkr#paynet"),
                 ),
             ],
         )
@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(plan.checkpoint().shards.len(), 2);
         assert_eq!(
             plan.checkpoint().shards[1].asset_definition_id.as_deref(),
-            Some("pkr#sbp")
+            Some("pkr#paynet")
         );
     }
 

@@ -202,17 +202,8 @@ pub mod isi {
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
     }
 
-    const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
-
     fn verified_lane_relay_state_key(relay_ref: &LaneRelayEnvelopeRef) -> Result<Name, Error> {
-        let suffix = hex::encode(CryptoHash::new(relay_ref.settlement_hash.as_ref()).as_ref());
-        let key = format!(
-            "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_{}_{}_{}_{}",
-            relay_ref.dataspace_id.as_u64(),
-            relay_ref.lane_id.as_u32(),
-            relay_ref.block_height,
-            suffix,
-        );
+        let key = relay_ref.relay_state_key();
         Name::from_str(&key).map_err(|_| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 "invalid verified lane relay state key".into(),
@@ -10793,12 +10784,10 @@ pub mod isi {
             })?;
             if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
                 let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "stored {err}"
-                            )),
-                        )
-                    })?;
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!("stored {err}")),
+                    )
+                })?;
                 if decoded != record {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "conflicting verified lane relay already exists".into(),
@@ -12062,19 +12051,19 @@ pub mod isi {
                 parameter: "fastpq-lane-balanced".to_string(),
                 source_dsid: 12,
                 source_dataspace: "cbuae".to_string(),
-                source_receipt_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .to_string(),
-                source_tx_commitment: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    .to_string(),
+                source_receipt_id:
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                source_tx_commitment:
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
                 claim_type: "value_conservation".to_string(),
                 claim_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                     .to_string(),
-                witness_commitment: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-                    .to_string(),
-                policy_commitment: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-                    .to_string(),
+                witness_commitment:
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+                policy_commitment:
+                    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
                 verified_effect_type: "aed_to_pkr_settlement".to_string(),
-                corridor: "sbp-aed-to-pkr-interceptor".to_string(),
+                corridor: "paynet-aed-to-pkr-interceptor".to_string(),
                 verifier_id: "fastpq".to_string(),
                 verifier_version: "v1".to_string(),
                 target_dsids: vec![10],
@@ -12094,7 +12083,13 @@ pub mod isi {
             let record = sample_verified_lane_relay_record();
             let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
             let key = key.to_string();
-            assert!(key.starts_with("pkdeploy_verified_lane_relay_12_4_1_"));
+            let expected_prefix = format!(
+                "pkdeploy_verified_lane_relay_{}_{}_{}_",
+                record.relay_ref.dataspace_id.as_u64(),
+                record.relay_ref.lane_id.as_u32(),
+                record.relay_ref.block_height
+            );
+            assert!(key.starts_with(&expected_prefix));
             assert!(!key.contains('/'));
             let suffix = key.rsplit('_').next().expect("hash suffix");
             assert_eq!(suffix.len(), 64);

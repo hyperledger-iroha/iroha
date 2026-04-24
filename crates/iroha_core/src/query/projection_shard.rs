@@ -347,7 +347,7 @@ mod tests {
             1_714_000_777,
             QueryProjectionResourceKind::AssetHolders,
             12,
-            Some("pkr#sbp".to_string()),
+            Some("pkr#paynet".to_string()),
             3,
             b"rows".to_vec(),
         );
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(
             archive.locator_label(),
             format!(
-                "query-projection:asset_holders:partition=12:height=144:asset=pkr#sbp:block={}",
+                "query-projection:asset_holders:partition=12:height=144:asset=pkr#paynet:block={}",
                 hex::encode(sample_hash(0x44).as_ref())
             )
         );
@@ -403,7 +403,7 @@ mod tests {
             1_714_000_333,
             QueryProjectionResourceKind::AssetHolders,
             31,
-            Some("pkr#sbp".to_string()),
+            Some("pkr#paynet".to_string()),
             1,
             b"rowset".to_vec(),
         );
@@ -446,7 +446,10 @@ mod tests {
             QueryProjectionResourceKind::AssetHolders
         );
         assert_eq!(checkpoint.partition_id, 31);
-        assert_eq!(checkpoint.asset_definition_id.as_deref(), Some("pkr#sbp"));
+        assert_eq!(
+            checkpoint.asset_definition_id.as_deref(),
+            Some("pkr#paynet")
+        );
         assert_eq!(checkpoint.manifest_digest, sample_digest(0x22));
         assert_eq!(checkpoint.storage_ticket, sample_ticket(0x33));
         assert_eq!(checkpoint.blob_hash, first_payload.payload_hash);

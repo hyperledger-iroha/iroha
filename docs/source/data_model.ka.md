@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - Alias მოდელი:
   - კანონიკური ანგარიშის იდენტურობა არასოდეს მოიცავს დომენს ან მონაცემთა სივრცის სეგმენტს.
   - `AccountAlias` მნიშვნელობები არის ცალკეული SNS აკინძები, რომლებიც განლაგებულია `AccountId`-ის თავზე.
-  - დომენის კვალიფიცირებული მეტსახელები, როგორიცაა `merchant@banka.sbp`, ატარებენ როგორც დომენს, ასევე მონაცემთა სივრცეს ალიასის სავალდებულოში.
-  - Dataspace-root მეტსახელები, როგორიცაა `merchant@sbp`, შეიცავს მხოლოდ მონაცემთა სივრცეს და, შესაბამისად, ბუნებრივად წყვილდება `Account::new(...)`-თან.
+  - დომენის კვალიფიცირებული მეტსახელები, როგორიცაა `merchant@banka.paynet`, ატარებენ როგორც დომენს, ასევე მონაცემთა სივრცეს ალიასის სავალდებულოში.
+  - Dataspace-root მეტსახელები, როგორიცაა `merchant@paynet`, შეიცავს მხოლოდ მონაცემთა სივრცეს და, შესაბამისად, ბუნებრივად წყვილდება `Account::new(...)`-თან.
   - ტესტები და მოწყობილობები ჯერ უნივერსალური `AccountId` უნდა ჩათესონ, შემდეგ დაემატოს ალიასის იჯარა, მეტსახელის ნებართვები და დომენის მფლობელობაში მყოფი ნებისმიერი სახელმწიფო ცალ-ცალკე, ნაცვლად იმისა, რომ დაშიფროს დომენის დაშვებები თავად ანგარიშის იდენტურობაში.
   - საჯარო სინგულარული ანგარიშის ძებნა ახლა ფოკუსირებულია მეტსახელებზე (`FindAliasesByAccountId`); თავად ანგარიშის იდენტიფიკაცია რჩება დომენის გარეშე.### აქტივების განმარტებები და აქტივები
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` ტექსტურად არის გამოსახული, როგორც უპრეფიქსის Base58 მისამართი ვერსიითა და გამშვები ჯამით.
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```მიგრაციის შენიშვნა:
 - ძველი `name#domain` აქტივების განსაზღვრის ID არ არის მიღებული v1-ში.
 - საჯარო აქტივების სელექტორები იყენებენ მხოლოდ ერთ აქტივის განსაზღვრის ფორმატს: კანონიკურ Base58 ID-ებს. მეტსახელები რჩება არასავალდებულო ამომრჩეველად, მაგრამ გადაწყდება იგივე კანონიკური ID.

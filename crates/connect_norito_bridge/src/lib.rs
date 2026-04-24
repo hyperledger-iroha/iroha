@@ -8450,7 +8450,7 @@ mod accel_tests {
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
-        let fee_sponsor = sample_destination("sbp", 2);
+        let fee_sponsor = sample_destination("paynet", 2);
         let fee_sponsor_literal = fee_sponsor.to_str().expect("utf8 fee sponsor");
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
