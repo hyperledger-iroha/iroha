@@ -2771,6 +2771,9 @@ async fn relay_hub_routes_consensus_between_spokes() {
     .await
     .expect("connection deadline exceeded");
 
+    // Give relay hub selection and subscriber wiring a moment to settle under parallel test load.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     let payload = ConsensusMessage(7);
     spoke1_net.post(Post {
         data: payload.clone(),
