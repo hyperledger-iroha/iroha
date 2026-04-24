@@ -15,15 +15,10 @@
     "APP_ENV": "production",
     "LOG_LEVEL": "info"
   },
-  "required_config_names": [
-    
-  ],
-  "required_secret_names": [
-    
-  ],
-  "config_exports": [
-    
-  ],
+  "inrou": null,
+  "required_config_names": [],
+  "required_secret_names": [],
+  "config_exports": [],
   "capabilities": {
     "network": {
       "mode": "Allowlist",

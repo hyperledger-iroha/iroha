@@ -17,15 +17,10 @@
       "APP_ENV": "production",
       "LOG_LEVEL": "info"
     },
-    "required_config_names": [
-      
-    ],
-    "required_secret_names": [
-      
-    ],
-    "config_exports": [
-      
-    ],
+    "inrou": null,
+    "required_config_names": [],
+    "required_secret_names": [],
+    "config_exports": [],
     "capabilities": {
       "network": {
         "mode": "Allowlist",
@@ -71,7 +66,7 @@
       "value": null
     },
     "container": {
-      "manifest_hash": "hash:7F93D5A117F945B9E9A00AA4EC9EBB65D06FF85446B172F151E3A3FCE362169F#BD0C",
+      "manifest_hash": "hash:1D4E71777486DBA39E6DF42EFD3460A09F0055C94D9680AF08647E69B9DE07FD#492B",
       "expected_schema_version": 1
     },
     "replicas": 3,
@@ -144,9 +139,7 @@
         "max_total_bytes": 16777216
       }
     ],
-    "lease_volumes": [
-      
-    ],
+    "lease_volumes": [],
     "handlers": [
       {
         "handler_name": "assets",

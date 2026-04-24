@@ -9,6 +9,9 @@ use std::{
 };
 
 use iroha_crypto::Hash;
+use iroha_data_model::soracloud::SoraCloudManifestError;
+#[cfg(feature = "json")]
+use iroha_data_model::soracloud::SoraInrouManifestV1;
 use iroha_data_model::{
     Decode, Encode,
     soracloud::{
@@ -27,14 +30,16 @@ use iroha_data_model::{
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
-        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
-        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
+        SoraConfigExportV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraLeaseVolumeBindingV1,
+        SoraLeaseVolumeKindV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
         SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
         SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1,
         SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1,
         SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
     },
+    sorafs::pin_registry::StorageClass,
 };
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
@@ -276,6 +281,67 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
 fn expected_deployment_bundle() -> SoraDeploymentBundleV1 {
     let container = expected_container_manifest();
     let mut service = expected_service_manifest();
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    }
+}
+
+#[cfg(feature = "json")]
+fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
+    let mut container = expected_container_manifest();
+    container.runtime = SoraContainerRuntimeV1::Inrou;
+    container.inrou = Some(
+        json::from_str::<SoraInrouManifestV1>(
+            r#"{
+              "schema_version": 1,
+              "guest_os": {
+                "guest_os": "DebianSlim",
+                "value": null
+              },
+              "guest_images": {
+                "x86_64": {
+                  "kernel_image_path": "/inrou/x86_64/vmlinux",
+                  "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
+                  "initrd_image_path": null
+                },
+                "aarch64": {
+                  "kernel_image_path": "/inrou/aarch64/vmlinux",
+                  "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
+                  "initrd_image_path": null
+                }
+              },
+              "bootstrap_user_data_path": null,
+              "ssh_authorized_keys": ["ssh-ed25519 test-key fixture"]
+            }"#,
+        )
+        .expect("valid inrou manifest fixture"),
+    );
+    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    let mut service = expected_service_manifest();
+    service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+    service.replicas = NonZeroU16::new(2).expect("nonzero");
+    service.state_bindings.clear();
+    service.handlers.clear();
+    service.artifacts.clear();
+    service.lease_volumes = vec![
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_string(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+        },
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "shared_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/soracloud".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        },
+    ];
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
     SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
@@ -582,6 +648,61 @@ fn state_binding_fixture_is_canonical() {
     binding.validate().expect("fixture should validate");
 }
 
+#[test]
+fn state_binding_rejects_relative_key_prefix() {
+    let mut binding = expected_state_binding();
+    binding.key_prefix = "state/session".to_string();
+
+    let error = binding
+        .validate()
+        .expect_err("state binding key prefixes must be absolute");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "key_prefix",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn state_binding_rejects_item_limit_above_total_limit() {
+    let mut binding = expected_state_binding();
+    binding.max_item_bytes = NonZeroU64::new(2_048).expect("nonzero");
+    binding.max_total_bytes = NonZeroU64::new(1_024).expect("nonzero");
+
+    let error = binding
+        .validate()
+        .expect_err("per-item state limit must not exceed total state limit");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "max_item_bytes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn state_binding_rejects_plaintext_confidential_state() {
+    let mut binding = expected_patient_records_binding();
+    binding.encryption = SoraStateEncryptionV1::Plaintext;
+
+    let error = binding
+        .validate()
+        .expect_err("confidential state must require ciphertext encryption");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "encryption",
+            ..
+        }
+    ));
+}
+
 #[cfg(feature = "json")]
 #[test]
 fn service_manifest_fixture_is_canonical() {
@@ -604,6 +725,1123 @@ fn deployment_bundle_fixture_is_canonical() {
     bundle
         .validate_for_admission()
         .expect("deployment bundle fixture should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn container_manifest_fixture_decodes_legacy_missing_default_fields() {
+    let mut value: json::Value =
+        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    for field in [
+        "inrou",
+        "required_config_names",
+        "required_secret_names",
+        "config_exports",
+    ] {
+        assert!(
+            object.remove(field).is_some(),
+            "fixture should declare `{field}` before the legacy omission check"
+        );
+    }
+
+    let decoded: SoraContainerManifestV1 =
+        json::from_value(value).expect("legacy container fixture shape must decode");
+
+    assert_eq!(decoded, expected_container_manifest());
+    decoded
+        .validate()
+        .expect("legacy container fixture shape should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn container_manifest_fixture_decodes_missing_args_and_env_defaults() {
+    let mut value: json::Value =
+        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    for field in ["args", "env"] {
+        assert!(
+            object.remove(field).is_some(),
+            "fixture should declare `{field}` before the default omission check"
+        );
+    }
+
+    let decoded: SoraContainerManifestV1 =
+        json::from_value(value).expect("container fixture without args/env must decode");
+    let mut expected = expected_container_manifest();
+    expected.args.clear();
+    expected.env.clear();
+
+    assert_eq!(decoded, expected);
+    decoded
+        .validate()
+        .expect("container fixture without args/env should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn container_manifest_fixture_decodes_null_default_collections() {
+    let mut value: json::Value =
+        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    for field in [
+        "inrou",
+        "required_config_names",
+        "required_secret_names",
+        "config_exports",
+    ] {
+        assert!(
+            object
+                .insert(field.to_string(), json::Value::Null)
+                .is_some(),
+            "fixture should declare `{field}` before the null-default check"
+        );
+    }
+
+    let decoded: SoraContainerManifestV1 =
+        json::from_value(value).expect("container fixture with null defaults must decode");
+
+    assert_eq!(decoded, expected_container_manifest());
+    decoded
+        .validate()
+        .expect("container fixture with null defaults should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn container_manifest_fixture_rejects_unknown_json_field() {
+    let mut value: json::Value =
+        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    assert!(
+        object
+            .insert("legacy_padding".to_string(), json::Value::Bool(true))
+            .is_none(),
+        "test should add a new unknown field"
+    );
+
+    let error = json::from_value::<SoraContainerManifestV1>(value)
+        .expect_err("unknown container manifest fields must be rejected");
+
+    assert!(matches!(error, json::Error::UnknownField { field } if field == "legacy_padding"));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn container_manifest_fixture_rejects_inrou_metadata_for_ivm_runtime() {
+    let mut value: json::Value =
+        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    let inrou: json::Value = json::from_str(
+        r#"{
+          "schema_version": 1,
+          "guest_os": {
+            "guest_os": "DebianSlim",
+            "value": null
+          },
+          "guest_images": {
+            "x86_64": {
+              "kernel_image_path": "/inrou/x86_64/vmlinux",
+              "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
+              "initrd_image_path": null
+            },
+            "aarch64": {
+              "kernel_image_path": "/inrou/aarch64/vmlinux",
+              "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
+              "initrd_image_path": null
+            }
+          },
+          "bootstrap_user_data_path": null,
+          "ssh_authorized_keys": ["ssh-ed25519 test-key fixture"]
+        }"#,
+    )
+    .expect("inrou JSON must decode");
+    assert!(
+        object.insert("inrou".to_string(), inrou).is_some(),
+        "fixture should declare `inrou` before the runtime policy check"
+    );
+
+    let decoded: SoraContainerManifestV1 =
+        json::from_value(value).expect("container fixture with inrou metadata must decode");
+    let error = decoded
+        .validate()
+        .expect_err("Ivm containers must reject Inrou metadata");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField { field: "inrou", .. }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn container_manifest_fixture_rejects_inrou_runtime_without_metadata() {
+    let mut value: json::Value =
+        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    let runtime: json::Value =
+        json::from_str(r#"{"runtime":"Inrou","value":null}"#).expect("runtime JSON must decode");
+    assert!(
+        object.insert("runtime".to_string(), runtime).is_some(),
+        "fixture should declare `runtime` before the runtime policy check"
+    );
+
+    let decoded: SoraContainerManifestV1 =
+        json::from_value(value).expect("Inrou container fixture without metadata must decode");
+    let error = decoded
+        .validate()
+        .expect_err("Inrou containers must require explicit metadata");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField { field: "inrou", .. }
+    ));
+}
+
+#[test]
+fn container_manifest_accepts_declared_config_exports() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names = vec!["runtime/theme".to_string(), "runtime/tls".to_string()];
+    manifest.config_exports = vec![
+        SoraConfigExportV1 {
+            config_name: "runtime/theme".to_string(),
+            target: SoraConfigExportTargetV1::Env("APP_THEME".to_string()),
+        },
+        SoraConfigExportV1 {
+            config_name: "runtime/tls".to_string(),
+            target: SoraConfigExportTargetV1::File("config/tls.json".to_string()),
+        },
+    ];
+
+    manifest
+        .validate()
+        .expect("declared config exports should validate");
+}
+
+#[test]
+fn container_manifest_rejects_duplicate_required_config_names() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names = vec!["runtime/theme".to_string(), "runtime/theme".to_string()];
+
+    let error = manifest
+        .validate()
+        .expect_err("duplicate required config names must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "required_config_names",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_duplicate_required_secret_names() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_secret_names = vec!["db/password".to_string(), "db/password".to_string()];
+
+    let error = manifest
+        .validate()
+        .expect_err("duplicate required secret names must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "required_secret_names",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_required_config_path_traversal() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names = vec!["runtime/../theme".to_string()];
+
+    let error = manifest
+        .validate()
+        .expect_err("required config names must reject traversal segments");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "required_config_names",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_export_for_undeclared_required_config() {
+    let mut manifest = expected_container_manifest();
+    manifest.config_exports = vec![SoraConfigExportV1 {
+        config_name: "runtime/theme".to_string(),
+        target: SoraConfigExportTargetV1::Env("APP_THEME".to_string()),
+    }];
+
+    let error = manifest
+        .validate()
+        .expect_err("config exports must reference declared required configs");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "config_exports",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_duplicate_config_export_env_targets() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names =
+        vec!["runtime/theme".to_string(), "runtime/locale".to_string()];
+    manifest.config_exports = vec![
+        SoraConfigExportV1 {
+            config_name: "runtime/theme".to_string(),
+            target: SoraConfigExportTargetV1::Env("APP_CONFIG".to_string()),
+        },
+        SoraConfigExportV1 {
+            config_name: "runtime/locale".to_string(),
+            target: SoraConfigExportTargetV1::Env("APP_CONFIG".to_string()),
+        },
+    ];
+
+    let error = manifest
+        .validate()
+        .expect_err("duplicate config export env targets must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "config_exports",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_invalid_config_export_env_target() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names = vec!["runtime/theme".to_string()];
+    manifest.config_exports = vec![SoraConfigExportV1 {
+        config_name: "runtime/theme".to_string(),
+        target: SoraConfigExportTargetV1::Env("1APP_THEME".to_string()),
+    }];
+
+    let error = manifest
+        .validate()
+        .expect_err("config export env targets must start with a valid character");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "config_exports",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_invalid_config_export_file_target() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names = vec!["runtime/theme".to_string()];
+    manifest.config_exports = vec![SoraConfigExportV1 {
+        config_name: "runtime/theme".to_string(),
+        target: SoraConfigExportTargetV1::File("../theme.json".to_string()),
+    }];
+
+    let error = manifest
+        .validate()
+        .expect_err("config export file targets must reject traversal segments");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "config_exports",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_duplicate_config_export_file_targets() {
+    let mut manifest = expected_container_manifest();
+    manifest.required_config_names =
+        vec!["runtime/theme".to_string(), "runtime/locale".to_string()];
+    manifest.config_exports = vec![
+        SoraConfigExportV1 {
+            config_name: "runtime/theme".to_string(),
+            target: SoraConfigExportTargetV1::File("config/app.json".to_string()),
+        },
+        SoraConfigExportV1 {
+            config_name: "runtime/locale".to_string(),
+            target: SoraConfigExportTargetV1::File("config/app.json".to_string()),
+        },
+    ];
+
+    let error = manifest
+        .validate()
+        .expect_err("duplicate config export file targets must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "config_exports",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn container_manifest_rejects_relative_healthcheck_path() {
+    let mut manifest = expected_container_manifest();
+    manifest.lifecycle.healthcheck_path = Some("healthz".to_string());
+
+    let error = manifest
+        .validate()
+        .expect_err("healthcheck paths must be absolute");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "lifecycle.healthcheck_path",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn service_manifest_fixture_decodes_missing_default_fields() {
+    let mut value: json::Value =
+        json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    for field in ["execution_plane", "economics", "lease_volumes"] {
+        assert!(
+            object.remove(field).is_some(),
+            "fixture should declare `{field}` before the default omission check"
+        );
+    }
+
+    let decoded: SoraServiceManifestV1 =
+        json::from_value(value).expect("service fixture with omitted defaults must decode");
+
+    assert_eq!(decoded, expected_service_manifest());
+    decoded
+        .validate()
+        .expect("service fixture with omitted defaults should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn service_manifest_fixture_decodes_missing_route_as_none() {
+    let mut value: json::Value =
+        json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
+    let object = value.as_object_mut().expect("fixture root must be object");
+    assert!(
+        object.remove("route").is_some(),
+        "fixture should declare `route` before the default omission check"
+    );
+
+    let decoded: SoraServiceManifestV1 =
+        json::from_value(value).expect("service fixture without route must decode");
+    let mut expected = expected_service_manifest();
+    expected.route = None;
+
+    assert_eq!(decoded, expected);
+    decoded
+        .validate()
+        .expect("deterministic service fixture without route should validate");
+}
+
+#[test]
+fn service_manifest_rejects_empty_service_version() {
+    let mut manifest = expected_service_manifest();
+    manifest.service_version = "   ".to_string();
+
+    let error = manifest
+        .validate()
+        .expect_err("blank service versions must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::EmptyField {
+            field: "service_version",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_rollout_canary_percent_over_100() {
+    let mut manifest = expected_service_manifest();
+    manifest.rollout.canary_percent = 101;
+
+    let error = manifest
+        .validate()
+        .expect_err("canary percent must be in range");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "rollout.canary_percent",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_empty_route_host() {
+    let mut manifest = expected_service_manifest();
+    manifest.route.as_mut().expect("fixture route").host = "  ".to_string();
+
+    let error = manifest
+        .validate()
+        .expect_err("blank route hosts must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::EmptyField {
+            field: "route.host",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_relative_route_path_prefix() {
+    let mut manifest = expected_service_manifest();
+    manifest.route.as_mut().expect("fixture route").path_prefix = "app".to_string();
+
+    let error = manifest
+        .validate()
+        .expect_err("route path prefixes must be absolute");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "route.path_prefix",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_deterministic_service_without_handlers() {
+    let mut manifest = expected_service_manifest();
+    manifest.handlers.clear();
+
+    let error = manifest
+        .validate()
+        .expect_err("deterministic services must declare handlers");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::EmptyField {
+            field: "handlers",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_blank_quota_class() {
+    let mut manifest = expected_service_manifest();
+    manifest.economics.quota_class = "   ".to_string();
+
+    let error = manifest
+        .validate()
+        .expect_err("blank hosted-service quota classes must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::EmptyField {
+            field: "quota_class",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_deterministic_service_with_lease_volume() {
+    let mut manifest = expected_service_manifest();
+    manifest.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+        volume_name: "scratch".parse().expect("valid name"),
+        kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+        storage_class: StorageClass::Warm,
+        mount_path: "/var/lib/scratch".to_string(),
+        max_total_bytes: NonZeroU64::new(1_048_576).expect("nonzero"),
+    }];
+
+    let error = manifest
+        .validate()
+        .expect_err("deterministic services must not declare lease volumes");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "lease_volumes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_duplicate_state_binding_names() {
+    let mut manifest = expected_service_manifest();
+    manifest.state_bindings[1].binding_name = manifest.state_bindings[0].binding_name.clone();
+
+    let error = manifest
+        .validate()
+        .expect_err("duplicate state binding names must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::DuplicateStateBinding { .. }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_duplicate_handler_names() {
+    let mut manifest = expected_service_manifest();
+    manifest.handlers[1].handler_name = manifest.handlers[0].handler_name.clone();
+
+    let error = manifest
+        .validate()
+        .expect_err("duplicate handler names must fail validation");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::DuplicateHandler { .. }
+    ));
+}
+
+#[test]
+fn service_handler_rejects_empty_entrypoint() {
+    let mut handler = expected_service_manifest().handlers[0].clone();
+    handler.entrypoint = "   ".to_string();
+
+    let error = handler
+        .validate()
+        .expect_err("handler entrypoints must not be blank");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::EmptyField {
+            field: "entrypoint",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_handler_rejects_relative_route_path() {
+    let mut handler = expected_service_manifest().handlers[0].clone();
+    handler.route_path = Some("assets".to_string());
+
+    let error = handler
+        .validate()
+        .expect_err("handler route paths must be absolute");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "route_path",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_handler_rejects_uncertified_asset_handler() {
+    let mut handler = expected_service_manifest().handlers[0].clone();
+    handler.certified_response = SoraCertifiedResponsePolicyV1::None;
+
+    let error = handler
+        .validate()
+        .expect_err("asset handlers must use certified responses");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "certified_response",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_handler_rejects_mailbox_on_query_handler() {
+    let mut handler = expected_service_manifest().handlers[1].clone();
+    handler.mailbox = Some(SoraMailboxContractV1 {
+        queue_name: "query_mailbox".parse().expect("valid name"),
+        max_pending_messages: NonZeroU32::new(16).expect("nonzero"),
+        max_message_bytes: NonZeroU64::new(256).expect("nonzero"),
+        retention_blocks: NonZeroU32::new(32).expect("nonzero"),
+    });
+
+    let error = handler
+        .validate()
+        .expect_err("query handlers must not declare mailboxes");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "mailbox",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_handler_rejects_update_without_mailbox() {
+    let mut handler = expected_service_manifest().handlers[2].clone();
+    handler.mailbox = None;
+
+    let error = handler
+        .validate()
+        .expect_err("update handlers must declare mailbox contracts");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "mailbox",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn mailbox_contract_rejects_tiny_message_limit() {
+    let mut mailbox = expected_service_manifest().handlers[2]
+        .mailbox
+        .clone()
+        .expect("fixture update mailbox");
+    mailbox.max_message_bytes = NonZeroU64::new(8).expect("nonzero");
+
+    let error = mailbox
+        .validate()
+        .expect_err("mailbox messages must have a minimum payload budget");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "max_message_bytes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn service_manifest_rejects_artifact_referencing_unknown_handler() {
+    let mut manifest = expected_service_manifest();
+    manifest.artifacts[0].handler_name = Some("missing".parse().expect("valid name"));
+
+    let error = manifest
+        .validate()
+        .expect_err("artifacts must reference declared handlers");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "artifacts.handler_name",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn artifact_ref_rejects_empty_path() {
+    let mut artifact = expected_service_manifest().artifacts[0].clone();
+    artifact.artifact_path = "   ".to_string();
+
+    let error = artifact
+        .validate()
+        .expect_err("artifact paths must not be blank");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::EmptyField {
+            field: "artifact_path",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn artifact_ref_rejects_control_character_path() {
+    let mut artifact = expected_service_manifest().artifacts[0].clone();
+    artifact.artifact_path = "/public/index\u{0000}.html".to_string();
+
+    let error = artifact
+        .validate()
+        .expect_err("artifact paths must reject control characters");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "artifact_path",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_decodes_legacy_nested_container_defaults() {
+    let mut value: json::Value = json::from_str(DEPLOYMENT_BUNDLE_FIXTURE)
+        .expect("bundle fixture must decode as JSON value");
+    let container = value
+        .get_mut("container")
+        .and_then(json::Value::as_object_mut)
+        .expect("bundle fixture container must be object");
+    for field in [
+        "inrou",
+        "required_config_names",
+        "required_secret_names",
+        "config_exports",
+    ] {
+        assert!(
+            container.remove(field).is_some(),
+            "nested container should declare `{field}` before the legacy omission check"
+        );
+    }
+
+    let bundle: SoraDeploymentBundleV1 =
+        json::from_value(value).expect("legacy nested container defaults must decode");
+
+    assert_eq!(bundle, expected_deployment_bundle());
+    bundle
+        .validate_for_admission()
+        .expect("legacy nested container defaults should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_uses_embedded_container_hash() {
+    let container: SoraContainerManifestV1 =
+        json::from_str(CONTAINER_FIXTURE).expect("container fixture must decode");
+    let bundle: SoraDeploymentBundleV1 =
+        json::from_str(DEPLOYMENT_BUNDLE_FIXTURE).expect("bundle fixture must decode");
+    let container_hash = Hash::new(Encode::encode(&container));
+
+    assert_eq!(bundle.container, container);
+    assert_eq!(bundle.container_manifest_hash(), container_hash);
+    assert_eq!(bundle.service.container.manifest_hash, container_hash);
+    assert_eq!(
+        bundle.service_manifest_hash(),
+        Hash::new(Encode::encode(&bundle.service))
+    );
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_rejects_container_drift_without_reference_update() {
+    let mut bundle: SoraDeploymentBundleV1 =
+        json::from_str(DEPLOYMENT_BUNDLE_FIXTURE).expect("bundle fixture must decode");
+    bundle.container.args.push("--trace".to_string());
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("container drift must invalidate the embedded manifest reference");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "service.container.manifest_hash",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_accepts_container_change_after_reference_refresh() {
+    let mut bundle: SoraDeploymentBundleV1 =
+        json::from_str(DEPLOYMENT_BUNDLE_FIXTURE).expect("bundle fixture must decode");
+    bundle
+        .container
+        .env
+        .insert("FEATURE_FLAG".to_string(), "enabled".to_string());
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    bundle
+        .validate_for_admission()
+        .expect("refreshed container manifest reference should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_rejects_public_route_without_healthcheck() {
+    let mut bundle: SoraDeploymentBundleV1 =
+        json::from_str(DEPLOYMENT_BUNDLE_FIXTURE).expect("bundle fixture must decode");
+    bundle.container.lifecycle.healthcheck_path = None;
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("public routes must require a healthcheck path");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.lifecycle.healthcheck_path",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn deployment_bundle_rejects_mutable_binding_without_state_write_capability() {
+    let mut bundle = expected_deployment_bundle();
+    bundle.container.capabilities.allow_state_writes = false;
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("mutable state bindings require state-write capability");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.capabilities.allow_state_writes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn deployment_bundle_rejects_update_handler_without_state_write_capability() {
+    let mut bundle = expected_deployment_bundle();
+    bundle.container.capabilities.allow_state_writes = false;
+    for binding in &mut bundle.service.state_bindings {
+        binding.mutability = SoraStateMutabilityV1::ReadOnly;
+    }
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("update handlers require state-write capability");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.capabilities.allow_state_writes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn deployment_bundle_rejects_http_service_with_ivm_runtime() {
+    let mut bundle = expected_deployment_bundle();
+    bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.state_bindings.clear();
+    bundle.service.handlers.clear();
+    bundle.service.artifacts.clear();
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("HTTP services require Inrou runtime containers");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.runtime",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_accepts_inrou_http_service_fixture() {
+    let bundle = expected_inrou_http_deployment_bundle();
+
+    bundle
+        .validate_for_admission()
+        .expect("valid Inrou HTTP deployment bundle should pass admission");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_http_service_without_root_lease_volume() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    bundle
+        .service
+        .lease_volumes
+        .retain(|volume| !volume.attaches_per_replica());
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("Inrou HTTP services require one persistent root volume");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "service.lease_volumes",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_http_service_without_shared_lease_volume() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    bundle
+        .service
+        .lease_volumes
+        .retain(SoraLeaseVolumeBindingV1::attaches_per_replica);
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("Inrou HTTP services require shared lease-backed storage");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "service.lease_volumes",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_inrou_http_service_without_ssh_key() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    bundle
+        .container
+        .inrou
+        .as_mut()
+        .expect("inrou metadata")
+        .ssh_authorized_keys
+        .clear();
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("Inrou HTTP services require SSH authorized keys");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.inrou.ssh_authorized_keys",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_http_service_replica_count_over_quota() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    bundle.service.replicas = NonZeroU16::new(5).expect("nonzero");
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("HTTP service replicas must stay within quota class limits");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "service.replicas",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_http_service_task_limit_over_quota() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    bundle.container.resources.max_tasks = NonZeroU16::new(1_025).expect("nonzero");
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("HTTP service resources must stay within quota class limits");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.resources.max_tasks",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_rejects_http_service_lease_bytes_over_quota() {
+    let mut bundle = expected_inrou_http_deployment_bundle();
+    let shared = bundle
+        .service
+        .lease_volumes
+        .iter_mut()
+        .find(|volume| volume.attaches_shared_across_replicas())
+        .expect("shared lease volume");
+    shared.max_total_bytes = NonZeroU64::new(600 * 1024 * 1024 * 1024).expect("nonzero");
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("HTTP service lease storage must stay within quota class limits");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "service.lease_volumes",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_rejects_expected_schema_version_drift() {
+    let mut bundle: SoraDeploymentBundleV1 =
+        json::from_str(DEPLOYMENT_BUNDLE_FIXTURE).expect("bundle fixture must decode");
+    bundle.service.container.expected_schema_version =
+        bundle.container.schema_version.saturating_add(1);
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("container schema-version drift must fail admission");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::InvalidField {
+            field: "container.expected_schema_version",
+            ..
+        }
+    ));
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn deployment_bundle_fixture_rejects_top_level_schema_version_drift() {
+    let mut bundle: SoraDeploymentBundleV1 =
+        json::from_str(DEPLOYMENT_BUNDLE_FIXTURE).expect("bundle fixture must decode");
+    bundle.schema_version = bundle.schema_version.saturating_add(1);
+
+    let error = bundle
+        .validate_for_admission()
+        .expect_err("deployment bundle schema-version drift must fail admission");
+
+    assert!(matches!(
+        error,
+        SoraCloudManifestError::UnsupportedVersion {
+            manifest: "sora deployment bundle",
+            expected: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            ..
+        }
+    ));
 }
 
 #[cfg(feature = "json")]
