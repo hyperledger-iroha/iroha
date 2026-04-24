@@ -9687,18 +9687,18 @@ mod tests {
         iroha_data_model::nexus::DataSpaceId,
         iroha_data_model::nexus::DataSpaceCatalog,
     ) {
-        let sbp = iroha_data_model::nexus::DataSpaceId::new(12);
+        let paynet = iroha_data_model::nexus::DataSpaceId::new(12);
         let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
             iroha_data_model::nexus::DataSpaceMetadata::default(),
             iroha_data_model::nexus::DataSpaceMetadata {
-                id: sbp,
-                alias: "sbp".to_owned(),
+                id: paynet,
+                alias: "paynet".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },
         ])
         .expect("retail dataspace catalog");
-        (sbp, catalog)
+        (paynet, catalog)
     }
 
     fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
@@ -11467,25 +11467,25 @@ seiyaku AliasPayout {{
             [],
         );
         let state = State::new_for_testing(world, kura, query);
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let alias_literal = "merchant@sbp";
+        let alias_literal = "merchant@paynet";
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
@@ -11551,7 +11551,7 @@ seiyaku AliasPayout {{
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account], []);
         let state = State::new_for_testing(world, kura, query);
-        let (_sbp, catalog) = retail_dataspace_catalog();
+        let (_paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -11565,7 +11565,7 @@ seiyaku AliasPayout {{
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000_000);
-        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, b" merchant@sbp ");
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, b" merchant@paynet ");
         vm.set_register(10, alias_ptr);
 
         let err = host
@@ -11586,9 +11586,9 @@ seiyaku AliasPayout {{
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account, merchant_account], []);
         let state = State::new_for_testing(world, kura, query);
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11597,7 +11597,7 @@ seiyaku AliasPayout {{
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing()
@@ -11611,7 +11611,7 @@ seiyaku AliasPayout {{
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000_000);
-        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, b"merchant@sbp");
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, b"merchant@paynet");
         vm.set_register(10, alias_ptr);
 
         let err = host
@@ -11632,10 +11632,10 @@ seiyaku AliasPayout {{
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account, merchant_account], []);
         let state = State::new_for_testing(world, kura, query);
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let alias_literal = "merchant@sbp";
-        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let alias_literal = "merchant@paynet";
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -11644,7 +11644,7 @@ seiyaku AliasPayout {{
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
@@ -11680,7 +11680,7 @@ seiyaku AliasPayout {{
             .parse()
             .expect("payment asset definition id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
@@ -11706,15 +11706,15 @@ seiyaku AliasPayout {{
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_for_testing(world, kura, query);
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let alias_literal = "merchant@bank.sbp";
+        let alias_literal = "merchant@bank.paynet";
         let alias = AccountAlias::new(
             "merchant".parse().expect("alias label"),
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -11733,7 +11733,7 @@ seiyaku AliasPayout {{
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
@@ -11745,7 +11745,7 @@ seiyaku AliasPayout {{
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
@@ -11816,7 +11816,7 @@ seiyaku AliasPayout {{
             .parse()
             .expect("payment asset definition id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
@@ -11841,15 +11841,15 @@ seiyaku AliasPayout {{
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_for_testing(world, kura, query);
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let alias_literal = "merchant@bank.sbp";
+        let alias_literal = "merchant@bank.paynet";
         let alias = AccountAlias::new(
             "merchant".parse().expect("alias label"),
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -11868,13 +11868,13 @@ seiyaku AliasPayout {{
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
@@ -11915,7 +11915,7 @@ seiyaku AliasPayout {{
             .parse()
             .expect("payment asset definition id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
@@ -11940,15 +11940,15 @@ seiyaku AliasPayout {{
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_for_testing(world, kura, query);
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let alias_literal = "merchant@bank.sbp";
+        let alias_literal = "merchant@bank.paynet";
         let alias = AccountAlias::new(
             "merchant".parse().expect("alias label"),
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -11973,7 +11973,7 @@ seiyaku AliasPayout {{
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
@@ -12610,7 +12610,7 @@ seiyaku Vault {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -12618,17 +12618,17 @@ seiyaku Vault {
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
@@ -12655,7 +12655,7 @@ seiyaku AliasPayout {
 
   #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), account_id("merchant@sbp"), SettlementAsset, amount);
+    transfer_asset(authority(), account_id("merchant@paynet"), SettlementAsset, amount);
     return amount;
   }
 }
@@ -12784,7 +12784,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -12792,17 +12792,17 @@ seiyaku AliasPayout {
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
@@ -12829,7 +12829,7 @@ seiyaku AliasPayout {
 
   #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    let merchant = resolve_account_alias("merchant@sbp");
+    let merchant = resolve_account_alias("merchant@paynet");
     transfer_asset(authority(), merchant, SettlementAsset, amount);
     return amount;
   }
@@ -12946,7 +12946,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -12976,7 +12976,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -12989,7 +12989,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
@@ -13003,7 +13003,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -13015,7 +13015,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -13037,7 +13037,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            r#"resolve_account_alias("merchant@bank.paynet")"#,
             0,
         );
 
@@ -13160,7 +13160,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13168,11 +13168,11 @@ seiyaku AliasPayout {
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
         tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
-        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
@@ -13199,7 +13199,7 @@ seiyaku AliasPayout {
 
   #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    let merchant = resolve_account_alias("merchant@sbp");
+    let merchant = resolve_account_alias("merchant@paynet");
     transfer_asset(authority(), merchant, SettlementAsset, amount);
     return amount;
   }
@@ -13282,7 +13282,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13293,7 +13293,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.apply();
@@ -13302,7 +13302,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"resolve_account_alias("merchant@sbp")"#,
+            r#"resolve_account_alias("merchant@paynet")"#,
             0,
         );
 
@@ -13375,7 +13375,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (_sbp, catalog) = retail_dataspace_catalog();
+        let (_paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13447,7 +13447,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -13476,7 +13476,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13489,7 +13489,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
@@ -13503,13 +13503,13 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -13531,7 +13531,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            r#"resolve_account_alias("merchant@bank.paynet")"#,
             0,
         );
 
@@ -13609,7 +13609,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13620,14 +13620,18 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.apply();
         block.commit().expect("commit alias permissions");
 
-        let contract =
-            install_alias_payout_contract(&state, &authority, r#"account_id("merchant@sbp")"#, 0);
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"account_id("merchant@paynet")"#,
+            0,
+        );
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let bind_payload =
@@ -13698,7 +13702,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (_sbp, catalog) = retail_dataspace_catalog();
+        let (_paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13766,7 +13770,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -13795,7 +13799,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13808,7 +13812,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
@@ -13822,13 +13826,13 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -13850,7 +13854,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"account_id("merchant@bank.sbp")"#,
+            r#"account_id("merchant@bank.paynet")"#,
             0,
         );
 
@@ -13916,7 +13920,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -13945,7 +13949,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -13958,7 +13962,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
@@ -13978,7 +13982,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -14000,7 +14004,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"account_id("merchant@bank.sbp")"#,
+            r#"account_id("merchant@bank.paynet")"#,
             0,
         );
 
@@ -14066,7 +14070,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -14095,7 +14099,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -14108,7 +14112,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias,
@@ -14122,7 +14126,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -14137,7 +14141,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"account_id("merchant@bank.sbp")"#,
+            r#"account_id("merchant@bank.paynet")"#,
             0,
         );
 
@@ -14200,7 +14204,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -14229,7 +14233,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -14242,7 +14246,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias,
@@ -14256,7 +14260,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -14271,7 +14275,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            r#"resolve_account_alias("merchant@bank.paynet")"#,
             0,
         );
 
@@ -14334,7 +14338,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -14363,7 +14367,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -14376,7 +14380,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
@@ -14396,7 +14400,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -14418,7 +14422,7 @@ seiyaku AliasPayout {
         let contract = install_alias_payout_contract(
             &state,
             &authority,
-            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            r#"resolve_account_alias("merchant@bank.paynet")"#,
             0,
         );
 
@@ -14495,7 +14499,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (_sbp, catalog) = retail_dataspace_catalog();
+        let (_paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -14578,7 +14582,7 @@ seiyaku AliasPayout {
             [],
         );
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (_sbp, catalog) = retail_dataspace_catalog();
+        let (_paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -14647,7 +14651,7 @@ seiyaku AliasPayout {
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
-        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain_id = DomainId::try_new("bank", "paynet").expect("retail domain id");
         let base_domain = Domain::new(fixture_domain_id()).build(&authority);
         let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
         let genesis_domain =
@@ -14677,7 +14681,7 @@ seiyaku AliasPayout {
         );
         crate::sns::seed_default_namespace_policies(&mut world);
         let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let (sbp, catalog) = retail_dataspace_catalog();
+        let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -14690,7 +14694,7 @@ seiyaku AliasPayout {
             Some(AccountAliasDomain::new(
                 "bank".parse().expect("alias domain name"),
             )),
-            sbp,
+            paynet,
         );
         iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
             alias.clone(),
@@ -14704,7 +14708,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -14716,7 +14720,7 @@ seiyaku AliasPayout {
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(sbp),
+                scope: AccountAliasPermissionScope::Dataspace(paynet),
             }),
         );
         tx.world.add_account_permission(
@@ -14749,7 +14753,7 @@ seiyaku AliasPayout {
 
   #[access(read="*", write="*")]
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), account_id("merchant@bank.sbp"), SettlementAsset, amount);
+    transfer_asset(authority(), account_id("merchant@bank.paynet"), SettlementAsset, amount);
     return amount;
   }
 }

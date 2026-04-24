@@ -11878,7 +11878,7 @@ mod nexus_asset_selector_tests {
     #[test]
     fn nexus_fees_parse_rejects_non_xor_asset_selector() {
         let cfg = NexusFees {
-            fee_asset_id: "pkr#sbp".to_owned(),
+            fee_asset_id: "pkr#paynet".to_owned(),
             ..NexusFees::default()
         };
 

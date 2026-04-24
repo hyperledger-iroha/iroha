@@ -6,6 +6,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
+- Carry the verified lane relay JSON-state/key change through the next UC6 integration corridor.
+  - The focused crate checks are green as of 2026-04-24, but no live UC6 settlement-smoke run or topology reset has been performed from this tree.
+  - Before any live deployment, confirm the deploy/Core API smoke path still uses `relay_state_key`, JSON relay state, and the simulation gate against the exact finalization payload.
+  - If a topology plan selects reset mode while validating this change, stop before approval and reassess the rollout scope.
 - Carry the Torii routed-read and telemetry fixes through the next workspace validation corridor.
   - The crate-local sweep is green as of 2026-04-24 with `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`.
   - When validation budget allows, carry the alias-routing and Torii telemetry slices through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.

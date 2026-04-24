@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - ተለዋጭ ሞዴል;
   - ቀኖናዊ መለያ ማንነት ጎራ ወይም የውሂብ ቦታ ክፍልን በጭራሽ አያካትትም።
   - `AccountAlias` እሴቶች በ `AccountId` ላይ የተደረደሩ የተለያዩ የኤስኤንኤስ ማሰሪያዎች ናቸው።
-  - እንደ `merchant@banka.sbp` ያሉ በጎራ ብቃት ያላቸው ተለዋጭ ስሞች ሁለቱንም ጎራ እና የውሂብ ቦታን በቅጥያ ማሰሪያ ውስጥ ይይዛሉ።
-  - እንደ `merchant@sbp` ያሉ የዳታ ስፔስ-ስር ተለዋጭ ስሞች የውሂብ ቦታን ብቻ ይይዛሉ እና ስለዚህ በተፈጥሮ ከ `Account::new(...)` ጋር ያጣምራሉ ።
+  - እንደ `merchant@banka.paynet` ያሉ በጎራ ብቃት ያላቸው ተለዋጭ ስሞች ሁለቱንም ጎራ እና የውሂብ ቦታን በቅጥያ ማሰሪያ ውስጥ ይይዛሉ።
+  - እንደ `merchant@paynet` ያሉ የዳታ ስፔስ-ስር ተለዋጭ ስሞች የውሂብ ቦታን ብቻ ይይዛሉ እና ስለዚህ በተፈጥሮ ከ `Account::new(...)` ጋር ያጣምራሉ ።
   - ሙከራዎች እና ዕቃዎች መጀመሪያ ሁለንተናዊውን `AccountId` መዝራት አለባቸው፣ ከዚያም ተለዋጭ ስም ሊዝ፣ ቅጽል ስም ፈቃዶችን እና ማንኛውንም የጎራ ግምቶችን በራሱ መለያ ማንነት ውስጥ ከማስቀመጥ ይልቅ በተናጠል ማከል አለባቸው።
   - ይፋዊ ነጠላ መለያ ፍለጋ አሁን በቅጽል ስሞች (`FindAliasesByAccountId`) ላይ ያተኩራል። የመለያው ማንነት ራሱ ያለገደብ ይቆያል።### የንብረት መግለጫዎች እና ንብረቶች
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` በጽሑፍ እንደ ያልተቀደሰ Base58 አድራሻ ከስሪት እና ቼክተም ጋር ተጋልጧል።
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```የስደት ማስታወሻ፡-
 - የድሮ `name#domain` የንብረት-ፍቺ መታወቂያዎች v1 ውስጥ ተቀባይነት የላቸውም።
 - የህዝብ ንብረት መራጮች አንድ የንብረት-ፍቺ ቅርጸት ብቻ ይጠቀማሉ፡ ቀኖናዊ Base58 መታወቂያዎች። ተለዋጭ ስሞች እንደ አማራጭ መራጮች ይቆያሉ፣ ግን በተመሳሳይ ቀኖናዊ መታወቂያ ይፍቱ።

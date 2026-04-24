@@ -107,7 +107,7 @@ fn account_alias_is_open_retail_namespace(
     let domain_alias = alias.domain.as_ref().map(|domain| domain.name().as_ref());
     matches!(
         (dataspace_alias, domain_alias),
-        ("sbp", None) | ("sbp", Some("hbl" | "ubl")) | ("cbuae", None)
+        ("paynet", None) | ("paynet", Some("hbl" | "ubl")) | ("cbuae", None)
     )
 }
 

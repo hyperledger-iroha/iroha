@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - דגם כינוי:
   - זהות חשבון קנונית לעולם אינה כוללת תחום או פלח מרחב נתונים.
   - ערכי `AccountAlias` הם כריכות SNS נפרדות בשכבות על גבי `AccountId`.
-  - כינויים מוסמכים לדומיין כגון `merchant@banka.sbp` נושאים גם דומיין וגם מרחב נתונים בקישור הכינוי.
-  - כינויים של בסיס נתונים של מרחב נתונים כגון `merchant@sbp` נושאים רק את מרחב הנתונים ולכן מתאימים באופן טבעי ל-`Account::new(...)`.
+  - כינויים מוסמכים לדומיין כגון `merchant@banka.paynet` נושאים גם דומיין וגם מרחב נתונים בקישור הכינוי.
+  - כינויים של בסיס נתונים של מרחב נתונים כגון `merchant@paynet` נושאים רק את מרחב הנתונים ולכן מתאימים באופן טבעי ל-`Account::new(...)`.
   - בדיקות ותוספות צריכים לראות תחילה את ה-`AccountId` האוניברסלי, ולאחר מכן להוסיף חכירות כינוי, הרשאות כינוי וכל מדינה בבעלות דומיין בנפרד במקום לקודד הנחות דומיין לזהות החשבון עצמו.
   - חיפוש חשבון יחיד ציבורי מתמקד כעת בכינויים (`FindAliasesByAccountId`); זהות החשבון עצמה נשארת ללא דומיין.### הגדרות ונכסים של נכסים
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` חשופה טקסטואלית ככתובת Base58 ללא קידומת עם ניהול גרסאות ובדיקת סכום.
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```הערת הגירה:
 - מזהי `name#domain` ישנים בהגדרת נכס אינם מתקבלים בגרסה 1.
 - בוררי נכסים ציבוריים משתמשים בפורמט אחד בלבד של הגדרת נכס: מזהי Base58 קנוניים. כינויים נשארים בוררים אופציונליים, אבל נפתרים לאותו מזהה קנוני.

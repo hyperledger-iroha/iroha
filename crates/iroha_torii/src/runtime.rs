@@ -2297,7 +2297,7 @@ mod tests {
                     resource:
                         iroha_core::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
                     partition_id: 7,
-                    asset_definition_id: Some("pkr#sbp".to_string()),
+                    asset_definition_id: Some("pkr#paynet".to_string()),
                     manifest_digest: iroha_data_model::da::types::BlobDigest::new([0x11; 32]),
                     storage_ticket: iroha_data_model::da::types::StorageTicketId::new([0x22; 32]),
                     blob_hash: iroha_data_model::da::types::BlobDigest::new([0x33; 32]),
@@ -2328,7 +2328,7 @@ mod tests {
         assert_eq!(resp.shards[0].partition_id, 7);
         assert_eq!(
             resp.shards[0].asset_definition_id.as_deref(),
-            Some("pkr#sbp")
+            Some("pkr#paynet")
         );
         assert_eq!(resp.shards[0].manifest_digest_hex, hex::encode([0x11; 32]));
         assert_eq!(resp.shards[0].storage_ticket_hex, hex::encode([0x22; 32]));

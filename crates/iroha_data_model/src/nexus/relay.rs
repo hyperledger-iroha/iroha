@@ -21,6 +21,8 @@ use crate::{
 };
 
 const FASTPQ_PROOF_DIGEST_DOMAIN: &[u8] = b"iroha:nexus:lane-relay:fastpq-proof:v1";
+/// Prefix for contract-visible verified relay state keys.
+pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
 
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -89,6 +91,21 @@ pub struct LaneRelayEnvelopeRef {
     pub block_height: u64,
     /// Norito hash of the settlement payload.
     pub settlement_hash: HashOf<LaneBlockCommitment>,
+}
+
+impl LaneRelayEnvelopeRef {
+    /// Return the canonical contract-state key for this verified lane relay.
+    #[must_use]
+    pub fn relay_state_key(&self) -> String {
+        let suffix = Hash::new(self.settlement_hash.as_ref());
+        format!(
+            "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_{}_{}_{}_{}",
+            self.dataspace_id.as_u64(),
+            self.lane_id.as_u32(),
+            self.block_height,
+            hex::encode(suffix.as_ref()),
+        )
+    }
 }
 
 /// Verified relay record persisted for restricted-source business effects.
@@ -778,6 +795,20 @@ mod tests {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
         LaneRelayEnvelope::new(header, qc, None, settlement, 0).expect("envelope")
+    }
+
+    #[test]
+    fn relay_envelope_ref_state_key_is_canonical_and_deterministic() {
+        let relay_ref = build_envelope(7, None).relay_ref();
+        let first = relay_ref.relay_state_key();
+        let second = relay_ref.relay_state_key();
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("pkdeploy_verified_lane_relay_2_3_7_"));
+        assert!(!first.contains('/'));
+        let suffix = first.rsplit('_').next().expect("hash suffix");
+        assert_eq!(suffix.len(), 64);
+        assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 
     fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> Qc {

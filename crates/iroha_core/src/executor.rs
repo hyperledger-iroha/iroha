@@ -518,9 +518,10 @@ pub(crate) struct ContractRuntimeExecutionContext {
 }
 
 impl ContractRuntimeExecutionContext {
-    fn allows_bisp_runtime_asset_transfer_bypass(&self) -> bool {
+    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
         self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "bisp" && contract_alias.dataspace_segment() == "bisp"
+            contract_alias.name_segment() == "benefit"
+                && contract_alias.dataspace_segment() == "benefit"
         }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
     }
 }
@@ -4376,7 +4377,7 @@ fn should_bypass_contract_runtime_asset_transfer_check(
     instruction: &InstructionBox,
 ) -> bool {
     contract_runtime_context
-        .is_some_and(ContractRuntimeExecutionContext::allows_bisp_runtime_asset_transfer_bypass)
+        .is_some_and(ContractRuntimeExecutionContext::allows_benefit_runtime_asset_transfer_bypass)
         && extract_transfer_asset(instruction).is_some()
 }
 
@@ -5469,8 +5470,8 @@ mod tests {
     }
 
     #[test]
-    fn contract_runtime_context_allows_bisp_spend_asset_transfers_only_for_bisp_spend_entrypoints()
-    {
+    fn contract_runtime_context_allows_benefit_spend_asset_transfers_only_for_benefit_spend_entrypoints()
+     {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
@@ -5525,11 +5526,11 @@ mod tests {
             0,
             DataSpaceId::UNIVERSAL,
         )
-        .expect("bisp contract address");
+        .expect("benefit contract address");
         let context = ContractRuntimeExecutionContext {
             contract_subject: contract_address.subject_id(),
             contract_address,
-            contract_alias: Some("bisp::bisp".parse().expect("bisp alias")),
+            contract_alias: Some("benefit::benefit".parse().expect("benefit alias")),
             entrypoint: "spend_to_merchant".to_owned(),
         };
 
@@ -5541,11 +5542,11 @@ mod tests {
                 instruction,
                 Some(&context),
             )
-            .expect("bisp spend runtime context should allow queued asset transfer");
+            .expect("benefit spend runtime context should allow queued asset transfer");
     }
 
     #[test]
-    fn contract_runtime_context_does_not_bypass_non_bisp_spend_entrypoints() {
+    fn contract_runtime_context_does_not_bypass_non_benefit_spend_entrypoints() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
@@ -5600,11 +5601,11 @@ mod tests {
             0,
             DataSpaceId::UNIVERSAL,
         )
-        .expect("bisp contract address");
+        .expect("benefit contract address");
         let context = ContractRuntimeExecutionContext {
             contract_subject: contract_address.subject_id(),
             contract_address,
-            contract_alias: Some("bisp::bisp".parse().expect("bisp alias")),
+            contract_alias: Some("benefit::benefit".parse().expect("benefit alias")),
             entrypoint: "create_tranche".to_owned(),
         };
 

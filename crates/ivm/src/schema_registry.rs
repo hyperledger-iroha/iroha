@@ -6,14 +6,10 @@
 //! is currently implemented for a couple of example types.
 
 use iroha_crypto::Hash as IrohaHash;
-use iroha_data_model::{
-    nexus::VerifiedLaneRelayRecord,
-    query::{
-        QueryRequest, QueryResponse,
-        json_wrappers::{QueryRequestJson, query_request_from_json, query_request_to_json},
-    },
+use iroha_data_model::query::{
+    QueryRequest, QueryResponse,
+    json_wrappers::{QueryRequestJson, query_request_from_json, query_request_to_json},
 };
-use iroha_primitives::json::Json;
 
 // Canonical schema type definitions used by the default registry for encoding/decoding.
 // Keep these at module scope so Norito type identity remains stable across encode/decode.
@@ -111,12 +107,6 @@ impl DefaultRegistry {
             version: 1,
         }
     }
-    fn info_verified_lane_relay_record(&self) -> SchemaInfo {
-        SchemaInfo {
-            id: IrohaHash::new(b"VerifiedLaneRelayRecord@1").into(),
-            version: 1,
-        }
-    }
 }
 
 impl SchemaRegistry for DefaultRegistry {
@@ -126,7 +116,6 @@ impl SchemaRegistry for DefaultRegistry {
             "OrderByTime" => Some(self.info_order_by_time()),
             "TradeV1" => Some(self.info_trade_v1()),
             "TradeV2" => Some(self.info_trade_v2()),
-            "VerifiedLaneRelayRecord" => Some(self.info_verified_lane_relay_record()),
             _ => None,
         }
     }
@@ -179,10 +168,6 @@ impl SchemaRegistry for DefaultRegistry {
                 let resp: QueryResponse = norito::json::from_slice(json).ok()?;
                 norito::to_bytes(&resp).ok()
             }
-            "VerifiedLaneRelayRecord" => {
-                let record: VerifiedLaneRelayRecord = norito::json::from_slice(json).ok()?;
-                norito::to_bytes(&record).ok()
-            }
             _ => None,
         }
     }
@@ -230,11 +215,6 @@ impl SchemaRegistry for DefaultRegistry {
                 let resp: QueryResponse = norito::decode_from_bytes(bytes).ok()?;
                 norito::json::to_vec(&resp).ok()
             }
-            "VerifiedLaneRelayRecord" => {
-                let record: VerifiedLaneRelayRecord = norito::decode_from_bytes(bytes).ok()?;
-                let json = Json::try_new(record).ok()?;
-                Some(json.get().as_bytes().to_vec())
-            }
             _ => None,
         }
     }
@@ -256,12 +236,6 @@ impl SchemaRegistry for DefaultRegistry {
             "QueryResponse" => {
                 out.push(("QueryResponse".to_string(), self.info_query_response()));
             }
-            "VerifiedLaneRelayRecord" => {
-                out.push((
-                    "VerifiedLaneRelayRecord".to_string(),
-                    self.info_verified_lane_relay_record(),
-                ));
-            }
             _ => return None,
         }
         Some(out)
@@ -273,10 +247,6 @@ impl SchemaRegistry for DefaultRegistry {
             "Trade" => Some(("TradeV2".to_string(), self.info_trade_v2())),
             "QueryRequest" => Some(("QueryRequest".to_string(), self.info_query_request())),
             "QueryResponse" => Some(("QueryResponse".to_string(), self.info_query_response())),
-            "VerifiedLaneRelayRecord" => Some((
-                "VerifiedLaneRelayRecord".to_string(),
-                self.info_verified_lane_relay_record(),
-            )),
             _ => None,
         }
     }
@@ -284,22 +254,12 @@ impl SchemaRegistry for DefaultRegistry {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
-    use iroha_crypto::Hash;
     use norito::json as njson;
 
     use super::*;
-    use iroha_data_model::{
-        block::{BlockHeader, consensus::LaneBlockCommitment},
-        nexus::{
-            AxtEffectBinding, AxtFastpqBinding, DataSpaceId, LaneId, LaneRelayEnvelope,
-            VerifiedLaneRelayRecord,
-        },
-        query::{
-            QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
-            executor::prelude::FindParameters, runtime::AbiVersion,
-        },
+    use iroha_data_model::query::{
+        QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
+        executor::prelude::FindParameters, runtime::AbiVersion,
     };
 
     fn eq_json(a: &[u8], b: &[u8]) -> bool {
@@ -388,96 +348,5 @@ mod tests {
             .decode_to_json("QueryResponse", &enc)
             .expect("decode to json");
         assert!(eq_json(&json_bytes, &dec));
-    }
-
-    #[test]
-    fn verified_lane_relay_record_decodes_to_contract_visible_json() {
-        let reg = DefaultRegistry::new();
-        let height = 9;
-        let commitment = LaneBlockCommitment {
-            block_height: height,
-            lane_id: LaneId::new(4),
-            dataspace_id: DataSpaceId::new(12),
-            tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
-            swap_metadata: None,
-            receipts: Vec::new(),
-        };
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("nonzero height"),
-            None,
-            None,
-            None,
-            1_700_000_000_000,
-            0,
-        );
-        let envelope =
-            LaneRelayEnvelope::new(header, None, None, commitment, 0).expect("relay envelope");
-        let binding = AxtFastpqBinding {
-            parameter: "fastpq-test".to_string(),
-            source_dsid: 12,
-            source_dataspace: "sbp".to_string(),
-            source_receipt_id: "receipt-1".to_string(),
-            source_tx_commitment: "11".repeat(32),
-            claim_type: "value_conservation".to_string(),
-            claim_digest: "22".repeat(32),
-            witness_commitment: "33".repeat(32),
-            policy_commitment: "44".repeat(32),
-            verified_effect_type: "aed_to_pkr_settlement".to_string(),
-            corridor: "aed-pkr".to_string(),
-            verifier_id: "fastpq".to_string(),
-            verifier_version: "v1".to_string(),
-            target_dsids: vec![1],
-            effect_binding: Some(AxtEffectBinding {
-                destination_domain: Some("hbl".to_string()),
-                destination_account_id: Some("recipient".to_string()),
-                vault_account_id: None,
-                issuance_account_id: None,
-                source_asset_definition_id: None,
-                destination_asset_definition_id: None,
-                source_amount_i64: Some(1),
-                destination_amount_i64: Some(76),
-            }),
-        };
-        let record =
-            VerifiedLaneRelayRecord::new(envelope, Hash::new(b"proof"), 42, [7; 32], binding);
-        let bytes = norito::to_bytes(&record).expect("encode verified relay record");
-
-        let decoded = reg
-            .decode_to_json("VerifiedLaneRelayRecord", &bytes)
-            .expect("decode verified relay record");
-        let value: njson::Value = njson::from_slice(&decoded).expect("parse decoded json");
-
-        assert_eq!(value["relay_ref"]["dataspace_id"].as_u64().unwrap(), 12);
-        assert_eq!(value["relay_ref"]["lane_id"].as_u64().unwrap(), 4);
-        assert_eq!(
-            value["fastpq_binding"]["source_dataspace"]
-                .as_str()
-                .unwrap(),
-            "sbp"
-        );
-        assert_eq!(
-            value["fastpq_binding"]["source_receipt_id"]
-                .as_str()
-                .unwrap(),
-            "receipt-1"
-        );
-        assert_eq!(
-            value["fastpq_binding"]["verified_effect_type"]
-                .as_str()
-                .unwrap(),
-            "aed_to_pkr_settlement"
-        );
-
-        let encoded = reg
-            .encode_json("VerifiedLaneRelayRecord", &decoded)
-            .expect("encode decoded verified relay record");
-        let roundtrip: VerifiedLaneRelayRecord =
-            norito::decode_from_bytes(&encoded).expect("decode roundtrip");
-        assert_eq!(roundtrip.fastpq_binding.source_dsid, 12);
-        assert_eq!(roundtrip.relay_ref.lane_id, LaneId::new(4));
     }
 }

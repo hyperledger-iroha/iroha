@@ -50,8 +50,8 @@ translator: machine-google-reviewed
 - エイリアスモデル:
   - 正規アカウント ID には、ドメインまたはデータスペース セグメントが含まれることはありません。
   - `AccountAlias` 値は、`AccountId` の上に階層化された個別の SNS バインディングです。
-  - `merchant@banka.sbp` などのドメイン修飾エイリアスは、エイリアス バインディングでドメインとデータスペースの両方を保持します。
-  - `merchant@sbp` などのデータスペース ルート エイリアスはデータスペースのみを保持するため、`Account::new(...)` と自然にペアになります。
+  - `merchant@banka.paynet` などのドメイン修飾エイリアスは、エイリアス バインディングでドメインとデータスペースの両方を保持します。
+  - `merchant@paynet` などのデータスペース ルート エイリアスはデータスペースのみを保持するため、`Account::new(...)` と自然にペアになります。
   - テストとフィクスチャは、アカウント ID 自体にドメインの仮定をエンコードするのではなく、最初にユニバーサル `AccountId` をシードし、次にエイリアス リース、エイリアスのアクセス許可、およびドメイン所有の状態を個別に追加する必要があります。
   - パブリック単数アカウント検索はエイリアス (`FindAliasesByAccountId`) に焦点を当てます。アカウント ID 自体はドメインレスのままです。### 資産の定義と資産
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` は、バージョン管理とチェックサムを備えたプレフィックスのない Base58 アドレスとしてテキストで公開されます。
@@ -249,24 +249,24 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#bankb.sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#bankb.sbp \
+  --definition-alias pkr#bankb.paynet \
   --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#bankb.sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```移行メモ:
 - 古い `name#domain` 資産定義 ID は v1 では受け入れられません。
 - パブリック アセット セレクターは、正規の Base58 ID という 1 つのアセット定義形式のみを使用します。エイリアスはオプションのセレクターのままですが、同じ正規 ID に解決されます。

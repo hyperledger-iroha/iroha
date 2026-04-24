@@ -15880,8 +15880,8 @@ mod torii_routed_read_tests {
             "account_id": "alice.i105.invalid",
             "total": 1,
             "items": [{
-                "alias": "merchant@sbp",
-                "dataspace": "sbp",
+                "alias": "merchant@paynet",
+                "dataspace": "paynet",
                 "domain": null,
                 "is_primary": true
             }],
@@ -16542,7 +16542,7 @@ mod torii_routed_read_tests {
     async fn merged_alias_resolve_index_response_deduplicates_identical_bindings() {
         let payload = norito::json!({
             "index": 7,
-            "alias": "merchant@sbp",
+            "alias": "merchant@paynet",
             "account_id": "alice.i105.invalid",
             "source": "on_chain"
         });
@@ -16565,7 +16565,7 @@ mod torii_routed_read_tests {
         let payload: routing::AliasResolveIndexResponseDto =
             norito::json::from_slice(&body).expect("alias-index response");
         assert_eq!(payload.index, 7);
-        assert_eq!(payload.alias, "merchant@sbp");
+        assert_eq!(payload.alias, "merchant@paynet");
         assert_eq!(payload.account_id, "alice.i105.invalid");
         assert_eq!(payload.source.as_deref(), Some("fanout"));
     }
@@ -16577,7 +16577,7 @@ mod torii_routed_read_tests {
             vec![
                 norito::json!({
                     "index": 7,
-                    "alias": "merchant@sbp",
+                    "alias": "merchant@paynet",
                     "account_id": "alice.i105.invalid",
                     "source": "on_chain"
                 }),
@@ -16608,7 +16608,7 @@ mod torii_routed_read_tests {
     async fn merged_alias_resolve_index_response_rejects_malformed_payload() {
         let response = merged_alias_resolve_index_response(
             vec![norito::json!({
-                "alias": "merchant@sbp",
+                "alias": "merchant@paynet",
                 "account_id": "alice.i105.invalid"
             })],
             "proxy",
@@ -16651,13 +16651,13 @@ mod torii_routed_read_tests {
                     "account_id": "alice.i105.invalid",
                     "total": 2,
                     "items": [{
-                        "alias": "merchant@sbp",
-                        "dataspace": "sbp",
+                        "alias": "merchant@paynet",
+                        "dataspace": "paynet",
                         "domain": null,
                         "is_primary": true
                     }, {
-                        "alias": "merchant@banka.sbp",
-                        "dataspace": "sbp",
+                        "alias": "merchant@banka.paynet",
+                        "dataspace": "paynet",
                         "domain": "banka",
                         "is_primary": false
                     }],
@@ -16667,8 +16667,8 @@ mod torii_routed_read_tests {
                     "account_id": "alice.i105.invalid",
                     "total": 1,
                     "items": [{
-                        "alias": "merchant@sbp",
-                        "dataspace": "sbp",
+                        "alias": "merchant@paynet",
+                        "dataspace": "paynet",
                         "domain": null,
                         "is_primary": true
                     }],
@@ -16691,8 +16691,8 @@ mod torii_routed_read_tests {
         assert_eq!(payload.total, 2);
         assert_eq!(payload.items.len(), 2);
         assert_eq!(payload.source.as_deref(), Some("fanout"));
-        assert_eq!(payload.items[0].alias, "merchant@sbp");
-        assert_eq!(payload.items[1].alias, "merchant@banka.sbp");
+        assert_eq!(payload.items[0].alias, "merchant@paynet");
+        assert_eq!(payload.items[1].alias, "merchant@banka.paynet");
     }
 
     #[cfg(feature = "app_api")]
@@ -28744,14 +28744,16 @@ async fn handler_alias_resolve(
         )));
     }
 
-    let visibility = torii_visibility_account_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        "v1/aliases/resolve",
-    )?;
+    if torii_signed_visibility_headers_present(&headers) {
+        let _ = torii_visibility_account_from_headers(
+            &app,
+            &headers,
+            &method,
+            &uri,
+            body.as_ref(),
+            "v1/aliases/resolve",
+        )?;
+    }
     let (_, alias_label) = parse_account_alias_label_with_catalog(
         request.alias.as_str(),
         &app.state.nexus_snapshot().dataspace_catalog,
@@ -28760,13 +28762,11 @@ async fn handler_alias_resolve(
         Ok(routes) => routes,
         Err(response) => return Ok(response),
     };
-    let (allowed_routes, denied_routes) =
-        torii_partition_routes_by_visibility(&app, candidate_routes, &visibility);
 
-    if allowed_routes.len() == 1 && denied_routes == 0 {
+    if candidate_routes.len() == 1 {
         return Ok(execute_torii_single_route_read(
             &app,
-            allowed_routes[0],
+            candidate_routes[0],
             ToriiReadEndpointV1::AliasResolve,
             Vec::new(),
             None,
@@ -28775,15 +28775,10 @@ async fn handler_alias_resolve(
         .await);
     }
 
-    let mut diagnostics = ToriiFanoutDiagnostics::default();
-    for _ in 0..denied_routes {
-        diagnostics.record_denied();
-    }
-    Ok(with_torii_fanout_headers(
-        torii_alias_permission_denied_response(
-            "one or more dataspace routes denied the alias lookup and no allowed route resolved it",
-        ),
-        diagnostics,
+    Ok(torii_proxy_error_response(
+        StatusCode::CONFLICT,
+        "route_conflict",
+        "multiple routes matched the alias dataspace",
     ))
 }
 
@@ -52567,7 +52562,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_returns_permission_denied_when_target_dataspace_is_hidden() {
+    async fn alias_resolve_allows_unsigned_request_for_restricted_target_dataspace() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-denied"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
@@ -52593,28 +52588,22 @@ mod tests {
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
                 .headers()
-                .get("x-iroha-reject-code")
+                .get("x-iroha-route-dataspace-id")
                 .and_then(|value| value.to_str().ok()),
-            Some("permission_denied")
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
+            Some("10")
         );
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await
             .unwrap()
             .to_bytes();
-        let payload =
-            norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error");
-        assert_eq!(payload.code, "permission_denied");
+        let dto: routing::AliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.alias, "merchant@restricted");
+        assert_eq!(dto.account_id, authority.to_string());
     }
 
     #[tokio::test]

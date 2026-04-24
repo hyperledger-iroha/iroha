@@ -489,9 +489,9 @@ fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
     fault_tolerance.max(1)
 }
 
-const LOCALNET_SBP_ALIAS_DATASPACE_ID: u64 = 10;
+const LOCALNET_PAYNET_ALIAS_DATASPACE_ID: u64 = 10;
 const LOCALNET_CBUAE_ALIAS_DATASPACE_ID: u64 = 12;
-const LOCALNET_SBP_ALIAS_LANE_INDEX: u32 = 3;
+const LOCALNET_PAYNET_ALIAS_LANE_INDEX: u32 = 3;
 const LOCALNET_CBUAE_ALIAS_LANE_INDEX: u32 = 4;
 const LOCALNET_NEXUS_ALIAS_LANE_COUNT: i64 = 5;
 
@@ -1390,9 +1390,10 @@ fn localnet_dataspace_catalog(
     if localnet_uses_alias_multilane_catalog(sora_profile) {
         for (alias, id, description) in [
             (
-                "sbp",
-                i64::try_from(LOCALNET_SBP_ALIAS_DATASPACE_ID).expect("SBP dataspace id fits i64"),
-                "SBP / FI retail alias dataspace",
+                "paynet",
+                i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
+                    .expect("PAYNET dataspace id fits i64"),
+                "PAYNET / FI retail alias dataspace",
             ),
             (
                 "cbuae",
@@ -1444,10 +1445,10 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
             "restricted",
         ),
         (
-            i64::from(LOCALNET_SBP_ALIAS_LANE_INDEX),
-            "sbp",
-            "SBP / FI retail alias lane",
-            "sbp",
+            i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
+            "paynet",
+            "PAYNET / FI retail alias lane",
+            "paynet",
             "public",
         ),
         (
@@ -1474,7 +1475,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
 fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<LaneId> {
     let mut lanes = vec![LaneId::SINGLE];
     if localnet_uses_alias_multilane_catalog(sora_profile) {
-        lanes.push(LaneId::new(LOCALNET_SBP_ALIAS_LANE_INDEX));
+        lanes.push(LaneId::new(LOCALNET_PAYNET_ALIAS_LANE_INDEX));
         lanes.push(LaneId::new(LOCALNET_CBUAE_ALIAS_LANE_INDEX));
     }
     lanes
@@ -5079,8 +5080,8 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            lanes_by_alias.get("sbp"),
-            Some(&("sbp".to_owned(), "public".to_owned()))
+            lanes_by_alias.get("paynet"),
+            Some(&("paynet".to_owned(), "public".to_owned()))
         );
         assert_eq!(
             lanes_by_alias.get("cbuae"),
@@ -5108,9 +5109,10 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            dataspaces_by_alias.get("sbp"),
+            dataspaces_by_alias.get("paynet"),
             Some(
-                &i64::try_from(LOCALNET_SBP_ALIAS_DATASPACE_ID).expect("SBP dataspace id fits i64")
+                &i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
+                    .expect("PAYNET dataspace id fits i64")
             )
         );
         assert_eq!(
@@ -5145,7 +5147,7 @@ mod tests {
 
         let expected_lanes = BTreeSet::from([
             LaneId::SINGLE.as_u32(),
-            LOCALNET_SBP_ALIAS_LANE_INDEX,
+            LOCALNET_PAYNET_ALIAS_LANE_INDEX,
             LOCALNET_CBUAE_ALIAS_LANE_INDEX,
         ]);
         assert_eq!(

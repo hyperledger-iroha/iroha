@@ -86,8 +86,8 @@ Universal-account rollout does not change the canonical account identity model:
 
 - `AccountId` remains the canonical, domainless account subject.
 - `AccountAlias` values are separate SNS bindings on top of that subject. A
-  domain-qualified alias such as `merchant@banka.sbp` and a dataspace-root alias
-  such as `merchant@sbp` can both resolve to the same canonical `AccountId`.
+  domain-qualified alias such as `merchant@banka.paynet` and a dataspace-root alias
+  such as `merchant@paynet` can both resolve to the same canonical `AccountId`.
 - Canonical account registration is always `Account::new(AccountId)` /
   `NewAccount::new(AccountId)`; there is no domain-qualified or domain-materialized
   registration path.

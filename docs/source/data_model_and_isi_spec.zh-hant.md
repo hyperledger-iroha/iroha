@@ -198,13 +198,13 @@ ID 具有穩定的字串形式，可進行 `Display`/`FromStr` 往返。名稱�
 - 參數更新：
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` 更新並發出 `ConfigurationEvent::Changed`。CLI / Torii 資產定義 id + 別名範例：
 - 使用規範的 Base58 id + 明確名稱 + 長別名註冊：
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
 - 使用規範的 Base58 id + 明確名稱 + 短別名註冊：
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - 由別名 + 帳戶組成的 Mint：
-  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
 - 將別名解析為規範的 Base58 id：
-  - `POST /v1/assets/aliases/resolve` 與 JSON `{ "alias": "pkr#bankb.sbp" }`
+  - `POST /v1/assets/aliases/resolve` 與 JSON `{ "alias": "pkr#bankb.paynet" }`
 
 遷移注意事項：
 - `name#domain` 文字資產定義 ID 在第一個版本中仍然故意不受支援；使用規範的 Base58 ID 或解析點分別名。

@@ -2837,6 +2837,7 @@ fn validate_local_continuity(
             })?;
             validate_source_payload(
                 source_payload,
+                &receipt.transfer_id,
                 &receipt.lineage_id,
                 &receipt.amount,
                 issuer_public_key_base64,
@@ -2887,12 +2888,18 @@ fn validate_local_continuity(
 
 fn validate_source_payload(
     raw_payload: &str,
+    expected_transfer_id: &str,
     recipient_lineage_id: &str,
     amount: &str,
     issuer_public_key_base64: &str,
     revoked_verdict_ids: &BTreeSet<String>,
 ) -> Result<(), Error> {
     let payload = decode_transfer_payload(raw_payload)?;
+    if payload.receipt.transfer_id != expected_transfer_id {
+        return Err(conversion_error(
+            "source payload transfer_id does not match the incoming receipt".to_owned(),
+        ));
+    }
     ensure_canonical_lineage_state_identifiers(&payload.anchor, "source_payload.anchor")?;
     validate_issuer_signature(
         authorization_unsigned_payload(&payload.anchor.authorization)?,
@@ -5194,6 +5201,57 @@ mod tests {
         let left = sync_request_hash_hex(&lhs).expect("left hash");
         let right = sync_request_hash_hex(&rhs).expect("right hash");
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn source_payload_rejects_mismatched_transfer_id() {
+        let offline_public_key = BASE64_STANDARD.encode([7u8; 32]);
+        let mut receipt = receipt_for_signature_test(offline_public_key.clone());
+        receipt.transfer_id = "source-transfer".to_owned();
+        receipt.direction = "outgoing".to_owned();
+        receipt.counterparty_lineage_id = "receiver-lineage".to_owned();
+        receipt.amount = "10".to_owned();
+        let anchor = OfflineLineageState {
+            lineage_id: receipt.lineage_id.clone(),
+            account_id: receipt.account_id.clone(),
+            device_id: receipt.device_id.clone(),
+            offline_public_key,
+            asset_definition_id: "pkr#paynet".to_owned(),
+            balance: "25".to_owned(),
+            locked_balance: "0".to_owned(),
+            server_revision: 1,
+            server_state_hash: "pre".to_owned(),
+            pending_local_revision: 0,
+            authorization: receipt
+                .authorization
+                .clone()
+                .expect("receipt authorization"),
+            issuer_signature_base64: "issuer-signature".to_owned(),
+        };
+        let payload = OfflineOutgoingTransferPayload {
+            version: 1,
+            anchor,
+            ancestry_receipts: Vec::new(),
+            receipt,
+        };
+        let raw_payload =
+            String::from_utf8(canonical_json_bytes(&payload).expect("source payload json"))
+                .expect("utf8 payload");
+
+        let err = validate_source_payload(
+            &raw_payload,
+            "incoming-transfer",
+            "receiver-lineage",
+            "10",
+            "unused-issuer-key",
+            &BTreeSet::new(),
+        )
+        .expect_err("mismatched source transfer_id must be rejected");
+
+        assert!(
+            format!("{err:?}").contains("transfer_id"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]

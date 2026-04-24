@@ -71,7 +71,7 @@ portal consumed.
 
 ## Aggregate DSL example
 
-SBP dashboards can read alias-derived PKR holder totals directly from Torii
+PAYNET dashboards can read alias-derived PKR holder totals directly from Torii
 without middleware:
 
 ```json
@@ -79,8 +79,8 @@ without middleware:
   "filter": {
     "op": "and",
     "args": [
-      { "op": "in", "args": ["primary_alias_domain", ["hbl.sbp", "ubl.sbp"]] },
-      { "op": "nin", "args": ["primary_alias", ["cbdc@hbl.sbp", "cbdc@ubl.sbp"]] }
+      { "op": "in", "args": ["primary_alias_domain", ["hbl.paynet", "ubl.paynet"]] },
+      { "op": "nin", "args": ["primary_alias", ["cbdc@hbl.paynet", "cbdc@ubl.paynet"]] }
     ]
   },
   "aggregate": {
