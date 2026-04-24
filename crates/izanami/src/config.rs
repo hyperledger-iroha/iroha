@@ -113,28 +113,74 @@ pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 #[allow(clippy::struct_excessive_bools)]
 pub struct FaultArgs {
     /// Enable crash-and-restart faults.
-    #[arg(long = "fault-enable-crash-restart", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-crash-restart",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub crash_restart: bool,
     /// Enable wipe-storage-and-restart faults.
-    #[arg(long = "fault-enable-wipe-storage", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-wipe-storage",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub wipe_storage: bool,
     /// Enable invalid-transaction spam faults.
     #[arg(
         long = "fault-enable-spam-invalid-transactions",
-        default_value_t = true
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
     )]
     pub spam_invalid_transactions: bool,
     /// Enable transient network latency faults.
-    #[arg(long = "fault-enable-network-latency", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-network-latency",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub network_latency: bool,
     /// Enable network partition faults.
-    #[arg(long = "fault-enable-network-partition", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-network-partition",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub network_partition: bool,
     /// Enable CPU stress faults.
-    #[arg(long = "fault-enable-cpu-stress", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-cpu-stress",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub cpu_stress: bool,
     /// Enable disk saturation faults.
-    #[arg(long = "fault-enable-disk-saturation", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-disk-saturation",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub disk_saturation: bool,
 }
 

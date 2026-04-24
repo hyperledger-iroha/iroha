@@ -347,6 +347,28 @@ mod tests {
     }
 
     #[test]
+    fn cli_accepts_explicit_false_fault_toggles() {
+        let (cli_args, _) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--fault-enable-crash-restart=false".to_string(),
+            "--fault-enable-wipe-storage=false".to_string(),
+            "--fault-enable-spam-invalid-transactions=false".to_string(),
+            "--fault-enable-network-latency=false".to_string(),
+            "--fault-enable-network-partition=false".to_string(),
+            "--fault-enable-cpu-stress=false".to_string(),
+            "--fault-enable-disk-saturation=false".to_string(),
+        ]);
+
+        assert!(!cli_args.faults.crash_restart);
+        assert!(!cli_args.faults.wipe_storage);
+        assert!(!cli_args.faults.spam_invalid_transactions);
+        assert!(!cli_args.faults.network_latency);
+        assert!(!cli_args.faults.network_partition);
+        assert!(!cli_args.faults.cpu_stress);
+        assert!(!cli_args.faults.disk_saturation);
+    }
+
+    #[test]
     fn cli_overrides_submitter_count() {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();

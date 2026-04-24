@@ -2,6 +2,21 @@
 
 Last updated: 2026-04-24
 
+## 2026-04-24 Izanami communication vulnerability matrix scaffold
+
+- `crates/izanami/src/communication_vulnerabilities.rs` now records the five scenario taxonomy from "Blockchain Communication Vulnerabilities" (targeted load, transient failure, packet loss, stopping, leader isolation), the paper-shaped 20-node/800s/200 TPS constants, the paper baseline outcomes for Algorand, Aptos, Avalanche, Redbelly, and Solana, and the current Izanami coverage profile for each case.
+- `scripts/run_izanami_communication_vulnerability_matrix.sh` adds a reusable matrix runner with `quick` and paper-shaped modes. It writes `summary.md`, `summary.tsv`, and per-scenario logs under `dist/izanami-communication-vuln-*`, including the paper baseline table beside Iroha/Izanami run results.
+- The matrix runner now accepts explicit `--fault-enable-*=true|false` values and classifies sandbox loopback-bind failures as `blocked-loopback-bind` so environment failures are not confused with protocol classifications.
+- `docs/source/izanami_communication_vulnerabilities.md` documents how the paper maps to Izanami, the comparison baseline, classification signals, and the current exact-vs-approximate coverage boundaries. Packet loss and leader isolation are explicitly marked as approximations until Izanami gets exact packet-drop windows and dynamic proposer tracking.
+- Quick-mode execution was attempted at `dist/izanami-communication-vuln-quick-20260424-144421`, but all five scenarios stopped before node startup because this sandbox denied binding `127.0.0.1:30000` with `Operation not permitted`. No Iroha vulnerability classification was produced from that run.
+- Focused validation for this scaffold:
+  - `cargo fmt --all`
+  - `cargo test -p izanami communication_vulnerabilities --lib -- --nocapture`
+  - `cargo test -p izanami cli_accepts_explicit_false_fault_toggles --bin izanami -- --nocapture`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --help`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --mode quick --out dist/izanami-communication-vuln-quick-20260424-144421` (blocked by sandbox loopback bind restrictions)
+
 ## 2026-04-24 Soracloud manifest fixture canonicalization and coverage
 
 - `fixtures/soracloud/sora_container_manifest_v1.json`, `fixtures/soracloud/sora_service_manifest_v1.json`, and `fixtures/soracloud/sora_deployment_bundle_v1.json` now match the current Soracloud V1 JSON schema: optional `inrou` serializes explicitly as `null`, empty default arrays use the compact canonical `[]` form, and the deployment bundle carries the refreshed canonical container manifest hash.
