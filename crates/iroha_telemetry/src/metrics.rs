@@ -12383,6 +12383,16 @@ impl Default for Metrics {
             &["stat"],
         )
         .expect("Infallible");
+        register_guarded(&registry, &torii_sorafs_registry_manifests_total);
+        register_guarded(&registry, &torii_sorafs_registry_aliases_total);
+        register_guarded(&registry, &torii_sorafs_registry_orders_total);
+        register_guarded(&registry, &torii_sorafs_replication_sla_total);
+        register_guarded(&registry, &torii_sorafs_replication_backlog_total);
+        register_guarded(
+            &registry,
+            &torii_sorafs_replication_completion_latency_epochs,
+        );
+        register_guarded(&registry, &torii_sorafs_replication_deadline_slack_epochs);
         let soranet_privacy_circuit_events_total = IntCounterVec::new(
             Opts::new(
                 "soranet_privacy_circuit_events_total",
