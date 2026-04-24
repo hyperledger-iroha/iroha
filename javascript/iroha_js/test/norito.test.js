@@ -150,7 +150,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-baseTest("noritoEncodeInstruction requires native binding for instruction JSON", () => {
+baseTest("noritoEncodeInstruction uses pure JS fallback for supported instruction JSON", () => {
   const instruction = {
     Transfer: {
       Asset: {
@@ -158,6 +158,21 @@ baseTest("noritoEncodeInstruction requires native binding for instruction JSON",
         object: "7",
         destination: ACCOUNT_ID,
       },
+    },
+  };
+  let encoded;
+  withMissingNativeBinding(() => {
+    encoded = Buffer.from(noritoEncodeInstruction(instruction));
+  });
+  assert.ok(encoded.length > 32);
+  assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+});
+
+baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
+  const instruction = {
+    Log: {
+      level: "INFO",
+      message: "unsupported by the pure JS fallback",
     },
   };
   withMissingNativeBinding(() => {

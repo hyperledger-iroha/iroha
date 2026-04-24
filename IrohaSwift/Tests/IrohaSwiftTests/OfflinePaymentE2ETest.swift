@@ -285,7 +285,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
             createdAtMs: createdAtMs
         )
 
-        let unsignedPayload = try buildCashUnsignedPayloadBytes(unsignedReceipt)
+        let unsignedPayload = try ToriiOfflineCashCodec.cashTransferReceiptUnsignedPayload(unsignedReceipt)
         let payloadHashHex = sha256Hex(unsignedPayload)
         print("Outgoing unsigned payload hash: \(payloadHashHex) size: \(unsignedPayload.count)")
 
@@ -392,7 +392,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
             createdAtMs: createdAtMs
         )
 
-        let unsignedPayload = try buildCashUnsignedPayloadBytes(unsignedReceipt)
+        let unsignedPayload = try ToriiOfflineCashCodec.cashTransferReceiptUnsignedPayload(unsignedReceipt)
         let payloadHashHex = sha256Hex(unsignedPayload)
         print("Incoming unsigned payload hash: \(payloadHashHex) size: \(unsignedPayload.count)")
 
@@ -422,95 +422,6 @@ final class OfflinePaymentE2ETest: XCTestCase {
             senderSignatureBase64: signature.base64EncodedString(),
             createdAtMs: unsignedReceipt.createdAtMs
         )
-    }
-
-    // MARK: - Canonical JSON — matches Iroha's canonical_json_bytes(CashTransferReceiptUnsignedPayload)
-
-    /// Build unsigned payload bytes matching Rust's `cash_transfer_receipt_unsigned_payload`.
-    ///
-    /// Key rules from Android E2E + Rust source:
-    /// - attestation: only 4 fields (norito skips optional ios_*/attestation_report when None)
-    /// - authorization: CashTransferReceiptAuthorizationPayload with device_binding
-    ///   (ios_* fields are omitted when nil)
-    /// - source_payload: skip if nil
-    /// - All keys sorted alphabetically at every nesting level
-    private func buildCashUnsignedPayloadBytes(_ receipt: ToriiOfflineTransferReceipt) throws -> Data {
-        // Attestation (4 fields only — norito skips optional fields)
-        let attestObj: [String: Any] = [
-            "assertion_base64": receipt.deviceProof.assertionBase64,
-            "challenge_hash_hex": receipt.deviceProof.challengeHashHex,
-            "counter": receipt.deviceProof.counter ?? 0,
-            "key_id": receipt.deviceProof.attestationKeyId,
-        ]
-
-        // Authorization as CashTransferReceiptAuthorizationPayload
-        var authObj: [String: Any]? = nil
-        if let auth = receipt.authorization {
-            let binding = auth.deviceBinding
-            var bindingObj: [String: Any] = [
-                "attestation_key_id": binding.attestationKeyId,
-                "attestation_report_base64": binding.attestationReportBase64,
-                "device_id": binding.deviceId,
-                "offline_public_key": binding.offlinePublicKey,
-                "platform": binding.platform,
-            ]
-            if let iosBundleId = binding.iosBundleId {
-                bindingObj["ios_bundle_id"] = iosBundleId
-            }
-            if let iosEnvironment = binding.iosEnvironment {
-                bindingObj["ios_environment"] = iosEnvironment
-            }
-            if let iosTeamId = binding.iosTeamId {
-                bindingObj["ios_team_id"] = iosTeamId
-            }
-
-            authObj = [
-                "account_id": auth.accountId,
-                "authorization_id": auth.authorizationId,
-                "device_binding": bindingObj,
-                "expires_at_ms": auth.expiresAtMs,
-                "issued_at_ms": auth.issuedAtMs,
-                "issuer_signature_base64": auth.issuerSignatureBase64,
-                "lineage_id": auth.lineageId,
-                "max_balance": auth.policyMaxBalance,
-                "max_tx_value": auth.policyMaxTxValue,
-                "refresh_at_ms": auth.refreshAtMs,
-                "verdict_id": auth.verdictId,
-            ]
-        }
-
-        // Top-level payload
-        var payload: [String: Any] = [
-            "account_id": receipt.accountId,
-            "amount": receipt.amount,
-            "attestation": attestObj,
-            "counterparty_account_id": receipt.counterpartyAccountId,
-            "counterparty_device_id": receipt.counterpartyDeviceId,
-            "counterparty_lineage_id": receipt.counterpartyLineageId,
-            "counterparty_offline_public_key": receipt.counterpartyOfflinePublicKey,
-            "created_at_ms": receipt.createdAtMs,
-            "device_id": receipt.deviceId,
-            "direction": receipt.direction.rawValue,
-            "lineage_id": receipt.lineageId,
-            "local_revision": receipt.localRevision,
-            "offline_public_key": receipt.offlinePublicKey,
-            "post_balance": receipt.postBalance,
-            "post_locked_balance": receipt.postLockedBalance,
-            "post_state_hash": receipt.postStateHash,
-            "pre_balance": receipt.preBalance,
-            "pre_locked_balance": receipt.preLockedBalance,
-            "pre_state_hash": receipt.preStateHash,
-            "transfer_id": receipt.transferId,
-            "version": receipt.version,
-        ]
-        if let authObj { payload["authorization"] = authObj }
-        if let sp = receipt.sourcePayload { payload["source_payload"] = sp }
-
-        let jsonData = try JSONSerialization.data(
-            withJSONObject: payload,
-            options: [.sortedKeys, .withoutEscapingSlashes]
-        )
-        return jsonData
     }
 
     // MARK: - Source payload

@@ -9254,24 +9254,42 @@ id: 88
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testWaitForTerminalTransactionStatusEventPollsStatusEndpointUntilApplied() async throws {
-        var callCount = 0
+    func testWaitForTerminalTransactionStatusEventUsesSSEAfterInitialStatusWithoutPollingFallback() async throws {
+        var statusCallCount = 0
+        var sseCallCount = 0
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
-            callCount += 1
-            let kind = callCount == 1 ? "Queued" : "Applied"
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            let body = """
-            {"hash":"deadbeef","resolved_from":"cache","scope":"auto","status":{"block_height":169,"kind":"\(kind)"}}
-            """.data(using: .utf8)!
-            return (response, body)
+            switch request.url?.path {
+            case "/v1/pipeline/transactions/status":
+                let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+                XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
+                statusCallCount += 1
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                let body = """
+                {"hash":"deadbeef","resolved_from":"cache","scope":"auto","status":{"block_height":168,"kind":"Queued"}}
+                """.data(using: .utf8)!
+                return (response, body)
+            case "/v1/events/sse":
+                sseCallCount += 1
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                let body = """
+                event: Transaction
+                data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height":169}
+
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                throw URLError(.unsupportedURL)
+            }
         }
 
         let event = try await makeClient().waitForTerminalTransactionStatusEvent(
@@ -9282,7 +9300,8 @@ id: 88
         XCTAssertEqual(event.hash, "deadbeef")
         XCTAssertEqual(event.status, "Applied")
         XCTAssertEqual(event.blockHeight, 169)
-        XCTAssertGreaterThanOrEqual(callCount, 2)
+        XCTAssertEqual(statusCallCount, 1)
+        XCTAssertEqual(sseCallCount, 1)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

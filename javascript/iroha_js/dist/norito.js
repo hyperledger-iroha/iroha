@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { blake3 } from "@noble/hashes/blake3";
 import {
   AccountAddress,
@@ -331,9 +332,33 @@ function resolveNative(method) {
   return native;
 }
 
+function isNativeBindingUnavailable(error) {
+  const message =
+    error && typeof error.message === "string" ? error.message : String(error ?? "");
+  return (
+    message.includes("Native binding required") ||
+    message.includes("Native binding does not expose") ||
+    message.includes("process is not defined") ||
+    message.includes("require is not available") ||
+    message.includes("createRequire is not a function")
+  );
+}
+
 function encodeNormalizedInstruction(normalized) {
-  const native = resolveNative("noritoEncodeInstruction");
-  const encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
+  let encoded;
+  try {
+    const native = resolveNative("noritoEncodeInstruction");
+    encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
+  } catch (error) {
+    if (!isNativeBindingUnavailable(error)) {
+      throw error;
+    }
+    try {
+      encoded = encodePureJsInstruction(normalized);
+    } catch {
+      throw error;
+    }
+  }
   cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
 }
