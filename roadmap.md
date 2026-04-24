@@ -6,9 +6,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
-- Fold the new Nexus-routed alias-read coverage into the next wider validation sweep once the current tree is stable.
-  - Keep `cargo test -p iroha_torii --lib --features app_api -- --nocapture` in the rerun window so the new `/v1/aliases/resolve`, `/v1/aliases/resolve_index`, and `/v1/aliases/by_account` fanout/permission tests stay exercised alongside the broader Torii surface.
-  - When validation budget allows, carry the alias-routing slice through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
+- Carry the Torii routed-read and telemetry fixes through the next workspace validation corridor.
+  - The crate-local sweep is green as of 2026-04-24 with `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`.
+  - When validation budget allows, carry the alias-routing and Torii telemetry slices through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
 - Broaden validation for the new canonical account-alias lease flow beyond the focused onboarding and executor checks.
   - Rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
   - Add or rerun focused coverage for the SNS subscription auto-renew billing path in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, not just the onboarding enqueue path.
@@ -27,6 +27,7 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Close the exact-reproduction gaps in the Izanami communication vulnerability matrix.
   - Add a timed fault scheduler that can reproduce the paper's 133s-266s injection window instead of relying only on randomized Izanami fault-loop timing.
   - Add an OS `netem` or in-process P2P packet-drop injector so the `packet-loss` scenario can run 25%, 50%, and 75% loss between selected peer groups.
+  - Fix the current partition/restart fault path so Izanami peers always have a restartable `trusted_peers_pop` roster; the 2026-04-24 quick run reported `peer missing trusted_peers_pop roster required for partition restart` in both `packet-loss` and `leader-isolation`.
   - Wire Sumeragi proposer/leader telemetry into the `leader-isolation` scenario so Izanami isolates the active proposer rather than a fixed selected peer.
   - Rerun at least quick mode on a host that permits local loopback socket binds; the 2026-04-24 sandbox run was blocked before node startup by `Operation not permitted` on `127.0.0.1:30000`.
   - After those exact injectors land, run `scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper` and record Iroha's classification against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.

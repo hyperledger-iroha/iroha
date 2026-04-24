@@ -23023,7 +23023,10 @@ async fn handler_debug_axt_cache(
                 "next_min_sub_nonce".to_string(),
                 encode_json(&hint.next_min_sub_nonce)?,
             );
-            map.insert("reason".to_string(), encode_json(&hint.reason)?);
+            map.insert(
+                "reason".to_string(),
+                norito::json::Value::from(hint.reason.label()),
+            );
             Ok(norito::json::Value::Object(map))
         })
         .collect::<Result<Vec<_>, Error>>()?;
@@ -39376,7 +39379,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "telemetry")]
     fn sample_privacy_share_dto() -> RecordSoranetPrivacyShareDto {
-        let mut share = SoranetPrivacyPrioShareV1::new(1, 1_720_000_000, 60);
+        let mut share = SoranetPrivacyPrioShareV1::new(1, 1_720_000_020, 60);
         share.mode = SoranetPrivacyModeV1::Entry;
         share.handshake_accept_share = 5;
         share.active_circuits_sum_share = 30;
@@ -55227,7 +55230,16 @@ mod tests {
                 .telemetry
                 .set_axt_policy_snapshot_version(&AxtPolicySnapshot {
                     version: 77,
-                    entries: Vec::new(),
+                    entries: vec![iroha_data_model::nexus::AxtPolicyBinding {
+                        dsid,
+                        policy: iroha_data_model::nexus::AxtPolicyEntry {
+                            manifest_root,
+                            target_lane: LaneId::new(2),
+                            min_handle_era: 10,
+                            min_sub_nonce: 11,
+                            current_slot: 5,
+                        },
+                    }],
                 });
         }
 

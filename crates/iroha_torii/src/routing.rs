@@ -2796,7 +2796,7 @@ impl MaybeTelemetry {
     pub fn for_tests() -> Self {
         #[cfg(feature = "telemetry")]
         {
-            use std::sync::Arc;
+            use std::sync::{Arc, LazyLock};
 
             use iroha_core::{
                 kura::Kura,
@@ -2807,6 +2807,18 @@ impl MaybeTelemetry {
             };
             use iroha_primitives::time::TimeSource;
             use tokio::sync::watch;
+
+            static TEST_TELEMETRY_RUNTIME: LazyLock<tokio::runtime::Runtime> =
+                LazyLock::new(|| {
+                    tokio::runtime::Builder::new_multi_thread()
+                        .enable_time()
+                        .build()
+                        .expect("test telemetry runtime should start")
+                });
+
+            let _runtime_guard = tokio::runtime::Handle::try_current()
+                .is_err()
+                .then(|| TEST_TELEMETRY_RUNTIME.enter());
 
             let metrics = iroha_telemetry::metrics::global_or_default();
             let kura = Kura::blank_kura_for_testing();
@@ -2844,7 +2856,7 @@ impl MaybeTelemetry {
                 true,
             );
             let _ = peers_tx;
-            MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Operator)
+            MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
         }
         #[cfg(not(feature = "telemetry"))]
         {
@@ -32994,6 +33006,9 @@ fn record_account_literal_reject(
     telemetry.with_metrics(|metrics| {
         if literal_is_local8(literal) {
             metrics.inc_torii_address_domain(context, "local8");
+            if let Some(domain_label) = local8_domain_label(literal) {
+                metrics.inc_torii_address_domain(context, &domain_label);
+            }
         }
         metrics.inc_torii_address_invalid(context, reason);
     });
@@ -33053,7 +33068,7 @@ mod address_metrics_tests {
     static DEFAULT_DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn local8_literal() -> &'static str {
-        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora"
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -33204,7 +33219,7 @@ mod address_metrics_tests {
     }
 
     fn i105_literal(domain_label: &str) -> String {
-        let _domain = DomainId::parse_fully_qualified(domain_label).expect("domain parses");
+        let _domain = DomainId::try_new(domain_label, "universal").expect("domain parses");
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
         account.to_string()
@@ -33252,15 +33267,16 @@ mod address_metrics_tests {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod account_path_metric_tests {
-    use iroha_data_model::account::AccountAddressErrorCode;
-
     use super::*;
 
     #[tokio::test]
     async fn invalid_literal_records_endpoint_counter() {
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY;
-        let reason = AccountAddressErrorCode::UnsupportedAddressFormat.as_str();
+        let literal = "bad@banka.dataspace";
+        let reason = AccountId::parse_encoded(literal)
+            .expect_err("literal must be rejected")
+            .reason();
 
         let before = {
             let metrics = telemetry.metrics().await;
@@ -33270,7 +33286,7 @@ mod account_path_metric_tests {
                 .get()
         };
         assert!(
-            parse_account_path_segment("bad@banka.dataspace", &telemetry, endpoint).is_err(),
+            parse_account_path_segment(literal, &telemetry, endpoint).is_err(),
             "literal should be rejected"
         );
         let after = {
@@ -77492,7 +77508,8 @@ pub async fn handle_status(
         };
         match format {
             crate::utils::ResponseFormat::Norito => {
-                let bytes = norito::codec::encode_adaptive(&status);
+                let bytes =
+                    norito::to_bytes(&status).map_err(|err| Error::StatusFailure(eyre!(err)))?;
                 let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
                 resp.headers_mut().insert(
                     axum::http::header::CONTENT_TYPE,
@@ -77846,7 +77863,7 @@ mod tests {
             "lane metrics must be stripped when Nexus is disabled: {filtered}"
         );
         assert!(
-            filtered.contains("telemetry_build_info"),
+            filtered.contains("block_height"),
             "non-lane metrics must remain after filtering: {filtered}"
         );
     }
@@ -78076,8 +78093,34 @@ mod tests {
             status::record_qc_latency("availability", 123);
             status::set_rbc_backlog_snapshot(7, 5, 2);
 
+            let world = iroha_core::state::World::new();
+            {
+                let mut block = world.block();
+                block.vrf_epochs_mut_for_testing().insert(
+                    0,
+                    iroha_data_model::consensus::VrfEpochRecord {
+                        epoch: 0,
+                        seed: [0x42; 32],
+                        epoch_length: 10,
+                        commit_deadline_offset: 2,
+                        reveal_deadline_offset: 4,
+                        roster_len: 1,
+                        finalized: false,
+                        updated_at_height: 4,
+                        participants: Vec::new(),
+                        late_reveals: Vec::new(),
+                        committed_no_reveal: Vec::new(),
+                        no_participation: Vec::new(),
+                        penalties_applied: false,
+                        penalties_applied_at_height: None,
+                        validator_election: None,
+                    },
+                );
+                block.commit();
+            }
+
             let state = Arc::new(iroha_core::state::State::new_for_testing(
-                iroha_core::state::World::new(),
+                world,
                 iroha_core::kura::Kura::blank_kura_for_testing(),
                 iroha_core::query::store::LiveQueryStore::start_test(),
             ));
