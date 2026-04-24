@@ -1265,7 +1265,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                        "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1292,7 +1292,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={literal}"
+                    "/v1/nexus/public_lanes/0/stake?validator={literal}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1312,7 +1312,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                        "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1348,7 +1348,7 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1381,7 +1381,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1410,7 +1410,7 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1444,7 +1444,13 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let domain = Domain::new(domain_id).build(&account_id);
     let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let mut state = State::new_for_testing(world, kura.clone(), query);
+    let mut nexus = state.nexus_snapshot();
+    nexus.enabled = true;
+    state
+        .set_nexus(nexus)
+        .expect("enable Nexus for public-lane address parsing");
+    let state = Arc::new(state);
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(

@@ -5783,6 +5783,14 @@ test("submitTransaction retries broken pipe failures without an explicit error c
 test("submitTransaction rejects unavailable pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
   const seenUrls = [];
+  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    encodeSignedTransactionNorito: (buffer) => {
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
+      return Buffer.from([0xca, 0xfe]);
+    },
+  };
   const fetchImpl = async (url, init) => {
     seenUrls.push(url);
     if (url === `${BASE_URL}/v1/node/capabilities`) {
@@ -5818,14 +5826,105 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
       assert.equal(init.method, "POST");
       return createResponse({ status: 405 });
     }
+    if (url === `${BASE_URL}/transaction`) {
+      assert.equal(init.method, "POST");
+      return createResponse({ status: 405 });
+    }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(() => client.submitTransaction(payload), /405/);
-  assert.deepEqual(seenUrls, [
-    `${BASE_URL}/v1/node/capabilities`,
-    `${BASE_URL}/v1/pipeline/transactions`,
-  ]);
+  try {
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    await assert.rejects(() => client.submitTransaction(payload), /405/);
+    assert.deepEqual(seenUrls, [
+      `${BASE_URL}/v1/node/capabilities`,
+      `${BASE_URL}/v1/pipeline/transactions`,
+      `${BASE_URL}/transaction`,
+    ]);
+  } finally {
+    if (originalBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
+    }
+  }
+});
+
+test("submitTransaction falls back to the public route when pipeline submit returns 405", async () => {
+  const payload = new Uint8Array([0xfa, 0xce]);
+  const seenUrls = [];
+  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    encodeSignedTransactionNorito: (buffer) => {
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [0xfa, 0xce]);
+      return Buffer.from([0xba, 0xdc, 0x0f, 0xfe]);
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    seenUrls.push(url);
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url === `${BASE_URL}/v1/pipeline/transactions`) {
+      assert.equal(init.method, "POST");
+      return createResponse({ status: 405 });
+    }
+    if (url === `${BASE_URL}/transaction`) {
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers["Content-Type"], "application/x-norito");
+      assert.equal(init.headers.Accept, "application/x-norito, application/json");
+      assert.ok(Buffer.isBuffer(init.body));
+      assert.deepEqual([...init.body.values()], [0xba, 0xdc, 0x0f, 0xfe]);
+      return createResponse({
+        status: 202,
+        jsonData: { ok: true, route: "public" },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  try {
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    const response = await client.submitTransaction(payload);
+    assert.deepEqual(response, { ok: true, route: "public" });
+    assert.deepEqual(seenUrls, [
+      `${BASE_URL}/v1/node/capabilities`,
+      `${BASE_URL}/v1/pipeline/transactions`,
+      `${BASE_URL}/transaction`,
+    ]);
+  } finally {
+    if (originalBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
+    }
+  }
 });
 
 test("submitTransaction rejects missing node capabilities advert", async () => {

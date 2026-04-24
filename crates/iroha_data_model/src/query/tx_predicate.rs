@@ -971,6 +971,77 @@ mod tests {
     }
 
     #[test]
+    fn parses_string_field_exists_and_extended_relational_filters() {
+        let alice_account = sample_account(0x11);
+        let bob_account = sample_account(0x22);
+        let alice_id = alice_account.to_string();
+        let bob_id = bob_account.to_string();
+        let entry_ne_literal = sample_hash_literal(0x55);
+        let entry_nin_literal = sample_hash_literal(0x66);
+        let entry_ne_hash: EntryHash = entry_ne_literal.parse().unwrap();
+        let entry_nin_hash: EntryHash = entry_nin_literal.parse().unwrap();
+        let json = format!(
+            r#"{{"op":"and","args":[
+                {{"op":"exists","args":"entrypoint_hash"}},
+                {{"op":"is_null","args":"authority"}},
+                {{"op":"exists","args":"result_ok"}},
+                {{"op":"in","args":["authority",["{alice_id}","{bob_id}"]]}},
+                {{"op":"nin","args":["authority",["{bob_id}"]]}},
+                {{"op":"ne","args":["entrypoint_hash","{entry_ne_literal}"]}},
+                {{"op":"nin","args":["entrypoint_hash",["{entry_nin_literal}"]]}},
+                {{"op":"ne","args":["result_ok",false]}},
+                {{"op":"in","args":["result_ok",[true,false]]}},
+                {{"op":"gte","args":["timestamp_ms",1000]}},
+                {{"op":"lt","args":["timestamp_ms",2000]}}
+            ]}}"#
+        );
+
+        let filters = parse_filters(&json);
+        assert_eq!(filters.entry_exists, Some(true));
+        assert_eq!(filters.authority_exists, Some(false));
+        assert_eq!(filters.result_exists, Some(true));
+        assert_eq!(
+            filters.authority_in,
+            vec![alice_account, bob_account.clone()]
+        );
+        assert_eq!(filters.authority_nin, vec![bob_account]);
+        assert_eq!(filters.entry_ne.as_ref(), Some(&entry_ne_hash));
+        assert_eq!(filters.entry_nin, vec![entry_nin_hash]);
+        assert_eq!(filters.result_ok_ne, Some(false));
+        assert_eq!(filters.result_ok_in, vec![true, false]);
+        assert_eq!(filters.ts_ge, Some(1000));
+        assert_eq!(filters.ts_le, Some(1999));
+    }
+
+    #[test]
+    fn parses_timestamp_bounds_at_saturation_edges() {
+        let json = format!(
+            r#"{{"op":"and","args":[
+                {{"op":"gt","args":["timestamp_ms",{}]}},
+                {{"op":"lt","args":["timestamp_ms",0]}}
+            ]}}"#,
+            u64::MAX
+        );
+
+        let filters = parse_filters(&json);
+        assert_eq!(filters.ts_ge, Some(u64::MAX));
+        assert_eq!(filters.ts_le, Some(0));
+    }
+
+    #[test]
+    fn rejects_unsupported_or_malformed_filter_expressions() {
+        let unknown_op = r#"{"op":"or","args":[]}"#;
+        let malformed_eq = r#"{"op":"eq","args":["authority"]}"#;
+        let unsupported_exists = r#"{"op":"exists","args":"timestamp_ms"}"#;
+        let unsupported_relational = r#"{"op":"gt","args":["authority","alice"]}"#;
+
+        assert!(committed_tx_filters_from_json(unknown_op).is_none());
+        assert!(committed_tx_filters_from_json(malformed_eq).is_none());
+        assert!(committed_tx_filters_from_json(unsupported_exists).is_none());
+        assert!(committed_tx_filters_from_json(unsupported_relational).is_none());
+    }
+
+    #[test]
     fn rejects_unknown_field() {
         let json = r#"{
             "op":"eq",
@@ -993,5 +1064,124 @@ mod tests {
             .applies(&tx)
         );
         assert!(!CommittedTxPredicate::AuthorityExists(true).applies(&tx));
+    }
+
+    #[test]
+    fn predicate_applies_extended_atoms_and_boolean_forms() {
+        let tx = sample_private_committed_tx();
+        let topic = Name::from_str("topic").expect("metadata key");
+        let private = iroha_primitives::json::Json::new("private");
+        let public = iroha_primitives::json::Json::new("public");
+        let other_entry = zero_hash::<crate::transaction::signed::TransactionEntrypoint>();
+
+        assert!(CommittedTxPredicate::TsGt(50).applies(&tx));
+        assert!(!CommittedTxPredicate::TsGt(77).applies(&tx));
+        assert!(CommittedTxPredicate::TsNin(vec![1, 2, 3]).applies(&tx));
+        assert!(!CommittedTxPredicate::TsNin(vec![77]).applies(&tx));
+
+        assert!(CommittedTxPredicate::EntryNe(other_entry).applies(&tx));
+        assert!(CommittedTxPredicate::EntryNin(vec![other_entry]).applies(&tx));
+        assert!(!CommittedTxPredicate::EntryNin(vec![tx.entrypoint_hash]).applies(&tx));
+
+        assert!(
+            CommittedTxPredicate::MetadataIn {
+                key: topic.clone(),
+                values: vec![public.clone(), private.clone()],
+            }
+            .applies(&tx)
+        );
+        assert!(
+            !CommittedTxPredicate::MetadataIn {
+                key: topic.clone(),
+                values: vec![public.clone()],
+            }
+            .applies(&tx)
+        );
+        assert!(
+            CommittedTxPredicate::MetadataNin {
+                key: topic.clone(),
+                values: vec![public.clone()],
+            }
+            .applies(&tx)
+        );
+        assert!(
+            !CommittedTxPredicate::MetadataNin {
+                key: topic.clone(),
+                values: vec![private.clone()],
+            }
+            .applies(&tx)
+        );
+        assert!(
+            CommittedTxPredicate::MetadataIsNull {
+                key: topic.clone(),
+                is_null: false,
+            }
+            .applies(&tx)
+        );
+
+        assert!(
+            CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::ResultEq(false))).applies(&tx)
+        );
+        assert!(CommittedTxPredicate::Const(true).applies(&tx));
+        assert!(!CommittedTxPredicate::Const(false).applies(&tx));
+    }
+
+    #[test]
+    fn predicate_norito_roundtrip_preserves_complex_boolean_tree() {
+        let topic = Name::from_str("topic").expect("metadata key");
+        let predicate = CommittedTxPredicate::Or(vec![
+            CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::ResultEq(false))),
+            CommittedTxPredicate::TsGt(50),
+            CommittedTxPredicate::EntryNe(zero_hash::<
+                crate::transaction::signed::TransactionEntrypoint,
+            >()),
+            CommittedTxPredicate::MetadataIn {
+                key: topic,
+                values: vec![iroha_primitives::json::Json::new("private")],
+            },
+            CommittedTxPredicate::Const(false),
+        ]);
+
+        let bytes = norito::to_bytes(&predicate).expect("encode predicate");
+        let decoded: CommittedTxPredicate =
+            norito::decode_from_bytes(&bytes).expect("decode predicate");
+
+        match decoded {
+            CommittedTxPredicate::Or(children) => {
+                assert_eq!(children.len(), 5);
+                assert!(matches!(
+                    children.first(),
+                    Some(CommittedTxPredicate::Not(inner))
+                        if matches!(inner.as_ref(), CommittedTxPredicate::ResultEq(false))
+                ));
+                assert!(matches!(
+                    children.get(1),
+                    Some(CommittedTxPredicate::TsGt(50))
+                ));
+                assert!(matches!(
+                    children.get(2),
+                    Some(CommittedTxPredicate::EntryNe(_))
+                ));
+                assert!(matches!(
+                    children.get(3),
+                    Some(CommittedTxPredicate::MetadataIn { .. })
+                ));
+                assert!(matches!(
+                    children.get(4),
+                    Some(CommittedTxPredicate::Const(false))
+                ));
+            }
+            other => panic!(
+                "expected Or predicate after roundtrip, got {:?}",
+                core::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn predicate_wire_inflate_rejects_missing_and_trailing_nodes() {
+        assert!(wire::inflate(&[wire::Node::And { child_count: 1 }]).is_err());
+        assert!(wire::inflate(&[wire::Node::Not]).is_err());
+        assert!(wire::inflate(&[wire::Node::Const(true), wire::Node::Const(false)]).is_err());
     }
 }

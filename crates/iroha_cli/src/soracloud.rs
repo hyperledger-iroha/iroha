@@ -22991,6 +22991,214 @@ mod tests {
         );
     }
 
+    fn assert_generated_pii_app_startup_import_fails(
+        dir_name: &str,
+        harness_name: &str,
+        env_overrides: &[(&str, &str)],
+        expected_error: &str,
+        static_markers: &[&str],
+    ) {
+        let dir = temp_dir(dir_name);
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "clinic_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::PiiApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("pii-app init should succeed");
+
+        let server_path = dir.join("pii-app/api/server.mjs");
+        if !node_available() {
+            eprintln!(
+                "node unavailable; validating static pii startup-failure markers in scaffold"
+            );
+            let api = fs::read_to_string(&server_path).expect("read pii api");
+            for marker in static_markers {
+                assert!(
+                    api.contains(marker),
+                    "generated pii api missing startup-failure marker: {marker}"
+                );
+            }
+            return;
+        }
+
+        let mut env_values = BTreeMap::from([
+            ("AUTH_MODE".to_owned(), "strict".to_owned()),
+            (
+                "AUTH_CAPABILITY_MAP_JSON".to_owned(),
+                r#"{"1111111111111111111111111111111111111111111111111111111111111111":["pii.records.read"]}"#
+                    .to_owned(),
+            ),
+            (
+                "AUTH_CHALLENGE_TTL_SECS".to_owned(),
+                "120".to_owned(),
+            ),
+            (
+                "AUTH_REQUIRE_EXTERNAL_SHARED_STATE".to_owned(),
+                "0".to_owned(),
+            ),
+            ("AUTH_SESSION_TTL_SECS".to_owned(), "900".to_owned()),
+            (
+                "SESSION_HMAC_KEY".to_owned(),
+                "0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            ),
+            ("NODE_ENV".to_owned(), "development".to_owned()),
+            ("PUBLIC_BASE_URL".to_owned(), "http://127.0.0.1".to_owned()),
+        ]);
+        for (name, value) in env_overrides {
+            env_values.insert((*name).to_owned(), (*value).to_owned());
+        }
+        let env_assignments = env_values
+            .iter()
+            .map(|(name, value)| format!("process.env.{name} = {value:?};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let harness_path = dir.join(harness_name);
+        let scenario = harness_name.trim_end_matches(".mjs");
+        let mut script = r#"import { pathToFileURL } from "node:url";
+
+const SERVER_PATH = __SERVER_PATH__;
+const EXPECTED = __EXPECTED_ERROR__;
+
+process.argv = [process.argv[0], SERVER_PATH, "--port=0"];
+__ENV_ASSIGNMENTS__
+
+try {
+  await import(`${pathToFileURL(SERVER_PATH).href}?startup=__SCENARIO__`);
+} catch (error) {
+  const logs = `${error?.stack ?? ""}\n${error?.message ?? ""}\n${String(error)}`;
+  if (!logs.includes(EXPECTED)) {
+    console.error(`missing expected startup error. expected=${EXPECTED} logs=${logs}`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+console.error(`pii-app server unexpectedly started; expected startup error: ${EXPECTED}`);
+process.exit(1);
+"#
+        .to_owned();
+        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
+        script = script.replace("__EXPECTED_ERROR__", &format!("{expected_error:?}"));
+        script = script.replace("__ENV_ASSIGNMENTS__", &env_assignments);
+        script = script.replace("__SCENARIO__", scenario);
+        fs::write(&harness_path, script).expect("write node harness");
+        run_node_harness(&harness_path);
+    }
+
+    fn run_generated_pii_app_auth_core_harness(
+        dir_name: &str,
+        harness_name: &str,
+        env_overrides: &[(&str, &str)],
+        static_markers: &[&str],
+        test_body: &str,
+    ) {
+        run_generated_pii_app_auth_core_harness_with_setup(
+            dir_name,
+            harness_name,
+            env_overrides,
+            static_markers,
+            "",
+            test_body,
+        );
+    }
+
+    fn run_generated_pii_app_auth_core_harness_with_setup(
+        dir_name: &str,
+        harness_name: &str,
+        env_overrides: &[(&str, &str)],
+        static_markers: &[&str],
+        setup_before_import: &str,
+        test_body: &str,
+    ) {
+        let dir = temp_dir(dir_name);
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "clinic_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::PiiApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("pii-app init should succeed");
+
+        let server_path = dir.join("pii-app/api/server.mjs");
+        let api = fs::read_to_string(&server_path).expect("read pii api");
+        for marker in static_markers {
+            assert!(
+                api.contains(marker),
+                "generated pii api missing auth-core marker: {marker}"
+            );
+        }
+        if !node_available() {
+            eprintln!("node unavailable; static auth-core markers validated in scaffold");
+            return;
+        }
+
+        let (auth_core, _) = api
+            .split_once("\nimport http from \"node:http\";")
+            .expect("generated pii api must include auth core before http server");
+        let core_module_path = dir.join(format!("{harness_name}.generated.mjs"));
+        fs::write(&core_module_path, format!("{auth_core}\n{test_body}"))
+            .expect("write auth core harness module");
+
+        let state_file = dir.join(format!("{harness_name}.state.json"));
+        let mut env_values = BTreeMap::from([
+            ("AUTH_MODE".to_owned(), "strict".to_owned()),
+            ("AUTH_CAPABILITY_MAP_JSON".to_owned(), "{}".to_owned()),
+            (
+                "AUTH_CHALLENGE_TTL_SECS".to_owned(),
+                "120".to_owned(),
+            ),
+            (
+                "AUTH_REQUIRE_EXTERNAL_SHARED_STATE".to_owned(),
+                "0".to_owned(),
+            ),
+            ("AUTH_SESSION_TTL_SECS".to_owned(), "900".to_owned()),
+            (
+                "SESSION_HMAC_KEY".to_owned(),
+                "0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            ),
+            ("NODE_ENV".to_owned(), "development".to_owned()),
+            ("PUBLIC_BASE_URL".to_owned(), "http://127.0.0.1".to_owned()),
+            (
+                "SORACLOUD_SHARED_STATE_FILE".to_owned(),
+                state_file.to_string_lossy().into_owned(),
+            ),
+        ]);
+        for (name, value) in env_overrides {
+            env_values.insert((*name).to_owned(), (*value).to_owned());
+        }
+        let env_assignments = env_values
+            .iter()
+            .map(|(name, value)| format!("process.env.{name} = {value:?};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let harness_path = dir.join(harness_name);
+        let scenario = harness_name.trim_end_matches(".mjs");
+        let mut script = r#"import { pathToFileURL } from "node:url";
+
+const CORE_MODULE_PATH = __CORE_MODULE_PATH__;
+
+process.argv = [process.argv[0], CORE_MODULE_PATH, "--port=0"];
+__ENV_ASSIGNMENTS__
+__SETUP_BEFORE_IMPORT__
+
+await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
+"#
+        .to_owned();
+        script = script.replace("__CORE_MODULE_PATH__", &js_string_literal(&core_module_path));
+        script = script.replace("__ENV_ASSIGNMENTS__", &env_assignments);
+        script = script.replace("__SETUP_BEFORE_IMPORT__", setup_before_import);
+        script = script.replace("__SCENARIO__", scenario);
+        fs::write(&harness_path, script).expect("write node harness");
+        run_node_harness(&harness_path);
+    }
+
     fn install_mock_submission_config(authority: &AccountId, key_pair: &KeyPair) {
         let mut config = crate::fallback_config();
         config.account = authority.clone();
@@ -33709,138 +33917,27 @@ if (!logs.includes(EXPECTED)) {
 
     #[test]
     fn generated_pii_app_auth_startup_fails_on_weak_session_key_in_strict_mode() {
-        let dir = temp_dir("pii_auth_strict_key");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
-
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii strict-session-key guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("SESSION_HMAC_KEY must be set to at least 32 characters"));
-            assert!(api.contains("resolveSessionHmacKey"));
-            return;
-        }
-
-        let harness_path = dir.join("pii_auth_strict_key_fail.mjs");
-        let mut script = r#"import { spawnSync } from "node:child_process";
-
-const SERVER_PATH = __SERVER_PATH__;
-const EXPECTED = "SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode";
-
-const result = spawnSync(process.execPath, [SERVER_PATH, "--port=0"], {
-  env: {
-    ...process.env,
-    AUTH_MODE: "strict",
-    NODE_ENV: "development",
-    SESSION_HMAC_KEY: "too-short",
-    AUTH_CAPABILITY_MAP_JSON: "{\"1111111111111111111111111111111111111111111111111111111111111111\":[\"pii.records.read\"]}",
-    AUTH_REQUIRE_EXTERNAL_SHARED_STATE: "0",
-    PUBLIC_BASE_URL: "http://127.0.0.1"
-  },
-  encoding: "utf8",
-  timeout: 3000
-});
-
-if (result.error && result.error.code === "ETIMEDOUT") {
-  console.error("pii-app server did not fail-closed within timeout for weak SESSION_HMAC_KEY");
-  process.exit(1);
-}
-if (result.error && result.error.code !== "ETIMEDOUT") {
-  console.error(result.error.stack ?? String(result.error));
-  process.exit(1);
-}
-if (result.status === 0) {
-  console.error("pii-app server unexpectedly started with weak SESSION_HMAC_KEY");
-  process.exit(1);
-}
-const logs = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-if (!logs.includes(EXPECTED)) {
-  console.error(`missing expected startup error. logs=${logs}`);
-  process.exit(1);
-}
-"#
-        .to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_strict_key",
+            "pii_auth_strict_key_fail.mjs",
+            &[("SESSION_HMAC_KEY", "too-short")],
+            "SESSION_HMAC_KEY must be set to at least 32 characters in strict/production mode",
+            &[
+                "SESSION_HMAC_KEY must be set to at least 32 characters",
+                "resolveSessionHmacKey",
+            ],
+        );
     }
 
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_auth_mode() {
-        let dir = temp_dir("pii_auth_invalid_mode");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
-
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static pii auth-mode guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("normalizeAuthMode"));
-            assert!(api.contains("AUTH_MODE must be strict or dev"));
-            return;
-        }
-
-        let harness_path = dir.join("pii_auth_invalid_mode_fail.mjs");
-        let mut script = r#"import { spawnSync } from "node:child_process";
-
-const SERVER_PATH = __SERVER_PATH__;
-const EXPECTED = "AUTH_MODE must be strict or dev, got: permissive";
-
-const result = spawnSync(process.execPath, [SERVER_PATH, "--port=0"], {
-  env: {
-    ...process.env,
-    AUTH_MODE: "permissive",
-    NODE_ENV: "development",
-    SESSION_HMAC_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
-    AUTH_CAPABILITY_MAP_JSON: "{\"1111111111111111111111111111111111111111111111111111111111111111\":[\"pii.records.read\"]}",
-    AUTH_REQUIRE_EXTERNAL_SHARED_STATE: "0",
-    PUBLIC_BASE_URL: "http://127.0.0.1"
-  },
-  encoding: "utf8",
-  timeout: 3000
-});
-
-if (result.error && result.error.code === "ETIMEDOUT") {
-  console.error("pii-app server did not fail-closed within timeout for invalid AUTH_MODE");
-  process.exit(1);
-}
-if (result.error && result.error.code !== "ETIMEDOUT") {
-  console.error(result.error.stack ?? String(result.error));
-  process.exit(1);
-}
-if (result.status === 0) {
-  console.error("pii-app server unexpectedly started with invalid AUTH_MODE");
-  process.exit(1);
-}
-const logs = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-if (!logs.includes(EXPECTED)) {
-  console.error(`missing expected invalid AUTH_MODE error. logs=${logs}`);
-  process.exit(1);
-}
-"#
-        .to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_mode",
+            "pii_auth_invalid_mode_fail.mjs",
+            &[("AUTH_MODE", "permissive")],
+            "AUTH_MODE must be strict or dev, got: permissive",
+            &["normalizeAuthMode", "AUTH_MODE must be strict or dev"],
+        );
     }
 
     #[test]
@@ -34801,204 +34898,185 @@ main()
 
     #[test]
     fn generated_pii_app_auth_startup_fails_without_capability_map() {
-        let dir = temp_dir("pii_auth_missing_capability_map");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
-
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static missing-capability-map guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(
-                api.contains("AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints")
-            );
-            assert!(api.contains(
-                "parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? \"\", true)"
-            ));
-            return;
-        }
-
-        let harness_path = dir.join("pii_auth_missing_capability_map_fail.mjs");
-        let mut script = r#"import { spawnSync } from "node:child_process";
-
-const SERVER_PATH = __SERVER_PATH__;
-const result = spawnSync(process.execPath, [SERVER_PATH, "--port=0"], {
-  env: {
-    ...process.env,
-    AUTH_MODE: "strict",
-    NODE_ENV: "development",
-    SESSION_HMAC_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
-    AUTH_CAPABILITY_MAP_JSON: "",
-    AUTH_REQUIRE_EXTERNAL_SHARED_STATE: "0",
-    PUBLIC_BASE_URL: "http://127.0.0.1"
-  },
-  encoding: "utf8",
-  timeout: 3000
-});
-
-if (result.error && result.error.code === "ETIMEDOUT") {
-  console.error("pii-app server did not fail-closed within timeout for missing capability map");
-  process.exit(1);
-}
-if (result.error && result.error.code !== "ETIMEDOUT") {
-  console.error(result.error.stack ?? String(result.error));
-  process.exit(1);
-}
-if (result.status === 0) {
-  console.error("pii-app server unexpectedly started without capability map");
-  process.exit(1);
-}
-const logs = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-if (!logs.includes("AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints")) {
-  console.error(`missing expected capability map startup error. logs=${logs}`);
-  process.exit(1);
-}
-"#
-        .to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_missing_capability_map",
+            "pii_auth_missing_capability_map_fail.mjs",
+            &[("AUTH_CAPABILITY_MAP_JSON", "")],
+            "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
+            &[
+                "AUTH_CAPABILITY_MAP_JSON must be provided for private endpoints",
+                r#"parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true)"#,
+            ],
+        );
     }
 
     #[test]
     fn generated_pii_app_auth_startup_fails_on_invalid_capability_map_json() {
-        let dir = temp_dir("pii_auth_invalid_capability_map");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
-
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static invalid-capability-map guard markers in scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_CAPABILITY_MAP_JSON is invalid JSON"));
-            return;
-        }
-
-        let harness_path = dir.join("pii_auth_invalid_capability_map_fail.mjs");
-        let mut script = r#"import { spawnSync } from "node:child_process";
-
-const SERVER_PATH = __SERVER_PATH__;
-const result = spawnSync(process.execPath, [SERVER_PATH, "--port=0"], {
-  env: {
-    ...process.env,
-    AUTH_MODE: "strict",
-    NODE_ENV: "development",
-    SESSION_HMAC_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
-    AUTH_CAPABILITY_MAP_JSON: "{not-json",
-    AUTH_REQUIRE_EXTERNAL_SHARED_STATE: "0",
-    PUBLIC_BASE_URL: "http://127.0.0.1"
-  },
-  encoding: "utf8",
-  timeout: 3000
-});
-
-if (result.error && result.error.code === "ETIMEDOUT") {
-  console.error("pii-app server did not fail-closed within timeout for invalid capability map");
-  process.exit(1);
-}
-if (result.error && result.error.code !== "ETIMEDOUT") {
-  console.error(result.error.stack ?? String(result.error));
-  process.exit(1);
-}
-if (result.status === 0) {
-  console.error("pii-app server unexpectedly started with invalid capability map JSON");
-  process.exit(1);
-}
-const logs = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-if (!logs.includes("AUTH_CAPABILITY_MAP_JSON is invalid JSON")) {
-  console.error(`missing expected invalid capability map error. logs=${logs}`);
-  process.exit(1);
-}
-"#
-        .to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_capability_map",
+            "pii_auth_invalid_capability_map_fail.mjs",
+            &[("AUTH_CAPABILITY_MAP_JSON", "{not-json")],
+            "AUTH_CAPABILITY_MAP_JSON is invalid JSON",
+            &["AUTH_CAPABILITY_MAP_JSON is invalid JSON"],
+        );
     }
 
     #[test]
     fn generated_pii_app_auth_startup_fails_on_empty_capability_map_object() {
-        let dir = temp_dir("pii_auth_empty_capability_map_object");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_empty_capability_map_object",
+            "pii_auth_empty_capability_map_object_fail.mjs",
+            &[("AUTH_CAPABILITY_MAP_JSON", "{}")],
+            "AUTH_CAPABILITY_MAP_JSON must define at least one principal",
+            &["AUTH_CAPABILITY_MAP_JSON must define at least one principal"],
+        );
+    }
 
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!(
-                "node unavailable; validating static empty-capability-map guard markers in pii scaffold"
-            );
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_CAPABILITY_MAP_JSON must define at least one principal"));
-            return;
-        }
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_non_object_capability_map() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_non_object_capability_map",
+            "pii_auth_non_object_capability_map_fail.mjs",
+            &[("AUTH_CAPABILITY_MAP_JSON", "[]")],
+            "AUTH_CAPABILITY_MAP_JSON must be an object",
+            &["AUTH_CAPABILITY_MAP_JSON must be an object"],
+        );
+    }
 
-        let harness_path = dir.join("pii_auth_empty_capability_map_object_fail.mjs");
-        let mut script = r#"import { spawnSync } from "node:child_process";
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_invalid_capability_map_principal() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_capability_map_principal",
+            "pii_auth_invalid_capability_map_principal_fail.mjs",
+            &[(
+                "AUTH_CAPABILITY_MAP_JSON",
+                r#"{"not-a-public-key":["pii.records.read"]}"#,
+            )],
+            "AUTH_CAPABILITY_MAP_JSON principal must be 32 bytes of hex",
+            &["AUTH_CAPABILITY_MAP_JSON principal"],
+        );
+    }
 
-const SERVER_PATH = __SERVER_PATH__;
-const EXPECTED = "AUTH_CAPABILITY_MAP_JSON must define at least one principal";
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_empty_capability_array() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_empty_capability_array",
+            "pii_auth_empty_capability_array_fail.mjs",
+            &[(
+                "AUTH_CAPABILITY_MAP_JSON",
+                r#"{"1111111111111111111111111111111111111111111111111111111111111111":[]}"#,
+            )],
+            "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
+            &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
+        );
+    }
 
-const result = spawnSync(process.execPath, [SERVER_PATH, "--port=0"], {
-  env: {
-    ...process.env,
-    AUTH_MODE: "strict",
-    NODE_ENV: "development",
-    SESSION_HMAC_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
-    AUTH_CAPABILITY_MAP_JSON: "{}",
-    AUTH_REQUIRE_EXTERNAL_SHARED_STATE: "0",
-    PUBLIC_BASE_URL: "http://127.0.0.1"
-  },
-  encoding: "utf8",
-  timeout: 3000
-});
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_non_array_capability_value() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_non_array_capability_value",
+            "pii_auth_non_array_capability_value_fail.mjs",
+            &[(
+                "AUTH_CAPABILITY_MAP_JSON",
+                r#"{"1111111111111111111111111111111111111111111111111111111111111111":"pii.records.read"}"#,
+            )],
+            "AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays",
+            &["AUTH_CAPABILITY_MAP_JSON values must be non-empty string arrays"],
+        );
+    }
 
-if (result.error && result.error.code === "ETIMEDOUT") {
-  console.error("pii-app server did not fail-closed within timeout for empty capability map object");
-  process.exit(1);
-}
-if (result.error && result.error.code !== "ETIMEDOUT") {
-  console.error(result.error.stack ?? String(result.error));
-  process.exit(1);
-}
-if (result.status === 0) {
-  console.error("pii-app server unexpectedly started with empty capability map object");
-  process.exit(1);
-}
-const logs = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-if (!logs.includes(EXPECTED)) {
-  console.error(`missing expected empty capability map startup error. logs=${logs}`);
-  process.exit(1);
-}
-"#
-        .to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_non_string_capability() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_non_string_capability",
+            "pii_auth_non_string_capability_fail.mjs",
+            &[(
+                "AUTH_CAPABILITY_MAP_JSON",
+                r#"{"1111111111111111111111111111111111111111111111111111111111111111":[42]}"#,
+            )],
+            "AUTH_CAPABILITY_MAP_JSON capability must be a string",
+            &["AUTH_CAPABILITY_MAP_JSON capability"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_blank_capability() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_blank_capability",
+            "pii_auth_blank_capability_fail.mjs",
+            &[(
+                "AUTH_CAPABILITY_MAP_JSON",
+                r#"{"1111111111111111111111111111111111111111111111111111111111111111":[" "]}"#,
+            )],
+            "AUTH_CAPABILITY_MAP_JSON capability must not be empty",
+            &["AUTH_CAPABILITY_MAP_JSON capability"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_invalid_public_base_url() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_public_base_url",
+            "pii_auth_invalid_public_base_url_fail.mjs",
+            &[("PUBLIC_BASE_URL", "http://")],
+            "PUBLIC_BASE_URL is invalid",
+            &["PUBLIC_BASE_URL is invalid"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_invalid_session_ttl() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_session_ttl",
+            "pii_auth_invalid_session_ttl_fail.mjs",
+            &[("AUTH_SESSION_TTL_SECS", "59")],
+            "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
+            &["AUTH_SESSION_TTL_SECS"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_non_numeric_session_ttl() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_non_numeric_session_ttl",
+            "pii_auth_non_numeric_session_ttl_fail.mjs",
+            &[("AUTH_SESSION_TTL_SECS", "not-a-number")],
+            "AUTH_SESSION_TTL_SECS must be an integer in [60, 86400]",
+            &["AUTH_SESSION_TTL_SECS"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_invalid_challenge_ttl() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_challenge_ttl",
+            "pii_auth_invalid_challenge_ttl_fail.mjs",
+            &[("AUTH_CHALLENGE_TTL_SECS", "4")],
+            "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
+            &["AUTH_CHALLENGE_TTL_SECS"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_challenge_ttl_above_max() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_challenge_ttl_above_max",
+            "pii_auth_challenge_ttl_above_max_fail.mjs",
+            &[("AUTH_CHALLENGE_TTL_SECS", "901")],
+            "AUTH_CHALLENGE_TTL_SECS must be an integer in [5, 900]",
+            &["AUTH_CHALLENGE_TTL_SECS"],
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_startup_fails_on_invalid_external_state_boolean() {
+        assert_generated_pii_app_startup_import_fails(
+            "pii_auth_invalid_external_state_boolean",
+            "pii_auth_invalid_external_state_boolean_fail.mjs",
+            &[("AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "maybe")],
+            "AUTH_REQUIRE_EXTERNAL_SHARED_STATE must be boolean (true/false/1/0)",
+            &["AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "must be boolean"],
+        );
     }
 
     #[test]
@@ -36790,6 +36868,863 @@ main().catch((error) => {
         script = script.replace("__STATE_FILE__", &js_string_literal(&state_file));
         fs::write(&harness_path, script).expect("write node harness");
         run_node_harness(&harness_path);
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_normalizes_capabilities_and_parses_success_values() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_success_values",
+            "pii_auth_core_success_values.mjs",
+            &[
+                ("AUTH_CHALLENGE_TTL_SECS", "5"),
+                ("AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "off"),
+                ("AUTH_SESSION_TTL_SECS", "86400"),
+                ("PUBLIC_BASE_URL", ""),
+            ],
+            &[
+                "normalizedCapabilities.sort()",
+                "Array.from(new Set(normalizedCapabilities))",
+                "parseBooleanEnv",
+                "parsePositiveIntEnv",
+                "parsePublicOrigin",
+            ],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+const principal = "1111111111111111111111111111111111111111111111111111111111111111";
+const capabilityMap = parseCapabilityMap(JSON.stringify({
+  [principal]: [
+    "pii.records.delete",
+    " pii.records.read ",
+    "pii.consent.grant",
+    "pii.records.retention.sweep",
+    "pii.consent.revoke",
+    "pii.records.read"
+  ]
+}), true);
+
+const expectedCapabilities = [
+  "pii.consent.grant",
+  "pii.consent.revoke",
+  "pii.records.delete",
+  "pii.records.read",
+  "pii.records.retention.sweep"
+];
+assert(
+  JSON.stringify(capabilityMap.get(principal)) === JSON.stringify(expectedCapabilities),
+  `capabilities must be trimmed, sorted, and deduplicated: ${JSON.stringify([...capabilityMap])}`
+);
+
+assert(parseBooleanEnv("FLAG", "yes", false) === true, "yes should parse true");
+assert(parseBooleanEnv("FLAG", "on", false) === true, "on should parse true");
+assert(parseBooleanEnv("FLAG", "off", true) === false, "off should parse false");
+assert(parseBooleanEnv("FLAG", "", true) === true, "empty boolean should use fallback");
+assert(parsePositiveIntEnv("SESSION", "86400", 900, 60, 86400) === 86400, "max session TTL should parse");
+assert(parsePositiveIntEnv("CHALLENGE", "5", 120, 5, 900) === 5, "min challenge TTL should parse");
+assert(parsePublicOrigin("") === "", "empty PUBLIC_BASE_URL should parse to empty origin");
+assert(parsePublicOrigin("https://example.test/path?q=1") === "https://example.test", "public origin should canonicalize URL origin");
+            "#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_persists_file_state_canonically() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_file_state",
+            "pii_auth_core_file_state.mjs",
+            &[],
+            &[
+                "stableJsonStringify",
+                "readAuthStateSnapshot",
+                "statePutIfAbsent",
+                "stateEntries",
+            ],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function assertThrows(fn, expectedMessage) {
+  try {
+    fn();
+  } catch (error) {
+    if (String(error?.message ?? error).includes(expectedMessage)) {
+      return;
+    }
+    throw new Error(`unexpected error: ${error?.stack ?? String(error)}`);
+  }
+  throw new Error(`expected error containing: ${expectedMessage}`);
+}
+
+assert(
+  JSON.stringify(readAuthStateSnapshot()) === JSON.stringify({ schema_version: AUTH_STATE_SCHEMA_VERSION, records: {} }),
+  "missing state file should decode as an empty auth snapshot"
+);
+
+statePut("/state/test/z", {
+  z: 1,
+  a: { d: 4, c: 3 },
+  list: [{ b: 2, a: 1 }]
+});
+const storedRaw = fs.readFileSync(STATE_FILE_PATH, "utf8");
+const stored = JSON.parse(storedRaw);
+const expectedStoredValue = { a: { c: 3, d: 4 }, list: [{ a: 1, b: 2 }], z: 1 };
+assert(
+  JSON.stringify(stored.records["/state/test/z"]) === JSON.stringify(expectedStoredValue),
+  `statePut should canonicalize nested values: ${storedRaw}`
+);
+assert(
+  JSON.stringify(stateGet("/state/test/z")) === JSON.stringify(expectedStoredValue),
+  "stateGet should return the canonicalized value"
+);
+assert(statePutIfAbsent("/state/test/z", { replaced: true }) === false, "existing key must not be replaced");
+assert(statePutIfAbsent("/state/test/a", { value: 1 }) === true, "new key must be inserted");
+assert(
+  JSON.stringify(stateEntries("/state/test/").map(([key]) => key)) === JSON.stringify(["/state/test/a", "/state/test/z"]),
+  "stateEntries should be sorted and prefix-filtered"
+);
+stateDelete("/state/test/z");
+assert(stateGet("/state/test/z") === null, "stateDelete should remove existing records");
+
+fs.writeFileSync(STATE_FILE_PATH, "  ");
+assert(
+  JSON.stringify(readAuthStateSnapshot()) === JSON.stringify({ schema_version: AUTH_STATE_SCHEMA_VERSION, records: {} }),
+  "empty state file should decode as an empty auth snapshot"
+);
+fs.writeFileSync(STATE_FILE_PATH, JSON.stringify({ schema_version: "wrong", records: {} }));
+assertThrows(() => readAuthStateSnapshot(), "invalid auth state snapshot shape");
+"#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_uses_and_validates_shared_state_adapter() {
+        run_generated_pii_app_auth_core_harness_with_setup(
+            "pii_auth_core_shared_adapter",
+            "pii_auth_core_shared_adapter.mjs",
+            &[("AUTH_REQUIRE_EXTERNAL_SHARED_STATE", "1")],
+            &[
+                "SHARED_STATE_ADAPTER",
+                "shared state adapter putIfAbsent(key, value) must return boolean",
+                "shared state adapter entries(prefix) must return [key, value][]",
+            ],
+            r#"
+globalThis.__adapterRecords = new Map();
+globalThis.__adapterMode = "normal";
+globalThis.__soracloudSharedStateAdapter = {
+  get(key) {
+    return globalThis.__adapterRecords.has(key)
+      ? globalThis.__adapterRecords.get(key)
+      : null;
+  },
+  put(key, value) {
+    globalThis.__adapterRecords.set(key, value);
+  },
+  delete(key) {
+    globalThis.__adapterRecords.delete(key);
+  },
+  putIfAbsent(key, value) {
+    if (globalThis.__adapterMode === "bad-put-if-absent") {
+      return "true";
+    }
+    if (globalThis.__adapterRecords.has(key)) {
+      return false;
+    }
+    globalThis.__adapterRecords.set(key, value);
+    return true;
+  },
+  entries(prefix) {
+    if (globalThis.__adapterMode === "entries-not-array") {
+      return "not-an-array";
+    }
+    if (globalThis.__adapterMode === "bad-entry-shape") {
+      return [["/state/adapter/a"]];
+    }
+    if (globalThis.__adapterMode === "empty-entry-key") {
+      return [["   ", {}]];
+    }
+    return Array.from(globalThis.__adapterRecords.entries()).concat([
+      ["/unrelated/key", { ignored: true }]
+    ]);
+  }
+};
+"#,
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function assertThrows(fn, expectedMessage) {
+  try {
+    fn();
+  } catch (error) {
+    if (String(error?.message ?? error).includes(expectedMessage)) {
+      return;
+    }
+    throw new Error(`unexpected error: ${error?.stack ?? String(error)}`);
+  }
+  throw new Error(`expected error containing: ${expectedMessage}`);
+}
+
+assert(SHARED_STATE_ADAPTER === globalThis.__soracloudSharedStateAdapter, "configured shared adapter should be used");
+assert(stateGet("/state/adapter/missing") === null, "missing adapter values should read as null");
+
+statePut("/state/adapter/b", { z: 2, a: 1 });
+assert(
+  JSON.stringify(globalThis.__adapterRecords.get("/state/adapter/b")) === JSON.stringify({ a: 1, z: 2 }),
+  "statePut should canonicalize values before calling adapter.put"
+);
+assert(statePutIfAbsent("/state/adapter/b", { replaced: true }) === false, "existing adapter key should not be replaced");
+assert(statePutIfAbsent("/state/adapter/a", { nested: { b: 2, a: 1 } }) === true, "new adapter key should be inserted");
+assert(
+  JSON.stringify(stateEntries("/state/adapter/").map(([key]) => key)) === JSON.stringify(["/state/adapter/a", "/state/adapter/b"]),
+  "adapter entries should be sorted and prefix-filtered"
+);
+assert(
+  JSON.stringify(stateGet("/state/adapter/a")) === JSON.stringify({ nested: { a: 1, b: 2 } }),
+  "stateGet should canonicalize adapter-returned values"
+);
+stateDelete("/state/adapter/b");
+assert(stateGet("/state/adapter/b") === null, "stateDelete should call adapter.delete");
+
+globalThis.__adapterMode = "bad-put-if-absent";
+assertThrows(
+  () => statePutIfAbsent("/state/adapter/bad-insert", {}),
+  "shared state adapter putIfAbsent(key, value) must return boolean"
+);
+globalThis.__adapterMode = "entries-not-array";
+assertThrows(
+  () => stateEntries("/state/adapter/"),
+  "shared state adapter entries(prefix) must return [key, value][]"
+);
+globalThis.__adapterMode = "bad-entry-shape";
+assertThrows(
+  () => stateEntries("/state/adapter/"),
+  "shared state adapter entries(prefix) must return [key, value][]"
+);
+globalThis.__adapterMode = "empty-entry-key";
+assertThrows(
+  () => stateEntries("/state/adapter/"),
+  "shared state adapter entry keys must be non-empty strings"
+);
+"#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_handles_session_tokens_cookies_and_origins() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_session_cookie",
+            "pii_auth_core_session_cookie.mjs",
+            &[("PUBLIC_BASE_URL", "")],
+            &[
+                "parseCookies",
+                "requestOrigin",
+                "buildSetCookieHeader",
+                "getSessionFromRequest",
+            ],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+const forwardedReq = {
+  headers: {
+    "x-forwarded-proto": "https,http",
+    "x-forwarded-host": "example.test, proxy.local",
+    host: "fallback.test"
+  }
+};
+assert(requestOrigin(forwardedReq) === "https://example.test", "forwarded origin should use first forwarded values");
+assert(shouldUseSecureCookie(forwardedReq) === true, "forwarded https should require secure cookies");
+
+const plainReq = { headers: { host: "fallback.test" } };
+assert(requestOrigin(plainReq) === "http://fallback.test", "plain host should fall back to http origin");
+assert(shouldUseSecureCookie(plainReq) === false, "plain http request should not require secure cookies");
+
+const parsedCookies = parseCookies("ignored; session=sess%2Etoken; theme=dark=mode; empty=");
+assert(parsedCookies.session === "sess.token", "session cookie should be decoded");
+assert(parsedCookies.theme === "dark=mode", "cookie values may contain equals signs");
+assert(parsedCookies.empty === "", "empty cookie values should be retained");
+
+const sessionId = "session-1";
+const token = signSessionToken(sessionId);
+assert(verifySessionToken(token) === sessionId, "signed session token should verify");
+assert(verifySessionToken(`${token}bad`) === null, "tampered session token should be rejected");
+assert(verifySessionToken("missing-dot") === null, "malformed session token should be rejected");
+
+const setCookie = buildSetCookieHeader(forwardedReq, token);
+assert(setCookie.includes("session="), "set-cookie should include the session token");
+assert(setCookie.includes("HttpOnly"), "set-cookie should be HttpOnly");
+assert(setCookie.includes("SameSite=Strict"), "set-cookie should be SameSite=Strict");
+assert(setCookie.includes("Secure"), "forwarded https set-cookie should be Secure");
+const clearCookie = buildClearCookieHeader(forwardedReq);
+assert(clearCookie.includes("Max-Age=0"), "clear-cookie should expire the session");
+assert(clearCookie.includes("Secure"), "forwarded https clear-cookie should be Secure");
+
+statePut(sessionStateKey(sessionId), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  session_id: sessionId,
+  principal: "principal-1",
+  capabilities: ["pii.records.read"],
+  expires_at_unix_ms: Date.now() + 60000,
+  origin: "https://example.test"
+});
+const session = getSessionFromRequest({
+  headers: {
+    cookie: `session=${encodeURIComponent(token)}`,
+    "x-forwarded-proto": "https",
+    "x-forwarded-host": "example.test"
+  }
+});
+assert(session?.session_id === sessionId, "matching session cookie and origin should load the session");
+assert(
+  getSessionFromRequest({ headers: { cookie: `session=${encodeURIComponent(token)}`, host: "fallback.test" } }) === null,
+  "origin mismatch should reject an otherwise valid session token"
+);
+
+const expiredSessionId = "expired-session";
+const expiredToken = signSessionToken(expiredSessionId);
+statePut(sessionStateKey(expiredSessionId), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  session_id: expiredSessionId,
+  principal: "principal-1",
+  capabilities: [],
+  expires_at_unix_ms: Date.now() - 1,
+  origin: ""
+});
+assert(
+  getSessionFromRequest({ headers: { cookie: `session=${encodeURIComponent(expiredToken)}`, host: "fallback.test" } }) === null,
+  "expired sessions should not authenticate"
+);
+assert(stateGet(sessionStateKey(expiredSessionId)) === null, "expired session lookup should delete the state record");
+"#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_cleans_expired_records_and_manages_consume_locks() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_cleanup_locks",
+            "pii_auth_core_cleanup_locks.mjs",
+            &[],
+            &[
+                "cleanupExpiredAuthRecords",
+                "acquireChallengeConsumeLock",
+                "releaseChallengeConsumeLock",
+                "challengeExpiredStateKey",
+            ],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+const now = 1_000_000;
+statePut(challengeStateKey("expired"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: "expired",
+  expires_at_unix_ms: now - 1
+});
+statePut(challengeStateKey("invalid-expiry"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: "",
+  expires_at_unix_ms: "not-a-number"
+});
+statePut(challengeExpiredStateKey("old-marker"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: "old-marker",
+  marked_at_unix_ms: now - AUTH_CHALLENGE_EXPIRED_TTL_MS - 1
+});
+statePut(challengeExpiredStateKey("fresh-marker"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: "fresh-marker",
+  marked_at_unix_ms: now
+});
+statePut(challengeConsumeLockStateKey("stale-lock"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: "stale-lock",
+  owner: "owner",
+  expires_at_unix_ms: now - 1
+});
+statePut(sessionStateKey("expired-session"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  session_id: "expired-session",
+  expires_at_unix_ms: now - 1
+});
+
+cleanupExpiredAuthRecords(now);
+
+assert(stateGet(challengeStateKey("expired")) === null, "expired challenge should be removed");
+assert(stateGet(challengeExpiredStateKey("expired"))?.challenge_id === "expired", "expired challenge marker should be written");
+assert(stateGet(challengeStateKey("invalid-expiry")) === null, "invalid challenge expiry should be removed");
+assert(stateGet(challengeExpiredStateKey("old-marker")) === null, "old expired marker should be deleted");
+assert(stateGet(challengeExpiredStateKey("fresh-marker"))?.challenge_id === "fresh-marker", "fresh expired marker should remain");
+assert(stateGet(challengeConsumeLockStateKey("stale-lock")) === null, "stale consume lock should be removed");
+assert(stateGet(sessionStateKey("expired-session")) === null, "expired session should be removed");
+
+const lock = acquireChallengeConsumeLock("active-lock", now);
+assert(lock?.challenge_id === "active-lock", "first consume lock acquisition should succeed");
+assert(acquireChallengeConsumeLock("active-lock", now) === null, "second consume lock acquisition should fail closed");
+releaseChallengeConsumeLock({ challenge_id: "active-lock", owner: "wrong-owner" });
+assert(stateGet(challengeConsumeLockStateKey("active-lock")) !== null, "wrong lock owner must not release the lock");
+releaseChallengeConsumeLock(lock);
+assert(stateGet(challengeConsumeLockStateKey("active-lock")) === null, "matching lock owner should release the lock");
+
+statePut(challengeConsumeLockStateKey("reclaimed-lock"), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: "reclaimed-lock",
+  owner: "old-owner",
+  expires_at_unix_ms: now - 1
+});
+assert(
+  acquireChallengeConsumeLock("reclaimed-lock", now)?.challenge_id === "reclaimed-lock",
+  "expired consume lock should be reclaimed"
+);
+"#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_handlers_reject_login_auth_failures() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_login_failures",
+            "pii_auth_core_login_failures.mjs",
+            &[("PUBLIC_BASE_URL", "")],
+            &[
+                "AUTH_CHALLENGE_EXPIRED",
+                "AUTH_CHALLENGE_NOT_FOUND",
+                "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
+                "AUTH_ORIGIN_MISMATCH",
+                "AUTH_SIGNATURE_INVALID",
+            ],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function publicKeyHexFromSpki(spkiDer) {
+  return Buffer.from(spkiDer).subarray(-32).toString("hex");
+}
+
+function jsonReq(body, headers = { host: "clinic.test" }) {
+  const encoded = Buffer.from(JSON.stringify(body), "utf8");
+  return {
+    headers,
+    [Symbol.asyncIterator]: async function* () {
+      yield encoded;
+    }
+  };
+}
+
+function resCapture() {
+  return {
+    status: null,
+    headers: {},
+    body: "",
+    writeHead(status, headers = {}) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(body = "") {
+      this.body += body ?? "";
+    },
+    json() {
+      return this.body.length > 0 ? JSON.parse(this.body) : null;
+    }
+  };
+}
+
+async function assertLoginError(body, expectedStatus, expectedCode, headers = { host: "clinic.test" }) {
+  const res = resCapture();
+  await handleAuthLogin(jsonReq(body, headers), res, new Map());
+  assert(res.status === expectedStatus, `expected ${expectedStatus}, got ${res.status}: ${res.body}`);
+  assert(res.json().code === expectedCode, `expected ${expectedCode}, got ${res.body}`);
+}
+
+const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+const publicKeyHex = publicKeyHexFromSpki(publicKey.export({ format: "der", type: "spki" }));
+const { publicKey: otherPublicKey } = crypto.generateKeyPairSync("ed25519");
+const otherPublicKeyHex = publicKeyHexFromSpki(otherPublicKey.export({ format: "der", type: "spki" }));
+const signaturePlaceholder = "00".repeat(64);
+
+await assertLoginError(
+  {
+    public_key: publicKeyHex,
+    challenge_id: crypto.randomUUID(),
+    signature: signaturePlaceholder
+  },
+  401,
+  "AUTH_CHALLENGE_NOT_FOUND"
+);
+
+const expiredId = crypto.randomUUID();
+statePut(challengeExpiredStateKey(expiredId), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: expiredId,
+  marked_at_unix_ms: Date.now()
+});
+await assertLoginError(
+  {
+    public_key: publicKeyHex,
+    challenge_id: expiredId,
+    signature: signaturePlaceholder
+  },
+  401,
+  "AUTH_CHALLENGE_EXPIRED"
+);
+
+const mismatchId = crypto.randomUUID();
+statePut(challengeStateKey(mismatchId), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: mismatchId,
+  public_key: otherPublicKeyHex,
+  expires_at_unix_ms: Date.now() + 60000,
+  used_at_unix_ms: null,
+  origin: "http://clinic.test"
+});
+await assertLoginError(
+  {
+    public_key: publicKeyHex,
+    challenge_id: mismatchId,
+    signature: signaturePlaceholder
+  },
+  401,
+  "AUTH_CHALLENGE_PRINCIPAL_MISMATCH"
+);
+
+const replayedId = crypto.randomUUID();
+statePut(challengeStateKey(replayedId), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: replayedId,
+  public_key: publicKeyHex,
+  expires_at_unix_ms: Date.now() + 60000,
+  used_at_unix_ms: Date.now(),
+  origin: "http://clinic.test"
+});
+await assertLoginError(
+  {
+    public_key: publicKeyHex,
+    challenge_id: replayedId,
+    signature: signaturePlaceholder
+  },
+  401,
+  "AUTH_CHALLENGE_REPLAYED"
+);
+
+const originMismatchId = crypto.randomUUID();
+statePut(challengeStateKey(originMismatchId), {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: originMismatchId,
+  public_key: publicKeyHex,
+  expires_at_unix_ms: Date.now() + 60000,
+  used_at_unix_ms: null,
+  origin: "https://clinic.test"
+});
+await assertLoginError(
+  {
+    public_key: publicKeyHex,
+    challenge_id: originMismatchId,
+    signature: signaturePlaceholder
+  },
+  401,
+  "AUTH_ORIGIN_MISMATCH",
+  { host: "clinic.test" }
+);
+
+const invalidSignatureId = crypto.randomUUID();
+const challenge = {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: invalidSignatureId,
+  public_key: publicKeyHex,
+  nonce: "nonce",
+  issued_at_unix_ms: Date.now(),
+  expires_at_unix_ms: Date.now() + 60000,
+  used_at_unix_ms: null,
+  origin: "http://clinic.test"
+};
+statePut(challengeStateKey(invalidSignatureId), challenge);
+await assertLoginError(
+  {
+    public_key: publicKeyHex,
+    challenge_id: invalidSignatureId,
+    signature: signaturePlaceholder
+  },
+  401,
+  "AUTH_SIGNATURE_INVALID"
+);
+
+const validButNoCapabilitiesId = crypto.randomUUID();
+const validChallenge = {
+  schema_version: AUTH_STATE_SCHEMA_VERSION,
+  challenge_id: validButNoCapabilitiesId,
+  public_key: publicKeyHex,
+  nonce: "nonce-2",
+  issued_at_unix_ms: Date.now(),
+  expires_at_unix_ms: Date.now() + 60000,
+  used_at_unix_ms: null,
+  origin: "http://clinic.test"
+};
+statePut(challengeStateKey(validButNoCapabilitiesId), validChallenge);
+const validSignature = crypto
+  .sign(null, Buffer.from(canonicalChallengeMessage(validChallenge), "utf8"), privateKey)
+  .toString("hex");
+const loginRes = resCapture();
+await handleAuthLogin(
+  jsonReq({
+    public_key: publicKeyHex,
+    challenge_id: validButNoCapabilitiesId,
+    signature: validSignature
+  }),
+  loginRes,
+  new Map()
+);
+assert(loginRes.status === 200, `login without mapped capabilities should still mint a session: ${loginRes.body}`);
+assert(JSON.stringify(loginRes.json().capabilities) === "[]", "unmapped principals should receive no capabilities");
+
+const sessionCookie = loginRes.headers["set-cookie"].split(";")[0];
+const capabilityMapRequired = resCapture();
+handleAuthMe(
+  { headers: { cookie: sessionCookie, host: "clinic.test" } },
+  capabilityMapRequired,
+  new Map(),
+  "pii.records.read"
+);
+assert(capabilityMapRequired.status === 403, `empty capability map should fail: ${capabilityMapRequired.body}`);
+assert(capabilityMapRequired.json().code === "AUTH_CAPABILITY_MAP_REQUIRED", "empty capability map should return AUTH_CAPABILITY_MAP_REQUIRED");
+"#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_handlers_complete_login_me_and_logout() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_handlers_success",
+            "pii_auth_core_handlers_success.mjs",
+            &[("PUBLIC_BASE_URL", "")],
+            &[
+                "handleAuthChallenge",
+                "handleAuthLogin",
+                "handleAuthMe",
+                "handleAuthLogout",
+            ],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function publicKeyHexFromSpki(spkiDer) {
+  return Buffer.from(spkiDer).subarray(-32).toString("hex");
+}
+
+function jsonReq(body, headers = { host: "clinic.test" }) {
+  const encoded = Buffer.from(JSON.stringify(body), "utf8");
+  return {
+    headers,
+    [Symbol.asyncIterator]: async function* () {
+      yield encoded;
+    }
+  };
+}
+
+function emptyReq(headers = { host: "clinic.test" }) {
+  return {
+    headers,
+    [Symbol.asyncIterator]: async function* () {}
+  };
+}
+
+function resCapture() {
+  return {
+    status: null,
+    headers: {},
+    body: "",
+    writeHead(status, headers = {}) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(body = "") {
+      this.body += body ?? "";
+    },
+    json() {
+      return this.body.length > 0 ? JSON.parse(this.body) : null;
+    }
+  };
+}
+
+const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+const publicKeyHex = publicKeyHexFromSpki(publicKey.export({ format: "der", type: "spki" }));
+const capabilityMap = parseCapabilityMap(JSON.stringify({
+  [publicKeyHex]: ["pii.records.read", "pii.consent.grant"]
+}), true);
+
+const challengeRes = resCapture();
+await handleAuthChallenge(jsonReq({ public_key: publicKeyHex }), challengeRes);
+assert(challengeRes.status === 200, `challenge should succeed: ${challengeRes.body}`);
+const challenge = challengeRes.json();
+assert(challenge.public_key === publicKeyHex, "challenge principal mismatch");
+assert(challenge.message.includes(`challenge_id=${challenge.challenge_id}`), "challenge message should include challenge id");
+assert(stateGet(challengeStateKey(challenge.challenge_id))?.public_key === publicKeyHex, "challenge state should be persisted");
+
+const signature = crypto
+  .sign(null, Buffer.from(challenge.message, "utf8"), privateKey)
+  .toString("hex");
+const loginRes = resCapture();
+await handleAuthLogin(
+  jsonReq({
+    public_key: publicKeyHex,
+    challenge_id: challenge.challenge_id,
+    signature
+  }),
+  loginRes,
+  capabilityMap
+);
+assert(loginRes.status === 200, `login should succeed: ${loginRes.body}`);
+const login = loginRes.json();
+assert(
+  JSON.stringify(login.capabilities) === JSON.stringify(["pii.consent.grant", "pii.records.read"]),
+  `login capabilities should be sorted: ${loginRes.body}`
+);
+assert(loginRes.headers["set-cookie"]?.includes("session="), "login should set a session cookie");
+assert(stateGet(challengeConsumeLockStateKey(challenge.challenge_id)) === null, "login should release consume lock");
+
+const sessionCookie = loginRes.headers["set-cookie"].split(";")[0];
+const sessionToken = sessionCookie.slice("session=".length);
+const sessionId = verifySessionToken(decodeURIComponent(sessionToken));
+assert(sessionId, "login cookie should contain a valid signed session token");
+assert(stateGet(sessionStateKey(sessionId))?.principal === publicKeyHex, "login should persist session state");
+
+const meRes = resCapture();
+handleAuthMe({ headers: { cookie: sessionCookie, host: "clinic.test" } }, meRes, capabilityMap, "pii.records.read");
+assert(meRes.status === 200, `auth me should succeed: ${meRes.body}`);
+assert(meRes.json().principal === publicKeyHex, "auth me principal mismatch");
+
+const forbiddenRes = resCapture();
+handleAuthMe({ headers: { cookie: sessionCookie, host: "clinic.test" } }, forbiddenRes, capabilityMap, "pii.records.delete");
+assert(forbiddenRes.status === 403, `missing capability should be forbidden: ${forbiddenRes.body}`);
+assert(forbiddenRes.json().code === "AUTH_FORBIDDEN", "missing capability should return AUTH_FORBIDDEN");
+
+const logoutRes = resCapture();
+handleAuthLogout({ headers: { cookie: sessionCookie, host: "clinic.test" } }, logoutRes);
+assert(logoutRes.status === 204, "logout should return no-content");
+assert(logoutRes.headers["set-cookie"]?.includes("Max-Age=0"), "logout should clear the session cookie");
+assert(stateGet(sessionStateKey(sessionId)) === null, "logout should delete session state");
+
+const afterLogoutRes = resCapture();
+handleAuthMe({ headers: { cookie: sessionCookie, host: "clinic.test" } }, afterLogoutRes, capabilityMap);
+assert(afterLogoutRes.status === 401, `logged out session should not authenticate: ${afterLogoutRes.body}`);
+assert(afterLogoutRes.json().code === "AUTH_REQUIRED", "logged out session should return AUTH_REQUIRED");
+
+const emptyBody = await readJson(emptyReq());
+assert(JSON.stringify(emptyBody) === "{}", "empty JSON request body should decode as an object");
+"#,
+        );
+    }
+
+    #[test]
+    fn generated_pii_app_auth_core_handlers_reject_bad_request_bodies() {
+        run_generated_pii_app_auth_core_harness(
+            "pii_auth_core_handlers_bad_requests",
+            "pii_auth_core_handlers_bad_requests.mjs",
+            &[],
+            &["readJson", "sendAuthError", "INVALID_REQUEST"],
+            r#"
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+async function assertRejects(promiseFactory, expectedMessage) {
+  try {
+    await promiseFactory();
+  } catch (error) {
+    if (String(error?.message ?? error).includes(expectedMessage)) {
+      return;
+    }
+    throw new Error(`unexpected error: ${error?.stack ?? String(error)}`);
+  }
+  throw new Error(`expected rejection containing: ${expectedMessage}`);
+}
+
+function reqFromChunks(chunks, headers = { host: "clinic.test" }) {
+  return {
+    headers,
+    [Symbol.asyncIterator]: async function* () {
+      for (const chunk of chunks) {
+        yield Buffer.from(chunk, "utf8");
+      }
+    }
+  };
+}
+
+function resCapture() {
+  return {
+    status: null,
+    headers: {},
+    body: "",
+    writeHead(status, headers = {}) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(body = "") {
+      this.body += body ?? "";
+    },
+    json() {
+      return this.body.length > 0 ? JSON.parse(this.body) : null;
+    }
+  };
+}
+
+await assertRejects(
+  () => readJson(reqFromChunks(["{not-json"])),
+  "invalid JSON payload"
+);
+await assertRejects(
+  () => readJson(reqFromChunks(["x".repeat(65537)])),
+  "request body too large"
+);
+
+const badChallengeJson = resCapture();
+await handleAuthChallenge(reqFromChunks(["{not-json"]), badChallengeJson);
+assert(badChallengeJson.status === 400, `invalid challenge JSON should fail: ${badChallengeJson.body}`);
+assert(badChallengeJson.json().code === "INVALID_REQUEST", "invalid challenge JSON should return INVALID_REQUEST");
+
+const missingPublicKey = resCapture();
+await handleAuthChallenge(reqFromChunks([JSON.stringify({})]), missingPublicKey);
+assert(missingPublicKey.status === 400, `missing public key should fail: ${missingPublicKey.body}`);
+assert(missingPublicKey.json().error === "public_key must be a string", "missing public key error mismatch");
+
+const badLoginJson = resCapture();
+await handleAuthLogin(reqFromChunks(["{not-json"]), badLoginJson, new Map());
+assert(badLoginJson.status === 400, `invalid login JSON should fail: ${badLoginJson.body}`);
+assert(badLoginJson.json().code === "INVALID_REQUEST", "invalid login JSON should return INVALID_REQUEST");
+
+const missingChallengeId = resCapture();
+await handleAuthLogin(
+  reqFromChunks([JSON.stringify({ public_key: "11".repeat(32), signature: "00".repeat(64) })]),
+  missingChallengeId,
+  new Map()
+);
+assert(missingChallengeId.status === 400, `missing challenge id should fail: ${missingChallengeId.body}`);
+assert(missingChallengeId.json().error === "challenge_id must be a string", "missing challenge id error mismatch");
+"#,
+        );
     }
 
     #[test]

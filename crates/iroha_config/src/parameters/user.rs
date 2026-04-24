@@ -41,6 +41,7 @@ use iroha_config_base::{
 };
 use iroha_data_model::{
     block::consensus::RbcEncoding,
+    domain::DomainId,
     sorafs::capacity::ProviderId,
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
@@ -15876,11 +15877,38 @@ impl Default for ToriiMcp {
     }
 }
 
+/// Default constructors for `ToriiOnboarding` when the optional subtree is
+/// deserialized directly.
+const fn default_torii_onboarding_enabled() -> bool {
+    true
+}
+
+fn default_torii_onboarding_allowed_permissions() -> Vec<String> {
+    Vec::new()
+}
+
+const fn default_torii_onboarding_alias_lease_term_years() -> u8 {
+    1
+}
+
+const fn default_torii_onboarding_alias_auto_renew_enabled() -> bool {
+    false
+}
+
+const fn default_torii_onboarding_alias_auto_renew_retry_backoff_ms() -> u64 {
+    86_400_000
+}
+
+const fn default_torii_onboarding_alias_auto_renew_max_failures() -> u32 {
+    5
+}
+
 /// App onboarding authority wiring for UAID registration helpers.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiOnboarding {
     /// Master enable switch (defaults to enabled).
     #[config(default = "true")]
+    #[norito(default = "default_torii_onboarding_enabled")]
     pub enabled: bool,
     /// Account identifier that signs onboarding transactions.
     pub authority: String,
@@ -15888,9 +15916,30 @@ pub struct ToriiOnboarding {
     pub private_key: ExposedPrivateKey,
     /// Permission names that onboarding is allowed to grant to new accounts.
     #[config(default)]
+    #[norito(default = "default_torii_onboarding_allowed_permissions")]
     pub allowed_permissions: Vec<String>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
     pub fee_sponsor_account: Option<String>,
+    /// Default alias lease term applied during onboarding.
+    #[config(default = "1")]
+    #[norito(default = "default_torii_onboarding_alias_lease_term_years")]
+    pub alias_lease_term_years: u8,
+    /// Whether onboarding should create a default auto-renew subscription.
+    ///
+    /// Defaults to disabled until `alias_auto_renew_subscription_domain` is configured.
+    #[config(default = "false")]
+    #[norito(default = "default_torii_onboarding_alias_auto_renew_enabled")]
+    pub alias_auto_renew_enabled: bool,
+    /// Retry delay for alias auto-renew after a failed charge.
+    #[config(default = "86_400_000")]
+    #[norito(default = "default_torii_onboarding_alias_auto_renew_retry_backoff_ms")]
+    pub alias_auto_renew_retry_backoff_ms: u64,
+    /// Maximum consecutive alias auto-renew failures before suspension.
+    #[config(default = "5")]
+    #[norito(default = "default_torii_onboarding_alias_auto_renew_max_failures")]
+    pub alias_auto_renew_max_failures: u32,
+    /// Existing domain used to store internal alias auto-renew subscription NFTs.
+    pub alias_auto_renew_subscription_domain: Option<String>,
 }
 
 impl ToriiOnboarding {
@@ -15919,11 +15968,25 @@ impl ToriiOnboarding {
                 iroha_data_model::account::ParsedAccountId::into_account_id,
             )
         });
+        let alias_auto_renew_subscription_domain =
+            self.alias_auto_renew_subscription_domain.map(|domain| {
+                DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid torii.onboarding.alias_auto_renew_subscription_domain `{domain}`: {}",
+                        err.reason()
+                    )
+                })
+            });
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
             allowed_permissions,
             fee_sponsor_account,
+            alias_lease_term_years: self.alias_lease_term_years,
+            alias_auto_renew_enabled: self.alias_auto_renew_enabled,
+            alias_auto_renew_retry_backoff_ms: self.alias_auto_renew_retry_backoff_ms,
+            alias_auto_renew_max_failures: self.alias_auto_renew_max_failures,
+            alias_auto_renew_subscription_domain,
         })
     }
 }
@@ -18742,7 +18805,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use std::{path::PathBuf, time::Duration as StdDuration};
 
-    use iroha_config_base::toml::TomlSource;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
     use toml::{Table, Value};
 
     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
@@ -18776,6 +18839,48 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     fn load_root(table: Table) -> actual::Root {
         actual::Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
+    }
+
+    fn load_user_root(table: Table) -> super::Root {
+        ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<super::Root>()
+            .expect("load minimal user config")
+    }
+
+    #[test]
+    fn onboarding_alias_auto_renew_defaults_disabled_without_subscription_domain() {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        let authority = iroha_data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        let onboarding: Table = toml::from_str(&format!(
+            r#"
+enabled = true
+authority = "{authority}"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+"#,
+        ))
+        .expect("parse onboarding table");
+        torii.insert("onboarding".into(), Value::Table(onboarding));
+
+        let actual = load_user_root(table).parse().expect("parse user config");
+        let onboarding = actual.torii.onboarding.expect("onboarding enabled");
+        assert!(
+            !onboarding.alias_auto_renew_enabled,
+            "auto-renew should stay disabled until a subscription domain is configured"
+        );
+        assert!(
+            onboarding.alias_auto_renew_subscription_domain.is_none(),
+            "subscription domain remains optional"
+        );
     }
 
     #[test]

@@ -54,6 +54,10 @@ use iroha_core::{
     },
     query::store::LiveQueryStoreHandle,
     queue::RoutingDecision,
+    sns::{
+        LeaseQuote, SnsNamespace, get_name_record, quote_account_alias_registration,
+        quote_account_alias_renewal,
+    },
     state::{
         AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
@@ -2245,6 +2249,80 @@ pub struct AliasLookupByAccountResponseDto {
     pub source: Option<String>,
 }
 
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasLeaseDto {
+    pub alias: String,
+    pub dataspace: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    pub is_primary: bool,
+    pub lease_status: String,
+    pub expires_at_ms: u64,
+    pub grace_expires_at_ms: u64,
+    pub redemption_expires_at_ms: u64,
+    pub auto_renew_enabled: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub subscription_status: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_charge_ms: Option<u64>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_invoice_status: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub max_charge_amount: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasLeaseListResponseDto {
+    pub account_id: String,
+    pub total: u64,
+    pub items: Vec<AccountAliasLeaseDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct AccountAliasRenewRequestDto {
+    pub authority: String,
+    pub private_key: ExposedPrivateKey,
+    #[norito(default)]
+    pub term_years: Option<u8>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasRenewResponseDto {
+    pub account_id: String,
+    pub alias: String,
+    pub tx_hash_hex: String,
+    pub status: &'static str,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct AccountAliasAutoRenewRequestDto {
+    pub authority: String,
+    pub private_key: ExposedPrivateKey,
+    pub enabled: bool,
+    #[norito(default)]
+    pub term_years: Option<u8>,
+    #[norito(default)]
+    pub max_charge_amount: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountAliasAutoRenewResponseDto {
+    pub account_id: String,
+    pub alias: String,
+    pub auto_renew_enabled: bool,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    pub status: &'static str,
+}
+
 #[derive(
     Clone,
     crate::json_macros::JsonSerialize,
@@ -2718,7 +2796,7 @@ impl MaybeTelemetry {
     pub fn for_tests() -> Self {
         #[cfg(feature = "telemetry")]
         {
-            use std::sync::Arc;
+            use std::sync::{Arc, LazyLock};
 
             use iroha_core::{
                 kura::Kura,
@@ -2729,6 +2807,18 @@ impl MaybeTelemetry {
             };
             use iroha_primitives::time::TimeSource;
             use tokio::sync::watch;
+
+            static TEST_TELEMETRY_RUNTIME: LazyLock<tokio::runtime::Runtime> =
+                LazyLock::new(|| {
+                    tokio::runtime::Builder::new_multi_thread()
+                        .enable_time()
+                        .build()
+                        .expect("test telemetry runtime should start")
+                });
+
+            let _runtime_guard = tokio::runtime::Handle::try_current()
+                .is_err()
+                .then(|| TEST_TELEMETRY_RUNTIME.enter());
 
             let metrics = iroha_telemetry::metrics::global_or_default();
             let kura = Kura::blank_kura_for_testing();
@@ -2766,7 +2856,7 @@ impl MaybeTelemetry {
                 true,
             );
             let _ = peers_tx;
-            MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Operator)
+            MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Full)
         }
         #[cfg(not(feature = "telemetry"))]
         {
@@ -8240,7 +8330,11 @@ mod zk_roots_selector_tests {
     use std::str::FromStr;
 
     use super::*;
+    use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
+    use http_body_util::BodyExt as _;
     use iroha_crypto::KeyPair;
+    use iroha_primitives::json::Json;
+    use nonzero_ext::nonzero;
 
     fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -8263,12 +8357,44 @@ mod zk_roots_selector_tests {
         (state, definition_id)
     }
 
+    fn set_gas_accepted_assets_parameter(
+        state: &std::sync::Arc<iroha_core::state::State>,
+        payload: Json,
+    ) {
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            iroha_data_model::parameter::CustomParameterId(
+                "ivm_gas_accepted_assets".parse().expect("parameter id"),
+            ),
+            payload,
+        );
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(custom));
+        block
+            .commit()
+            .expect("commit gas accepted assets parameter");
+    }
+
     #[test]
     fn resolve_asset_definition_selector_accepts_alias_literal() {
         let (state, definition_id) = selector_state();
         let view = state.world_view();
         let resolved =
             resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
+        assert_eq!(resolved, definition_id);
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_accepts_trimmed_alias_literal() {
+        let (state, definition_id) = selector_state();
+        let view = state.world_view();
+        let resolved = resolve_asset_definition_selector(&view, "  usd#main  ", 0)
+            .expect("trimmed alias should resolve");
         assert_eq!(resolved, definition_id);
     }
 
@@ -8282,10 +8408,32 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
+    fn resolve_asset_definition_selector_rejects_blank_literal() {
+        let (state, _) = selector_state();
+        let view = state.world_view();
+        let err = resolve_asset_definition_selector(&view, "   ", 0)
+            .expect_err("blank selector should fail");
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(ref message))
+                if message.contains("invalid asset selector")
+        ));
+    }
+
+    #[test]
     fn normalize_contract_call_gas_asset_id_canonicalizes_alias_literal() {
         let (state, definition_id) = selector_state();
         let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#main"))
             .expect("alias should canonicalize");
+
+        assert_eq!(normalized, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_canonicalizes_trimmed_alias_literal() {
+        let (state, definition_id) = selector_state();
+        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), Some("  usd#main  "))
+            .expect("trimmed alias should canonicalize");
 
         assert_eq!(normalized, Some(definition_id.to_string()));
     }
@@ -8324,6 +8472,22 @@ mod zk_roots_selector_tests {
         let view = state.world_view();
         let err = resolve_asset_definition_selector(&view, "usd#missing", 0)
             .expect_err("unknown alias should fail");
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_rejects_unknown_base58_literal() {
+        let (state, _) = selector_state();
+        let view = state.world_view();
+        let missing_definition =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400ef");
+        let err = resolve_asset_definition_selector(&view, &missing_definition, 0)
+            .expect_err("unknown base58 id should fail");
         assert!(matches!(
             err,
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -8375,6 +8539,598 @@ mod zk_roots_selector_tests {
                 == "asset_id is outside the allowed transaction history asset definition"
         ));
         assert_ne!(definition_id, other_definition);
+    }
+
+    #[tokio::test]
+    async fn canonical_gas_asset_definition_id_rejects_blank_literal() {
+        let (state, _) = selector_state();
+        let err = canonical_gas_asset_definition_id(state.as_ref(), "   ")
+            .expect_err("blank gas asset id should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message == "gas_asset_id must not be empty"
+        ));
+    }
+
+    #[test]
+    fn canonical_gas_asset_definition_id_accepts_base58_literal() {
+        let (state, definition_id) = selector_state();
+
+        let canonical =
+            canonical_gas_asset_definition_id(state.as_ref(), &definition_id.to_string())
+                .expect("base58 gas asset id should canonicalize");
+
+        assert_eq!(canonical, definition_id.to_string());
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_preserves_trimmed_invalid_pipeline_default() {
+        let (mut state, _) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["  usd#missing  ".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let normalized = normalize_contract_call_gas_asset_id(state.as_ref(), None)
+            .expect("default gas asset fallback should not error");
+
+        assert_eq!(normalized, Some("usd#missing".to_owned()));
+    }
+
+    #[test]
+    fn normalize_contract_call_gas_asset_id_rejects_invalid_explicit_literal() {
+        let (state, _) = selector_state();
+        let err = normalize_contract_call_gas_asset_id(state.as_ref(), Some("usd#missing"))
+            .expect_err("invalid explicit gas asset should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message
+                == "invalid gas_asset_id `usd#missing`; expected canonical Base58 asset definition id or active asset alias"
+        ));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_prefers_custom_parameter_over_pipeline_default() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#missing".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(&state, Json::new(vec!["usd#main".to_owned()]));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_payload_is_invalid() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(&state, Json::new("not-a-list"));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_entries_are_blank() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(
+            &state,
+            Json::new(vec!["   ".to_owned(), "\t".to_owned(), "".to_owned()]),
+        );
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_falls_back_to_pipeline_when_custom_list_is_empty() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+        set_gas_accepted_assets_parameter(&state, Json::new(Vec::<String>::new()));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_uses_first_non_empty_custom_entry() {
+        let (state, definition_id) = selector_state();
+        set_gas_accepted_assets_parameter(
+            &state,
+            Json::new(vec![
+                "   ".to_owned(),
+                "usd#main".to_owned(),
+                "usd#missing".to_owned(),
+            ]),
+        );
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_preserves_trimmed_invalid_custom_entry() {
+        let (state, _) = selector_state();
+        set_gas_accepted_assets_parameter(&state, Json::new(vec!["  usd#missing  ".to_owned()]));
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some("usd#missing".to_owned()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_returns_none_when_unconfigured() {
+        let (state, _) = selector_state();
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_skips_blank_pipeline_entries() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["   ".to_owned(), "usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, Some(definition_id.to_string()));
+    }
+
+    #[test]
+    fn default_pipeline_gas_asset_id_returns_none_when_pipeline_entries_are_only_blank() {
+        let (mut state, _) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["   ".to_owned(), "\t".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let selected = default_pipeline_gas_asset_id(state.as_ref());
+
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn metadata_with_default_gas_asset_inserts_selected_asset_id() {
+        let (mut state, definition_id) = selector_state();
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = vec!["usd#main".to_owned()];
+        std::sync::Arc::get_mut(&mut state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+
+        let metadata = metadata_with_default_gas_asset(state.as_ref());
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+
+        assert_eq!(gas_asset_id, Some(definition_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn metadata_with_default_gas_asset_stays_empty_when_unconfigured() {
+        let (state, _) = selector_state();
+
+        let metadata = metadata_with_default_gas_asset(state.as_ref());
+
+        assert!(metadata.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_accepts_alias_literal_and_returns_empty_json_payload() {
+        let (state, _) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            None,
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: "usd#main".to_owned(),
+                max: 5,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_prefers_norito_when_accept_quality_ties() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(
+                "application/json;q=0.7, application/x-norito;q=0.7",
+            )),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_negotiates_norito_response_when_requested() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::decode_from_bytes(&bytes).expect("norito response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_prefers_json_when_accept_quality_is_higher() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(
+                "application/x-norito;q=0.4, application/json;q=0.8",
+            )),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_treats_wildcard_accept_as_json() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("*/*")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_treats_application_wildcard_accept_as_json() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("application/*")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_accepts_vendor_json_media_type() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("application/problem+json")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_ignores_zero_quality_norito_and_uses_json() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static(
+                "application/x-norito;q=0, application/json;q=0.6",
+            )),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 2,
+            }),
+        )
+        .await
+        .expect("zk roots handler should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let payload: ZkRootsGetResponseDto =
+            norito::json::from_slice(&bytes).expect("json response payload");
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert_eq!(payload.height, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_returns_not_acceptable_for_unsupported_accept_header() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("text/plain")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect("accept negotiation should return an HTTP response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = std::str::from_utf8(&bytes).expect("utf8 response body");
+        assert!(body.contains("unsupported Accept header"));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_qvalue() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_static("application/json;q=bogus")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect("accept negotiation should return an HTTP response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = std::str::from_utf8(&bytes).expect("utf8 response body");
+        assert!(body.contains("invalid q-value"));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_returns_not_acceptable_for_invalid_accept_encoding() {
+        let (state, definition_id) = selector_state();
+
+        let response = handle_v1_zk_roots(
+            state,
+            Some(HeaderValue::from_bytes(b"\x80").expect("header value")),
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect("accept negotiation should return an HTTP response");
+
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = std::str::from_utf8(&bytes).expect("utf8 response body");
+        assert!(body.contains("invalid Accept header encoding"));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_rejects_blank_asset_selector() {
+        let (state, _) = selector_state();
+
+        let err = handle_v1_zk_roots(
+            state,
+            None,
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: "   ".to_owned(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect_err("blank selector should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(ref message))
+                if message.contains("invalid asset selector")
+        ));
     }
 }
 
@@ -31703,6 +32459,11 @@ static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str(iroha_data_model::subscription::SUBSCRIPTION_TRIGGER_REF_METADATA_KEY)
         .expect("subscription trigger reference metadata key is valid")
 });
+#[cfg(feature = "app_api")]
+static ACCOUNT_ALIAS_AUTO_RENEW_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(iroha_data_model::subscription::ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY)
+        .expect("account alias auto-renew metadata key is valid")
+});
 
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
@@ -31718,6 +32479,13 @@ pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_ALIAS_RENEW: &str = "/v1/accounts/{account_id}/aliases/{literal}/renew";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW: &str =
+    "/v1/accounts/{account_id}/aliases/{literal}/auto-renew";
 #[cfg(feature = "app_api")]
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
 #[cfg(feature = "app_api")]
@@ -32325,6 +33093,9 @@ fn record_account_literal_reject(
     telemetry.with_metrics(|metrics| {
         if literal_is_local8(literal) {
             metrics.inc_torii_address_domain(context, "local8");
+            if let Some(domain_label) = local8_domain_label(literal) {
+                metrics.inc_torii_address_domain(context, &domain_label);
+            }
         }
         metrics.inc_torii_address_invalid(context, reason);
     });
@@ -32384,7 +33155,7 @@ mod address_metrics_tests {
     static DEFAULT_DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn local8_literal() -> &'static str {
-        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora"
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -32535,7 +33306,7 @@ mod address_metrics_tests {
     }
 
     fn i105_literal(domain_label: &str) -> String {
-        let _domain = DomainId::parse_fully_qualified(domain_label).expect("domain parses");
+        let _domain = DomainId::try_new(domain_label, "universal").expect("domain parses");
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
         account.to_string()
@@ -32583,15 +33354,16 @@ mod address_metrics_tests {
 
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
 mod account_path_metric_tests {
-    use iroha_data_model::account::AccountAddressErrorCode;
-
     use super::*;
 
     #[tokio::test]
     async fn invalid_literal_records_endpoint_counter() {
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY;
-        let reason = AccountAddressErrorCode::UnsupportedAddressFormat.as_str();
+        let literal = "bad@banka.dataspace";
+        let reason = AccountId::parse_encoded(literal)
+            .expect_err("literal must be rejected")
+            .reason();
 
         let before = {
             let metrics = telemetry.metrics().await;
@@ -32601,7 +33373,7 @@ mod account_path_metric_tests {
                 .get()
         };
         assert!(
-            parse_account_path_segment("bad@banka.dataspace", &telemetry, endpoint).is_err(),
+            parse_account_path_segment(literal, &telemetry, endpoint).is_err(),
             "literal should be rejected"
         );
         let after = {
@@ -54154,7 +54926,16 @@ mod uaid_parsing_tests {
     }
 
     #[test]
+    fn parses_raw_hex_literal_without_prefix() {
+        let parsed = parse_uaid_literal(SAMPLE_UAID_HEX).expect("parse UAID literal");
+        let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
+        let expected = UniversalAccountId::from_hash(expected_hash);
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
     fn rejects_invalid_inputs() {
+        assert!(parse_uaid_literal("").is_err());
         assert!(parse_uaid_literal("uaid:1234").is_err());
         let invalid_hex = format!("{}g", "0".repeat(63));
         assert!(parse_uaid_literal(&invalid_hex).is_err());
@@ -54184,6 +54965,7 @@ pub struct AccountOnboardingResponseDto {
     pub uaid: String,
     pub tx_hash_hex: String,
     pub status: &'static str,
+    pub lease: AccountAliasLeaseDto,
 }
 
 #[cfg(feature = "app_api")]
@@ -54289,6 +55071,8 @@ pub struct MultisigAccountOnboardingResponseDto {
     pub account_id: String,
     pub tx_hash_hex: String,
     pub status: &'static str,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lease: Option<AccountAliasLeaseDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -54325,6 +55109,24 @@ impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardin
             norito::Error::Message(format!(
                 "invalid MultisigAccountOnboardingRequestDto: {err}"
             ))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasRenewRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!("invalid AccountAliasRenewRequestDto: {err}"))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasAutoRenewRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!("invalid AccountAliasAutoRenewRequestDto: {err}"))
         })
     }
 }
@@ -55026,6 +55828,94 @@ fn alias_domain_to_domain_id(
     })
 }
 
+#[cfg(feature = "app_api")]
+fn account_alias_scope_strings(
+    alias: &account::rekey::AccountAlias,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> Result<(String, Option<String>)> {
+    let dataspace = catalog
+        .by_id(alias.dataspace)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| onboarding_invalid_request("alias dataspace is not registered"))?;
+    let domain = alias
+        .domain
+        .as_ref()
+        .map(ToString::to_string)
+        .map(|domain| format!("{domain}.{dataspace}"));
+    Ok((dataspace, domain))
+}
+
+#[cfg(feature = "app_api")]
+fn build_onboarding_alias_auto_renew_instructions(
+    onboarding_authority: &AccountId,
+    subscriber: &AccountId,
+    subscription_domain: &DomainId,
+    alias_literal: &str,
+    lease_quote: &LeaseQuote,
+    term_years: u8,
+    retry_backoff_ms: u64,
+    max_failures: u32,
+    max_charge_amount: u64,
+) -> Result<(Vec<InstructionBox>, NftId)> {
+    use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+
+    let subscription_id =
+        account_alias_auto_renew_subscription_id(subscription_domain, subscriber, alias_literal)?;
+    let billing_trigger_id = derive_trigger_id("sub_bill_", &subscription_id)?;
+    let settings = build_account_alias_auto_renew_settings(
+        alias_literal.to_owned(),
+        term_years,
+        max_charge_amount,
+        retry_backoff_ms,
+        max_failures,
+    );
+    let subscription_state = build_account_alias_auto_renew_state(
+        subscriber.clone(),
+        lease_quote.payment_asset_definition_id.clone(),
+        billing_trigger_id.clone(),
+        network_time_ms()?,
+        lease_quote.expires_at_ms,
+    );
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        (*SUBSCRIPTION_KEY).clone(),
+        IrohaJson::new(subscription_state),
+    );
+    metadata.insert(
+        (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+        IrohaJson::new(settings),
+    );
+    let permission: Permission = CanRegisterTrigger {
+        authority: subscriber.clone(),
+    }
+    .into();
+    Ok((
+        vec![
+            InstructionBox::from(Grant::account_permission(
+                permission.clone(),
+                onboarding_authority.clone(),
+            )),
+            InstructionBox::from(Register::nft(Nft::new(subscription_id.clone(), metadata))),
+            InstructionBox::from(Register::trigger(build_billing_trigger(
+                billing_trigger_id,
+                subscriber.clone(),
+                subscription_id.clone(),
+                lease_quote.expires_at_ms,
+            ))),
+            InstructionBox::from(Transfer::nft(
+                onboarding_authority.clone(),
+                subscription_id.clone(),
+                subscriber.clone(),
+            )),
+            InstructionBox::from(Revoke::account_permission(
+                permission,
+                onboarding_authority.clone(),
+            )),
+        ],
+        subscription_id,
+    ))
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
@@ -55060,6 +55950,8 @@ pub async fn handle_v1_accounts_onboard(
     let canonical_alias = alias_label
         .to_literal(&nexus.dataspace_catalog)
         .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    let (alias_dataspace, alias_domain) =
+        account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
     let account_id = if let Some(account_literal) = account_id
         .as_deref()
         .map(str::trim)
@@ -55089,6 +55981,18 @@ pub async fn handle_v1_accounts_onboard(
         return Err(onboarding_invalid_request("account already exists"));
     }
 
+    let lease_term_years = signer.alias_lease_term_years.max(1);
+    let lease_quote = quote_account_alias_registration(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias_label,
+        &account_id,
+        lease_term_years,
+        None,
+        network_time_ms()?,
+    )
+    .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+
     let uaid = if let Some(literal) = uaid {
         parse_uaid_literal(&literal)?
     } else {
@@ -55117,7 +56021,7 @@ pub async fn handle_v1_accounts_onboard(
     let register_builder = dm::Account::new(account_id.clone());
     let register = Register::account(
         register_builder
-            .with_label(Some(alias_label))
+            .with_label(Some(alias_label.clone()))
             .with_metadata(metadata)
             .with_uaid(Some(uaid)),
     );
@@ -55158,11 +56062,52 @@ pub async fn handle_v1_accounts_onboard(
         )));
     }
 
+    let auto_renew_enabled = signer.alias_auto_renew_enabled;
+    let mut auto_renew_instructions = Vec::new();
+    let mut auto_renew_cap = None;
+    if auto_renew_enabled {
+        let Some(subscription_domain) = signer.alias_auto_renew_subscription_domain.as_ref() else {
+            return Err(onboarding_invalid_request(
+                "torii onboarding alias auto-renew requires alias_auto_renew_subscription_domain",
+            ));
+        };
+        if app.state.world_view().domain(subscription_domain).is_err() {
+            return Err(onboarding_invalid_request(
+                "configured alias auto-renew subscription domain is not registered",
+            ));
+        }
+        auto_renew_cap = Some(lease_quote.charge_amount);
+        let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
+            &signer.authority,
+            &account_id,
+            subscription_domain,
+            &canonical_alias,
+            &lease_quote,
+            lease_term_years,
+            signer.alias_auto_renew_retry_backoff_ms,
+            signer.alias_auto_renew_max_failures,
+            lease_quote.charge_amount,
+        )?;
+        auto_renew_instructions = instructions;
+    }
+
     let mut instructions = Vec::with_capacity(
-        1 + permission_instructions.len() + usize::from(should_publish_manifest),
+        2 + permission_instructions.len()
+            + auto_renew_instructions.len()
+            + usize::from(should_publish_manifest),
     );
+    instructions.push(InstructionBox::from(
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias_label.clone(),
+            account_id.clone(),
+            signer.authority.clone(),
+            lease_term_years,
+            None,
+        ),
+    ));
     instructions.push(InstructionBox::from(register));
     instructions.extend(permission_instructions);
+    instructions.extend(auto_renew_instructions);
     if should_publish_manifest {
         let activation_epoch = app.state.committed_height().saturating_sub(1) as u64;
         let manifest = AssetPermissionManifest {
@@ -55214,6 +56159,16 @@ pub async fn handle_v1_accounts_onboard(
         uaid: uaid.to_string(),
         tx_hash_hex,
         status: "QUEUED",
+        lease: account_alias_lease_dto_from_quote(
+            canonical_alias,
+            alias_dataspace,
+            alias_domain,
+            true,
+            &lease_quote,
+            auto_renew_enabled,
+            auto_renew_cap,
+            auto_renew_enabled.then_some(lease_quote.expires_at_ms),
+        ),
     };
 
     let mut resp = Response::new(Body::from(
@@ -55411,6 +56366,11 @@ pub async fn handle_v1_accounts_onboard_multisig(
         account::rekey::AccountAlias::from_literal(trimmed_alias, &nexus.dataspace_catalog)
             .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
+    let canonical_alias = alias_label
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    let (alias_dataspace, alias_domain_text) =
+        account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
     if member_account_ids.len() < 2 {
         return Err(onboarding_invalid_request(
             "multisig onboarding requires at least two member accounts",
@@ -55478,6 +56438,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             account_id: multisig_account.to_string(),
             tx_hash_hex: String::new(),
             status: "EXISTS",
+            lease: None,
         };
         let mut resp = Response::new(Body::from(
             norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
@@ -55493,20 +56454,73 @@ pub async fn handle_v1_accounts_onboard_multisig(
         .ok_or_else(|| onboarding_invalid_request("required_signers must be positive"))?;
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
+    let lease_term_years = signer.alias_lease_term_years.max(1);
+    let lease_quote = quote_account_alias_registration(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias_label,
+        &multisig_account,
+        lease_term_years,
+        None,
+        network_time_ms()?,
+    )
+    .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
     let alias_domain = alias_domain_to_domain_id(&alias_label, &nexus.dataspace_catalog)?;
     let register = MultisigRegister::with_account(multisig_account.clone(), alias_domain, spec);
     let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
-        alias: Some(alias_label),
+        alias: Some(alias_label.clone()),
         lease_expiry_ms: None,
     };
 
+    let auto_renew_enabled = signer.alias_auto_renew_enabled;
+    let mut auto_renew_instructions = Vec::new();
+    let mut auto_renew_cap = None;
+    if auto_renew_enabled {
+        let Some(subscription_domain) = signer.alias_auto_renew_subscription_domain.as_ref() else {
+            return Err(onboarding_invalid_request(
+                "torii onboarding alias auto-renew requires alias_auto_renew_subscription_domain",
+            ));
+        };
+        if app.state.world_view().domain(subscription_domain).is_err() {
+            return Err(onboarding_invalid_request(
+                "configured alias auto-renew subscription domain is not registered",
+            ));
+        }
+        auto_renew_cap = Some(lease_quote.charge_amount);
+        let (instructions, _) = build_onboarding_alias_auto_renew_instructions(
+            &signer.authority,
+            &multisig_account,
+            subscription_domain,
+            &canonical_alias,
+            &lease_quote,
+            lease_term_years,
+            signer.alias_auto_renew_retry_backoff_ms,
+            signer.alias_auto_renew_max_failures,
+            lease_quote.charge_amount,
+        )?;
+        auto_renew_instructions = instructions;
+    }
+
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_instructions([
-            InstructionBox::from(register),
-            InstructionBox::from(bind_alias),
-        ]);
+        .with_instructions({
+            let mut instructions = vec![
+                InstructionBox::from(
+                    iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+                        alias_label,
+                        multisig_account.clone(),
+                        signer.authority.clone(),
+                        lease_term_years,
+                        None,
+                    ),
+                ),
+                InstructionBox::from(register),
+                InstructionBox::from(bind_alias),
+            ];
+            instructions.extend(auto_renew_instructions);
+            instructions
+        });
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -55525,11 +56539,414 @@ pub async fn handle_v1_accounts_onboard_multisig(
         account_id: multisig_account.to_string(),
         tx_hash_hex,
         status: "QUEUED",
+        lease: Some(account_alias_lease_dto_from_quote(
+            canonical_alias,
+            alias_dataspace,
+            alias_domain_text,
+            true,
+            &lease_quote,
+            auto_renew_enabled,
+            auto_renew_cap,
+            auto_renew_enabled.then_some(lease_quote.expires_at_ms),
+        )),
     };
 
     let mut resp = Response::new(Body::from(
         norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
     ));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_account_aliases(
+    app: crate::SharedAppState,
+    axum::extract::Path(account_id_literal): axum::extract::Path<String>,
+) -> Result<impl IntoResponse> {
+    let telemetry = MaybeTelemetry::disabled();
+    let (account_id, canonical_account_id) = parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id_literal,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIASES,
+    )?;
+    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    )
+    .execute(&app.state.view())
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+    let now_ms = asset_alias_observation_time_ms(app.state.as_ref());
+    let world = app.state.world_view();
+    let mut items = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let record = get_name_record(
+            &world,
+            &app.state.nexus_snapshot().dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            &binding.alias,
+            now_ms,
+        )
+        .map_err(|err| conversion_error(err.to_string()))?;
+        let auto_renew = lookup_account_alias_auto_renew(&app, &account_id, &binding.alias)?;
+        items.push(account_alias_lease_dto_from_record(
+            binding.alias,
+            binding.dataspace,
+            binding.domain,
+            binding.is_primary,
+            &record,
+            auto_renew
+                .as_ref()
+                .map(|(_, subscription, _, _)| subscription),
+            auto_renew
+                .as_ref()
+                .and_then(|(_, _, invoice, _)| invoice.as_ref()),
+            auto_renew.as_ref().map(|(_, _, _, settings)| settings),
+        ));
+    }
+    let payload = AccountAliasLeaseListResponseDto {
+        account_id: canonical_account_id,
+        total: items.len() as u64,
+        items,
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_account_alias_renew(
+    app: crate::SharedAppState,
+    axum::extract::Path((account_id_literal, alias_literal)): axum::extract::Path<(String, String)>,
+    crate::NoritoJson(req): crate::NoritoJson<AccountAliasRenewRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let (account_id, _) = parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id_literal,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )?;
+    let (authority_id, _) = parse_account_literal_with_state(
+        app.state.as_ref(),
+        &req.authority,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid authority `{}`: {}",
+            req.authority,
+            err.reason()
+        ))
+    })?;
+    if authority_id != account_id {
+        return Err(conversion_error(
+            "renew authority must match the account path".to_string(),
+        ));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let alias =
+        account::rekey::AccountAlias::from_literal(alias_literal.trim(), &nexus.dataspace_catalog)
+            .map_err(|err| conversion_error(err.to_string()))?;
+    let canonical_alias = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    )
+    .execute(&app.state.view())
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+    if !bindings
+        .iter()
+        .any(|binding| binding.alias == canonical_alias)
+    {
+        return Err(conversion_error(
+            "alias is not bound to the requested account".to_string(),
+        ));
+    }
+    let term_years = req.term_years.unwrap_or_else(|| {
+        app.uaid_onboarding
+            .as_ref()
+            .map_or(1, |signer| signer.alias_lease_term_years.max(1))
+    });
+    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
+        .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
+        .with_instructions([InstructionBox::from(
+            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                alias,
+                authority_id.clone(),
+                term_years,
+            ),
+        )])
+        .sign(&req.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_RENEW,
+    )
+    .await?;
+    let payload = AccountAliasRenewResponseDto {
+        account_id: authority_id.to_string(),
+        alias: canonical_alias,
+        tx_hash_hex,
+        status: "QUEUED",
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_v1_account_alias_auto_renew(
+    app: crate::SharedAppState,
+    axum::extract::Path((account_id_literal, alias_literal)): axum::extract::Path<(String, String)>,
+    crate::NoritoJson(req): crate::NoritoJson<AccountAliasAutoRenewRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let (account_id, _) = parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_id_literal,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )?;
+    let (authority_id, _) = parse_account_literal_with_state(
+        app.state.as_ref(),
+        &req.authority,
+        &telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid authority `{}`: {}",
+            req.authority,
+            err.reason()
+        ))
+    })?;
+    if authority_id != account_id {
+        return Err(conversion_error(
+            "auto-renew authority must match the account path".to_string(),
+        ));
+    }
+    let nexus = app.state.nexus_snapshot();
+    let alias =
+        account::rekey::AccountAlias::from_literal(alias_literal.trim(), &nexus.dataspace_catalog)
+            .map_err(|err| conversion_error(err.to_string()))?;
+    let canonical_alias = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let bindings = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id.clone(),
+        None,
+        None,
+    )
+    .execute(&app.state.view())
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+    if !bindings
+        .iter()
+        .any(|binding| binding.alias == canonical_alias)
+    {
+        return Err(conversion_error(
+            "alias is not bound to the requested account".to_string(),
+        ));
+    }
+
+    let existing = lookup_account_alias_auto_renew(&app, &account_id, &canonical_alias)?;
+    if !req.enabled && existing.is_none() {
+        let payload = AccountAliasAutoRenewResponseDto {
+            account_id: account_id.to_string(),
+            alias: canonical_alias,
+            auto_renew_enabled: false,
+            subscription_id: None,
+            tx_hash_hex: None,
+            status: "DISABLED",
+        };
+        let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+        let mut resp = Response::new(Body::from(body));
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        return Ok((StatusCode::OK, resp));
+    }
+
+    let Some(subscription_domain) = app
+        .uaid_onboarding
+        .as_ref()
+        .and_then(|signer| signer.alias_auto_renew_subscription_domain.as_ref())
+    else {
+        return Err(conversion_error(
+            "alias auto-renew is not configured on this Torii".to_string(),
+        ));
+    };
+    if app.state.world_view().domain(subscription_domain).is_err() {
+        return Err(conversion_error(
+            "configured alias auto-renew subscription domain is not registered".to_string(),
+        ));
+    }
+
+    let now_ms = asset_alias_observation_time_ms(app.state.as_ref());
+    let record = get_name_record(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        SnsNamespace::AccountAlias,
+        &canonical_alias,
+        now_ms,
+    )
+    .map_err(|err| conversion_error(err.to_string()))?;
+    let term_years = req.term_years.unwrap_or_else(|| {
+        app.uaid_onboarding
+            .as_ref()
+            .map_or(1, |signer| signer.alias_lease_term_years.max(1))
+    });
+    let quote = quote_account_alias_renewal(
+        &app.state.world_view(),
+        &nexus.dataspace_catalog,
+        &alias,
+        term_years,
+        now_ms,
+    )
+    .map_err(|err| conversion_error(err.to_string()))?;
+    let max_charge_amount = req.max_charge_amount.unwrap_or(quote.charge_amount);
+    let subscription_id = account_alias_auto_renew_subscription_id(
+        subscription_domain,
+        &account_id,
+        &canonical_alias,
+    )?;
+    let billing_trigger_id = derive_trigger_id("sub_bill_", &subscription_id)?;
+    let billing_trigger_exists = app
+        .state
+        .world_view()
+        .triggers()
+        .time_triggers()
+        .get(&billing_trigger_id)
+        .is_some();
+    let settings = build_account_alias_auto_renew_settings(
+        canonical_alias.clone(),
+        term_years,
+        max_charge_amount,
+        app.uaid_onboarding.as_ref().map_or(86_400_000, |signer| {
+            signer.alias_auto_renew_retry_backoff_ms
+        }),
+        app.uaid_onboarding
+            .as_ref()
+            .map_or(5, |signer| signer.alias_auto_renew_max_failures),
+    );
+
+    let mut instructions = Vec::new();
+    if req.enabled {
+        let state = build_account_alias_auto_renew_state(
+            account_id.clone(),
+            quote.payment_asset_definition_id.clone(),
+            billing_trigger_id.clone(),
+            record.registered_at_ms,
+            record.expires_at_ms,
+        );
+        if existing.is_some() {
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*SUBSCRIPTION_KEY).clone(),
+                IrohaJson::new(state),
+            )));
+            instructions.push(InstructionBox::from(SetKeyValue::nft(
+                subscription_id.clone(),
+                (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+                IrohaJson::new(settings),
+            )));
+            if billing_trigger_exists {
+                instructions.push(InstructionBox::from(Unregister::trigger(
+                    billing_trigger_id.clone(),
+                )));
+            }
+            instructions.push(InstructionBox::from(Register::trigger(
+                build_billing_trigger(
+                    billing_trigger_id.clone(),
+                    account_id.clone(),
+                    subscription_id.clone(),
+                    record.expires_at_ms,
+                ),
+            )));
+        } else {
+            let mut metadata = Metadata::default();
+            metadata.insert((*SUBSCRIPTION_KEY).clone(), IrohaJson::new(state));
+            metadata.insert(
+                (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+                IrohaJson::new(settings),
+            );
+            instructions.push(InstructionBox::from(Register::nft(Nft::new(
+                subscription_id.clone(),
+                metadata,
+            ))));
+            instructions.push(InstructionBox::from(Register::trigger(
+                build_billing_trigger(
+                    billing_trigger_id.clone(),
+                    account_id.clone(),
+                    subscription_id.clone(),
+                    record.expires_at_ms,
+                ),
+            )));
+        }
+    } else if let Some((_, mut state, _, _)) = existing {
+        state.status = SubscriptionStatus::Canceled;
+        state.cancel_at_period_end = false;
+        state.cancel_at_ms = None;
+        instructions.push(InstructionBox::from(SetKeyValue::nft(
+            subscription_id.clone(),
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(state),
+        )));
+        if billing_trigger_exists {
+            instructions.push(InstructionBox::from(Unregister::trigger(
+                billing_trigger_id.clone(),
+            )));
+        }
+    }
+
+    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority_id.clone())
+        .with_metadata(metadata_with_default_gas_asset(app.state.as_ref()))
+        .with_instructions(instructions)
+        .sign(&req.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_ACCOUNT_ALIAS_AUTO_RENEW,
+    )
+    .await?;
+    let payload = AccountAliasAutoRenewResponseDto {
+        account_id: account_id.to_string(),
+        alias: canonical_alias,
+        auto_renew_enabled: req.enabled,
+        subscription_id: Some(subscription_id.to_string()),
+        tx_hash_hex: Some(tx_hash_hex),
+        status: "QUEUED",
+    };
+    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
+    let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
@@ -56858,6 +58275,843 @@ fn bindings_for_dataspace(
 
     Value::Array(Vec::new())
 }
+
+#[cfg(all(test, feature = "app_api"))]
+mod space_directory_manifest_helper_tests {
+    use std::sync::Arc;
+
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+    };
+
+    use super::*;
+
+    fn sample_manifest_record() -> SpaceDirectoryManifestRecord {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x44; Hash::LENGTH]));
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace: DataSpaceId::new(7),
+            issued_ms: 1_710_000_123_456,
+            activation_epoch: 12,
+            expiry_epoch: Some(24),
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(13);
+        record
+    }
+
+    fn manifest_state(world: World, catalog: Option<DataSpaceCatalog>) -> Arc<CoreState> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = iroha_core::query::store::LiveQueryStore::start_test();
+        let mut state = CoreState::new_for_testing(world, kura, query);
+        if let Some(catalog) = catalog {
+            state.nexus.get_mut().dataspace_catalog = catalog;
+        }
+        Arc::new(state)
+    }
+
+    async fn response_json(response: Response) -> Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        norito::json::from_slice(&body).expect("response body should decode as JSON")
+    }
+
+    #[test]
+    fn space_directory_manifest_status_parsing_is_case_insensitive_and_rejects_unknown_values() {
+        assert_eq!(
+            "ACTIVE".parse::<SpaceDirectoryManifestStatus>(),
+            Ok(SpaceDirectoryManifestStatus::Active)
+        );
+        assert_eq!(
+            "inactive".parse::<SpaceDirectoryManifestStatus>(),
+            Ok(SpaceDirectoryManifestStatus::Inactive)
+        );
+        assert_eq!(
+            "AlL".parse::<SpaceDirectoryManifestStatus>(),
+            Ok(SpaceDirectoryManifestStatus::All)
+        );
+        assert_eq!(
+            "stale".parse::<SpaceDirectoryManifestStatus>(),
+            Err("status must be one of: active, inactive, all")
+        );
+    }
+
+    #[test]
+    fn manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows() {
+        let pending = SpaceDirectoryManifestRecord::new(sample_manifest_record().manifest);
+        assert_eq!(manifest_status(&pending), "Pending");
+        assert!(manifest_status_matches(
+            &pending,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+        assert!(!manifest_status_matches(
+            &pending,
+            SpaceDirectoryManifestStatus::Active
+        ));
+
+        let active = sample_manifest_record();
+        assert_eq!(manifest_status(&active), "Active");
+        assert!(manifest_status_matches(
+            &active,
+            SpaceDirectoryManifestStatus::Active
+        ));
+        assert!(!manifest_status_matches(
+            &active,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+
+        let mut expired = sample_manifest_record();
+        expired.lifecycle.mark_expired(25);
+        assert_eq!(manifest_status(&expired), "Expired");
+        assert!(manifest_status_matches(
+            &expired,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+        assert!(!manifest_status_matches(
+            &expired,
+            SpaceDirectoryManifestStatus::Active
+        ));
+
+        let mut revoked = sample_manifest_record();
+        revoked
+            .lifecycle
+            .mark_revoked(26, Some("operator request".to_owned()));
+        assert_eq!(manifest_status(&revoked), "Revoked");
+        assert!(manifest_status_matches(
+            &revoked,
+            SpaceDirectoryManifestStatus::Inactive
+        ));
+        assert!(manifest_status_matches(
+            &revoked,
+            SpaceDirectoryManifestStatus::All
+        ));
+    }
+
+    #[test]
+    fn manifest_lifecycle_json_keeps_reasonless_revocation_shape() {
+        let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
+        lifecycle.mark_activated(13);
+        lifecycle.mark_revoked(21, None);
+
+        let payload = manifest_lifecycle_json(&lifecycle);
+        let obj = payload.as_object().expect("manifest lifecycle object");
+        assert_eq!(obj.get("activated_epoch").and_then(Value::as_u64), Some(13));
+        assert!(obj.get("expired_epoch").is_some_and(Value::is_null));
+
+        let revocation = obj
+            .get("revocation")
+            .and_then(Value::as_object)
+            .expect("revocation object");
+        assert_eq!(revocation.get("epoch").and_then(Value::as_u64), Some(21));
+        assert!(
+            revocation.get("reason").is_some_and(Value::is_null),
+            "reasonless revocations should keep an explicit null reason field",
+        );
+    }
+
+    #[test]
+    fn manifest_lifecycle_json_keeps_reasonful_revocation_shape() {
+        let mut lifecycle = SpaceDirectoryManifestLifecycle::default();
+        lifecycle.mark_expired(34);
+        lifecycle.mark_revoked(55, Some("operator request".to_owned()));
+
+        let payload = manifest_lifecycle_json(&lifecycle);
+        let obj = payload.as_object().expect("manifest lifecycle object");
+        assert!(obj.get("activated_epoch").is_some_and(Value::is_null));
+        assert_eq!(obj.get("expired_epoch").and_then(Value::as_u64), Some(34));
+
+        let revocation = obj
+            .get("revocation")
+            .and_then(Value::as_object)
+            .expect("revocation object");
+        assert_eq!(revocation.get("epoch").and_then(Value::as_u64), Some(55));
+        assert_eq!(
+            revocation.get("reason").and_then(Value::as_str),
+            Some("operator request")
+        );
+    }
+
+    #[test]
+    fn bindings_for_dataspace_filters_to_requested_scope_and_handles_missing_bindings() {
+        let dataspace = DataSpaceId::new(7);
+        let other_dataspace = DataSpaceId::new(8);
+        let primary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(dataspace, primary_account.clone());
+        bindings.bind_account(dataspace, secondary_account.clone());
+        bindings.bind_account(other_dataspace, other_account.clone());
+
+        let matching = bindings_for_dataspace(Some(&bindings), dataspace);
+        let mut matching: Vec<_> = matching
+            .as_array()
+            .expect("matching bindings array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("matching binding should be an account literal")
+                    .to_owned()
+            })
+            .collect();
+        let mut expected = vec![
+            crate::account_literal::display_literal(&primary_account),
+            crate::account_literal::display_literal(&secondary_account),
+        ];
+        matching.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(matching, expected);
+
+        let non_matching = bindings_for_dataspace(Some(&bindings), DataSpaceId::new(999));
+        assert_eq!(
+            non_matching
+                .as_array()
+                .expect("non-matching bindings array")
+                .len(),
+            0
+        );
+
+        let missing = bindings_for_dataspace(None, dataspace);
+        assert_eq!(missing.as_array().expect("missing bindings array").len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_returns_empty_payload_when_bindings_are_missing() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x59; Hash::LENGTH]));
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("missing bindings should still return 200")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
+        assert_eq!(
+            json["dataspaces"]
+                .as_array()
+                .expect("dataspaces array")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_accepts_raw_hex_uaid_literals() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5C; Hash::LENGTH]));
+        let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path(raw_hex),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("raw-hex UAID literal should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
+        assert_eq!(
+            json["dataspaces"]
+                .as_array()
+                .expect("dataspaces array")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_rejects_invalid_uaid_literals() {
+        let state = manifest_state(World::default(), None);
+
+        let error = match handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path("uaid:1234".to_owned()),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid UAID literal should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_bindings_returns_aliases_and_sorted_accounts() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5A; Hash::LENGTH]));
+        let primary_dataspace = DataSpaceId::new(7);
+        let secondary_dataspace = DataSpaceId::new(9);
+        let primary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let secondary_account = AccountId::new(KeyPair::random().public_key().clone());
+        let tertiary_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(primary_dataspace, secondary_account.clone());
+        bindings.bind_account(primary_dataspace, primary_account.clone());
+        bindings.bind_account(secondary_dataspace, tertiary_account.clone());
+
+        let mut primary_manifest = AssetPermissionManifest {
+            dataspace: primary_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        primary_manifest.uaid = uaid;
+        let mut primary_record = SpaceDirectoryManifestRecord::new(primary_manifest);
+        primary_record.lifecycle.mark_activated(13);
+
+        let mut secondary_manifest = AssetPermissionManifest {
+            dataspace: secondary_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        secondary_manifest.uaid = uaid;
+        let mut secondary_record = SpaceDirectoryManifestRecord::new(secondary_manifest);
+        secondary_record.lifecycle.mark_activated(14);
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(primary_record);
+        set.upsert(secondary_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: primary_dataspace,
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+
+        let response = handle_v1_space_directory_bindings(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("bindings query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let dataspaces = json["dataspaces"].as_array().expect("dataspaces array");
+        assert_eq!(dataspaces.len(), 2);
+        assert_eq!(
+            dataspaces[0]["dataspace_id"].as_u64(),
+            Some(primary_dataspace.as_u64())
+        );
+        assert_eq!(dataspaces[0]["dataspace_alias"].as_str(), Some("retail"));
+        let mut expected_primary_accounts = vec![
+            crate::account_literal::display_literal(&primary_account),
+            crate::account_literal::display_literal(&secondary_account),
+        ];
+        let mut actual_primary_accounts: Vec<_> = dataspaces[0]["accounts"]
+            .as_array()
+            .expect("accounts array")
+            .iter()
+            .map(|value| value.as_str().expect("account literal").to_owned())
+            .collect();
+        expected_primary_accounts.sort_unstable();
+        actual_primary_accounts.sort_unstable();
+        assert_eq!(actual_primary_accounts, expected_primary_accounts);
+
+        assert_eq!(
+            dataspaces[1]["dataspace_id"].as_u64(),
+            Some(secondary_dataspace.as_u64())
+        );
+        assert!(dataspaces[1]["dataspace_alias"].is_null());
+        assert_eq!(
+            dataspaces[1]["accounts"][0].as_str(),
+            Some(crate::account_literal::display_literal(&tertiary_account).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_entry_to_json_includes_alias_hash_status_lifecycle_and_accounts() {
+        let dataspace = DataSpaceId::new(7);
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(dataspace, account.clone());
+
+        let alias_lookup = DataspaceAliasLookup::new(
+            DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace,
+                    alias: "retail".to_owned(),
+                    description: Some("Retail lane".to_owned()),
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+        );
+
+        let mut record = sample_manifest_record();
+        record
+            .lifecycle
+            .mark_revoked(77, Some("operator request".to_owned()));
+
+        let payload = manifest_entry_to_json(dataspace, &record, &alias_lookup, Some(&bindings))
+            .expect("manifest entry should serialize");
+        let obj = payload.as_object().expect("manifest entry object");
+
+        assert_eq!(obj.get("dataspace_id").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            obj.get("dataspace_alias").and_then(Value::as_str),
+            Some("retail")
+        );
+        assert_eq!(obj.get("status").and_then(Value::as_str), Some("Revoked"));
+        assert_eq!(
+            obj.get("manifest_hash").and_then(Value::as_str),
+            Some(
+                record
+                    .manifest_hash
+                    .as_ref()
+                    .encode_hex::<String>()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            obj.get("manifest"),
+            Some(&norito::json::to_value(&record.manifest).expect("manifest value"))
+        );
+        assert_eq!(
+            obj.get("accounts")
+                .and_then(Value::as_array)
+                .and_then(|accounts| accounts.first())
+                .and_then(Value::as_str),
+            Some(crate::account_literal::display_literal(&account).as_str())
+        );
+        assert_eq!(
+            obj.get("lifecycle")
+                .and_then(Value::as_object)
+                .and_then(|lifecycle| lifecycle.get("revocation"))
+                .and_then(Value::as_object)
+                .and_then(|revocation| revocation.get("reason"))
+                .and_then(Value::as_str),
+            Some("operator request")
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_entry_to_json_uses_null_alias_and_empty_accounts_when_context_is_missing() {
+        let record = sample_manifest_record();
+        let payload = manifest_entry_to_json(
+            record.manifest.dataspace,
+            &record,
+            &DataspaceAliasLookup::new(DataSpaceCatalog::default()),
+            None,
+        )
+        .expect("manifest entry should serialize");
+        let obj = payload.as_object().expect("manifest entry object");
+
+        assert!(obj.get("dataspace_alias").is_some_and(Value::is_null));
+        assert_eq!(obj.get("status").and_then(Value::as_str), Some("Active"));
+        assert_eq!(
+            obj.get("accounts")
+                .and_then(Value::as_array)
+                .expect("accounts array")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_returns_empty_payload_when_manifest_set_is_missing()
+     {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x55; Hash::LENGTH]));
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("missing manifest set should still return 200")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        let uaid_literal = uaid.to_string();
+        assert_eq!(json["uaid"].as_str(), Some(uaid_literal.as_str()));
+        assert_eq!(json["total"].as_u64(), Some(0));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_rejects_invalid_status_queries() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x56; Hash::LENGTH]));
+        let state = manifest_state(World::default(), None);
+
+        let error = match handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                status: Some("DefinitelyNotAStatus".to_owned()),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid manifest status should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_accepts_raw_hex_uaid_literals() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5D; Hash::LENGTH]));
+        let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
+        let state = manifest_state(World::default(), None);
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(raw_hex),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("raw-hex UAID literal should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
+        assert_eq!(json["total"].as_u64(), Some(0));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_rejects_invalid_uaid_literals() {
+        let state = manifest_state(World::default(), None);
+
+        let error = match handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path("uaid:1234".to_owned()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        {
+            Ok(_) => panic!("invalid UAID literal should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_inactive_filter_returns_pending_and_revoked_rows()
+    {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5B; Hash::LENGTH]));
+        let active_dataspace = DataSpaceId::new(7);
+        let pending_dataspace = DataSpaceId::new(8);
+        let revoked_dataspace = DataSpaceId::new(9);
+        let revoked_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut active_manifest = AssetPermissionManifest {
+            dataspace: active_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        active_manifest.uaid = uaid;
+        let mut active_record = SpaceDirectoryManifestRecord::new(active_manifest);
+        active_record.lifecycle.mark_activated(13);
+
+        let mut pending_manifest = AssetPermissionManifest {
+            dataspace: pending_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        pending_manifest.uaid = uaid;
+        let pending_record = SpaceDirectoryManifestRecord::new(pending_manifest);
+
+        let mut revoked_manifest = AssetPermissionManifest {
+            dataspace: revoked_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        revoked_manifest.uaid = uaid;
+        let mut revoked_record = SpaceDirectoryManifestRecord::new(revoked_manifest);
+        revoked_record.lifecycle.mark_activated(14);
+        revoked_record
+            .lifecycle
+            .mark_revoked(15, Some("operator request".to_owned()));
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(revoked_dataspace, revoked_account.clone());
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(active_record);
+        set.upsert(pending_record);
+        set.upsert(revoked_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: revoked_dataspace,
+                alias: "revoked".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                status: Some("Inactive".to_owned()),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("inactive manifest query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(3));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 2);
+
+        assert_eq!(
+            manifests[0]["dataspace_id"].as_u64(),
+            Some(pending_dataspace.as_u64())
+        );
+        assert_eq!(manifests[0]["status"].as_str(), Some("Pending"));
+        assert!(manifests[0]["dataspace_alias"].is_null());
+        assert_eq!(
+            manifests[0]["accounts"]
+                .as_array()
+                .expect("pending accounts array")
+                .len(),
+            0
+        );
+
+        assert_eq!(
+            manifests[1]["dataspace_id"].as_u64(),
+            Some(revoked_dataspace.as_u64())
+        );
+        assert_eq!(manifests[1]["status"].as_str(), Some("Revoked"));
+        assert_eq!(manifests[1]["dataspace_alias"].as_str(), Some("revoked"));
+        assert_eq!(
+            manifests[1]["accounts"][0].as_str(),
+            Some(crate::account_literal::display_literal(&revoked_account).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_applies_dataspace_filter_and_treats_zero_limit_as_unbounded()
+     {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x58; Hash::LENGTH]));
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut first_manifest = AssetPermissionManifest {
+            dataspace: first_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        first_manifest.uaid = uaid;
+        let mut first_record = SpaceDirectoryManifestRecord::new(first_manifest);
+        first_record.lifecycle.mark_activated(13);
+
+        let mut second_manifest = AssetPermissionManifest {
+            dataspace: second_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        second_manifest.uaid = uaid;
+        let mut second_record = SpaceDirectoryManifestRecord::new(second_manifest);
+        second_record.lifecycle.mark_activated(14);
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(second_dataspace, account.clone());
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(first_record);
+        set.upsert(second_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let state = manifest_state(world, None);
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                dataspace: Some(second_dataspace.as_u64()),
+                limit: Some(0),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("dataspace-filtered manifest query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(
+            manifests.len(),
+            1,
+            "limit=0 should be treated as an unbounded page for the filtered result",
+        );
+        assert_eq!(
+            manifests[0]["dataspace_id"].as_u64(),
+            Some(second_dataspace.as_u64())
+        );
+        assert_eq!(manifests[0]["status"].as_str(), Some("Active"));
+        assert_eq!(
+            manifests[0]["accounts"][0].as_str(),
+            Some(crate::account_literal::display_literal(&account).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_keeps_prefilter_total_when_status_and_offset_clear_page()
+     {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x57; Hash::LENGTH]));
+        let active_dataspace = DataSpaceId::new(7);
+        let revoked_dataspace = DataSpaceId::new(8);
+        let account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let mut active_manifest = AssetPermissionManifest {
+            dataspace: active_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        active_manifest.uaid = uaid;
+        let mut active_record = SpaceDirectoryManifestRecord::new(active_manifest);
+        active_record.lifecycle.mark_activated(13);
+
+        let mut revoked_manifest = AssetPermissionManifest {
+            dataspace: revoked_dataspace,
+            ..sample_manifest_record().manifest
+        };
+        revoked_manifest.uaid = uaid;
+        let mut revoked_record = SpaceDirectoryManifestRecord::new(revoked_manifest);
+        revoked_record.lifecycle.mark_activated(14);
+        revoked_record.lifecycle.mark_revoked(15, None);
+
+        let mut bindings = UaidDataspaceBindings::default();
+        bindings.bind_account(active_dataspace, account);
+
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(active_record);
+        set.upsert(revoked_record);
+
+        let mut world = World::default();
+        world
+            .uaid_dataspaces_mut_for_testing()
+            .insert(uaid, bindings);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: active_dataspace,
+                alias: "active".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: revoked_dataspace,
+                alias: "revoked".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state = manifest_state(world, Some(catalog));
+
+        let response = handle_v1_space_directory_manifests(
+            state,
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                status: Some("Active".to_owned()),
+                limit: Some(1),
+                offset: Some(1),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("active manifest query should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(
+            json["manifests"].as_array().expect("manifests array").len(),
+            0,
+            "offset is applied after status filtering, but total stays pre-filter",
+        );
+    }
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod accounts_query_tests {
     use std::sync::Arc;
@@ -68353,6 +70607,173 @@ fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<Subs
 }
 
 #[cfg(feature = "app_api")]
+fn account_alias_auto_renew_from_metadata(
+    metadata: &Metadata,
+) -> Result<Option<iroha_data_model::subscription::AccountAliasAutoRenewMetadata>> {
+    let Some(value) = metadata.get(&*ACCOUNT_ALIAS_AUTO_RENEW_KEY) else {
+        return Ok(None);
+    };
+    let settings = value
+        .try_into_any_norito::<iroha_data_model::subscription::AccountAliasAutoRenewMetadata>()
+        .map_err(|err| {
+            conversion_error(format!("invalid account alias auto-renew metadata: {err}"))
+        })?;
+    Ok(Some(settings))
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
+    match status {
+        SubscriptionStatus::Active => "active",
+        SubscriptionStatus::Paused => "paused",
+        SubscriptionStatus::PastDue => "past_due",
+        SubscriptionStatus::Canceled => "canceled",
+        SubscriptionStatus::Suspended => "suspended",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_invoice_status_label(status: SubscriptionInvoiceStatus) -> &'static str {
+    match status {
+        SubscriptionInvoiceStatus::Paid => "paid",
+        SubscriptionInvoiceStatus::Failed => "failed",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn name_status_label(status: &NameStatus) -> &'static str {
+    match status {
+        NameStatus::Active => "active",
+        NameStatus::GracePeriod => "grace_period",
+        NameStatus::Redemption => "redemption",
+        NameStatus::Frozen(_) => "frozen",
+        NameStatus::Tombstoned(_) => "tombstoned",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_auto_renew_subscription_name(
+    account_id: &AccountId,
+    alias_literal: &str,
+) -> Result<Name> {
+    let digest = Hash::new(format!(
+        "account-alias-auto-renew:{}:{}",
+        account_id,
+        alias_literal.trim().to_ascii_lowercase()
+    ));
+    Name::from_str(&format!("aliasrenew_{}", hex::encode(digest.as_ref())))
+        .map_err(|err| conversion_error(format!("invalid auto-renew subscription name: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_auto_renew_subscription_id(
+    domain_id: &DomainId,
+    account_id: &AccountId,
+    alias_literal: &str,
+) -> Result<NftId> {
+    Ok(NftId::of(
+        domain_id.clone(),
+        account_alias_auto_renew_subscription_name(account_id, alias_literal)?,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn lookup_account_alias_auto_renew(
+    app: &crate::SharedAppState,
+    account_id: &AccountId,
+    alias_literal: &str,
+) -> Result<
+    Option<(
+        NftId,
+        SubscriptionState,
+        Option<SubscriptionInvoice>,
+        iroha_data_model::subscription::AccountAliasAutoRenewMetadata,
+    )>,
+> {
+    let Some(signer) = app.uaid_onboarding.as_ref() else {
+        return Ok(None);
+    };
+    let Some(domain_id) = signer.alias_auto_renew_subscription_domain.as_ref() else {
+        return Ok(None);
+    };
+    let subscription_id =
+        account_alias_auto_renew_subscription_id(domain_id, account_id, alias_literal)?;
+    let world = app.state.world_view();
+    let nft = match world.nft(&subscription_id) {
+        Ok(nft) => nft,
+        Err(_) => return Ok(None),
+    };
+    let subscription = subscription_state_from_metadata(&nft.content)?
+        .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
+    let invoice = subscription_invoice_from_metadata(&nft.content)?;
+    let settings = account_alias_auto_renew_from_metadata(&nft.content)?
+        .ok_or_else(|| conversion_error("account alias auto-renew metadata missing".to_string()))?;
+    Ok(Some((subscription_id, subscription, invoice, settings)))
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_lease_dto_from_record(
+    alias: String,
+    dataspace: String,
+    domain: Option<String>,
+    is_primary: bool,
+    record: &NameRecordV1,
+    subscription: Option<&SubscriptionState>,
+    invoice: Option<&SubscriptionInvoice>,
+    auto_renew: Option<&iroha_data_model::subscription::AccountAliasAutoRenewMetadata>,
+) -> AccountAliasLeaseDto {
+    let subscription_status =
+        subscription.map(|state| subscription_status_label(state.status).to_owned());
+    let auto_renew_enabled = subscription
+        .map(|state| !matches!(state.status, SubscriptionStatus::Canceled))
+        .unwrap_or(false);
+    AccountAliasLeaseDto {
+        alias,
+        dataspace,
+        domain,
+        is_primary,
+        lease_status: name_status_label(&record.status).to_owned(),
+        expires_at_ms: record.expires_at_ms,
+        grace_expires_at_ms: record.grace_expires_at_ms,
+        redemption_expires_at_ms: record.redemption_expires_at_ms,
+        auto_renew_enabled,
+        subscription_status,
+        next_charge_ms: subscription.map(|state| state.next_charge_ms),
+        last_invoice_status: invoice
+            .map(|item| subscription_invoice_status_label(item.status).to_owned()),
+        max_charge_amount: auto_renew.map(|settings| settings.max_charge_amount.to_string()),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_alias_lease_dto_from_quote(
+    alias: String,
+    dataspace: String,
+    domain: Option<String>,
+    is_primary: bool,
+    quote: &LeaseQuote,
+    auto_renew_enabled: bool,
+    max_charge_amount: Option<u64>,
+    next_charge_ms: Option<u64>,
+) -> AccountAliasLeaseDto {
+    AccountAliasLeaseDto {
+        alias,
+        dataspace,
+        domain,
+        is_primary,
+        lease_status: "active".to_owned(),
+        expires_at_ms: quote.expires_at_ms,
+        grace_expires_at_ms: quote.grace_expires_at_ms,
+        redemption_expires_at_ms: quote.redemption_expires_at_ms,
+        auto_renew_enabled,
+        subscription_status: auto_renew_enabled.then_some("active".to_owned()),
+        next_charge_ms,
+        last_invoice_status: None,
+        max_charge_amount: max_charge_amount.map(|amount| amount.to_string()),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn network_time_ms() -> Result<u64> {
     let now = time::now().now;
     let duration = now
@@ -68404,6 +70825,16 @@ fn resolve_charge_ms(billing: SubscriptionBilling, requested: Option<u64>) -> Re
     }
     let now_ms = network_time_ms()?;
     default_charge_ms(now_ms, billing)
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_account_alias_auto_renew_resume_charge_ms(
+    subscription_state: &SubscriptionState,
+    requested: Option<u64>,
+) -> Result<u64> {
+    requested
+        .map(Ok)
+        .unwrap_or_else(|| Ok(network_time_ms()?.max(subscription_state.next_charge_ms)))
 }
 
 #[cfg(feature = "app_api")]
@@ -68513,6 +70944,47 @@ fn build_billing_trigger(
     )
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
+}
+
+#[cfg(feature = "app_api")]
+fn build_account_alias_auto_renew_settings(
+    alias_literal: String,
+    term_years: u8,
+    max_charge_amount: u64,
+    retry_backoff_ms: u64,
+    max_failures: u32,
+) -> iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
+    iroha_data_model::subscription::AccountAliasAutoRenewMetadata {
+        alias: alias_literal,
+        term_years,
+        max_charge_amount: max_charge_amount.into(),
+        retry_backoff_ms,
+        max_failures,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn build_account_alias_auto_renew_state(
+    subscriber: AccountId,
+    charge_asset_definition_id: AssetDefinitionId,
+    billing_trigger_id: TriggerId,
+    current_period_start_ms: u64,
+    current_period_end_ms: u64,
+) -> SubscriptionState {
+    SubscriptionState {
+        plan_id: charge_asset_definition_id,
+        provider: subscriber.clone(),
+        subscriber,
+        status: SubscriptionStatus::Active,
+        current_period_start_ms,
+        current_period_end_ms,
+        next_charge_ms: current_period_end_ms,
+        cancel_at_period_end: false,
+        cancel_at_ms: None,
+        failure_count: 0,
+        usage_accumulated: std::collections::BTreeMap::new(),
+        billing_trigger_id,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -69053,7 +71525,12 @@ pub async fn handle_post_v1_subscription_resume(
     } = req;
     let authority: AccountId = authority.into();
 
-    let (mut subscription_state, owner, plan, billing_trigger_exists) = {
+    enum ResumeBilling {
+        Generic(SubscriptionPlan),
+        AccountAliasAutoRenew,
+    }
+
+    let (mut subscription_state, owner, billing, billing_trigger_exists) = {
         let world = state.world_view();
         let nft = world
             .nfts()
@@ -69062,18 +71539,23 @@ pub async fn handle_post_v1_subscription_resume(
         let subscription_state = subscription_state_from_metadata(&nft.content)?
             .ok_or_else(|| conversion_error("subscription metadata missing".to_string()))?;
         let owner = nft.owned_by.clone();
-        let plan_def = world
-            .asset_definitions()
-            .get(&subscription_state.plan_id)
-            .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
-        let plan = subscription_plan_from_metadata(plan_def.metadata())?
-            .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
+        let billing = if account_alias_auto_renew_from_metadata(&nft.content)?.is_some() {
+            ResumeBilling::AccountAliasAutoRenew
+        } else {
+            let plan_def = world
+                .asset_definitions()
+                .get(&subscription_state.plan_id)
+                .ok_or_else(|| conversion_error("plan asset definition not found".to_string()))?;
+            let plan = subscription_plan_from_metadata(plan_def.metadata())?
+                .ok_or_else(|| conversion_error("plan metadata missing".to_string()))?;
+            ResumeBilling::Generic(plan)
+        };
         let billing_trigger_exists = world
             .triggers()
             .time_triggers()
             .get(&subscription_state.billing_trigger_id)
             .is_some();
-        (subscription_state, owner, plan, billing_trigger_exists)
+        (subscription_state, owner, billing, billing_trigger_exists)
     };
     if owner != authority {
         return Err(conversion_error(
@@ -69084,13 +71566,22 @@ pub async fn handle_post_v1_subscription_resume(
         return Err(conversion_error("subscription is not paused".to_string()));
     }
 
-    let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
-    let (period_start, period_end) = initial_period_for_charge(plan.billing, next_charge_ms)?;
+    let next_charge_ms = match billing {
+        ResumeBilling::Generic(plan) => {
+            let next_charge_ms = resolve_charge_ms(plan.billing, charge_at_ms)?;
+            let (period_start, period_end) =
+                initial_period_for_charge(plan.billing, next_charge_ms)?;
+            subscription_state.current_period_start_ms = period_start;
+            subscription_state.current_period_end_ms = period_end;
+            next_charge_ms
+        }
+        ResumeBilling::AccountAliasAutoRenew => {
+            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, charge_at_ms)?
+        }
+    };
     subscription_state.status = SubscriptionStatus::Active;
     subscription_state.failure_count = 0;
     subscription_state.next_charge_ms = next_charge_ms;
-    subscription_state.current_period_start_ms = period_start;
-    subscription_state.current_period_end_ms = period_end;
 
     let mut instructions = Vec::new();
     instructions.push(InstructionBox::from(SetKeyValue::nft(
@@ -69655,6 +72146,50 @@ mod subscription_api_tests {
     }
 
     #[test]
+    fn resolve_account_alias_auto_renew_resume_charge_ms_preserves_future_schedule() {
+        let future_charge_ms = network_time_ms().unwrap().saturating_add(60_000);
+        let subscription_state = sample_subscription_state(
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403f1"),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+            SubscriptionStatus::Paused,
+            "bill_alias_future".parse().unwrap(),
+        );
+        let subscription_state = SubscriptionState {
+            next_charge_ms: future_charge_ms,
+            ..subscription_state
+        };
+
+        let resolved =
+            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, None).unwrap();
+        assert_eq!(resolved, future_charge_ms);
+    }
+
+    #[test]
+    fn resolve_account_alias_auto_renew_resume_charge_ms_clamps_stale_schedule_to_now() {
+        let subscription_state = sample_subscription_state(
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403f2"),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+            SubscriptionStatus::Paused,
+            "bill_alias_stale".parse().unwrap(),
+        );
+        let subscription_state = SubscriptionState {
+            next_charge_ms: 1,
+            ..subscription_state
+        };
+
+        let before = network_time_ms().unwrap();
+        let resolved =
+            resolve_account_alias_auto_renew_resume_charge_ms(&subscription_state, None).unwrap();
+        let after = network_time_ms().unwrap();
+        assert!(
+            (before..=after).contains(&resolved),
+            "resolved charge {resolved} should be clamped to current time between {before} and {after}",
+        );
+    }
+
+    #[test]
     fn resolve_trigger_id_prefers_explicit() {
         let subscription_id: NftId = "sub2$wonderland.universal".parse().unwrap();
         let explicit: TriggerId = "explicit_trigger".parse().unwrap();
@@ -69798,14 +72333,6 @@ mod subscription_api_tests {
         plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
         subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
     ) -> Arc<CoreState> {
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let domain = Domain::new(domain_id.clone()).build(&provider);
-        let provider_account = provider.clone();
-        let subscriber_account = subscriber.clone();
-        let accounts = vec![
-            Account::new(provider_account.account().clone()).build(&provider),
-            Account::new(subscriber_account.account().clone()).build(&subscriber),
-        ];
         let asset_definitions: Vec<AssetDefinition> = plans
             .into_iter()
             .map(|(plan_id, plan)| {
@@ -69827,6 +72354,23 @@ mod subscription_api_tests {
                 Nft::new(nft_id, metadata).build(&subscriber)
             })
             .collect();
+        state_with_asset_definitions_and_nfts(provider, subscriber, asset_definitions, nfts)
+    }
+
+    fn state_with_asset_definitions_and_nfts(
+        provider: AccountId,
+        subscriber: AccountId,
+        asset_definitions: Vec<AssetDefinition>,
+        nfts: Vec<Nft>,
+    ) -> Arc<CoreState> {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id).build(&provider);
+        let provider_account = provider.clone();
+        let subscriber_account = subscriber.clone();
+        let accounts = vec![
+            Account::new(provider_account.account().clone()).build(&provider),
+            Account::new(subscriber_account.account().clone()).build(&subscriber),
+        ];
         let world = World::with_assets([domain], accounts, asset_definitions, [], nfts);
         Arc::new(CoreState::new_for_testing(
             world,
@@ -70435,6 +72979,251 @@ mod subscription_api_tests {
         .into_response();
         assert_eq!(queue.queued_len(), 6);
         assert_action_ok(resp, &active_id).await;
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_cancel_period_end_marks_cancellation_window() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403fa");
+        let plan = sample_plan(provider.clone());
+        let subscription_id: NftId = "sub-cancel-period-end$wonderland.universal"
+            .parse()
+            .unwrap();
+        let subscription_state = sample_subscription_state(
+            plan_id.clone(),
+            provider.clone(),
+            subscriber.clone(),
+            SubscriptionStatus::Active,
+            "bill_cancel_period_end".parse().unwrap(),
+        );
+        let expected_cancel_at_ms = subscription_state.current_period_end_ms;
+        let state = state_with_plans_and_subscriptions(
+            provider,
+            subscriber.clone(),
+            vec![(plan_id, plan)],
+            vec![(subscription_id.clone(), subscription_state, None)],
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let req = SubscriptionActionDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: Some(SubscriptionCancelMode::PeriodEnd),
+        };
+        let resp = handle_post_v1_subscription_cancel(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry,
+            subscription_id.clone(),
+            NoritoJson(req),
+        )
+        .await
+        .expect("cancel at period end ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &subscription_id).await;
+
+        let applied =
+            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
+        assert_eq!(applied, 1, "cancel transaction should apply");
+
+        let view = state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should exist");
+        let updated_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(updated_state.status, SubscriptionStatus::Active);
+        assert!(updated_state.cancel_at_period_end);
+        assert_eq!(updated_state.cancel_at_ms, Some(expected_cancel_at_ms));
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_resume_supports_alias_auto_renew_nfts() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let charge_asset_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554402fa");
+        let subscription_id: NftId = "sub-alias-resume$wonderland.universal".parse().unwrap();
+        let billing_trigger_id: TriggerId = "bill_alias_resume".parse().unwrap();
+        let mut subscription_state = build_account_alias_auto_renew_state(
+            subscriber.clone(),
+            charge_asset_id.clone(),
+            billing_trigger_id.clone(),
+            1_000,
+            2_000,
+        );
+        subscription_state.status = SubscriptionStatus::Paused;
+        subscription_state.next_charge_ms = 3_000;
+        subscription_state.failure_count = 2;
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(subscription_state),
+        );
+        metadata.insert(
+            (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+            IrohaJson::new(build_account_alias_auto_renew_settings(
+                "member@universal".to_owned(),
+                1,
+                200,
+                500,
+                3,
+            )),
+        );
+
+        let asset_definitions =
+            vec![AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider)];
+        let nfts = vec![Nft::new(subscription_id.clone(), metadata).build(&subscriber)];
+        let state = state_with_asset_definitions_and_nfts(
+            provider,
+            subscriber.clone(),
+            asset_definitions,
+            nfts,
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let req = SubscriptionActionDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: Some(5_000),
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_resume(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry,
+            subscription_id.clone(),
+            NoritoJson(req),
+        )
+        .await
+        .expect("resume ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &subscription_id).await;
+
+        let applied =
+            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
+        assert_eq!(applied, 1, "resume transaction should apply");
+
+        let view = state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should exist");
+        let resumed_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(resumed_state.status, SubscriptionStatus::Active);
+        assert_eq!(resumed_state.failure_count, 0);
+        assert_eq!(resumed_state.next_charge_ms, 5_000);
+        assert_eq!(resumed_state.current_period_start_ms, 1_000);
+        assert_eq!(resumed_state.current_period_end_ms, 2_000);
+        assert!(
+            view.world()
+                .triggers()
+                .time_triggers()
+                .get(&billing_trigger_id)
+                .is_some(),
+            "resume should register a new billing trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_post_v1_subscription_resume_alias_auto_renew_without_charge_at_preserves_future_schedule()
+     {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let charge_asset_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554403fb");
+        let subscription_id: NftId = "sub-alias-resume-default$wonderland.universal"
+            .parse()
+            .unwrap();
+        let billing_trigger_id: TriggerId = "bill_alias_resume_default".parse().unwrap();
+        let future_charge_ms = network_time_ms().unwrap().saturating_add(60_000);
+        let mut subscription_state = build_account_alias_auto_renew_state(
+            subscriber.clone(),
+            charge_asset_id.clone(),
+            billing_trigger_id.clone(),
+            1_000,
+            2_000,
+        );
+        subscription_state.status = SubscriptionStatus::Paused;
+        subscription_state.next_charge_ms = future_charge_ms;
+        subscription_state.failure_count = 2;
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*SUBSCRIPTION_KEY).clone(),
+            IrohaJson::new(subscription_state),
+        );
+        metadata.insert(
+            (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
+            IrohaJson::new(build_account_alias_auto_renew_settings(
+                "member@universal".to_owned(),
+                1,
+                200,
+                500,
+                3,
+            )),
+        );
+
+        let asset_definitions =
+            vec![AssetDefinition::new(charge_asset_id, NumericSpec::integer()).build(&provider)];
+        let nfts = vec![Nft::new(subscription_id.clone(), metadata).build(&subscriber)];
+        let state = state_with_asset_definitions_and_nfts(
+            provider,
+            subscriber.clone(),
+            asset_definitions,
+            nfts,
+        );
+        let (queue, chain_id, telemetry) = test_queue_components();
+
+        let req = SubscriptionActionDto {
+            authority: subscriber,
+            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let resp = handle_post_v1_subscription_resume(
+            chain_id.clone(),
+            queue.clone(),
+            state.clone(),
+            telemetry,
+            subscription_id.clone(),
+            NoritoJson(req),
+        )
+        .await
+        .expect("resume ok")
+        .into_response();
+        assert_eq!(queue.queued_len(), 1);
+        assert_action_ok(resp, &subscription_id).await;
+
+        let applied =
+            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
+        assert_eq!(applied, 1, "resume transaction should apply");
+
+        let view = state.view();
+        let nft = view
+            .world()
+            .nft(&subscription_id)
+            .expect("subscription nft should exist");
+        let resumed_state = subscription_state_from_metadata(&nft.content)
+            .unwrap()
+            .expect("subscription metadata present");
+        assert_eq!(resumed_state.status, SubscriptionStatus::Active);
+        assert_eq!(resumed_state.failure_count, 0);
+        assert_eq!(resumed_state.next_charge_ms, future_charge_ms);
+        assert_eq!(resumed_state.current_period_start_ms, 1_000);
+        assert_eq!(resumed_state.current_period_end_ms, 2_000);
     }
 }
 
@@ -74806,7 +77595,8 @@ pub async fn handle_status(
         };
         match format {
             crate::utils::ResponseFormat::Norito => {
-                let bytes = norito::codec::encode_adaptive(&status);
+                let bytes =
+                    norito::to_bytes(&status).map_err(|err| Error::StatusFailure(eyre!(err)))?;
                 let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
                 resp.headers_mut().insert(
                     axum::http::header::CONTENT_TYPE,
@@ -75160,7 +77950,7 @@ mod tests {
             "lane metrics must be stripped when Nexus is disabled: {filtered}"
         );
         assert!(
-            filtered.contains("telemetry_build_info"),
+            filtered.contains("block_height"),
             "non-lane metrics must remain after filtering: {filtered}"
         );
     }
@@ -75390,8 +78180,34 @@ mod tests {
             status::record_qc_latency("availability", 123);
             status::set_rbc_backlog_snapshot(7, 5, 2);
 
+            let world = iroha_core::state::World::new();
+            {
+                let mut block = world.block();
+                block.vrf_epochs_mut_for_testing().insert(
+                    0,
+                    iroha_data_model::consensus::VrfEpochRecord {
+                        epoch: 0,
+                        seed: [0x42; 32],
+                        epoch_length: 10,
+                        commit_deadline_offset: 2,
+                        reveal_deadline_offset: 4,
+                        roster_len: 1,
+                        finalized: false,
+                        updated_at_height: 4,
+                        participants: Vec::new(),
+                        late_reveals: Vec::new(),
+                        committed_no_reveal: Vec::new(),
+                        no_participation: Vec::new(),
+                        penalties_applied: false,
+                        penalties_applied_at_height: None,
+                        validator_election: None,
+                    },
+                );
+                block.commit();
+            }
+
             let state = Arc::new(iroha_core::state::State::new_for_testing(
-                iroha_core::state::World::new(),
+                world,
                 iroha_core::kura::Kura::blank_kura_for_testing(),
                 iroha_core::query::store::LiveQueryStore::start_test(),
             ));

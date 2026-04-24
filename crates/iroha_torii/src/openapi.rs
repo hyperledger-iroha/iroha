@@ -505,14 +505,7 @@ fn alias_paths() -> Map {
     );
     paths.insert(
         "/v1/aliases/by_account".to_owned(),
-        Value::Object(json_post_operation(
-            "Aliases",
-            "List aliases bound to an account.",
-            "Resolve the aliases currently bound to a canonical account id.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object(alias_lookup_by_account_operation()),
     );
     paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
@@ -6673,8 +6666,10 @@ fn alias_resolve_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the canonical alias spelling, the bound account identifier, and \
-             (if known) the deterministic alias index."
+            "Routes account-alias resolution through the Nexus read proxy using the alias \
+             dataspace, then returns the canonical alias spelling, the bound account \
+             identifier, and (if known) the deterministic alias index. Unsigned/public \
+             requests remain allowed for ordinary public alias lookups."
                 .to_owned(),
         ),
     );
@@ -6727,6 +6722,13 @@ fn alias_resolve_responses() -> Map {
         json_response("Alias not found.", error_schema_reference()),
     );
     responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Alias lookup was denied by the routed dataspace and no allowed route resolved it.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "503".to_owned(),
         json_response("Alias runtime unavailable.", error_schema_reference()),
     );
@@ -6746,8 +6748,9 @@ fn alias_resolve_index_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the alias string and account identifier registered under the \
-             provided index."
+            "Fans out the alias-index lookup across configured Nexus dataspaces because the \
+             index alone does not encode a dataspace, dedupes identical bindings, and returns \
+             `source = fanout` when the result comes from multi-route merging."
                 .to_owned(),
         ),
     );
@@ -6790,6 +6793,39 @@ fn asset_alias_resolve_operation() -> Map {
     operation.insert(
         "responses".into(),
         Value::Object(asset_alias_resolve_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn alias_lookup_by_account_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Aliases".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("List aliases bound to an account across reachable dataspaces.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Routes the lookup through the Nexus read proxy using the target account routes, \
+             merges deduplicated alias rows across reachable dataspaces, recomputes `total`, \
+             and returns `source = fanout` when multiple routes contribute to the response."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("aliasLookupByAccount".to_owned()),
+    );
+    operation.insert("requestBody".into(), alias_lookup_by_account_request_body());
+    operation.insert(
+        "responses".into(),
+        Value::Object(alias_lookup_by_account_responses()),
     );
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
@@ -6870,8 +6906,80 @@ fn alias_resolve_index_responses() -> Map {
         ),
     );
     responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Alias-index lookup was denied by one or more routed dataspaces and no allowed route resolved it.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "404".to_owned(),
         json_response("Alias index not found.", error_schema_reference()),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Multiple dataspaces returned conflicting alias-index bindings.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response("Alias runtime unavailable.", error_schema_reference()),
+    );
+    responses
+}
+
+fn alias_lookup_by_account_request_body() -> Value {
+    let mut media = Map::new();
+    media.insert(
+        "application/json".into(),
+        Value::Object({
+            let mut schema = Map::new();
+            schema.insert("schema".into(), schema_ref("AliasLookupByAccountRequest"));
+            schema
+        }),
+    );
+
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert("content".into(), Value::Object(media));
+    Value::Object(body)
+}
+
+fn alias_lookup_by_account_responses() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Alias list successfully resolved.",
+            schema_ref("AliasLookupByAccountResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed request (account id or filters are invalid).",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Alias lookup was denied by one or more routed dataspaces and no allowed route returned aliases.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response("Account alias list not found.", error_schema_reference()),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Multiple dataspaces returned conflicting alias-account roots.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "503".to_owned(),
@@ -8577,6 +8685,87 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Optional identifier-claim expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLookupByAccountRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier to inspect."
+                },
+                "dataspace": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional dataspace alias filter applied after routing."
+                },
+                "domain": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional alias-domain filter applied after routing."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLookupByAccountItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "dataspace", "is_primary"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Canonical alias representation."
+                },
+                "dataspace": {
+                    "type": "string",
+                    "description": "Dataspace alias that owns the binding."
+                },
+                "domain": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional alias domain."
+                },
+                "is_primary": {
+                    "type": "boolean",
+                    "description": "Whether this alias is the account's primary label in that dataspace."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLookupByAccountResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "total", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier used for the lookup."
+                },
+                "total": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Merged count of deduplicated alias rows."
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/AliasLookupByAccountItem"
+                    },
+                    "description": "Merged alias rows returned by reachable dataspaces."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Resolver source, including `fanout` when multiple routes contributed."
                 }
             }
         }),

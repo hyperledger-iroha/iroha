@@ -90,6 +90,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<SetParameter>,
     dispatch_instruction::<Upgrade>,
     dispatch_instruction::<Log>,
+    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
+    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,

@@ -1,6 +1,10 @@
 //! Split contract deploy helper for oversized public deploy envelopes.
 
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
@@ -20,6 +24,7 @@ use iroha::{
     },
 };
 use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_version::codec::EncodeVersioned;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -39,19 +44,46 @@ struct Args {
     deploy_nonce: u64,
     #[arg(long, default_value_t = 753)]
     chain_discriminant: u16,
+    #[arg(long)]
+    gas_asset_id: Option<String>,
+    #[arg(long, default_value_t = false)]
+    route_anchor_authority_account: bool,
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
+    #[arg(long, default_value_t = false)]
+    emit_only: bool,
 }
 
-fn sign_and_submit(
-    client: &Client,
+fn sign_transaction(
+    chain: &ChainId,
     authority: &AccountId,
     private_key: &PrivateKey,
+    metadata: Metadata,
     instructions: impl IntoIterator<Item = InstructionBox>,
-) -> Result<HashOf<SignedTransaction>> {
-    let tx = TransactionBuilder::new(client.chain.clone(), authority.clone())
+) -> SignedTransaction {
+    TransactionBuilder::new(chain.clone(), authority.clone())
         .with_instructions(instructions)
-        .with_metadata(Metadata::default())
-        .sign(private_key);
-    client.submit_transaction_blocking(&tx)
+        .with_metadata(metadata)
+        .sign(private_key)
+}
+
+fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
+    fs::create_dir_all(out_dir)
+        .wrap_err_with(|| format!("create output directory {}", out_dir.display()))?;
+    let path = out_dir.join(format!("{stem}.norito"));
+    let bytes = tx.encode_versioned();
+    fs::write(&path, &bytes).wrap_err_with(|| format!("write {}", path.display()))?;
+    Ok((path, bytes.len()))
+}
+
+fn transaction_metadata(gas_asset_id: Option<&str>) -> Metadata {
+    let mut metadata = Metadata::default();
+    if let Some(asset_id) = gas_asset_id.filter(|value| !value.trim().is_empty()) {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, Json::new(asset_id.to_owned()));
+    }
+    metadata
 }
 
 fn main() -> Result<()> {
@@ -88,26 +120,43 @@ fn main() -> Result<()> {
         .deploy_nonce
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
+    let tx_metadata = transaction_metadata(args.gas_asset_id.as_deref());
+    let route_anchor_instruction = args.route_anchor_authority_account.then(|| {
+        InstructionBox::from(SetKeyValue::account(
+            authority.clone(),
+            nonce_key.clone(),
+            Json::new(args.deploy_nonce),
+        ))
+    });
 
-    let register_bytes_hash = sign_and_submit(
-        &client,
+    let register_bytes_tx = sign_transaction(
+        &client.chain,
         &authority,
         &private_key,
-        [InstructionBox::from(RegisterSmartContractBytes {
-            code_hash,
-            code: code.clone(),
-        })],
-    )?;
-    let register_manifest_hash = sign_and_submit(
-        &client,
+        tx_metadata.clone(),
+        route_anchor_instruction
+            .clone()
+            .into_iter()
+            .chain([InstructionBox::from(RegisterSmartContractBytes {
+                code_hash,
+                code: code.clone(),
+            })]),
+    );
+    let register_manifest_tx = sign_transaction(
+        &client.chain,
         &authority,
         &private_key,
-        [InstructionBox::from(RegisterSmartContractCode { manifest })],
-    )?;
-    let activate_hash = sign_and_submit(
-        &client,
+        tx_metadata.clone(),
+        route_anchor_instruction
+            .clone()
+            .into_iter()
+            .chain([InstructionBox::from(RegisterSmartContractCode { manifest })]),
+    );
+    let activate_tx = sign_transaction(
+        &client.chain,
         &authority,
         &private_key,
+        tx_metadata,
         [
             InstructionBox::from(ActivateContractInstance {
                 contract_address: contract_address.clone(),
@@ -119,38 +168,82 @@ fn main() -> Result<()> {
                 Json::new(next_nonce),
             )),
         ],
-    )?;
-
-    let result = norito::json::Value::Object(
-        [
-            ("ok".to_owned(), norito::json::Value::Bool(true)),
-            ("dataspace".to_owned(), args.dataspace.into()),
-            (
-                "contract_address".to_owned(),
-                contract_address.to_string().into(),
-            ),
-            ("deploy_nonce".to_owned(), args.deploy_nonce.into()),
-            ("next_deploy_nonce".to_owned(), next_nonce.into()),
-            (
-                "code_hash_hex".to_owned(),
-                hex::encode(<[u8; 32]>::from(code_hash)).into(),
-            ),
-            (
-                "register_bytes_tx_hash".to_owned(),
-                register_bytes_hash.to_string().into(),
-            ),
-            (
-                "register_manifest_tx_hash".to_owned(),
-                register_manifest_hash.to_string().into(),
-            ),
-            (
-                "activate_tx_hash".to_owned(),
-                activate_hash.to_string().into(),
-            ),
-        ]
-        .into_iter()
-        .collect(),
     );
+
+    let register_bytes_hash = register_bytes_tx.hash();
+    let register_manifest_hash = register_manifest_tx.hash();
+    let activate_hash = activate_tx.hash();
+
+    let written = if let Some(out_dir) = args.out_dir.as_deref() {
+        Some(vec![
+            (
+                "register_bytes",
+                write_tx(out_dir, "01-register-bytes", &register_bytes_tx)?,
+            ),
+            (
+                "register_manifest",
+                write_tx(out_dir, "02-register-manifest", &register_manifest_tx)?,
+            ),
+            ("activate", write_tx(out_dir, "03-activate", &activate_tx)?),
+        ])
+    } else {
+        None
+    };
+
+    if !args.emit_only {
+        client.submit_transaction_blocking(&register_bytes_tx)?;
+        client.submit_transaction_blocking(&register_manifest_tx)?;
+        client.submit_transaction_blocking(&activate_tx)?;
+    }
+
+    let mut fields = std::collections::BTreeMap::from([
+        ("ok".to_owned(), norito::json::Value::Bool(true)),
+        (
+            "submitted".to_owned(),
+            norito::json::Value::Bool(!args.emit_only),
+        ),
+        ("dataspace".to_owned(), args.dataspace.into()),
+        (
+            "contract_address".to_owned(),
+            contract_address.to_string().into(),
+        ),
+        ("deploy_nonce".to_owned(), args.deploy_nonce.into()),
+        ("next_deploy_nonce".to_owned(), next_nonce.into()),
+        (
+            "code_hash_hex".to_owned(),
+            hex::encode(<[u8; 32]>::from(code_hash)).into(),
+        ),
+        (
+            "register_bytes_tx_hash".to_owned(),
+            register_bytes_hash.to_string().into(),
+        ),
+        (
+            "register_manifest_tx_hash".to_owned(),
+            register_manifest_hash.to_string().into(),
+        ),
+        (
+            "activate_tx_hash".to_owned(),
+            activate_hash.to_string().into(),
+        ),
+    ]);
+    if let Some(written) = written {
+        let files = written
+            .into_iter()
+            .map(|(name, (path, size))| {
+                norito::json::Value::Object(
+                    [
+                        ("name".to_owned(), name.into()),
+                        ("path".to_owned(), path.display().to_string().into()),
+                        ("size".to_owned(), (size as u64).into()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+            })
+            .collect();
+        fields.insert("files".to_owned(), norito::json::Value::Array(files));
+    }
+    let result = norito::json::Value::Object(fields);
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())
 }

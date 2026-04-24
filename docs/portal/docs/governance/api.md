@@ -66,13 +66,17 @@ Alias Service
   - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
   - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
-  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Response: { "alias": "GB82WEST12345698765432", "account_id": "<i105-account-id>", "index": 0, "source": "iso_bridge" }
-  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
+  - Request: { "alias": "merchant@sbp" }
+  - Response: { "alias": "merchant@sbp", "account_id": "<i105-account-id>", "index": 12, "source": "on_chain" }
+  - Notes: Torii routes the lookup through the Nexus read proxy using the alias dataspace encoded in the literal, so `merchant@sbp` can be resolved through any configured Nexus ingress instead of only the SBP-local Torii surface. Public/unsigned requests remain allowed for ordinary public alias resolution. Returns HTTP `403` with `ErrorEnvelope.code = "permission_denied"` only when the routed dataspace blocks the lookup and no allowed route can resolve it; returns `404` when reachable routes miss and `503` when no route can be reached.
 - POST `/v1/aliases/resolve_index`
   - Request: { "index": 0 }
-  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "<i105-account-id>", "source": "iso_bridge" }
-  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
+  - Response: { "index": 0, "alias": "merchant@sbp", "account_id": "<i105-account-id>", "source": "fanout" }
+  - Notes: Because the index alone does not encode a dataspace, Torii fans this lookup out across every configured dataspace route, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings for the same index, `403 permission_denied` if only blocked routes could resolve it, `404` when all reachable routes miss, and `503` when no route can be reached.
+- POST `/v1/aliases/by_account`
+  - Request: { "account_id": "<i105-account-id>", "dataspace": "sbp"?, "domain": "merchant"?" }
+  - Response: { "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@sbp", "dataspace": "sbp", "domain": null, "is_primary": false }], "source": "fanout" }
+  - Notes: Torii routes the lookup through the target-account dataspace set, merges deduplicated alias rows across reachable dataspaces, and recomputes `total` after merging. If one or more routes are denied but another route succeeds, Torii still returns `200` and includes the usual routing diagnostics headers plus an HTTP `Warning` header. Returns `403 permission_denied` only when no allowed route can return aliases, `404` when reachable routes miss, and `503` when no route can be reached.
 
 Code Size Cap
 - Custom parameter: `max_contract_code_bytes` (JSON u64)

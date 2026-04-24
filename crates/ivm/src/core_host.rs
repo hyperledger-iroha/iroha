@@ -977,7 +977,7 @@ impl CoreHost {
         out.extend_from_slice(payload);
         let h: [u8; 32] = IrohaHash::new(payload).into();
         out.extend_from_slice(&h);
-        vm.alloc_input_tlv(&out)
+        vm.alloc_host_tlv(&out)
     }
 
     fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
@@ -1044,7 +1044,7 @@ impl IVMHost for CoreHost {
                     buf.extend_from_slice(&val);
                     let h: [u8; 32] = IrohaHash::new(&val).into();
                     buf.extend_from_slice(&h);
-                    let p = vm.alloc_input_tlv(&buf)?;
+                    let p = vm.alloc_host_tlv(&buf)?;
                     vm.set_register(10, p);
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!("[CoreHost] STATE_GET returned r10=0x{p:08x}");

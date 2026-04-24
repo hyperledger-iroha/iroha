@@ -45,6 +45,7 @@ use iroha_data_model::{
         asset::prelude::FindAssetById, error::QueryExecutionFail,
     },
     subscription::{
+        ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
     },
@@ -680,20 +681,38 @@ where
 }
 
 /// Snapshot of subscription-related data resolved from the current state.
+#[derive(Clone)]
+enum SubscriptionBillingKind {
+    Generic {
+        plan: SubscriptionPlan,
+        charge_asset_def: AssetDefinition,
+    },
+    AccountAliasAutoRenew {
+        metadata: AccountAliasAutoRenewMetadata,
+        charge_asset_def: AssetDefinition,
+    },
+}
+
+/// Resolved subscription state and billing inputs for the trigger currently being billed.
 pub struct SubscriptionContext {
     executable: Executable,
     authority: AccountId,
     trigger_metadata: Metadata,
     subscription_nft_id: NftId,
     subscription_state: SubscriptionState,
-    plan: SubscriptionPlan,
-    charge_asset_def: AssetDefinition,
+    billing: SubscriptionBillingKind,
     subscriber_balance: Numeric,
     nft_owner: AccountId,
 }
 
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Parse and canonicalize an account alias literal using the current dataspace catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the alias literal is invalid.
+    fn parse_account_alias(&self, alias_literal: &str) -> Result<AccountAlias, ivm::VMError>;
     /// Resolve a stable account alias to the current backing account id.
     ///
     /// # Errors
@@ -729,6 +748,17 @@ pub trait QueryStateRefOps {
         &self,
         plan_id: &AssetDefinitionId,
     ) -> Result<SubscriptionPlan, ivm::VMError>;
+    /// Quote a SNS account-alias renewal using current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the alias is invalid or not renewable.
+    fn quote_account_alias_renewal(
+        &self,
+        alias_literal: &str,
+        term_years: u8,
+        now_ms: u64,
+    ) -> Result<crate::sns::LeaseQuote, ivm::VMError>;
     /// Resolve the fully bound contract record for a deterministic contract subject.
     fn bound_contract_record_by_subject(
         &self,
@@ -742,6 +772,23 @@ pub trait QueryStateRefOps {
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn parse_account_alias(&self, alias_literal: &str) -> Result<AccountAlias, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(view, alias_literal)
+            }
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(view, alias_literal)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(block, alias_literal)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::parse_account_alias(tx, alias_literal)
+            }
+        }
+    }
+
     fn resolve_account_alias(
         &self,
         authority: &AccountId,
@@ -819,6 +866,46 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
             QueryStateRef::Transaction(tx) => {
                 CoreHostImpl::<NoQueryState>::subscription_plan(tx, plan_id)
+            }
+        }
+    }
+
+    fn quote_account_alias_renewal(
+        &self,
+        alias_literal: &str,
+        term_years: u8,
+        now_ms: u64,
+    ) -> Result<crate::sns::LeaseQuote, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                view,
+                alias_literal,
+                term_years,
+                now_ms,
+            ),
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                    view,
+                    alias_literal,
+                    term_years,
+                    now_ms,
+                )
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                    block,
+                    alias_literal,
+                    term_years,
+                    now_ms,
+                )
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::quote_account_alias_renewal(
+                    tx,
+                    alias_literal,
+                    term_years,
+                    now_ms,
+                )
             }
         }
     }
@@ -2683,7 +2770,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             out.extend_from_slice(&h);
             env = out;
         }
-        let p = vm.alloc_input_tlv(&env)?;
+        let p = vm.alloc_host_tlv(&env)?;
         vm.set_register(10, p);
         Ok(())
     }
@@ -2773,6 +2860,61 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             Ok(value) => Ok(value),
             Err(_) => {
                 // Fall back to decoding from an owned buffer to avoid alignment quirks.
+                let owned = tlv.payload.to_vec();
+                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
+            }
+        }
+    }
+
+    /// Decode a typed pointer-ABI TLV from any readable VM region.
+    ///
+    /// This variant accepts heap-backed envelopes in addition to INPUT and
+    /// literal/code pointers, which is required for staged deployment helpers
+    /// that reconstruct large lifecycle requests outside the 64 KiB INPUT
+    /// window before queueing the final ISI.
+    ///
+    /// # Errors
+    /// Returns an error if the pointer does not resolve to a TLV in a readable
+    /// region, the type is not allowed by the active ABI policy, or the Norito
+    /// payload cannot be decoded.
+    pub fn decode_tlv_typed_any_region<T>(
+        vm: &IVM,
+        ptr: u64,
+        expected: PointerType,
+    ) -> Result<T, ivm::VMError>
+    where
+        T: for<'de> NoritoDeserialize<'de>,
+    {
+        let hdr = vm
+            .memory
+            .load_region(ptr, 7)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
+        if type_id != expected as u16 || hdr[2] != 1 {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|size| size.checked_add(Hash::LENGTH))
+            .ok_or(ivm::VMError::NoritoInvalid)?;
+        let envelope = vm
+            .memory
+            .load_region(ptr, total as u64)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        if tlv.type_id != expected {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if !is_type_allowed_for_policy(vm.syscall_policy(), expected) {
+            return Err(ivm::VMError::AbiTypeNotAllowed {
+                abi: vm.abi_version(),
+                type_id: expected as u16,
+            });
+        }
+        match decode_from_bytes(tlv.payload) {
+            Ok(value) => Ok(value),
+            Err(_) => {
                 let owned = tlv.payload.to_vec();
                 decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
             }
@@ -3429,7 +3571,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         out.extend_from_slice(payload);
         let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
         out.extend_from_slice(&h);
-        vm.alloc_input_tlv(&out)
+        vm.alloc_host_tlv(&out)
     }
 
     fn alloc_norito_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
@@ -3738,6 +3880,182 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(response_bytes))
     }
 
+    fn subscription_bill_account_alias(
+        &mut self,
+        trigger_id: &TriggerId,
+        context: SubscriptionContext,
+        metadata: AccountAliasAutoRenewMetadata,
+        charge_asset_def: AssetDefinition,
+    ) -> Result<u64, ivm::VMError> {
+        let mut subscription_state = context.subscription_state;
+        if subscription_state.subscriber != context.nft_owner {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        subscription_state.billing_trigger_id = trigger_id.clone();
+
+        let scheduled_at_ms = subscription_state.next_charge_ms;
+        let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
+        let attempted_at_ms = now_ms.max(scheduled_at_ms);
+        let previous_period_end_ms = subscription_state.current_period_end_ms;
+        let quote = {
+            let Some(state_ref) = self.query_state.get() else {
+                return Err(ivm::VMError::NotImplemented {
+                    syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                });
+            };
+            state_ref.quote_account_alias_renewal(
+                &metadata.alias,
+                metadata.term_years,
+                attempted_at_ms,
+            )
+        };
+
+        let mut gas = 0_u64;
+        let invoice;
+        match quote {
+            Ok(quote) => {
+                let charge_amount: Numeric = quote.charge_amount.into();
+                let within_cap = charge_amount <= metadata.max_charge_amount.clone();
+                let can_pay = within_cap && charge_amount <= context.subscriber_balance;
+                invoice = SubscriptionInvoice {
+                    subscription_nft_id: context.subscription_nft_id.clone(),
+                    period_start_ms: previous_period_end_ms,
+                    period_end_ms: quote.expires_at_ms,
+                    attempted_at_ms,
+                    amount: charge_amount.clone(),
+                    asset_definition: charge_asset_def.id.clone(),
+                    status: if can_pay {
+                        SubscriptionInvoiceStatus::Paid
+                    } else {
+                        SubscriptionInvoiceStatus::Failed
+                    },
+                    tx_hash: None,
+                };
+                if can_pay {
+                    let alias = {
+                        let Some(state_ref) = self.query_state.get() else {
+                            return Err(ivm::VMError::NotImplemented {
+                                syscall: ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                            });
+                        };
+                        state_ref.parse_account_alias(&metadata.alias)?
+                    };
+                    let renew =
+                        iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                            alias,
+                            subscription_state.subscriber.clone(),
+                            metadata.term_years,
+                        );
+                    gas = gas.saturating_add(self.queue_instruction(InstructionBox::from(renew)));
+                    subscription_state.failure_count = 0;
+                    subscription_state.status = SubscriptionStatus::Active;
+                    subscription_state.current_period_start_ms = previous_period_end_ms;
+                    subscription_state.current_period_end_ms = quote.expires_at_ms;
+                    subscription_state.next_charge_ms = quote.expires_at_ms;
+                } else {
+                    subscription_state.failure_count =
+                        subscription_state.failure_count.saturating_add(1);
+                    subscription_state.status =
+                        if subscription_state.failure_count >= metadata.max_failures {
+                            SubscriptionStatus::Suspended
+                        } else {
+                            SubscriptionStatus::PastDue
+                        };
+                    if subscription_state.status != SubscriptionStatus::Suspended {
+                        subscription_state.next_charge_ms =
+                            attempted_at_ms.saturating_add(metadata.retry_backoff_ms);
+                    }
+                }
+            }
+            Err(_) => {
+                invoice = SubscriptionInvoice {
+                    subscription_nft_id: context.subscription_nft_id.clone(),
+                    period_start_ms: previous_period_end_ms,
+                    period_end_ms: previous_period_end_ms,
+                    attempted_at_ms,
+                    amount: Numeric::zero(),
+                    asset_definition: charge_asset_def.id.clone(),
+                    status: SubscriptionInvoiceStatus::Failed,
+                    tx_hash: None,
+                };
+                subscription_state.failure_count = metadata.max_failures.max(1);
+                subscription_state.status = SubscriptionStatus::Suspended;
+            }
+        }
+
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            let outcome = match subscription_state.status {
+                SubscriptionStatus::Active => "paid",
+                SubscriptionStatus::Suspended => "suspended",
+                _ => "failed",
+            };
+            telemetry.record_subscription_billing_outcome("sns_alias", outcome);
+        }
+
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let subscription_json = iroha_primitives::json::Json::new(subscription_state.clone());
+        let subscription_isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            subscription_key,
+            subscription_json,
+        );
+        gas = gas.saturating_add(
+            self.queue_instruction(InstructionBox::from(SetKeyValueBox::from(subscription_isi))),
+        );
+
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let invoice_json = iroha_primitives::json::Json::new(invoice);
+        let invoice_isi = SetKeyValue::nft(
+            context.subscription_nft_id.clone(),
+            invoice_key,
+            invoice_json,
+        );
+        gas = gas.saturating_add(
+            self.queue_instruction(InstructionBox::from(SetKeyValueBox::from(invoice_isi))),
+        );
+
+        if matches!(
+            subscription_state.status,
+            SubscriptionStatus::Suspended | SubscriptionStatus::Canceled
+        ) {
+            let unregister =
+                InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+            gas = gas.saturating_add(self.queue_instruction(unregister));
+            return Ok(gas);
+        }
+
+        let schedule = Schedule {
+            start_ms: subscription_state.next_charge_ms,
+            period_ms: None,
+        };
+        let mut next_trigger_metadata = context.trigger_metadata.clone();
+        for key in ["__registered_block_height", "__registered_at_ms"] {
+            let key = key
+                .parse::<Name>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            next_trigger_metadata.remove(&key);
+        }
+        let action = iroha_data_model::trigger::action::Action::new(
+            context.executable.clone(),
+            Repeats::Exactly(1),
+            context.authority.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        )
+        .with_metadata(next_trigger_metadata);
+        let trigger = Trigger::new(trigger_id.clone(), action);
+        let unregister =
+            InstructionBox::from(UnregisterBox::from(Unregister::trigger(trigger_id.clone())));
+        gas = gas.saturating_add(self.queue_instruction(unregister));
+        let register = InstructionBox::from(RegisterBox::from(Register::trigger(trigger)));
+        gas = gas.saturating_add(self.queue_instruction(register));
+        Ok(gas)
+    }
+
     #[allow(clippy::too_many_lines)]
     fn subscription_bill(&mut self) -> Result<u64, ivm::VMError> {
         struct BillingWindow {
@@ -3760,19 +4078,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             state_ref.subscription_context_for_trigger(&trigger_id)?
         };
 
-        let mut subscription_state = context.subscription_state;
+        let mut subscription_state = context.subscription_state.clone();
         if subscription_state.subscriber != context.nft_owner {
             return Err(ivm::VMError::NoritoInvalid);
         }
-        if subscription_state.provider != context.plan.provider {
+        let billing = context.billing.clone();
+        if let SubscriptionBillingKind::Generic { plan, .. } = &billing
+            && subscription_state.provider != plan.provider
+        {
             return Err(ivm::VMError::NoritoInvalid);
         }
         subscription_state.billing_trigger_id = trigger_id.clone();
 
         #[cfg(feature = "telemetry")]
-        let pricing_label = match context.plan.pricing {
-            SubscriptionPricing::Fixed(_) => "fixed",
-            SubscriptionPricing::Usage(_) => "usage",
+        let pricing_label = match &billing {
+            SubscriptionBillingKind::Generic { plan, .. } => match &plan.pricing {
+                SubscriptionPricing::Fixed(_) => "fixed",
+                SubscriptionPricing::Usage(_) => "usage",
+            },
+            SubscriptionBillingKind::AccountAliasAutoRenew { .. } => "sns_alias",
         };
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry.as_ref() {
@@ -3794,7 +4118,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(self.queue_instruction(instr));
         }
 
-        let billing = context.plan.billing;
+        if let SubscriptionBillingKind::AccountAliasAutoRenew {
+            metadata,
+            charge_asset_def,
+        } = billing
+        {
+            return self.subscription_bill_account_alias(
+                &trigger_id,
+                context,
+                metadata,
+                charge_asset_def,
+            );
+        }
+
+        let SubscriptionBillingKind::Generic {
+            plan,
+            charge_asset_def,
+        } = billing
+        else {
+            unreachable!("subscription billing kind is exhaustive");
+        };
+
+        let billing = plan.billing;
         let scheduled_at_ms = subscription_state.next_charge_ms;
         let now_ms = self.current_block_time_ms.unwrap_or(scheduled_at_ms);
         let attempted_at_ms = now_ms.max(scheduled_at_ms);
@@ -3905,8 +4250,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         }
 
-        let charge_spec = context.charge_asset_def.spec();
-        let (amount, usage_key) = match &context.plan.pricing {
+        let charge_spec = charge_asset_def.spec();
+        let (amount, usage_key) = match &plan.pricing {
             SubscriptionPricing::Fixed(pricing) => {
                 let fixed_amount = pricing.amount.clone();
                 if fixed_amount < Numeric::zero() {
@@ -3949,21 +4294,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             period_end_ms: charge_period.end_ms,
             attempted_at_ms,
             amount: amount.clone(),
-            asset_definition: context.charge_asset_def.id.clone(),
+            asset_definition: charge_asset_def.id.clone(),
             status: invoice_status,
             tx_hash: None,
         };
         if can_pay {
             if !amount.is_zero() {
                 let asset_id = AssetId::of(
-                    context.charge_asset_def.id.clone(),
+                    charge_asset_def.id.clone(),
                     subscription_state.subscriber.clone(),
                 );
-                let isi = Transfer::asset_numeric(
-                    asset_id,
-                    amount.clone(),
-                    context.plan.provider.clone(),
-                );
+                let isi = Transfer::asset_numeric(asset_id, amount.clone(), plan.provider.clone());
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -4169,22 +4510,54 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let subscription_nft_id = trigger_ref.subscription_nft_id;
         let (subscription_state, nft_owner) =
             Self::subscription_state_and_owner(state, &subscription_nft_id)?;
-
-        let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
-        let charge_asset_def = {
-            let charge_asset_id = match &plan.pricing {
-                SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
-                SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
-            };
-            state
+        let nft = state
+            .world()
+            .nft(&subscription_nft_id)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let alias_auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY
+            .parse()
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let billing = if let Some(value) = nft.value().content.get(&alias_auto_renew_key) {
+            let metadata = value
+                .try_into_any_norito::<AccountAliasAutoRenewMetadata>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            let charge_asset_def = state
                 .world()
-                .asset_definition(charge_asset_id)
-                .map_err(|_| ivm::VMError::NoritoInvalid)?
+                .asset_definition(&subscription_state.plan_id)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            SubscriptionBillingKind::AccountAliasAutoRenew {
+                metadata,
+                charge_asset_def,
+            }
+        } else {
+            let plan = Self::subscription_plan(state, &subscription_state.plan_id)?;
+            let charge_asset_def = {
+                let charge_asset_id = match &plan.pricing {
+                    SubscriptionPricing::Fixed(pricing) => &pricing.asset_definition,
+                    SubscriptionPricing::Usage(pricing) => &pricing.asset_definition,
+                };
+                state
+                    .world()
+                    .asset_definition(charge_asset_id)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?
+            };
+            SubscriptionBillingKind::Generic {
+                plan,
+                charge_asset_def,
+            }
+        };
+        let charge_asset_definition_id = match &billing {
+            SubscriptionBillingKind::Generic {
+                charge_asset_def, ..
+            }
+            | SubscriptionBillingKind::AccountAliasAutoRenew {
+                charge_asset_def, ..
+            } => charge_asset_def.id.clone(),
         };
 
         let balance = {
             let asset_id = AssetId::of(
-                charge_asset_def.id.clone(),
+                charge_asset_definition_id,
                 subscription_state.subscriber.clone(),
             );
             state.world().asset(&asset_id).map_or_else(
@@ -4199,8 +4572,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             trigger_metadata,
             subscription_nft_id,
             subscription_state,
-            plan,
-            charge_asset_def,
+            billing,
             subscriber_balance: balance,
             nft_owner,
         })
@@ -4255,6 +4627,32 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         value
             .try_into_any_norito::<SubscriptionPlan>()
             .map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    fn parse_account_alias<S: StateReadOnly>(
+        state: &S,
+        alias_literal: &str,
+    ) -> Result<AccountAlias, ivm::VMError> {
+        AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
+            .map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
+    fn quote_account_alias_renewal<S: StateReadOnly>(
+        state: &S,
+        alias_literal: &str,
+        term_years: u8,
+        now_ms: u64,
+    ) -> Result<crate::sns::LeaseQuote, ivm::VMError> {
+        let alias = AccountAlias::from_literal(alias_literal, &state.nexus().dataspace_catalog)
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        crate::sns::quote_account_alias_renewal(
+            state.world(),
+            &state.nexus().dataspace_catalog,
+            &alias,
+            term_years,
+            now_ms,
+        )
+        .map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn norito_encoded_len_exact<T: NoritoSerialize>(value: &T) -> Option<u64> {
@@ -5228,22 +5626,7 @@ impl<QS> CoreHostImpl<QS> {
         if let Some(account_id) = state.world().account_aliases().get(&alias_label).cloned() {
             return Ok(account_id);
         }
-
-        let mut matched_account_id: Option<AccountId> = None;
-        for (account_id, value) in state.world().accounts().iter() {
-            if value.as_ref().label() != Some(&alias_label) {
-                continue;
-            }
-            if let Some(existing) = matched_account_id.as_ref() {
-                if existing != account_id {
-                    return Err(ivm::VMError::DecodeError);
-                }
-            } else {
-                matched_account_id = Some(account_id.clone());
-            }
-        }
-
-        matched_account_id.ok_or(ivm::VMError::DecodeError)
+        Err(ivm::VMError::DecodeError)
     }
 
     /// Set the trigger identifier for the current execution.
@@ -5660,7 +6043,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
                 let ptr = vm.register(10);
                 let request: scode::RegisterSmartContractBytes =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    Self::decode_tlv_typed_any_region(vm, ptr, PointerType::NoritoBytes)?;
                 let instr = InstructionBox::from(request);
                 Ok(self.queue_instruction(instr))
             }
@@ -5921,7 +6304,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     return Err(ivm::VMError::NotImplemented { syscall: number });
                 };
                 let account_id =
-                    state_ref.resolve_account_alias(&self.authority, alias_literal.trim())?;
+                    state_ref.resolve_account_alias(&self.authority, &alias_literal)?;
                 let payload =
                     norito::to_bytes(&account_id).map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let payload_len = Self::len_to_u32(payload.len())?;
@@ -6811,6 +7194,37 @@ mod pointer_abi_tests {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AssetDefinitionId)
                 .expect("decode asset definition pointer from state");
         assert_eq!(decoded, asset);
+    }
+
+    #[test]
+    fn load_state_value_rejects_wrapped_non_norito_bytes() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(10_000);
+        let stored = make_tlv(
+            PointerType::Name as u16,
+            &norito_blob(&Name::from_str("wrong").expect("valid name")),
+        );
+
+        let err =
+            CoreHost::load_state_value(&mut vm, &stored).expect_err("wrapped non-NoritoBytes TLV");
+        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    }
+
+    #[test]
+    fn load_state_value_wraps_raw_norito_payload_into_norito_bytes_tlv() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(10_000);
+        let expected = vec![1_u8, 2, 3, 4, 5];
+        let stored = norito::to_bytes(&expected).expect("encode raw state value");
+
+        CoreHost::load_state_value(&mut vm, &stored).expect("load raw state value");
+        let tlv = vm
+            .validate_tlv(vm.register(10))
+            .expect("wrapped raw state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let decoded: Vec<u8> =
+            norito::decode_from_bytes(tlv.payload).expect("decode wrapped raw state value");
+        assert_eq!(decoded, expected);
     }
 
     #[test]
@@ -8222,6 +8636,48 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn register_contract_bytes_syscall_accepts_heap_tlv() {
+        let mut vm = ivm::IVM::new(1_000);
+        let kp = KeyPair::random();
+        let (public_key, _) = kp.into_parts();
+        let authority = AccountId::of(public_key);
+        let mut host = CoreHost::new(authority);
+
+        let code_hash = IrohaHash::new(b"heap-bytecode");
+        let request = scode::RegisterSmartContractBytes {
+            code_hash,
+            code: vec![0xAA, 0xBB, 0xCC],
+        };
+        let payload = norito::to_bytes(&request).expect("encode request");
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let ptr = vm
+            .alloc_heap(tlv.len() as u64)
+            .expect("allocate heap pointer");
+        vm.store_bytes(ptr, &tlv).expect("store heap tlv");
+        let heap_bytes = vm
+            .memory
+            .load_region(ptr, tlv.len() as u64)
+            .expect("read heap tlv bytes");
+        let tlv_view =
+            pointer_abi::validate_tlv_bytes(heap_bytes).expect("validate heap tlv bytes");
+        assert_eq!(tlv_view.type_id, PointerType::NoritoBytes);
+        let decoded: scode::RegisterSmartContractBytes =
+            CoreHost::decode_tlv_typed_any_region(&vm, ptr, PointerType::NoritoBytes)
+                .expect("decode heap register request");
+        assert_eq!(decoded, request);
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(
+            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+            &mut vm,
+        );
+        let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
     fn activate_contract_instance_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
         let kp = KeyPair::random();
@@ -9152,7 +9608,7 @@ mod tests {
         },
     };
     use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanResolveAccountAlias,
+        AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
@@ -9164,6 +9620,7 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         smartcontracts::{
+            Execute,
             isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
             ivm::host::pointer_abi_tests::make_tlv,
         },
@@ -9226,6 +9683,24 @@ mod tests {
         Account::new(id.clone()).build(authority)
     }
 
+    fn retail_dataspace_catalog() -> (
+        iroha_data_model::nexus::DataSpaceId,
+        iroha_data_model::nexus::DataSpaceCatalog,
+    ) {
+        let sbp = iroha_data_model::nexus::DataSpaceId::new(12);
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: sbp,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("retail dataspace catalog");
+        (sbp, catalog)
+    }
+
     fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
         if authority == &*ALICE_ID {
             return (*ALICE_KEYPAIR).clone();
@@ -9280,13 +9755,13 @@ mod tests {
         contract_address
     }
 
-    fn execute_contract_call_transaction(
+    fn execute_contract_call_transaction_result(
         state: &State,
         authority: &AccountId,
         keypair: &KeyPair,
         invocation: iroha_data_model::transaction::executable::ContractInvocation,
         ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
-    ) {
+    ) -> Result<(), iroha_data_model::ValidationFail> {
         let next_height = u64::try_from(state.view().height() + 1)
             .ok()
             .and_then(core::num::NonZeroU64::new)
@@ -9302,13 +9777,54 @@ mod tests {
             .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut stx = block.transaction();
-        crate::executor::Executor::Initial
-            .execute_transaction(&mut stx, authority, tx, ivm_cache)
+        let result = crate::executor::Executor::Initial
+            .execute_transaction(&mut stx, authority, tx, ivm_cache);
+        if result.is_ok() {
+            stx.apply();
+            block
+                .commit()
+                .expect("commit contract call transaction block");
+        }
+        result
+    }
+
+    fn execute_contract_call_transaction(
+        state: &State,
+        authority: &AccountId,
+        keypair: &KeyPair,
+        invocation: iroha_data_model::transaction::executable::ContractInvocation,
+        ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
+    ) {
+        execute_contract_call_transaction_result(state, authority, keypair, invocation, ivm_cache)
             .expect("contract call transaction should execute");
-        stx.apply();
-        block
-            .commit()
-            .expect("commit contract call transaction block");
+    }
+
+    fn install_alias_payout_contract(
+        state: &State,
+        authority: &AccountId,
+        recipient_expr: &str,
+        nonce: u64,
+    ) -> ContractAddress {
+        let source = format!(
+            r#"
+seiyaku AliasPayout {{
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(settlement_asset: AssetDefinitionId) {{
+    SettlementAsset = settlement_asset;
+  }}
+
+  #[access(read="*", write="*")]
+  kotoage fn pay(amount: int) -> int permission(AssetOps) {{
+    let merchant = {recipient_expr};
+    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    return amount;
+  }}
+}}
+"#
+        );
+        install_contract(state, authority, &source, nonce)
     }
 
     fn call_contract_syscall(
@@ -10363,6 +10879,378 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_account_alias_auto_renew_queues_renewal_and_reschedules() {
+        crate::test_alias::ensure();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
+        let charge_asset_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "alias-renew".parse().unwrap();
+        let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
+            "member".parse().unwrap(),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(
+            &alias,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
+        )
+        .expect("selector");
+        let alias_address = iroha_data_model::account::AccountAddress::from_account_id(&subscriber)
+            .expect("account address");
+        let alias_record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            subscriber.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &alias_address,
+            )],
+            0,
+            1,
+            scheduled_at_ms,
+            scheduled_at_ms + (30 * 86_400_000),
+            scheduled_at_ms + (90 * 86_400_000),
+            Metadata::default(),
+        );
+
+        let subscription_state = SubscriptionState {
+            plan_id: charge_asset_id.clone(),
+            provider: subscriber.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let auto_renew = AccountAliasAutoRenewMetadata {
+            alias: "member@universal".to_owned(),
+            term_years: 1,
+            max_charge_amount: Numeric::new(200_u32, 0),
+            retry_backoff_ms: 500,
+            max_failures: 3,
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(auto_renew_key, Json::new(auto_renew.clone()));
+        let nft_id: NftId = "alias-renew$subscriptions.universal".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let charge_def = AssetDefinition::numeric(charge_asset_id.clone())
+            .with_name("xor".to_owned())
+            .build(&provider);
+        let asset = Asset::new(
+            AssetId::of(charge_asset_id.clone(), subscriber.clone()),
+            Numeric::new(500_u32, 0),
+        );
+
+        let domains = vec![
+            Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
+        ];
+        let mut world = World::with_assets(domains, accounts, [charge_def], [asset], [nft]);
+        crate::sns::seed_default_namespace_policies(&mut world);
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&alias_record),
+        );
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        trigger_metadata.insert(
+            "__registered_block_height".parse().unwrap(),
+            Json::from(42_u64),
+        );
+        trigger_metadata.insert(
+            "__registered_at_ms".parse().unwrap(),
+            Json::from(12_345_u64),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let quote = crate::sns::quote_account_alias_renewal(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            &alias,
+            auto_renew.term_years,
+            scheduled_at_ms,
+        )
+        .expect("renewal quote");
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.current_period_start_ms = scheduled_at_ms;
+        expected_state.current_period_end_ms = quote.expires_at_ms;
+        expected_state.next_charge_ms = quote.expires_at_ms;
+        expected_state.failure_count = 0;
+        expected_state.status = SubscriptionStatus::Active;
+
+        let expected_renew = InstructionBox::from(
+            iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease::new(
+                alias.clone(),
+                subscriber.clone(),
+                auto_renew.term_years,
+            ),
+        );
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms,
+            period_end_ms: quote.expires_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: Numeric::from(quote.charge_amount),
+            asset_definition: charge_asset_id.clone(),
+            status: SubscriptionInvoiceStatus::Paid,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_schedule = Schedule {
+            start_ms: quote.expires_at_ms,
+            period_ms: None,
+        };
+        let expected_action = iroha_data_model::trigger::action::Action::new(
+            Executable::Ivm(bytecode),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
+        )
+        .with_metadata({
+            let mut metadata = trigger_metadata;
+            let registered_height_key: Name = "__registered_block_height".parse().unwrap();
+            metadata.remove(&registered_height_key);
+            let registered_time_key: Name = "__registered_at_ms".parse().unwrap();
+            metadata.remove(&registered_time_key);
+            metadata
+        });
+        let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id.clone()));
+        let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_renew.clone(),
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+                expected_register.clone(),
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_renew)
+            .saturating_add(crate::gas::meter_instruction(&expected_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister))
+            .saturating_add(crate::gas::meter_instruction(&expected_register));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subscription_bill_account_alias_auto_renew_suspends_when_alias_is_missing() {
+        crate::test_alias::ensure();
+        let provider = fixture_account_in_domain("acme", "commerce");
+        let subscriber = fixture_account_in_domain("alice", "users");
+        let charge_asset_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let scheduled_at_ms = 10_000_u64;
+        let trigger_id: TriggerId = "alias-renew-missing".parse().unwrap();
+
+        let subscription_state = SubscriptionState {
+            plan_id: charge_asset_id.clone(),
+            provider: subscriber.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: scheduled_at_ms,
+            next_charge_ms: scheduled_at_ms,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: BTreeMap::new(),
+            billing_trigger_id: trigger_id.clone(),
+        };
+        let auto_renew = AccountAliasAutoRenewMetadata {
+            alias: "ghost@universal".to_owned(),
+            term_years: 1,
+            max_charge_amount: Numeric::new(200_u32, 0),
+            retry_backoff_ms: 500,
+            max_failures: 3,
+        };
+        let mut nft_meta = Metadata::default();
+        let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(
+            subscription_key.clone(),
+            Json::new(subscription_state.clone()),
+        );
+        let auto_renew_key: Name = ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY.parse().unwrap();
+        nft_meta.insert(auto_renew_key, Json::new(auto_renew.clone()));
+        let nft_id: NftId = "alias-missing$subscriptions.universal".parse().unwrap();
+        let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
+
+        let charge_def = AssetDefinition::numeric(charge_asset_id.clone())
+            .with_name("xor".to_owned())
+            .build(&provider);
+        let asset = Asset::new(
+            AssetId::of(charge_asset_id.clone(), subscriber.clone()),
+            Numeric::new(500_u32, 0),
+        );
+
+        let domains = vec![
+            Domain::new(DomainId::try_new("genesis", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
+        ];
+        let accounts = vec![
+            build_fixture_account(&provider, &provider),
+            build_fixture_account(&subscriber, &provider),
+        ];
+        let mut world = World::with_assets(domains, accounts, [charge_def], [asset], [nft]);
+        crate::sns::seed_default_namespace_policies(&mut world);
+
+        let bytecode = IvmBytecode::from_compiled(ivm::ProgramMetadata::default().encode());
+        let mut trigger_metadata = Metadata::default();
+        let trigger_ref_key: Name = SUBSCRIPTION_TRIGGER_REF_METADATA_KEY.parse().unwrap();
+        trigger_metadata.insert(
+            trigger_ref_key,
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: nft_id.clone(),
+            }),
+        );
+        let schedule = Schedule {
+            start_ms: scheduled_at_ms,
+            period_ms: None,
+        };
+        let mut action = SpecializedAction::new(
+            Executable::Ivm(bytecode.clone()),
+            Repeats::Exactly(1),
+            subscriber.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(schedule)),
+        );
+        action.metadata = trigger_metadata.clone();
+        let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
+        {
+            let mut block = world.triggers.block();
+            let mut tx = block.transaction();
+            tx.add_time_trigger(trigger).expect("add trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(subscriber.clone());
+        host.set_query_state(&view);
+        host.set_trigger_id(trigger_id.clone());
+        host.set_block_time_ms(scheduled_at_ms);
+        let mut vm = IVM::new(1_000_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SUBSCRIPTION_BILL, &mut vm)
+            .expect("billing");
+
+        let mut expected_state = subscription_state.clone();
+        expected_state.failure_count = auto_renew.max_failures;
+        expected_state.status = SubscriptionStatus::Suspended;
+
+        let expected_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            subscription_key,
+            Json::new(expected_state),
+        ));
+        let expected_invoice = SubscriptionInvoice {
+            subscription_nft_id: nft_id.clone(),
+            period_start_ms: scheduled_at_ms,
+            period_end_ms: scheduled_at_ms,
+            attempted_at_ms: scheduled_at_ms,
+            amount: Numeric::zero(),
+            asset_definition: charge_asset_id,
+            status: SubscriptionInvoiceStatus::Failed,
+            tx_hash: None,
+        };
+        let invoice_key: Name = SUBSCRIPTION_INVOICE_METADATA_KEY.parse().unwrap();
+        let expected_invoice_set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            invoice_key,
+            Json::new(expected_invoice),
+        ));
+        let expected_unregister = InstructionBox::from(Unregister::trigger(trigger_id));
+
+        assert_eq!(
+            host.queued,
+            vec![
+                expected_set.clone(),
+                expected_invoice_set.clone(),
+                expected_unregister.clone(),
+            ]
+        );
+        let expected_gas = crate::gas::meter_instruction(&expected_set)
+            .saturating_add(crate::gas::meter_instruction(&expected_invoice_set))
+            .saturating_add(crate::gas::meter_instruction(&expected_unregister));
+        assert_eq!(gas, expected_gas);
+    }
+
+    #[test]
     fn queue_instructions_accumulates_gas_and_enqueues() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
@@ -10565,46 +11453,55 @@ mod tests {
     fn resolve_account_alias_syscall_reads_current_alias_binding() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let alias_domain = fixture_domain_id();
-        let alias_domain_label = alias_domain.name().to_string();
-        let alias_label: Name = "banking".parse().expect("alias label");
-        let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
-        let domain = Domain::new(alias_domain.clone()).build(&authority);
+        let merchant_account_id: AccountId = fixture_account("bob");
+        let replacement_account_id: AccountId = fixture_account("carol");
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let aliased_account = Account::new(alias_account_id.clone())
-            .with_label(Some(AccountAlias::new(
-                alias_label.clone(),
-                Some(AccountAliasDomain::new(alias_domain.name().clone())),
-                DataSpaceId::UNIVERSAL,
-            )))
-            .build(&authority);
+        let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
+        let replacement_account = Account::new(replacement_account_id.clone()).build(&authority);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let world = World::with([domain], [authority_account, aliased_account], []);
+        let world = World::with(
+            [domain],
+            [authority_account, merchant_account, replacement_account],
+            [],
+        );
         let state = State::new_for_testing(world, kura, query);
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let alias_literal = "merchant@sbp";
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
             }),
         );
         tx.world_mut_for_testing().add_account_permission(
             &authority,
-            Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(alias_domain.clone()),
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
             }),
         );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account_id.clone(),
+            alias.clone(),
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind alias");
         tx.apply();
         block.commit().expect("commit permissions");
-        let view = state.view();
-        let mut host = CoreHostImpl::new(authority);
-        host.set_query_state(&view);
+        let first_view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&first_view);
         let mut vm = IVM::new(1_000_000);
 
-        let alias_literal = format!("{alias_label}@{alias_domain_label}.universal");
         let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
         vm.set_register(10, alias_ptr);
 
@@ -10614,7 +11511,498 @@ mod tests {
         let resolved: AccountId =
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
                 .expect("resolved account id");
-        assert_eq!(resolved, alias_account_id);
+        assert_eq!(resolved, merchant_account_id);
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            replacement_account_id.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("rebind alias");
+        tx.apply();
+        block.commit().expect("commit alias rebind");
+
+        let rebound_view = state.view();
+        host.set_query_state(&rebound_view);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
+        host.syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect("resolve rebound alias syscall");
+        let rebound: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("rebound account id");
+        assert_eq!(rebound, replacement_account_id);
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_rejects_invalid_alias_literal_without_trimming() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with([domain], [authority_account], []);
+        let state = State::new_for_testing(world, kura, query);
+        let (_sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.apply();
+        block.commit().expect("commit catalog");
+
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, b" merchant@sbp ");
+        vm.set_register(10, alias_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect_err("invalid alias literal should fail at runtime");
+        assert!(matches!(err, ivm::VMError::DecodeError));
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_requires_authoritative_alias_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account_id: AccountId = fixture_account("bob");
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with([domain], [authority_account, merchant_account], []);
+        let state = State::new_for_testing(world, kura, query);
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world_mut_for_testing()
+            .account_mut(&merchant_account_id)
+            .expect("merchant account exists")
+            .set_label(Some(alias));
+        tx.apply();
+        block.commit().expect("commit label-only alias state");
+
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, b"merchant@sbp");
+        vm.set_register(10, alias_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect_err("primary labels alone must not resolve without a binding");
+        assert!(matches!(err, ivm::VMError::DecodeError));
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_requires_dataspace_permission() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account_id: AccountId = fixture_account("bob");
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with([domain], [authority_account, merchant_account], []);
+        let state = State::new_for_testing(world, kura, query);
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let alias_literal = "merchant@sbp";
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account_id,
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect_err("alias resolution should require dataspace permission");
+        assert!(matches!(err, ivm::VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_reads_current_domain_qualified_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account_id: AccountId = fixture_account("bob");
+        let replacement_account_id: AccountId = fixture_account("carol");
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
+        let replacement_account = Account::new(replacement_account_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_account, replacement_account],
+            [payment_definition],
+            [payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(world, kura, query);
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let alias_literal = "merchant@bank.sbp";
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account_id.clone(),
+            alias.clone(),
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind domain-qualified alias");
+        tx.apply();
+        block.commit().expect("commit permissions");
+        let first_view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&first_view);
+        let mut vm = IVM::new(1_000_000);
+
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
+
+        host.syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect("resolve domain-qualified alias syscall");
+
+        let resolved: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("resolved account id");
+        assert_eq!(resolved, merchant_account_id);
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            replacement_account_id.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("rebind domain-qualified alias");
+        tx.apply();
+        block.commit().expect("commit alias rebind");
+
+        let rebound_view = state.view();
+        host.set_query_state(&rebound_view);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
+        host.syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect("resolve rebound domain-qualified alias syscall");
+        let rebound: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("rebound account id");
+        assert_eq!(rebound, replacement_account_id);
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_requires_domain_permission_for_domain_qualified_alias() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account_id: AccountId = fixture_account("bob");
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_account],
+            [payment_definition],
+            [payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(world, kura, query);
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let alias_literal = "merchant@bank.sbp";
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account_id,
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind domain-qualified alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect_err("domain-qualified alias resolution should require domain permission");
+        assert!(matches!(err, ivm::VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_requires_dataspace_permission_for_domain_qualified_alias() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account_id: AccountId = fixture_account("bob");
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_account],
+            [payment_definition],
+            [payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(world, kura, query);
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+        let alias_literal = "merchant@bank.sbp";
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account_id,
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind domain-qualified alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect_err("domain-qualified alias resolution should require dataspace permission");
+        assert!(matches!(err, ivm::VMError::PermissionDenied));
     }
 
     #[test]
@@ -11198,6 +12586,2274 @@ seiyaku Vault {
     }
 
     #[test]
+    fn contract_call_transaction_account_id_alias_shorthand_uses_current_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let replacement_account = fixture_account("carol");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let replacement_fixture = build_fixture_account(&replacement_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account, merchant_fixture, replacement_fixture],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias.clone(),
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku AliasPayout {
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(settlement_asset: AssetDefinitionId) {
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn pay(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), account_id("merchant@sbp"), SettlementAsset, amount);
+    return amount;
+  }
+}
+"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let after_first = state.view();
+        let merchant_asset_id = AssetId::of(asset_def_id.clone(), merchant_account.clone());
+        let replacement_asset_id = AssetId::of(asset_def_id.clone(), replacement_account.clone());
+        let merchant_balance = after_first
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset exists after first payout")
+            .value()
+            .clone();
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            after_first.world().asset(&replacement_asset_id).is_err(),
+            "replacement account should not receive funds before the alias is rebound",
+        );
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            replacement_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("rebind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias rebind");
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let final_view = state.view();
+        let authority_balance = final_view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_balance = final_view
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset remains")
+            .value()
+            .clone();
+        let replacement_balance = final_view
+            .world()
+            .asset(&replacement_asset_id)
+            .expect("replacement asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_resolve_account_alias_builtin_uses_current_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let replacement_account = fixture_account("carol");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let replacement_fixture = build_fixture_account(&replacement_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account, merchant_fixture, replacement_fixture],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias.clone(),
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku AliasPayout {
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(settlement_asset: AssetDefinitionId) {
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn pay(amount: int) -> int permission(AssetOps) {
+    let merchant = resolve_account_alias("merchant@sbp");
+    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    return amount;
+  }
+}
+"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let after_first = state.view();
+        let merchant_asset_id = AssetId::of(asset_def_id.clone(), merchant_account.clone());
+        let replacement_asset_id = AssetId::of(asset_def_id.clone(), replacement_account.clone());
+        let merchant_balance = after_first
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset exists after first payout")
+            .value()
+            .clone();
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            after_first.world().asset(&replacement_asset_id).is_err(),
+            "replacement account should not receive funds before the alias is rebound",
+        );
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            replacement_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("rebind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias rebind");
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let final_view = state.view();
+        let authority_balance = final_view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_balance = final_view
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset remains")
+            .value()
+            .clone();
+        let replacement_balance = final_view
+            .world()
+            .asset(&replacement_asset_id)
+            .expect("replacement asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_uses_current_binding()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let replacement_account = fixture_account("carol");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let replacement_fixture = build_fixture_account(&replacement_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture, replacement_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias.clone(),
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let after_first = state.view();
+        let merchant_asset_id = AssetId::of(asset_def_id.clone(), merchant_account.clone());
+        let replacement_asset_id = AssetId::of(asset_def_id.clone(), replacement_account.clone());
+        let merchant_balance = after_first
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset exists after first payout")
+            .value()
+            .clone();
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            after_first.world().asset(&replacement_asset_id).is_err(),
+            "replacement account should not receive funds before the alias is rebound",
+        );
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            replacement_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("rebind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias rebind");
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let final_view = state.view();
+        let authority_balance = final_view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_balance = final_view
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset remains")
+            .value()
+            .clone();
+        let replacement_balance = final_view
+            .world()
+            .asset(&replacement_asset_id)
+            .expect("replacement asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_resolve_account_alias_builtin_without_permission_is_rejected() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account, merchant_fixture],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), sbp);
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku AliasPayout {
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(settlement_asset: AssetDefinitionId) {
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn pay(amount: int) -> int permission(AssetOps) {
+    let merchant = resolve_account_alias("merchant@sbp");
+    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    return amount;
+  }
+}
+"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(iroha_data_model::ValidationFail::NotPermitted(_))
+            ),
+            "alias resolution without permission should reject the transaction"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "failed alias resolution must not mint or transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_resolve_account_alias_builtin_without_binding_is_rejected() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account, merchant_fixture],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.apply();
+        block.commit().expect("commit alias permissions");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "missing alias binding should reject builtin alias resolution"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "missing binding must not transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_resolve_account_alias_builtin_invalid_literal_is_rejected() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (_sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.apply();
+        block.commit().expect("commit catalog");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "malformed builtin alias literal should reject the transaction"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_without_domain_permission_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(iroha_data_model::ValidationFail::NotPermitted(_))
+            ),
+            "domain-qualified builtin alias resolution should require domain permission"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "failed alias resolution must not mint or transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_account_id_alias_shorthand_without_binding_is_rejected() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account, merchant_fixture],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.apply();
+        block.commit().expect("commit alias permissions");
+
+        let contract =
+            install_alias_payout_contract(&state, &authority, r#"account_id("merchant@sbp")"#, 0);
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "missing alias binding should reject the transaction"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "missing binding must not transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_account_id_alias_shorthand_invalid_literal_is_rejected() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (_sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.apply();
+        block.commit().expect("commit catalog");
+
+        let contract =
+            install_alias_payout_contract(&state, &authority, r#"account_id("merchant@")"#, 0);
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "malformed alias literal should reject the transaction"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_without_domain_permission_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"account_id("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(iroha_data_model::ValidationFail::NotPermitted(_))
+            ),
+            "domain-qualified shorthand alias resolution should require domain permission"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "failed alias resolution must not mint or transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_without_dataspace_permission_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"account_id("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(iroha_data_model::ValidationFail::NotPermitted(_))
+            ),
+            "domain-qualified shorthand alias resolution should require dataspace permission"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "failed alias resolution must not mint or transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_without_binding_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias,
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.apply();
+        block.commit().expect("commit alias permissions");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"account_id("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "missing domain-qualified alias binding should reject shorthand alias resolution"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "missing binding must not transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_without_binding_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias,
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.apply();
+        block.commit().expect("commit alias permissions");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "missing domain-qualified alias binding should reject builtin alias resolution"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "missing binding must not transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_without_dataspace_permission_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@bank.sbp")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(iroha_data_model::ValidationFail::NotPermitted(_))
+            ),
+            "domain-qualified builtin alias resolution should require dataspace permission"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_asset_id = AssetId::of(asset_def_id, merchant_account);
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+        assert!(
+            view.world().asset(&merchant_asset_id).is_err(),
+            "failed alias resolution must not mint or transfer to the merchant account",
+        );
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_resolve_account_alias_builtin_invalid_literal_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (_sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.apply();
+        block.commit().expect("commit catalog");
+
+        let contract = install_alias_payout_contract(
+            &state,
+            &authority,
+            r#"resolve_account_alias("merchant@bank.")"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "malformed domain-qualified builtin alias literal should reject the transaction"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_invalid_literal_is_rejected()
+     {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets(
+            [domain],
+            [authority_account],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (_sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.apply();
+        block.commit().expect("commit catalog");
+
+        let contract =
+            install_alias_payout_contract(&state, &authority, r#"account_id("merchant@bank.")"#, 0);
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let result = execute_contract_call_transaction_result(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+        assert!(
+            result.is_err(),
+            "malformed domain-qualified shorthand alias literal should reject the transaction"
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(5_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_domain_qualified_account_id_alias_shorthand_uses_current_binding()
+    {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let merchant_account = fixture_account("bob");
+        let replacement_account = fixture_account("carol");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let retail_domain_id = DomainId::try_new("bank", "sbp").expect("retail domain id");
+        let base_domain = Domain::new(fixture_domain_id()).build(&authority);
+        let retail_domain = Domain::new(retail_domain_id.clone()).build(&authority);
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = build_fixture_account(&authority, &authority);
+        let merchant_fixture = build_fixture_account(&merchant_account, &authority);
+        let replacement_fixture = build_fixture_account(&replacement_account, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let payment_asset = Asset::new(
+            AssetId::of(payment_asset_definition_id, authority.clone()),
+            Numeric::new(1_000_u32, 0),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut world = World::with_assets(
+            [base_domain, retail_domain, genesis_domain],
+            [authority_account, merchant_fixture, replacement_fixture],
+            [asset_def, payment_definition],
+            [source_asset, payment_asset],
+            [],
+        );
+        crate::sns::seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let (sbp, catalog) = retail_dataspace_catalog();
+        state.nexus.write().dataspace_catalog = catalog;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        tx.world.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
+        let alias = AccountAlias::new(
+            "merchant".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "bank".parse().expect("alias domain name"),
+            )),
+            sbp,
+        );
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease::new(
+            alias.clone(),
+            authority.clone(),
+            authority.clone(),
+            1,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("acquire domain-qualified alias lease");
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(retail_domain_id.clone()),
+            }),
+        );
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            merchant_account.clone(),
+            alias.clone(),
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("bind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias setup");
+
+        let contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku AliasPayout {
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(settlement_asset: AssetDefinitionId) {
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn pay(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), account_id("merchant@bank.sbp"), SettlementAsset, amount);
+    return amount;
+  }
+}
+"#,
+            0,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload =
+            Json::from_str_norito(&format!(r#"{{"settlement_asset":"{}"}}"#, asset_def_id))
+                .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let after_first = state.view();
+        let merchant_asset_id = AssetId::of(asset_def_id.clone(), merchant_account.clone());
+        let replacement_asset_id = AssetId::of(asset_def_id.clone(), replacement_account.clone());
+        let merchant_balance = after_first
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset exists after first payout")
+            .value()
+            .clone();
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            after_first.world().asset(&replacement_asset_id).is_err(),
+            "replacement account should not receive funds before the alias is rebound",
+        );
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding::bind(
+            replacement_account.clone(),
+            alias,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("rebind merchant alias");
+        tx.apply();
+        block.commit().expect("commit alias rebind");
+
+        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                entrypoint: "pay".to_owned(),
+                payload: Some(pay_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let final_view = state.view();
+        let authority_balance = final_view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let merchant_balance = final_view
+            .world()
+            .asset(&merchant_asset_id)
+            .expect("merchant asset remains")
+            .value()
+            .clone();
+        let replacement_balance = final_view
+            .world()
+            .asset(&replacement_asset_id)
+            .expect("replacement asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
+    }
+
+    #[test]
     fn contract_call_transaction_preserves_three_hop_transfer_authorities() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -11645,6 +15301,382 @@ seiyaku Vault {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn state_syscall_reads_world_snapshot_spills_to_heap_when_input_fills() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        let expected = vec![0xA5; 96];
+        let value_bytes = norito::to_bytes(&expected).expect("encode state value");
+        world.smart_contract_state.insert(path.clone(), value_bytes);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let filler = make_tlv(PointerType::Blob as u16, b"");
+        while vm.alloc_input_tlv(&filler).is_ok() {}
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "STATE_GET should spill to heap when input space is exhausted"
+        );
+        let out_ptr = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&out_ptr),
+            "contract runtime state_get should return a heap pointer once input is full"
+        );
+        let tlv = vm.validate_tlv(out_ptr).expect("spilled snapshot tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn state_syscall_unscoped_overlay_overrides_base_value_without_context() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode base state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&22_u64).expect("encode overlay state value"),
+        );
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Ok(0),
+            "STATE_SET should stage an unscoped overlay value without runtime context"
+        );
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "unscoped overlay should override the persisted base value"
+        );
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("overlay state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode overlay state");
+        assert_eq!(value, 22);
+
+        let overlay = host.drain_durable_state_overlay();
+        let stored = overlay
+            .get(&path)
+            .and_then(Option::as_ref)
+            .expect("unscoped overlay entry");
+        let stored_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored unscoped overlay tlv");
+        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
+        let stored_value: u64 =
+            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+        assert_eq!(stored_value, 22);
+    }
+
+    #[test]
+    fn state_syscall_unscoped_delete_shadows_base_value_without_context() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode base state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority, &state);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Ok(0),
+            "STATE_DEL should stage an unscoped tombstone without runtime context"
+        );
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "unscoped tombstone should shadow the persisted base value"
+        );
+        assert_eq!(vm.register(10), 0);
+
+        let overlay = host.drain_durable_state_overlay();
+        assert_eq!(
+            overlay.len(),
+            1,
+            "unscoped delete should only record one tombstone"
+        );
+        assert_eq!(overlay.get(&path), Some(&None));
+    }
+
+    #[test]
+    fn state_syscall_reads_scoped_overlay_spills_to_heap_when_input_fills() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(10_000);
+
+        let path: Name = "counter".parse().unwrap();
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let expected = vec![0x3C; 80];
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&expected).expect("encode state value"),
+        );
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            44,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("spill::overlay".parse().expect("contract alias")),
+            entrypoint: "read".to_owned(),
+        }));
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm), Ok(0));
+
+        let filler = make_tlv(PointerType::Blob as u16, b"");
+        while vm.alloc_input_tlv(&filler).is_ok() {}
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "scoped overlay STATE_GET should spill to heap when input space is exhausted"
+        );
+        let out_ptr = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&out_ptr),
+            "scoped overlay state_get should return a heap pointer once input is full"
+        );
+        let tlv = vm.validate_tlv(out_ptr).expect("spilled overlay tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn state_syscall_prefers_scoped_base_value_over_legacy_fallback() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let path: Name = "counter".parse().unwrap();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            46,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("scoped::base".parse().expect("contract alias")),
+            entrypoint: "read".to_owned(),
+        };
+        let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_contract_runtime_context(Some(context.clone()));
+        let scoped_path = scope_host
+            .scoped_durable_state_path(&path)
+            .expect("build scoped path")
+            .expect("scoped path should exist");
+
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode legacy state value"),
+        );
+        world.smart_contract_state.insert(
+            scoped_path,
+            norito::to_bytes(&11_u64).expect("encode scoped state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let filler = make_tlv(PointerType::Blob as u16, b"");
+        while vm.alloc_input_tlv(&filler).is_ok() {}
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "STATE_GET should prefer the scoped persisted value over the legacy fallback"
+        );
+        let out_ptr = vm.register(10);
+        assert!(
+            (ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&out_ptr),
+            "scoped base STATE_GET should spill to heap once input is exhausted"
+        );
+        let tlv = vm.validate_tlv(out_ptr).expect("scoped base tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode scoped state");
+        assert_eq!(value, 11);
+    }
+
+    #[test]
+    fn state_syscall_scoped_overlay_overrides_scoped_and_legacy_base_values() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let path: Name = "counter".parse().unwrap();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            47,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("scoped::overlay".parse().expect("contract alias")),
+            entrypoint: "write".to_owned(),
+        };
+        let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_contract_runtime_context(Some(context.clone()));
+        let scoped_path = scope_host
+            .scoped_durable_state_path(&path)
+            .expect("build scoped path")
+            .expect("scoped path should exist");
+
+        let mut world = World::new();
+        world.smart_contract_state.insert(
+            path.clone(),
+            norito::to_bytes(&7_u64).expect("encode legacy state value"),
+        );
+        world.smart_contract_state.insert(
+            scoped_path.clone(),
+            norito::to_bytes(&11_u64).expect("encode scoped state value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(authority, &state);
+        host.set_contract_runtime_context(Some(context));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&22_u64).expect("encode overlay state value"),
+        );
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm), Ok(0));
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "scoped overlay should win over both scoped and legacy persisted state"
+        );
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("overlay state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode overlay state");
+        assert_eq!(value, 22);
+
+        let overlay = host.drain_durable_state_overlay();
+        assert!(
+            !overlay.contains_key(&path),
+            "scoped overlay should not write through the legacy unscoped path"
+        );
+        let stored = overlay
+            .get(&scoped_path)
+            .and_then(Option::as_ref)
+            .expect("scoped overlay entry");
+        let stored_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored scoped overlay tlv");
+        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
+        let stored_value: u64 =
+            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+        assert_eq!(stored_value, 22);
+    }
+
+    #[test]
+    fn state_syscall_scoped_delete_shadows_legacy_raw_base_value() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        let value_bytes = norito::to_bytes(&7_u64).expect("encode state value");
+        world.smart_contract_state.insert(path.clone(), value_bytes);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            45,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("legacy::shadow".parse().expect("contract alias")),
+            entrypoint: "write".to_owned(),
+        }));
+
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        vm.set_register(10, path_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm), Ok(0));
+
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(0),
+            "scoped tombstone should shadow legacy unscoped base value"
+        );
+        assert_eq!(vm.register(10), 0);
+
+        let overlay = host.drain_durable_state_overlay();
+        assert_eq!(overlay.get(&path), Some(&None));
     }
 
     #[test]
