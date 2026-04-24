@@ -893,19 +893,14 @@ impl fmt::Display for NewAccount {
 
 #[cfg(test)]
 mod account_id_parsing_tests {
-    use std::sync::{LazyLock, Mutex, MutexGuard};
-
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::{core::decode_from_bytes, to_bytes};
 
     use super::*;
     use crate::DomainId;
 
-    fn guard_chain_discriminant() -> MutexGuard<'static, ()> {
-        static CHAIN_DISCRIMINANT_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        CHAIN_DISCRIMINANT_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
+        address::ChainDiscriminantGuard::enter(address::chain_discriminant())
     }
 
     #[test]
@@ -1025,6 +1020,22 @@ mod account_id_parsing_tests {
     }
 
     #[test]
+    fn parsed_account_id_into_parts_returns_components() {
+        let _guard = guard_chain_discriminant();
+        let key_pair = KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let literal = account.canonical_i105().expect("i105 encode");
+
+        let (parsed, canonical, source) = AccountId::parse_encoded(&literal)
+            .expect("i105 account id must parse")
+            .into_parts();
+
+        assert_eq!(parsed, account);
+        assert_eq!(canonical, literal);
+        assert_eq!(source, AccountAddressSource::Encoded);
+    }
+
+    #[test]
     fn parse_rejects_fullwidth_sentinel_i105_literal() {
         let _guard = guard_chain_discriminant();
         let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
@@ -1068,6 +1079,20 @@ mod account_id_parsing_tests {
     }
 
     #[test]
+    fn parse_encoded_trims_i105_literal() {
+        let _guard = guard_chain_discriminant();
+        let key_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let literal = account.canonical_i105().expect("i105 encode");
+        let padded = format!(" \n{literal}\t ");
+
+        let parsed = AccountId::parse_encoded(&padded).expect("padded i105 should parse");
+
+        assert_eq!(parsed.account_id(), &account);
+        assert_eq!(parsed.canonical(), literal);
+    }
+
+    #[test]
     fn norito_roundtrip_account_id() {
         let key_pair = KeyPair::from_seed(vec![0xEF; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
@@ -1080,18 +1105,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn parse_rejects_alias_source() {
-        struct Reset(u16);
-
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                address::set_chain_discriminant(self.0);
-            }
-        }
-
-        let _chain_guard = guard_chain_discriminant();
-
-        let previous_chain_discriminant = address::set_chain_discriminant(42);
-        let _reset = Reset(previous_chain_discriminant);
+        let _chain_guard = address::ChainDiscriminantGuard::enter(42);
         let err = AccountId::parse_encoded("blue-alias@banka.dataspace")
             .expect_err("alias must be rejected");
 
@@ -1120,9 +1134,23 @@ mod account_id_parsing_tests {
     }
 
     #[test]
+    fn canonicalize_accepts_configured_i105_discriminant() {
+        let _guard = address::ChainDiscriminantGuard::enter(42);
+        let key_pair = KeyPair::from_seed(vec![0xBD; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let literal = account
+            .to_i105_for_discriminant(42)
+            .expect("configured i105 literal");
+
+        let canonical = AccountId::canonicalize(&literal)
+            .expect("canonicalize should accept the configured discriminant");
+
+        assert_eq!(canonical, literal);
+    }
+
+    #[test]
     fn from_str_rejects_mismatched_i105_discriminant() {
-        let _guard = guard_chain_discriminant();
-        let previous = address::set_chain_discriminant(42);
+        let _guard = address::ChainDiscriminantGuard::enter(42);
         let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =
@@ -1140,14 +1168,11 @@ mod account_id_parsing_tests {
             "expected ERR_UNEXPECTED_NETWORK_PREFIX, got {}",
             err.reason()
         );
-
-        address::set_chain_discriminant(previous);
     }
 
     #[test]
     fn from_str_accepts_configured_i105_discriminant() {
-        let _guard = guard_chain_discriminant();
-        let previous = address::set_chain_discriminant(7);
+        let _guard = address::ChainDiscriminantGuard::enter(7);
         let key_pair = KeyPair::from_seed(vec![0xBB; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =
@@ -1160,8 +1185,6 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("matching prefix should parse");
         assert_eq!(parsed.signatory(), account.signatory());
-
-        address::set_chain_discriminant(previous);
     }
 
     #[test]
@@ -1192,8 +1215,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn display_uses_chain_discriminant_sentinel() {
-        let _guard = guard_chain_discriminant();
-        let previous = address::set_chain_discriminant(73);
+        let _guard = address::ChainDiscriminantGuard::enter(73);
         let key_pair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let rendered = account.to_string();
@@ -1204,7 +1226,6 @@ mod account_id_parsing_tests {
             account,
             "rendered address should roundtrip to the same account"
         );
-        address::set_chain_discriminant(previous);
     }
 }
 
