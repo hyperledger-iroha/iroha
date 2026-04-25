@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Proof request types supported by Torii (`/v1/offline/transfers/proof`). */
+/** Legacy proof request types retained for local fixture parsing. */
 enum class OfflineProofRequestKind {
     SUM,
     COUNTER,

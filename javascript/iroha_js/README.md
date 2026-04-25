@@ -3017,78 +3017,17 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is the device-bound cash flow:
-
-- `getOfflineCashReadiness()` for feature readiness
-- `setupOfflineCash()`, `loadOfflineCash()`, `refreshOfflineCash()`, `syncOfflineCash()`, and `redeemOfflineCash()`
-- `listOfflineTransfers()`, `getTransfer()`, and `queryOfflineTransfers()` for read-side transfer inspection
-- `listOfflineRevocations()` plus `getOfflineRevocationBundle()` for revocation state
-
-The cash helpers mirror the mounted `/v1/offline/cash/*` routes and return the
-envelope Torii sends back. Request bodies are passed through as JSON, which
-lets wallet adapters keep their own serializers while still reusing the shared
-transport, retries, and auth/header configuration:
+The supported first-release offline HTTP surface is Offline V2 readiness plus
+the allowance, certificate, settlement, summary, and telemetry endpoints that
+are still mounted by Torii. The legacy `/v1/offline/cash/*`,
+`/v1/offline/transfers*`, and `/v1/offline/revocations*` routes are no longer
+exposed by this SDK because Torii now returns 404 for them.
 
 ```js
-const readiness = await torii.getOfflineCashReadiness();
-console.log("recursive stark ready", readiness.offline_recursive_stark);
-
-const setupEnvelope = await torii.setupOfflineCash({
-  operation_id: "setup-001",
-  account_id: "<i105-account-id>",
-  device_binding: {
-    platform: "android",
-    device_id: "<device-id>",
-  },
-  device_proof: {
-    kind: "play_integrity",
-  },
-});
-console.log("lineage", setupEnvelope.lineage_state.lineage_id);
-
-const loadEnvelope = await torii.loadOfflineCash({
-  operation_id: "load-001",
-  lineage_id: setupEnvelope.lineage_state.lineage_id,
-  account_id: "<i105-account-id>",
-  asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-  amount: "10.00",
-  device_binding: {
-    platform: "android",
-    device_id: "<device-id>",
-  },
-  device_proof: {
-    kind: "play_integrity",
-  },
-});
-console.log("balance", loadEnvelope.lineage_state.balance);
+const readiness = await torii.getOfflineV2Readiness();
+console.log("one-use notes ready", readiness.offline_note_v2);
+console.log("Fountain QR ready", readiness.offline_fountain_qr_v1);
 ```
-
-Transfer and revocation reads keep the same iterable ergonomics as the rest of
-the SDK:
-
-```js
-for await (const transfer of torii.iterateOfflineTransfersQuery({
-  filter: { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] },
-  pageSize: 5,
-})) {
-  console.log("bundle", transfer.bundle_id_hex, "receipts", transfer.receipt_count);
-}
-
-const revocationBundle = await torii.getOfflineRevocationBundle();
-console.log("revocation bundle", revocationBundle);
-
-const revocations = await torii.listOfflineRevocations({
-  limit: 5,
-  sort: "revoked_at_ms:desc",
-});
-for (const item of revocations.items) {
-  console.log(item.verdict_id_hex, item.reason, item.note ?? "<none>");
-}
-```
-
-Allowance, certificate, settlement, summary, and revocation-query helpers are
-not part of the public client surface. Use the cash lifecycle, transfer,
-revocation list, and revocation bundle helpers instead.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

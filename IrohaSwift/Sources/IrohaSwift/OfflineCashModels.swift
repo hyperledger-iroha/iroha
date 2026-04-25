@@ -341,142 +341,6 @@ public struct ToriiOfflineAssetSendLimit: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflineSourceLineagePublicInputs: Codable, Sendable, Equatable {
-    public let transferId: String
-    public let sourceReceiptHash: String
-    public let senderLineageId: String
-    public let recipientLineageId: String
-    public let assetDefinitionId: String
-    public let amount: String
-    public let sourcePreStateHash: String
-    public let sourcePostStateHash: String
-    public let sourceLocalRevision: UInt64
-    public let deviceProofKeyId: String
-    public let deviceProofCounter: UInt64
-    public let sourceNullifier: String
-
-    public init(
-        transferId: String,
-        sourceReceiptHash: String,
-        senderLineageId: String,
-        recipientLineageId: String,
-        assetDefinitionId: String,
-        amount: String,
-        sourcePreStateHash: String,
-        sourcePostStateHash: String,
-        sourceLocalRevision: UInt64,
-        deviceProofKeyId: String,
-        deviceProofCounter: UInt64,
-        sourceNullifier: String
-    ) throws {
-        self.transferId = transferId
-        self.sourceReceiptHash = sourceReceiptHash
-        self.senderLineageId = senderLineageId
-        self.recipientLineageId = recipientLineageId
-        self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        self.sourcePreStateHash = sourcePreStateHash
-        self.sourcePostStateHash = sourcePostStateHash
-        self.sourceLocalRevision = sourceLocalRevision
-        self.deviceProofKeyId = deviceProofKeyId
-        self.deviceProofCounter = deviceProofCounter
-        self.sourceNullifier = sourceNullifier
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            transferId: container.decode(String.self, forKey: .transferId),
-            sourceReceiptHash: container.decode(String.self, forKey: .sourceReceiptHash),
-            senderLineageId: container.decode(String.self, forKey: .senderLineageId),
-            recipientLineageId: container.decode(String.self, forKey: .recipientLineageId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            amount: container.decode(String.self, forKey: .amount),
-            sourcePreStateHash: container.decode(String.self, forKey: .sourcePreStateHash),
-            sourcePostStateHash: container.decode(String.self, forKey: .sourcePostStateHash),
-            sourceLocalRevision: container.decode(UInt64.self, forKey: .sourceLocalRevision),
-            deviceProofKeyId: container.decode(String.self, forKey: .deviceProofKeyId),
-            deviceProofCounter: container.decode(UInt64.self, forKey: .deviceProofCounter),
-            sourceNullifier: container.decode(String.self, forKey: .sourceNullifier)
-        )
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case transferId = "transfer_id"
-        case sourceReceiptHash = "source_receipt_hash"
-        case senderLineageId = "sender_lineage_id"
-        case recipientLineageId = "recipient_lineage_id"
-        case assetDefinitionId = "asset_definition_id"
-        case amount
-        case sourcePreStateHash = "source_pre_state_hash"
-        case sourcePostStateHash = "source_post_state_hash"
-        case sourceLocalRevision = "source_local_revision"
-        case deviceProofKeyId = "device_proof_key_id"
-        case deviceProofCounter = "device_proof_counter"
-        case sourceNullifier = "source_nullifier"
-    }
-}
-
-public struct ToriiOfflineSourceLineageEnvelope: Codable, Sendable, Equatable {
-    public let version: Int
-    public let circuitId: String
-    public let publicInputs: ToriiOfflineSourceLineagePublicInputs
-    public let witnessPayload: String
-    public let fastpqProof: ToriiOfflineSourceLineageFastpqProof
-    public let proof: ToriiOfflineTransparentZkProof
-
-    public init(
-        version: Int = 1,
-        circuitId: String = "offline-source-lineage-v1",
-        publicInputs: ToriiOfflineSourceLineagePublicInputs,
-        witnessPayload: String,
-        fastpqProof: ToriiOfflineSourceLineageFastpqProof,
-        proof: ToriiOfflineTransparentZkProof
-    ) {
-        self.version = version
-        self.circuitId = circuitId
-        self.publicInputs = publicInputs
-        self.witnessPayload = witnessPayload
-        self.fastpqProof = fastpqProof
-        self.proof = proof
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case version
-        case circuitId = "circuit_id"
-        case publicInputs = "public_inputs"
-        case witnessPayload = "witness_payload"
-        case fastpqProof = "fastpq_proof"
-        case proof
-    }
-}
-
-public struct ToriiOfflineSourceLineageFastpqProof: Codable, Sendable, Equatable {
-    public let parameter: String
-    public let proofBytesBase64: String
-    public let proofSha256: String
-    public let batchManifestSha256: String
-
-    public init(
-        parameter: String,
-        proofBytesBase64: String,
-        proofSha256: String,
-        batchManifestSha256: String
-    ) {
-        self.parameter = parameter
-        self.proofBytesBase64 = proofBytesBase64
-        self.proofSha256 = proofSha256
-        self.batchManifestSha256 = batchManifestSha256
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case parameter
-        case proofBytesBase64 = "proof_bytes_base64"
-        case proofSha256 = "proof_sha256"
-        case batchManifestSha256 = "batch_manifest_sha256"
-    }
-}
-
 public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identifiable {
     public let version: Int
     public let transferId: String
@@ -499,8 +363,6 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
     public let amount: String
     public let authorization: ToriiOfflineSpendAuthorization?
     public let deviceProof: ToriiOfflineDeviceProof
-    public let sourceLineageProof: ToriiOfflineSourceLineageEnvelope?
-    public let sourcePayload: String?
     public let senderSignatureBase64: String
     public let createdAtMs: UInt64
 
@@ -528,8 +390,6 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         amount: String,
         authorization: ToriiOfflineSpendAuthorization?,
         deviceProof: ToriiOfflineDeviceProof,
-        sourceLineageProof: ToriiOfflineSourceLineageEnvelope? = nil,
-        sourcePayload: String?,
         senderSignatureBase64: String,
         createdAtMs: UInt64
     ) throws {
@@ -554,8 +414,6 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
         self.authorization = authorization
         self.deviceProof = deviceProof
-        self.sourceLineageProof = sourceLineageProof
-        self.sourcePayload = sourcePayload
         self.senderSignatureBase64 = senderSignatureBase64
         self.createdAtMs = createdAtMs
     }
@@ -584,11 +442,6 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
             amount: container.decode(String.self, forKey: .amount),
             authorization: container.decodeIfPresent(ToriiOfflineSpendAuthorization.self, forKey: .authorization),
             deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof),
-            sourceLineageProof: container.decodeIfPresent(
-                ToriiOfflineSourceLineageEnvelope.self,
-                forKey: .sourceLineageProof
-            ),
-            sourcePayload: container.decodeIfPresent(String.self, forKey: .sourcePayload),
             senderSignatureBase64: container.decode(String.self, forKey: .senderSignatureBase64),
             createdAtMs: container.decode(UInt64.self, forKey: .createdAtMs)
         )
@@ -616,251 +469,22 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         case amount
         case authorization
         case deviceProof = "device_proof"
-        case sourceLineageProof = "source_lineage_proof"
-        case sourcePayload = "source_payload"
         case senderSignatureBase64 = "sender_signature_base64"
         case createdAtMs = "created_at_ms"
     }
 }
 
-public struct ToriiOfflineOutgoingTransferPayload: Codable, Sendable, Equatable {
-    public let version: Int
-    public let anchor: ToriiOfflineCashState
-    public let ancestryReceipts: [ToriiOfflineTransferReceipt]
-    public let receipt: ToriiOfflineTransferReceipt
-
-    public init(
-        version: Int = 1,
-        anchor: ToriiOfflineCashState,
-        ancestryReceipts: [ToriiOfflineTransferReceipt],
-        receipt: ToriiOfflineTransferReceipt
-    ) {
-        self.version = version
-        self.anchor = anchor
-        self.ancestryReceipts = ancestryReceipts
-        self.receipt = receipt
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case version
-        case anchor
-        case ancestryReceipts = "ancestry_receipts"
-        case receipt
-    }
-}
-
-public struct ToriiOfflineCashSetupRequest: Codable, Sendable, Equatable {
-    public let accountId: String
-    public let assetDefinitionId: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
-
-    public init(
-        accountId: String,
-        assetDefinitionId: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof
-    ) {
-        self.accountId = accountId
-        self.assetDefinitionId = assetDefinitionId
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case accountId = "account_id"
-        case assetDefinitionId = "asset_definition_id"
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-    }
-}
-
-public struct ToriiOfflineCashLoadRequest: Codable, Sendable, Equatable {
-    public let operationId: String
-    public let lineageId: String?
-    public let accountId: String
-    public let assetDefinitionId: String
-    public let amount: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
-
-    public init(
-        operationId: String,
-        lineageId: String?,
-        accountId: String,
-        assetDefinitionId: String,
-        amount: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof
-    ) throws {
-        self.operationId = operationId
-        self.lineageId = lineageId
-        self.accountId = accountId
-        self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            lineageId: container.decodeIfPresent(String.self, forKey: .lineageId),
-            accountId: container.decode(String.self, forKey: .accountId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            amount: container.decode(String.self, forKey: .amount),
-            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
-            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case lineageId = "lineage_id"
-        case accountId = "account_id"
-        case assetDefinitionId = "asset_definition_id"
-        case amount
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-    }
-}
-
-public struct ToriiOfflineCashRefreshRequest: Codable, Sendable, Equatable {
-    public let operationId: String
-    public let lineageId: String
-    public let accountId: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
-
-    public init(
-        operationId: String,
-        lineageId: String,
-        accountId: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof
-    ) {
-        self.operationId = operationId
-        self.lineageId = lineageId
-        self.accountId = accountId
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case lineageId = "lineage_id"
-        case accountId = "account_id"
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-    }
-}
-
-public struct ToriiOfflineCashSyncRequest: Codable, Sendable, Equatable {
-    public let operationId: String
-    public let lineageId: String
-    public let accountId: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
-    public let receipts: [ToriiOfflineTransferReceipt]
-
-    public init(
-        operationId: String,
-        lineageId: String,
-        accountId: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof,
-        receipts: [ToriiOfflineTransferReceipt]
-    ) {
-        self.operationId = operationId
-        self.lineageId = lineageId
-        self.accountId = accountId
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-        self.receipts = receipts
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case lineageId = "lineage_id"
-        case accountId = "account_id"
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-        case receipts
-    }
-}
-
-public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
-    public let operationId: String
-    public let lineageId: String
-    public let accountId: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
-    public let amount: String
-    public let receipts: [ToriiOfflineTransferReceipt]
-    public let redeemProof: ToriiOfflineRedeemRequestProof
-
-    public init(
-        operationId: String,
-        lineageId: String,
-        accountId: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof,
-        amount: String,
-        receipts: [ToriiOfflineTransferReceipt],
-        redeemProof: ToriiOfflineRedeemRequestProof
-    ) throws {
-        self.operationId = operationId
-        self.lineageId = lineageId
-        self.accountId = accountId
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        self.receipts = receipts
-        self.redeemProof = redeemProof
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            lineageId: container.decode(String.self, forKey: .lineageId),
-            accountId: container.decode(String.self, forKey: .accountId),
-            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
-            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof),
-            amount: container.decode(String.self, forKey: .amount),
-            receipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .receipts),
-            redeemProof: container.decode(ToriiOfflineRedeemRequestProof.self, forKey: .redeemProof)
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case lineageId = "lineage_id"
-        case accountId = "account_id"
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-        case amount
-        case receipts
-        case redeemProof = "redeem_proof"
-    }
-}
-
 public struct ToriiOfflineCashEnvelope: Codable, Sendable, Equatable {
     public let lineageState: ToriiOfflineCashState
-    public let settlement: ToriiOfflineMutationSettlement?
 
     public init(
-        lineageState: ToriiOfflineCashState,
-        settlement: ToriiOfflineMutationSettlement? = nil
+        lineageState: ToriiOfflineCashState
     ) {
         self.lineageState = lineageState
-        self.settlement = settlement
     }
 
     private enum CodingKeys: String, CodingKey {
         case lineageState = "lineage_state"
-        case settlement
     }
 }
 
@@ -869,7 +493,6 @@ public enum ToriiOfflineCashCodec {
         case invalidSignature
         case invalidPublicKey
         case invalidSignatureEncoding
-        case legacySourcePayloadUnsupported
 
         public var errorDescription: String? {
             switch self {
@@ -879,8 +502,6 @@ public enum ToriiOfflineCashCodec {
                 return "Offline cash public key is invalid."
             case .invalidSignatureEncoding:
                 return "Offline cash signature encoding is invalid."
-            case .legacySourcePayloadUnsupported:
-                return "Legacy offline source payload is not supported."
             }
         }
     }
@@ -1064,9 +685,6 @@ public enum ToriiOfflineCashCodec {
     }
 
     public static func cashTransferReceiptUnsignedPayload(_ receipt: ToriiOfflineTransferReceipt) throws -> Data {
-        guard receipt.sourcePayload == nil else {
-            throw Error.legacySourcePayloadUnsupported
-        }
         return try canonicalData(
             CashTransferReceiptUnsignedPayload(
                 version: receipt.version,
@@ -1109,17 +727,12 @@ public enum ToriiOfflineCashCodec {
                     assertionBase64: receipt.deviceProof.assertionBase64,
                     challengeHashHex: receipt.deviceProof.challengeHashHex
                 ),
-                sourceLineageProof: receipt.sourceLineageProof,
-                sourcePayload: nil,
                 createdAtMs: receipt.createdAtMs
             )
         )
     }
 
     public static func cashTransferReceiptLineageHashHex(_ receipt: ToriiOfflineTransferReceipt) throws -> String {
-        guard receipt.sourcePayload == nil else {
-            throw Error.legacySourcePayloadUnsupported
-        }
         let digest = SHA256.hash(
             data: try canonicalData(
                 CashTransferReceiptLineageHashPayload(
@@ -1166,7 +779,6 @@ public enum ToriiOfflineCashCodec {
                         assertionBase64: receipt.deviceProof.assertionBase64,
                         challengeHashHex: receipt.deviceProof.challengeHashHex
                     ),
-                    sourceLineageProof: receipt.sourceLineageProof,
                     senderSignatureBase64: receipt.senderSignatureBase64,
                     createdAtMs: receipt.createdAtMs
                 )
@@ -1309,8 +921,6 @@ private extension ToriiOfflineCashCodec {
         let amount: String
         let authorization: CashTransferReceiptAuthorizationPayload?
         let attestation: TransferReceiptAttestationPayload
-        let sourceLineageProof: ToriiOfflineSourceLineageEnvelope?
-        let sourcePayload: String?
         let createdAtMs: UInt64
 
         enum CodingKeys: String, CodingKey {
@@ -1335,8 +945,6 @@ private extension ToriiOfflineCashCodec {
             case amount
             case authorization
             case attestation
-            case sourceLineageProof = "source_lineage_proof"
-            case sourcePayload = "source_payload"
             case createdAtMs = "created_at_ms"
         }
     }
@@ -1397,7 +1005,6 @@ private extension ToriiOfflineCashCodec {
         let amount: String
         let authorization: CashTransferReceiptLineageAuthorizationPayload?
         let attestation: TransferReceiptAttestationPayload
-        let sourceLineageProof: ToriiOfflineSourceLineageEnvelope?
         let senderSignatureBase64: String
         let createdAtMs: UInt64
 
@@ -1423,7 +1030,6 @@ private extension ToriiOfflineCashCodec {
             case amount
             case authorization
             case attestation
-            case sourceLineageProof = "source_lineage_proof"
             case senderSignatureBase64 = "sender_signature_base64"
             case createdAtMs = "created_at_ms"
         }

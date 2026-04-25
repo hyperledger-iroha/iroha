@@ -1045,80 +1045,25 @@ manifest together.
 
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 
-## Offline cash, transfers, revocations, and auditing
+## Offline V2 readiness and auditing
 
-The SDK now exposes a lightweight `OfflineToriiClient` for the first-release
-offline cash contract. Use the shared client for:
-
-- `POST /v1/offline/cash/{setup,load,refresh,sync,redeem}` via raw JSON helpers
-- `GET /v1/offline/revocations` and `GET /v1/offline/revocations/bundle`
-- `GET /v1/offline/transfers`, `GET /v1/offline/transfers/{bundle_id_hex}`, and `POST /v1/offline/transfers/query`
+The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline V2
+Torii surface. Torii now publishes only `GET /v1/offline/v2/readiness`; note issuance,
+redemption, and audit payloads are submitted as transaction instructions.
 
 The client reuses the existing `ClientConfig` headers/observers and can be
 created from any `HttpClientTransport`:
 
 ```java
-String setupRequestJson = """
-    {
-      "operation_id": "setup-001",
-      "account_id": "<wallet_account_i105>",
-      "device_binding": {
-        "platform": "android",
-        "device_id": "<device_id>"
-      },
-      "device_proof": {
-        "kind": "play_integrity"
-      }
-    }
-    """;
-
 transport
     .offlineToriiClient()
-    .setupCash(setupRequestJson)
-    .thenAccept(responseJson -> System.out.println(responseJson));
-
-OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_account_i105>\"]}")
-    .setLimit(25L)
-    .build();
-
-transport.offlineToriiClient().queryTransfers(query)
-    .thenAccept(list -> System.out.println("Fetched " + list.total() + " transfers"));
+    .getOfflineV2Readiness()
+    .thenAccept(readiness -> System.out.println(readiness.offlineNoteV2()));
 ```
 
-OfflineListParams revocationParams = OfflineListParams.builder()
-    .limit(10L)
-    .build();
-
-transport.offlineToriiClient().listRevocations(revocationParams)
-    .thenAccept(list -> System.out.println("Fetched " + list.total() + " revocations"));
-
-transport.offlineToriiClient().getRevocationBundleJson()
-    .thenAccept(bundleJson -> System.out.println(bundleJson));
-```
-
-`setupCash(...)`, `loadCash(...)`, `refreshCash(...)`, `syncCash(...)`, and
-`redeemCash(...)` accept JSON strings and return the raw JSON envelope so wallet
-adapters can keep their own serializers while reusing the shared transport,
-header, and error handling logic.
-
-Legacy server-side signing flows such as certificate issuance, allowance
-registration, and settlement submission were removed from the public offline
-client surface so callers cannot accidentally target removed Torii routes.
-
-For offline transfer responses, `item.assetId()` remains the concrete `AssetId`,
-while `item.certificateIdHex()`, `item.verdictIdHex()`, and
-`item.attestationNonceHex()` expose the offline cash provenance metadata needed
-for wallet debugging and audit trails.
-
-Fetch a single transfer bundle detail through the same client:
-
-```java
-transport
-    .offlineToriiClient()
-    .getTransfer("deadbeef")
-    .thenAccept(transfer -> System.out.println(transfer.bundleIdHex()));
-```
+The legacy offline cash, transfer-history, revocation, and build-claim HTTP routes were removed from
+the public offline client surface so callers cannot accidentally target Torii routes that now return
+404.
 
 For jurisdictions that require offline spend logs, use the shared audit logger
 and facade:
@@ -1137,16 +1082,10 @@ offlineWallet.recordAuditEntry(
 byte[] auditJson = offlineWallet.exportAuditJson(); // forward to regulators when requested
 byte[] verdictJournalJson =
     offlineWallet.exportVerdictJournalJson(); // include certificate countdown evidence
-
-// Fetch transfers and automatically append each bundle to the audit log
-offlineWallet.fetchTransfersWithAudit(params)
-    .thenAccept(list -> {
-        System.out.println("Fetched " + list.items().size() + " transfers");
-    });
 ```
 
 `OfflineTransferList.OfflineTransferItem.toJsonMap()` exposes a JSON-ready representation of the
-transfer item; encode it with `JsonEncoder.encode(...)` when caching transfer lists locally. The
+legacy transfer item; encode it with `JsonEncoder.encode(...)` only when reading local fixtures. The
 snapshot payload is included via `PlatformTokenSnapshot.toJsonMap()` when present.
 
 The Android logger mirrors the Swift implementation: logging can be toggled at runtime, entries

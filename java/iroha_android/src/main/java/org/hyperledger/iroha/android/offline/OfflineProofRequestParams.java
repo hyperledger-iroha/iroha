@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 
-/** Parameters accepted by the Torii `/v1/offline/transfers/proof` endpoint; requires a transfer payload. */
+/** Legacy proof-request parameters retained for local fixture parsing. */
 public final class OfflineProofRequestParams {
 
   private final Map<String, Object> transferPayload;

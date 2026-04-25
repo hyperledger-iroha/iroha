@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 import java.util.Locale;
 
-/** Proof request types supported by Torii (`/v1/offline/transfers/proof`). */
+/** Legacy proof request types retained for local fixture parsing. */
 public enum OfflineProofRequestKind {
   SUM,
   COUNTER,

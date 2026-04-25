@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 import java.util.Objects;
 
-/** Canonical proof payload returned by Torii (`/v1/offline/transfers/proof`). */
+/** Canonical legacy proof payload retained for local fixture parsing. */
 public final class OfflineProofRequestResult {
 
   private final OfflineProofRequestKind kind;

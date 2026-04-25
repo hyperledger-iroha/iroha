@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Canonical proof payload returned by Torii (`/v1/offline/transfers/proof`). */
+/** Canonical legacy proof payload retained for local fixture parsing. */
 class OfflineProofRequestResult(
     val kind: OfflineProofRequestKind,
     /**

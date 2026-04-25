@@ -32,10 +32,10 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            CommitOfflineLineageOperation, LoadOfflineEscrowBalance,
-            ReclaimExpiredOfflineAllowance, RedeemOfflineEscrowBalance, RegisterOfflineAllowance,
-            RegisterOfflineLineage, RegisterOfflineVerdictRevocation,
-            SubmitOfflineToOnlineTransfer,
+            AuditOfflineNoteV2, CommitOfflineLineageOperation, IssueOfflineNoteV2,
+            LoadOfflineEscrowBalance, ReclaimExpiredOfflineAllowance, RedeemOfflineEscrowBalance,
+            RedeemOfflineNoteV2, RegisterOfflineAllowance, RegisterOfflineLineage,
+            RegisterOfflineVerdictRevocation, SubmitOfflineToOnlineTransfer,
         },
     },
     metadata::Metadata,
@@ -52,7 +52,7 @@ use iroha_data_model::{
         OFFLINE_LINEAGE_EPOCH_KEY, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY,
         OFFLINE_LINEAGE_SCOPE_KEY, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord,
         OfflineBalanceProof, OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCounterState,
-        OfflineCounterSummary, OfflineLineageRecord, OfflinePlatformProof,
+        OfflineCounterSummary, OfflineNoteRecursiveProofV2, OfflinePlatformProof,
         OfflinePlatformTokenSnapshot, OfflineProofRequestError, OfflineSpendReceipt,
         OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferRejectionPlatform,
         OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
@@ -1225,17 +1225,158 @@ pub mod isi {
         Ok(allowance_scale)
     }
 
-    fn offline_rejection_code_from_error(err: &InstructionExecutionError) -> Option<&str> {
-        let InstructionExecutionError::InvariantViolation(message) = err else {
-            return None;
-        };
-        let raw = message.strip_prefix(OFFLINE_REJECTION_REASON_PREFIX)?;
-        Some(raw.split_once(':').map_or(raw, |(code, _)| code))
+    const OFFLINE_NOTE_V2_RECURSIVE_VERIFIER_KEY_ID: &str = "offline-note-v2-recursive-v1";
+    const OFFLINE_NOTE_V2_RECURSIVE_PROOF_DOMAIN: &str = "offline-note-v2-proof-v1";
+    const OFFLINE_NOTE_V2_RECURSIVE_PROOF_MAX_BYTES: usize = 256;
+    const OFFLINE_NOTE_V2_REPLAY_ISSUE_DOMAIN: &str = "offline-note-v2-issued-note-v1";
+    const OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN: &str = "offline-note-v2-spent-nullifier-v1";
+    const OFFLINE_NOTE_V2_REPLAY_AUDIT_TOKEN_DOMAIN: &str = "offline-note-v2-audit-token-v1";
+    const OFFLINE_NOTE_V2_REPLAY_AUDIT_NULLIFIER_DOMAIN: &str =
+        "offline-note-v2-audit-nullifier-v1";
+
+    fn offline_note_v2_recursive_proof_bytes(
+        verifier_key_id: &str,
+        public_inputs_hash_hex: &str,
+    ) -> Vec<u8> {
+        let digest_hex = hex::encode(Sha256::digest(
+            format!(
+                "{OFFLINE_NOTE_V2_RECURSIVE_PROOF_DOMAIN}|{verifier_key_id}|{public_inputs_hash_hex}"
+            )
+            .as_bytes(),
+        ));
+        format!(
+            "{OFFLINE_NOTE_V2_RECURSIVE_PROOF_DOMAIN}:{verifier_key_id}:{public_inputs_hash_hex}:{digest_hex}"
+        )
+        .into_bytes()
     }
 
-    fn normalize_offline_rejection_code(code: &str) -> Option<String> {
-        let reason = OfflineTransferRejectionReason::from_str(code).ok()?;
-        Some(rejection_code(reason).to_owned())
+    fn verify_offline_note_v2_recursive_proof(
+        proof: &OfflineNoteRecursiveProofV2,
+    ) -> Result<(), Error> {
+        let verifier_key_id = proof.verifier_key_id.trim();
+        if verifier_key_id != OFFLINE_NOTE_V2_RECURSIVE_VERIFIER_KEY_ID {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "offline V2 recursive proof verifier key is unsupported".into(),
+            ));
+        }
+        if proof.proof.is_empty() || proof.proof.len() > OFFLINE_NOTE_V2_RECURSIVE_PROOF_MAX_BYTES {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "offline V2 recursive proof size is invalid".into(),
+            ));
+        }
+        let public_inputs_hash_hex = hex::encode(proof.public_inputs_hash.as_ref());
+        let expected =
+            offline_note_v2_recursive_proof_bytes(verifier_key_id, &public_inputs_hash_hex);
+        if proof.proof != expected {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "offline V2 recursive proof does not match public inputs".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn offline_note_v2_replay_key(domain: &str, value: &Hash) -> Hash {
+        let mut preimage = Vec::with_capacity(domain.len() + Hash::LENGTH + 1);
+        preimage.extend_from_slice(domain.as_bytes());
+        preimage.push(b':');
+        preimage.extend_from_slice(value.as_ref());
+        Hash::new(&preimage)
+    }
+
+    fn offline_note_v2_issue_key(note_commitment: &Hash) -> Hash {
+        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUE_DOMAIN, note_commitment)
+    }
+
+    fn offline_note_v2_nullifier_key(nullifier: &Hash) -> Hash {
+        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN, nullifier)
+    }
+
+    fn offline_note_v2_audit_token_key(token_id: &Hash) -> Hash {
+        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_AUDIT_TOKEN_DOMAIN, token_id)
+    }
+
+    fn offline_note_v2_audit_nullifier_key(nullifier: &Hash) -> Hash {
+        offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_AUDIT_NULLIFIER_DOMAIN, nullifier)
+    }
+
+    fn ensure_unique_hashes(
+        hashes: &[Hash],
+        message: &'static str,
+    ) -> Result<(), InstructionExecutionError> {
+        let mut seen = BTreeSet::new();
+        for hash in hashes {
+            if !seen.insert(*hash) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    message.into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_can_submit_offline_note_for_account(
+        account: &AccountId,
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if account == authority
+            || state_transaction
+                .world
+                .account_permissions
+                .get(authority)
+                .is_some_and(|perms| {
+                    perms
+                        .iter()
+                        .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
+                })
+        {
+            Ok(())
+        } else {
+            Err(labeled_invariant(
+                "unauthorized_controller",
+                "only the note account or an offline escrow manager may submit Offline V2 notes",
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    mod offline_note_v2_recursive_proof_tests {
+        use super::*;
+
+        fn valid_proof() -> OfflineNoteRecursiveProofV2 {
+            let public_inputs_hash = Hash::new(b"offline-note-v2-public-inputs");
+            let public_inputs_hash_hex = hex::encode(public_inputs_hash.as_ref());
+            OfflineNoteRecursiveProofV2 {
+                verifier_key_id: OFFLINE_NOTE_V2_RECURSIVE_VERIFIER_KEY_ID.to_owned(),
+                public_inputs_hash,
+                proof: offline_note_v2_recursive_proof_bytes(
+                    OFFLINE_NOTE_V2_RECURSIVE_VERIFIER_KEY_ID,
+                    &public_inputs_hash_hex,
+                ),
+            }
+        }
+
+        #[test]
+        fn accepts_stable_v2_recursive_proof_transcript() {
+            verify_offline_note_v2_recursive_proof(&valid_proof())
+                .expect("stable transcript proof must verify");
+        }
+
+        #[test]
+        fn rejects_tampered_v2_recursive_proof_transcript() {
+            let mut proof = valid_proof();
+            proof.proof[0] ^= 0x01;
+
+            assert!(verify_offline_note_v2_recursive_proof(&proof).is_err());
+        }
+
+        #[test]
+        fn rejects_development_v2_recursive_verifier_key() {
+            let mut proof = valid_proof();
+            proof.verifier_key_id = "offline-note-v2-recursive-dev".to_owned();
+
+            assert!(verify_offline_note_v2_recursive_proof(&proof).is_err());
+        }
     }
 
     impl Execute for RegisterOfflineLineage {
@@ -1244,7 +1385,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            register_lineage(self, authority, state_transaction)
+            let _ = (self, authority, state_transaction);
+            Err(InstructionExecutionError::InvariantViolation(
+                "offline V1 lineage registration is removed; use Offline V2 note issuance".into(),
+            ))
         }
     }
 
@@ -1254,7 +1398,10 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            commit_lineage_operation(self, authority, state_transaction)
+            let _ = (self, authority, state_transaction);
+            Err(InstructionExecutionError::InvariantViolation(
+                "offline V1 lineage mutation is removed; use Offline V2 note audit".into(),
+            ))
         }
     }
 
@@ -1264,7 +1411,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            register_allowance(self, authority, state_transaction)
+            let _ = (self, authority, state_transaction);
+            Err(InstructionExecutionError::InvariantViolation(
+                "offline V1 allowance certificates are removed; use Offline V2 compact note certificates"
+                    .into(),
+            ))
         }
     }
 
@@ -1274,63 +1425,199 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let transfer = self.transfer;
-            let transfer_for_rejected_row = transfer.clone();
-            match submit_transfer(
-                SubmitOfflineToOnlineTransfer { transfer },
+            let _ = (self, authority, state_transaction);
+            Err(InstructionExecutionError::InvariantViolation(
+                "offline V1 online settlement is removed; use Offline V2 note redemption or optional audit"
+                    .into(),
+            ))
+        }
+    }
+
+    impl Execute for IssueOfflineNoteV2 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let issue = self.issue;
+            if issue.key_certificate.version != 2 || !issue.key_certificate.one_use {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 note issue requires a compact one-use key certificate".into(),
+                ));
+            }
+            if issue.key_certificate.public_key.is_empty() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 note issue certificate public key must be non-empty".into(),
+                ));
+            }
+            if issue.amount <= Numeric::zero() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 note issue amount must be positive".into(),
+                ));
+            }
+            if issue.key_certificate.account_id != *issue.asset.account() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 note issue certificate account must match the debited asset owner"
+                        .into(),
+                ));
+            }
+            ensure_can_submit_offline_note_for_account(
+                issue.asset.account(),
                 authority,
                 state_transaction,
-            ) {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    let Some(raw_code) = offline_rejection_code_from_error(&err) else {
-                        return Err(err);
-                    };
-                    let Some(reason_code) = normalize_offline_rejection_code(raw_code) else {
-                        return Err(err);
-                    };
-                    if reason_code
-                        == rejection_code(OfflineTransferRejectionReason::DuplicateBundle)
-                    {
-                        return Err(err);
-                    }
-                    if state_transaction
-                        .world
-                        .offline_to_online_transfers
-                        .get(&transfer_for_rejected_row.bundle_id)
-                        .is_some()
-                    {
-                        return Err(err);
-                    }
+            )?;
+            let spec = state_transaction.numeric_spec_for(issue.asset.definition())?;
+            assert_numeric_spec_with(&issue.amount, spec)?;
+            let issue_key = offline_note_v2_issue_key(&issue.note_commitment);
+            if state_transaction
+                .world
+                .offline_consumed_build_claim_ids
+                .get(&issue_key)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 note commitment is already issued".into(),
+                ));
+            }
+            reserve_offline_allowance(state_transaction, &issue.asset, &issue.amount)?;
+            state_transaction
+                .world
+                .offline_consumed_build_claim_ids
+                .insert(issue_key, ());
+            Ok(())
+        }
+    }
 
-                    let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
-                    let recorded_at_height = state_transaction.block_height();
-                    let mut rejected_record = OfflineTransferRecord {
-                        controller: transfer_for_rejected_row
-                            .receipts
-                            .first()
-                            .map(|receipt| receipt.from.clone())
-                            .unwrap_or_else(|| authority.clone()),
-                        transfer: transfer_for_rejected_row,
-                        status: OfflineTransferStatus::Rejected,
-                        rejection_reason: Some(reason_code),
-                        recorded_at_ms,
-                        recorded_at_height,
-                        archived_at_height: None,
-                        history: Vec::new(),
-                        pos_verdict_snapshots: Vec::new(),
-                        verdict_snapshot: None,
-                        platform_snapshot: None,
-                    };
-                    rejected_record.push_history_entry(
-                        OfflineTransferStatus::Rejected,
-                        recorded_at_ms,
-                        None,
-                    );
-                    insert_transfer_record(state_transaction, rejected_record);
-                    Ok(())
+    impl Execute for RedeemOfflineNoteV2 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let redemption = self.redemption;
+            if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 redemption requires 1 to 4 input nullifiers".into(),
+                ));
+            }
+            if redemption.amount <= Numeric::zero() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 redemption amount must be positive".into(),
+                ));
+            }
+            if redemption.asset.account() != &redemption.recipient {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 redemption asset owner must match recipient".into(),
+                ));
+            }
+            ensure_unique_hashes(
+                &redemption.input_nullifiers,
+                "offline V2 redemption input nullifiers must be unique",
+            )?;
+            ensure_can_submit_offline_note_for_account(
+                &redemption.recipient,
+                authority,
+                state_transaction,
+            )?;
+            let spec = state_transaction.numeric_spec_for(redemption.asset.definition())?;
+            assert_numeric_spec_with(&redemption.amount, spec)?;
+            verify_offline_note_v2_recursive_proof(&redemption.recursive_proof)?;
+            let consumed_keys = redemption
+                .input_nullifiers
+                .iter()
+                .map(offline_note_v2_nullifier_key)
+                .collect::<Vec<_>>();
+            for consumed_key in &consumed_keys {
+                if state_transaction
+                    .world
+                    .offline_consumed_build_claim_ids
+                    .get(consumed_key)
+                    .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "offline V2 nullifier is already redeemed".into(),
+                    ));
                 }
             }
+            credit_deposit_account(
+                state_transaction,
+                &redemption.asset,
+                &redemption.recipient,
+                &redemption.amount,
+            )?;
+            for consumed_key in consumed_keys {
+                state_transaction
+                    .world
+                    .offline_consumed_build_claim_ids
+                    .insert(consumed_key, ());
+            }
+            Ok(())
+        }
+    }
+
+    impl Execute for AuditOfflineNoteV2 {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let audit = self.audit;
+            if audit.input_nullifiers.is_empty() || audit.input_nullifiers.len() > 4 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 audit requires 1 to 4 input nullifiers".into(),
+                ));
+            }
+            if audit.output_commitments.is_empty() || audit.output_commitments.len() > 2 {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "offline V2 audit requires 1 to 2 output commitments".into(),
+                ));
+            }
+            ensure_unique_hashes(
+                &audit.input_nullifiers,
+                "offline V2 audit input nullifiers must be unique",
+            )?;
+            ensure_unique_hashes(
+                &audit.output_commitments,
+                "offline V2 audit output commitments must be unique",
+            )?;
+            verify_offline_note_v2_recursive_proof(&audit.recursive_proof)?;
+            let audit_token_key = offline_note_v2_audit_token_key(&audit.token_id);
+            if state_transaction
+                .world
+                .offline_consumed_build_claim_ids
+                .get(&audit_token_key)
+                .is_some()
+            {
+                return Ok(());
+            }
+            let observed_nullifier_keys = audit
+                .input_nullifiers
+                .iter()
+                .map(offline_note_v2_audit_nullifier_key)
+                .collect::<Vec<_>>();
+            for observed_key in &observed_nullifier_keys {
+                if state_transaction
+                    .world
+                    .offline_consumed_build_claim_ids
+                    .get(observed_key)
+                    .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "offline V2 audit observed a duplicate nullifier".into(),
+                    ));
+                }
+            }
+            state_transaction
+                .world
+                .offline_consumed_build_claim_ids
+                .insert(audit_token_key, ());
+            for observed_key in observed_nullifier_keys {
+                state_transaction
+                    .world
+                    .offline_consumed_build_claim_ids
+                    .insert(observed_key, ());
+            }
+            Ok(())
         }
     }
 
@@ -1350,7 +1637,11 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            reclaim_expired_allowance(self, authority, state_transaction)
+            let _ = (self, authority, state_transaction);
+            Err(InstructionExecutionError::InvariantViolation(
+                "offline V1 allowance reclaim is removed; Offline V2 has no allowance ledger reclaim path"
+                    .into(),
+            ))
         }
     }
 
@@ -1372,237 +1663,6 @@ pub mod isi {
         ) -> Result<(), Error> {
             redeem_offline_escrow_balance(self, authority, state_transaction)
         }
-    }
-
-    fn ensure_can_manage_offline_escrow(
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let can_manage_offline_escrow = state_transaction
-            .world
-            .account_permissions
-            .get(authority)
-            .is_some_and(|perms| {
-                perms
-                    .iter()
-                    .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
-            });
-        if can_manage_offline_escrow {
-            Ok(())
-        } else {
-            Err(labeled_invariant(
-                "unauthorized_controller",
-                "only an offline escrow manager may mutate shared offline lineages",
-            ))
-        }
-    }
-
-    fn validate_lineage_numeric(raw: &str, field: &'static str) -> Result<Numeric, Error> {
-        raw.parse::<Numeric>().map_err(|_| {
-            InstructionExecutionError::InvariantViolation(
-                format!("offline lineage {field} must be a valid numeric string").into(),
-            )
-        })
-    }
-
-    fn validate_lineage_record(record: &OfflineLineageRecord) -> Result<(), Error> {
-        if record.lineage_state.lineage_id.trim().is_empty()
-            || record.lineage_state.account_id.trim().is_empty()
-            || record.lineage_state.device_id.trim().is_empty()
-            || record.lineage_state.offline_public_key.trim().is_empty()
-            || record.lineage_state.asset_definition_id.trim().is_empty()
-            || record.app_attest_key_id.trim().is_empty()
-        {
-            return Err(labeled_invariant(
-                "invalid_lineage",
-                "offline lineage fields must be non-empty",
-            ));
-        }
-        if record.lineage_state.authorization.lineage_id != record.lineage_state.lineage_id
-            || record.lineage_state.authorization.account_id != record.lineage_state.account_id
-            || record.lineage_state.authorization.device_id != record.lineage_state.device_id
-            || record.lineage_state.authorization.offline_public_key
-                != record.lineage_state.offline_public_key
-            || record.lineage_state.authorization.app_attest_key_id != record.app_attest_key_id
-        {
-            return Err(labeled_invariant(
-                "invalid_lineage",
-                "offline lineage authorization does not match the lineage identity",
-            ));
-        }
-        let balance = validate_lineage_numeric(&record.lineage_state.balance, "balance")?;
-        let parked =
-            validate_lineage_numeric(&record.lineage_state.locked_balance, "locked_balance")?;
-        if parked > balance {
-            return Err(labeled_invariant(
-                "invalid_lineage",
-                "offline lineage locked_balance cannot exceed balance",
-            ));
-        }
-        let _ = validate_lineage_numeric(
-            &record.lineage_state.authorization.max_balance,
-            "authorization.max_balance",
-        )?;
-        let _ = validate_lineage_numeric(
-            &record.lineage_state.authorization.max_tx_value,
-            "authorization.max_tx_value",
-        )?;
-        Ok(())
-    }
-
-    fn register_lineage(
-        isi: RegisterOfflineLineage,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_can_manage_offline_escrow(authority, state_transaction)?;
-        let record = isi.lineage;
-        validate_lineage_record(&record)?;
-        let lineage_id = record.lineage_state.lineage_id.clone();
-        if state_transaction
-            .world
-            .offline_lineages
-            .get(&lineage_id)
-            .is_some()
-        {
-            return Err(labeled_invariant(
-                "lineage_duplicate",
-                "offline lineage already exists",
-            ));
-        }
-        state_transaction
-            .world
-            .offline_lineages
-            .insert(lineage_id, record);
-        Ok(())
-    }
-
-    fn commit_lineage_operation(
-        isi: CommitOfflineLineageOperation,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        ensure_can_manage_offline_escrow(authority, state_transaction)?;
-        let record = isi.lineage;
-        let result = isi.result;
-        validate_lineage_record(&record)?;
-        let lineage_id = record.lineage_state.lineage_id.clone();
-        if result.operation_key.trim().is_empty()
-            || result.kind.trim().is_empty()
-            || result.request_hash_hex.trim().is_empty()
-        {
-            return Err(labeled_invariant(
-                "invalid_operation",
-                "offline lineage operation metadata must be non-empty",
-            ));
-        }
-        if result.lineage_id != lineage_id || result.envelope.lineage_state != record.lineage_state
-        {
-            return Err(labeled_invariant(
-                "invalid_operation",
-                "offline lineage operation result does not match the updated lineage state",
-            ));
-        }
-        let current = state_transaction
-            .world
-            .offline_lineages
-            .get(&lineage_id)
-            .cloned();
-        let existing_operation_result = state_transaction
-            .world
-            .offline_lineage_operation_results
-            .get(&result.operation_key)
-            .cloned();
-        if let Some(current) = current {
-            if current.lineage_state == record.lineage_state
-                && isi.expected_server_revision == current.lineage_state.server_revision
-                && isi.expected_state_hash == current.lineage_state.server_state_hash
-            {
-                if let Some(existing) = existing_operation_result {
-                    if existing.kind != result.kind
-                        || existing.request_hash_hex != result.request_hash_hex
-                        || existing.lineage_id != result.lineage_id
-                        || existing.envelope.lineage_state != result.envelope.lineage_state
-                    {
-                        return Err(labeled_invariant(
-                            "operation_duplicate",
-                            "offline lineage operation_id is already bound to a different result",
-                        ));
-                    }
-                    let existing_settlement = existing.envelope.settlement.clone();
-                    let incoming_settlement = result.envelope.settlement.clone();
-                    if existing_settlement == incoming_settlement {
-                        return Ok(());
-                    }
-                    if existing_settlement.is_none() && incoming_settlement.is_some() {
-                        state_transaction
-                            .world
-                            .offline_lineage_operation_results
-                            .insert(result.operation_key.clone(), result);
-                        return Ok(());
-                    }
-                    return Err(labeled_invariant(
-                        "operation_duplicate",
-                        "offline lineage operation_id already exists",
-                    ));
-                }
-            }
-            if current.lineage_state.server_revision != isi.expected_server_revision
-                || current.lineage_state.server_state_hash != isi.expected_state_hash
-            {
-                return Err(labeled_invariant(
-                    "stale_lineage",
-                    "offline lineage mutation is based on a stale anchor",
-                ));
-            }
-            if current.lineage_state.account_id != record.lineage_state.account_id
-                || current.lineage_state.device_id != record.lineage_state.device_id
-                || current.lineage_state.offline_public_key
-                    != record.lineage_state.offline_public_key
-                || current.lineage_state.asset_definition_id
-                    != record.lineage_state.asset_definition_id
-                || current.app_attest_key_id != record.app_attest_key_id
-            {
-                return Err(labeled_invariant(
-                    "invalid_lineage",
-                    "offline lineage mutation cannot change lineage identity",
-                ));
-            }
-            if record.lineage_state.pending_local_revision
-                < current.lineage_state.pending_local_revision
-            {
-                return Err(labeled_invariant(
-                    "invalid_lineage",
-                    "offline lineage mutation cannot rewind pending_local_revision",
-                ));
-            }
-        } else if isi.expected_server_revision != 0 || !isi.expected_state_hash.is_empty() {
-            return Err(labeled_invariant(
-                "lineage_not_found",
-                "offline lineage not found",
-            ));
-        }
-        if existing_operation_result.is_some() {
-            return Err(labeled_invariant(
-                "operation_duplicate",
-                "offline lineage operation_id already exists",
-            ));
-        }
-        if record.lineage_state.server_revision != isi.expected_server_revision.saturating_add(1) {
-            return Err(labeled_invariant(
-                "invalid_lineage",
-                "offline lineage mutation must advance server_revision by exactly one",
-            ));
-        }
-        state_transaction
-            .world
-            .offline_lineages
-            .insert(lineage_id, record);
-        state_transaction
-            .world
-            .offline_lineage_operation_results
-            .insert(result.operation_key.clone(), result);
-        Ok(())
     }
 
     fn load_offline_escrow_balance(
@@ -1817,7 +1877,8 @@ pub mod isi {
             offline::{
                 AndroidProvisionedProof, AppleAppAttestProof, OFFLINE_ASSET_ENABLED_METADATA_KEY,
                 OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCertificateBalanceProof,
-                OfflineVerdictRevocationReason,
+                OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteKeyCertificateV2,
+                OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2, OfflineVerdictRevocationReason,
             },
             permission::Permission,
             query::error::FindError,
@@ -1906,6 +1967,229 @@ pub mod isi {
             };
             set_certificate_lineage(&mut certificate, "register-tests-default", 1, None);
             certificate
+        }
+
+        fn valid_offline_note_v2_proof(label: &'static [u8]) -> OfflineNoteRecursiveProofV2 {
+            let public_inputs_hash = Hash::new(label);
+            OfflineNoteRecursiveProofV2 {
+                public_inputs_hash,
+                verifier_key_id: OFFLINE_NOTE_V2_RECURSIVE_VERIFIER_KEY_ID.to_owned(),
+                proof: offline_note_v2_recursive_proof_bytes(
+                    OFFLINE_NOTE_V2_RECURSIVE_VERIFIER_KEY_ID,
+                    &hex::encode(public_inputs_hash.as_ref()),
+                ),
+            }
+        }
+
+        fn valid_offline_note_v2_certificate(account_id: AccountId) -> OfflineNoteKeyCertificateV2 {
+            OfflineNoteKeyCertificateV2 {
+                version: 2,
+                platform: "ios-appattest".to_owned(),
+                key_id: "note-key-1".to_owned(),
+                device_id: "device-1".to_owned(),
+                account_id,
+                public_key: vec![0xA5; 32],
+                one_use: true,
+                issuer_signature: Signature::from_bytes(&[0; 64]),
+            }
+        }
+
+        #[test]
+        fn issue_offline_note_v2_reserves_escrow_and_rejects_duplicate_commitment() {
+            let owner = sample_account(0x43);
+            let escrow = sample_account(0x45);
+            let domain_id = offline_domain_id();
+            let definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+            let owner_asset = AssetId::new(definition_id.clone(), owner.clone());
+            let domain = Domain::new(domain_id).build(&owner);
+            let owner_account = Account::new(owner.clone()).build(&owner);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&owner);
+            let world = World::with(
+                [domain],
+                [owner_account, escrow_account],
+                [asset_definition],
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_001, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .deposit_numeric_asset(&owner_asset, &Numeric::new(100, 0))
+                .expect("prefund owner");
+
+            let instruction = IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
+                note_commitment: Hash::new(b"offline-v2-note-commitment"),
+                key_certificate: valid_offline_note_v2_certificate(owner.clone()),
+                asset: owner_asset.clone(),
+                amount: Numeric::new(40, 0),
+            });
+
+            instruction
+                .clone()
+                .execute(&owner, &mut transaction)
+                .expect("issue should reserve escrow");
+            let owner_balance = transaction
+                .world
+                .assets
+                .get(&owner_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(owner_balance, Numeric::new(60, 0));
+            let escrow_asset = AssetId::new(definition_id, escrow);
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, Numeric::new(40, 0));
+
+            instruction
+                .execute(&owner, &mut transaction)
+                .expect_err("duplicate note commitment must reject");
+        }
+
+        #[test]
+        fn redeem_offline_note_v2_credits_recipient_and_consumes_nullifiers() {
+            let recipient = sample_account(0x44);
+            let escrow = sample_account(0x45);
+            let domain_id = offline_domain_id();
+            let definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+            let asset_id = AssetId::new(definition_id.clone(), recipient.clone());
+            let domain = Domain::new(domain_id).build(&recipient);
+            let account = Account::new(recipient.clone()).build(&recipient);
+            let escrow_account = Account::new(escrow.clone()).build(&escrow);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .build(&recipient);
+            let world = World::with([domain], [account, escrow_account], [asset_definition]);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_001, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            let escrow_asset_id = AssetId::new(definition_id.clone(), escrow.clone());
+            transaction
+                .world
+                .deposit_numeric_asset(&escrow_asset_id, &Numeric::new(100, 0))
+                .expect("prefund escrow");
+
+            let instruction = RedeemOfflineNoteV2::new(OfflineNoteRedeemV2 {
+                input_nullifiers: vec![Hash::new(b"offline-v2-nullifier")],
+                recipient: recipient.clone(),
+                asset: asset_id.clone(),
+                amount: Numeric::new(10, 0),
+                recursive_proof: valid_offline_note_v2_proof(b"offline-v2-public-inputs"),
+            });
+
+            instruction
+                .clone()
+                .execute(&recipient, &mut transaction)
+                .expect("redemption should credit recipient");
+            let recipient_balance = transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(recipient_balance, Numeric::new(10, 0));
+            let escrow_balance = transaction
+                .world
+                .assets
+                .get(&escrow_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(escrow_balance, Numeric::new(90, 0));
+
+            let err = instruction
+                .execute(&recipient, &mut transaction)
+                .expect_err("duplicate nullifier must reject");
+            assert!(
+                err.to_string()
+                    .contains("offline V2 nullifier is already redeemed"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn audit_offline_note_v2_is_idempotent_and_rejects_duplicate_observed_nullifier() {
+            let recipient = sample_account(0x44);
+            let domain_id = offline_domain_id();
+            let definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+            let domain = Domain::new(domain_id).build(&recipient);
+            let account = Account::new(recipient.clone()).build(&recipient);
+            let asset_definition =
+                AssetDefinition::new(definition_id, NumericSpec::integer()).build(&recipient);
+            let world = World::with([domain], [account], [asset_definition]);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new(world, Arc::clone(&kura), query);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_001, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let audit = AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
+                token_id: Hash::new(b"offline-v2-audit-token-1"),
+                input_nullifiers: vec![Hash::new(b"offline-v2-audit-nullifier")],
+                output_commitments: vec![Hash::new(b"offline-v2-output-commitment")],
+                recursive_proof: valid_offline_note_v2_proof(b"offline-v2-audit-inputs"),
+            });
+            audit
+                .clone()
+                .execute(&recipient, &mut transaction)
+                .expect("first audit should record observed nullifier");
+            audit
+                .execute(&recipient, &mut transaction)
+                .expect("same audit token should be idempotent");
+
+            let conflicting = AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
+                token_id: Hash::new(b"offline-v2-audit-token-2"),
+                input_nullifiers: vec![Hash::new(b"offline-v2-audit-nullifier")],
+                output_commitments: vec![Hash::new(b"offline-v2-output-commitment-2")],
+                recursive_proof: valid_offline_note_v2_proof(b"offline-v2-audit-inputs-2"),
+            });
+            let err = conflicting
+                .execute(&recipient, &mut transaction)
+                .expect_err("second token with same nullifier must reject");
+            let recipient_balance = transaction
+                .world
+                .assets
+                .get(&AssetId::new(
+                    AssetDefinitionId::new(offline_domain_id(), "xor".parse().expect("asset name")),
+                    recipient,
+                ))
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(recipient_balance, Numeric::zero());
+            assert!(
+                err.to_string()
+                    .contains("offline V2 audit observed a duplicate nullifier"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]

@@ -645,281 +645,16 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/cash/readiness".to_owned(),
+        "/v1/offline/v2/readiness".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
-            "Report offline cash feature readiness.",
-            "Returns feature-flag style readiness signals for the device-bound offline cash flow.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    for (path, summary, description) in [
-        (
-            "/v1/offline/cash/setup",
-            "Initialize an offline cash lineage.",
-            "Create the initial device-bound offline cash lineage and return the signed server envelope.",
-        ),
-        (
-            "/v1/offline/cash/load",
-            "Load value into offline cash.",
-            "Top up an existing device-bound offline cash lineage and return the updated signed envelope.",
-        ),
-        (
-            "/v1/offline/cash/refresh",
-            "Refresh offline cash authorization.",
-            "Rotate or refresh device-bound offline cash authorization material and return the updated signed envelope.",
-        ),
-        (
-            "/v1/offline/cash/sync",
-            "Sync offline cash state.",
-            "Submit the current device-side lineage view so the server can reconcile and return the canonical signed envelope.",
-        ),
-        (
-            "/v1/offline/cash/redeem",
-            "Redeem offline cash on-ledger.",
-            "Redeem device-bound offline cash back on-ledger and return the post-redeem signed envelope.",
-        ),
-    ] {
-        paths.insert(
-            path.to_owned(),
-            Value::Object(json_post_operation(
-                "Offline",
-                summary,
-                description,
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-    }
-    paths.insert(
-        "/v1/offline/revocations".to_owned(),
-        Value::Object(offline_revocations_operation()),
-    );
-    paths.insert(
-        "/v1/offline/revocations/bundle".to_owned(),
-        Value::Object(offline_revocations_bundle_operation()),
-    );
-    paths.insert(
-        "/v1/offline/transfers".to_owned(),
-        Value::Object(offline_transfers_operation()),
-    );
-    paths.insert(
-        "/v1/offline/transfers/{bundle_id_hex}".to_owned(),
-        Value::Object(offline_transfer_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/transfers/query".to_owned(),
-        Value::Object(offline_transfers_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/policy".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Set the offline policy snapshot.",
-            "Replace the active offline policy snapshot used by the app-facing offline controls.",
-            "#/components/schemas/JsonValue",
+            "Report Offline V2 feature readiness.",
+            "Returns V2 readiness signals for device-bound one-use notes and Fountain QR transport.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths
-}
-
-fn offline_revocations_operation() -> Map {
-    let mut get_op = Map::new();
-    get_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    get_op.insert(
-        "summary".into(),
-        Value::String("List offline verdict revocations.".to_owned()),
-    );
-    get_op.insert(
-        "description".into(),
-        Value::String(
-            "Return the human-readable list of currently revoked offline verdict identifiers."
-                .to_owned(),
-        ),
-    );
-    get_op.insert(
-        "operationId".into(),
-        Value::String("offlineRevocationsList".to_owned()),
-    );
-    get_op.insert(
-        "responses".into(),
-        Value::Object(single_json_response("#/components/schemas/JsonValue")),
-    );
-
-    let mut post_op = Map::new();
-    post_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    post_op.insert(
-        "summary".into(),
-        Value::String("Register an offline verdict revocation.".to_owned()),
-    );
-    post_op.insert(
-        "description".into(),
-        Value::String(
-            "Submit an operator/admin request that records an on-ledger offline verdict revocation."
-                .to_owned(),
-        ),
-    );
-    post_op.insert(
-        "operationId".into(),
-        Value::String("offlineRevocationsRegister".to_owned()),
-    );
-    post_op.insert(
-        "requestBody".into(),
-        Value::Object(json_request_body("#/components/schemas/JsonValue")),
-    );
-    post_op.insert(
-        "responses".into(),
-        Value::Object(single_json_response("#/components/schemas/JsonValue")),
-    );
-
-    let mut path_item = Map::new();
-    path_item.insert("get".into(), Value::Object(get_op));
-    path_item.insert("post".into(), Value::Object(post_op));
-    path_item
-}
-
-fn offline_revocations_bundle_operation() -> Map {
-    let mut get_op = Map::new();
-    get_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    get_op.insert(
-        "summary".into(),
-        Value::String("Fetch the signed offline revocation bundle.".to_owned()),
-    );
-    get_op.insert(
-        "description".into(),
-        Value::String(
-            "Return the issuer-signed deny-list bundle used by offline wallets.".to_owned(),
-        ),
-    );
-    get_op.insert(
-        "operationId".into(),
-        Value::String("offlineRevocationsBundleGet".to_owned()),
-    );
-    get_op.insert(
-        "responses".into(),
-        Value::Object(single_json_response("#/components/schemas/JsonValue")),
-    );
-
-    let mut path_item = Map::new();
-    path_item.insert("get".into(), Value::Object(get_op));
-    path_item
-}
-
-fn offline_transfers_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("List pending offline-to-online transfer bundles.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns bundles with their receiver/deposit accounts, receipts, and \
-             balance proofs for audit or settlement dashboards."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineTransfersList".to_owned()),
-    );
-    let mut params = list_filter_query_parameters();
-    params.extend(offline_transfer_query_parameters());
-    operation.insert("parameters".into(), Value::Array(params));
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_transfers_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_transfer_detail_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Fetch a specific offline transfer bundle.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns the same enriched transfer payload as `/v1/offline/transfers`, scoped to a \
-             single `bundle_id_hex`."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineTransferGet".to_owned()),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(vec![path_param(
-            "bundle_id_hex",
-            "Deterministic bundle identifier rendered as hex.",
-        )]),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_transfer_detail_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_transfers_query_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Query offline transfer bundles via JSON envelope.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Supports the Norito `QueryEnvelope` body to paginate and filter bundle \
-             records, enabling regulator views or PSP dashboards."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineTransfersQuery".to_owned()),
-    );
-    operation.insert("requestBody".into(), offline_query_request_body());
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_transfers_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
 }
 
 fn list_filter_query_parameters() -> Vec<Value> {
@@ -1206,164 +941,6 @@ fn asset_holders_list_query_parameters() -> Vec<Value> {
     params
 }
 
-fn offline_allowance_query_parameters() -> Vec<Value> {
-    vec![
-        string_query_param(
-            "controller_id",
-            "Filter allowances by controller account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-        ),
-        string_query_param(
-            "asset_id",
-            "Filter allowances by canonical Base58 asset id.",
-        ),
-        integer_query_param(
-            "certificate_expires_before_ms",
-            "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "certificate_expires_after_ms",
-            "Only include allowances whose certificate expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_before_ms",
-            "Only include allowances whose issuer policy expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_after_ms",
-            "Only include allowances whose issuer policy expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_before_ms",
-            "Filter to allowances whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_after_ms",
-            "Filter to allowances whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        string_query_param(
-            "verdict_id_hex",
-            "Match allowances whose cached attestation verdict id (hex) equals the provided value (case-insensitive).",
-        ),
-        string_query_param(
-            "attestation_nonce_hex",
-            "Match allowances whose attestation nonce (hex) equals the provided value (case-insensitive).",
-        ),
-        bool_query_param(
-            "require_verdict",
-            "When true, only allowances that already have attestation verdict metadata are returned.",
-        ),
-        bool_query_param(
-            "only_missing_verdict",
-            "When true, only allowances that are missing attestation verdict metadata are returned.",
-        ),
-        bool_query_param(
-            "include_expired",
-            "Include certificates/policies/refresh windows that have already expired (defaults to false).",
-        ),
-    ]
-}
-
-fn offline_transfer_query_parameters() -> Vec<Value> {
-    vec![
-        string_query_param(
-            "controller_id",
-            "Filter bundles by originating controller account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-        ),
-        string_query_param(
-            "receiver_id",
-            "Filter bundles by receiver account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-        ),
-        string_query_param(
-            "deposit_account_id",
-            "Filter bundles by deposit account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-        ),
-        string_query_param("asset_id", "Filter bundles by canonical Base58 asset id."),
-        string_query_param(
-            "certificate_id_hex",
-            "Match bundles whose originating certificate id (hex) equals the provided value (case-insensitive).",
-        ),
-        integer_query_param(
-            "certificate_expires_before_ms",
-            "Only include bundles whose originating certificate expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "certificate_expires_after_ms",
-            "Only include bundles whose originating certificate expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_before_ms",
-            "Only include bundles whose policy expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_after_ms",
-            "Only include bundles whose policy expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_before_ms",
-            "Filter to bundles whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_after_ms",
-            "Filter to bundles whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        string_query_param(
-            "verdict_id_hex",
-            "Match bundles whose attestation verdict id (hex) equals the provided value (case-insensitive).",
-        ),
-        string_query_param(
-            "attestation_nonce_hex",
-            "Match bundles whose attestation nonce (hex) equals the provided value (case-insensitive).",
-        ),
-        string_query_param(
-            "platform_policy",
-            "Restrict settled bundles to a specific Android attestation policy (use `play_integrity` or `hms_safety_detect`).",
-        ),
-        bool_query_param(
-            "require_verdict",
-            "When true, only bundles that already have attestation verdict metadata are returned.",
-        ),
-        bool_query_param(
-            "only_missing_verdict",
-            "When true, only bundles missing attestation verdict metadata are returned.",
-        ),
-    ]
-}
-
-fn offline_receipt_query_parameters() -> Vec<Value> {
-    vec![
-        string_query_param(
-            "controller_id",
-            "Filter receipts by sender/controller account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-        ),
-        string_query_param(
-            "receiver_id",
-            "Filter receipts by receiver account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
-        ),
-        string_query_param(
-            "bundle_id_hex",
-            "Restrict receipts to a specific bundle identifier (hex, case-insensitive).",
-        ),
-        string_query_param(
-            "certificate_id_hex",
-            "Restrict receipts to a specific certificate identifier (hex, case-insensitive).",
-        ),
-        string_query_param("invoice_id", "Filter receipts by invoice identifier."),
-        string_query_param("asset_id", "Filter receipts by canonical Base58 asset id."),
-    ]
-}
-
 fn string_query_param(name: &str, description: &str) -> Value {
     string_query_param_with_required(name, description, false)
 }
@@ -1422,87 +999,6 @@ fn path_param(name: &str, description: &str) -> Value {
     param.insert("schema".into(), Value::Object(schema));
     Value::Object(param)
 }
-
-fn offline_query_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert("schema".into(), schema_ref("OfflineQueryEnvelope"));
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_transfers_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline transfer bundles retrieved.",
-            schema_ref("OfflineTransferListResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid filter or pagination parameters.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_transfer_detail_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline transfer bundle retrieved.",
-            schema_ref("OfflineTransferItem"),
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        json_response_with_headers(
-            "Offline transfer bundle not found.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-#[cfg(test)]
-mod offline_header_tests {
-    use super::*;
-
-    #[test]
-    fn offline_error_responses_advertise_reject_code_header() {
-        let responses = offline_transfers_responses();
-        let response = responses
-            .get("400")
-            .expect("offline transfer responses should define 400 response")
-            .as_object()
-            .expect("response should be an object");
-        let headers = response
-            .get("headers")
-            .expect("offline error response should include headers")
-            .as_object()
-            .expect("headers should be an object");
-        assert!(
-            headers.contains_key("x-iroha-reject-code"),
-            "offline error responses should advertise x-iroha-reject-code"
-        );
-    }
-}
-
 fn system_paths() -> Map {
     let mut paths = Map::new();
     paths.insert("/health".to_owned(), Value::Object(health_operation()));
@@ -8888,360 +8384,6 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "OfflineTransferItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "bundle_id_hex",
-                "controller_id",
-                "controller_display",
-                "receiver_id",
-                "receiver_display",
-                "deposit_account_id",
-                "deposit_account_display",
-                "receipt_count",
-                "total_amount",
-                "status",
-                "recorded_at_ms",
-                "recorded_at_height",
-                "claimed_delta",
-                "transfer"
-            ],
-            "properties": {
-                "bundle_id_hex": {
-                    "type": "string",
-                    "description": "Bundle identifier rendered as lowercase hex."
-                },
-                "controller_id": {
-                    "type": "string",
-                    "description": "Controller account id associated with the originating allowance."
-                },
-                "controller_display": {
-                    "type": "string",
-                    "description": "Controller rendered as canonical I105 account literal."
-                },
-                "receiver_id": {
-                    "type": "string",
-                    "description": "Offline receiver account id."
-                },
-                "receiver_display": {
-                    "type": "string",
-                    "description": "Receiver rendered as canonical I105 account literal."
-                },
-                "deposit_account_id": {
-                    "type": "string",
-                    "description": "Online account that will receive the deposit."
-                },
-                "deposit_account_display": {
-                    "type": "string",
-                    "description": "Deposit account rendered as canonical I105 account literal."
-                },
-                "asset_id": {
-                    "type": "string",
-                    "description": "Asset id inferred from receipts, if present."
-                },
-                "receipt_count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Number of receipts included in the bundle."
-                },
-                "total_amount": {
-                    "type": "string",
-                    "description": "Human-readable total amount aggregated from receipts."
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["settled", "rejected", "archived"],
-                    "description": "Lifecycle status enforced for the bundle."
-                },
-                "rejection_reason": {
-                    "type": "string",
-                    "description": "Stable rejection code when `status` is `rejected`.",
-                    "nullable": true
-                },
-                "recorded_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Unix timestamp (ms) when the bundle settled on-ledger."
-                },
-                "recorded_at_height": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Block height that recorded the bundle."
-                },
-                "archived_at_height": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Optional block height when the bundle was archived.",
-                    "nullable": true
-                },
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Canonical sender certificate identifier (hex).",
-                    "nullable": true
-                },
-                "certificate_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Certificate expiry timestamp captured at settlement.",
-                    "nullable": true
-                },
-                "policy_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Policy expiry timestamp captured at settlement.",
-                    "nullable": true
-                },
-                "refresh_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Attestation refresh deadline captured at settlement.",
-                    "nullable": true
-                },
-                "verdict_id_hex": {
-                    "type": "string",
-                    "description": "Cached attestation verdict identifier.",
-                    "nullable": true
-                },
-                "attestation_nonce_hex": {
-                    "type": "string",
-                    "description": "Cached attestation nonce captured at settlement.",
-                    "nullable": true
-                },
-                "platform_policy": {
-                    "type": "string",
-                    "description": "Platform attestation policy (e.g., play_integrity).",
-                    "nullable": true
-                },
-                "platform_token_snapshot": {
-                    "$ref": "#/components/schemas/OfflinePlatformTokenSnapshot",
-                    "nullable": true,
-                    "description": "Snapshot of the attestation token recorded during settlement."
-                },
-                "verdict_snapshot": {
-                    "$ref": "#/components/schemas/OfflineVerdictSnapshot",
-                    "nullable": true,
-                    "description": "Snapshot of certificate/verdict metadata captured at settlement."
-                },
-                "status_transitions": {
-                    "type": "array",
-                    "description": "Ordered lifecycle history for the bundle.",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineTransferStatusTransition"
-                    }
-                },
-                "claimed_delta": {
-                    "type": "string",
-                    "description": "Claimed delta reported by the balance proof."
-                },
-                "transfer": {
-                    "type": "object",
-                    "description": "Full OfflineToOnlineTransfer payload serialized as JSON."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineVerdictSnapshot".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "certificate_id",
-                "certificate_expires_at_ms",
-                "policy_expires_at_ms"
-            ],
-            "properties": {
-                "certificate_id": {
-                    "type": "string",
-                    "description": "Deterministic certificate identifier backing the bundle (`hash:...` literal)."
-                },
-                "verdict_id": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Cached attestation verdict identifier literal."
-                },
-                "attestation_nonce": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Cached attestation nonce literal."
-                },
-                "refresh_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Timestamp when the attestation must be refreshed."
-                },
-                "certificate_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Certificate expiry timestamp captured at settlement."
-                },
-                "policy_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Policy expiry timestamp captured at settlement."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflinePlatformTokenSnapshot".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["policy", "attestation_jws_b64"],
-            "properties": {
-                "policy": {
-                    "type": "string",
-                    "description": "Attestation policy slug (e.g., play_integrity)."
-                },
-                "attestation_jws_b64": {
-                    "type": "string",
-                    "description": "Base64-encoded JWS payload captured at settlement."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineTransferStatusTransition".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["status", "transitioned_at_ms"],
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": ["settled", "rejected", "archived"],
-                    "description": "Status that became active during this transition."
-                },
-                "transitioned_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Timestamp when the transition occurred."
-                },
-                "verdict_snapshot": {
-                    "$ref": "#/components/schemas/OfflineVerdictSnapshot",
-                    "nullable": true,
-                    "description": "Optional verdict metadata snapshot captured at this transition."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineTransferListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineTransferItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Total number of transfer bundles matching the filter."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineRejectionItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["platform", "reason", "count"],
-            "properties": {
-                "platform": {
-                    "type": "string",
-                    "description": "Platform label (general, apple, android)."
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Canonical rejection reason label."
-                },
-                "count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Number of occurrences recorded for this platform/reason pair."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineRejectionListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineRejectionItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sum of all rejection counters returned in the payload."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineQueryEnvelope".to_owned(),
-        norito::json!({
-            "type": "object",
-            "description": "Torii QueryEnvelope. When `select` is present the route returns row-mode `{items,total,indexed_height,indexed_block_hash,query_source}` with only selected fields. When `aggregate` is present the same envelope carries aggregate rows after `having`; `select` and `aggregate` are mutually exclusive. Without both fields, each route keeps its legacy response shape.",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Optional label for the query payload."
-                },
-                "filter": {
-                    "type": "object",
-                    "description": "Filter expression object expressed in the Torii filter DSL.",
-                    "additionalProperties": true
-                },
-                "select": {
-                    "type": "object",
-                    "description": "Optional projection selector that switches the route into generic row-mode.",
-                    "additionalProperties": true
-                },
-                "aggregate": {
-                    "type": "object",
-                    "description": "Optional exact aggregate spec with `group_by`, `metrics`, and optional `having`; switches the route into aggregate-mode.",
-                    "additionalProperties": true
-                },
-                "sort": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "description": "Field/order pair such as {\"key\":\"registered_at_ms\",\"order\":\"desc\"}.",
-                        "additionalProperties": true
-                    }
-                },
-                "pagination": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {
-                            "type": "integer",
-                            "format": "uint64"
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "format": "uint64"
-                        }
-                    }
-                },
-                "fetch_size": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Optional batch fetch size hint."
-                }
-            }
-        }),
-    );
-    schemas.insert(
         "TimeHealth".to_owned(),
         norito::json!({
             "type": "object",
@@ -11174,13 +10316,7 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/activity"));
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));
-        assert!(paths.contains_key("/v1/offline/policy"));
-        assert!(paths.contains_key("/v1/offline/cash/readiness"));
-        assert!(paths.contains_key("/v1/offline/cash/setup"));
-        assert!(paths.contains_key("/v1/offline/cash/load"));
-        assert!(paths.contains_key("/v1/offline/cash/refresh"));
-        assert!(paths.contains_key("/v1/offline/cash/sync"));
-        assert!(paths.contains_key("/v1/offline/cash/redeem"));
+        assert!(paths.contains_key("/v1/offline/v2/readiness"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -11196,7 +10332,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_keeps_only_cash_offline_paths() {
+    fn generated_spec_keeps_only_v2_offline_paths() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
@@ -11206,17 +10342,29 @@ mod tests {
         for legacy_path in [
             "/v1/offline/allowances",
             "/v1/offline/allowances/query",
+            "/v1/offline/cash/setup",
+            "/v1/offline/cash/load",
+            "/v1/offline/cash/refresh",
+            "/v1/offline/cash/sync",
+            "/v1/offline/cash/redeem",
+            "/v1/offline/cash/readiness",
             "/v1/offline/certificates/issue",
             "/v1/offline/certificates/renew_issue",
             "/v1/offline/certificates/revoke",
+            "/v1/offline/policy",
             "/v1/offline/receipts",
             "/v1/offline/receipts/query",
+            "/v1/offline/revocations",
+            "/v1/offline/revocations/bundle",
             "/v1/offline/revocations/query",
             "/v1/offline/settlements/submit",
             "/v1/offline/spend_receipts",
             "/v1/offline/state",
             "/v1/offline/summaries",
             "/v1/offline/summaries/query",
+            "/v1/offline/transfers",
+            "/v1/offline/transfers/{bundle_id_hex}",
+            "/v1/offline/transfers/query",
             "/v1/offline/transfers/proof",
         ] {
             assert!(
@@ -11225,58 +10373,8 @@ mod tests {
             );
         }
 
-        for supported_path in [
-            "/v1/offline/cash/readiness",
-            "/v1/offline/cash/setup",
-            "/v1/offline/cash/load",
-            "/v1/offline/cash/refresh",
-            "/v1/offline/cash/sync",
-            "/v1/offline/cash/redeem",
-            "/v1/offline/revocations",
-            "/v1/offline/revocations/bundle",
-            "/v1/offline/transfers",
-            "/v1/offline/transfers/{bundle_id_hex}",
-            "/v1/offline/transfers/query",
-            "/v1/offline/policy",
-        ] {
-            assert!(
-                paths.contains_key(supported_path),
-                "supported offline path should be present: {supported_path}"
-            );
-        }
+        assert!(paths.contains_key("/v1/offline/v2/readiness"));
     }
-
-    #[test]
-    fn revocation_list_and_bundle_paths_have_distinct_semantics() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-
-        let revocations = paths
-            .get("/v1/offline/revocations")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .expect("revocations list get operation");
-        let bundle = paths
-            .get("/v1/offline/revocations/bundle")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .expect("revocations bundle get operation");
-
-        assert_eq!(
-            revocations.get("summary").and_then(Value::as_str),
-            Some("List offline verdict revocations.")
-        );
-        assert_eq!(
-            bundle.get("summary").and_then(Value::as_str),
-            Some("Fetch the signed offline revocation bundle.")
-        );
-    }
-
     #[test]
     fn identifier_policy_schema_exposes_ram_fhe_profile() {
         let doc = generate_spec();
@@ -11887,7 +10985,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/revocations",
+                expected: "/v1/offline/v2/readiness",
             },
             PathCase {
                 label: "system",
@@ -12083,6 +11181,10 @@ mod tests {
             "OfflineBuildClaimIssueResponse",
             "OfflineBundleProofStatusResponse",
             "OfflineBundleProofSummary",
+            "OfflinePlatformTokenSnapshot",
+            "OfflineQueryEnvelope",
+            "OfflineRejectionItem",
+            "OfflineRejectionListResponse",
             "OfflineReceiptListItem",
             "OfflineReceiptListResponse",
             "OfflineSettlementBuildClaimOverride",
@@ -12093,6 +11195,10 @@ mod tests {
             "OfflineStateResponse",
             "OfflineSummaryItem",
             "OfflineSummaryListResponse",
+            "OfflineTransferItem",
+            "OfflineTransferListResponse",
+            "OfflineTransferStatusTransition",
+            "OfflineVerdictSnapshot",
             "OfflineWalletCertificateDraft",
         ] {
             assert!(

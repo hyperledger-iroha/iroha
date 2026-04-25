@@ -4313,30 +4313,6 @@ class ToriiClient:
         )
         return OfflineAllowanceListPage.from_payload(payload)
 
-    def list_offline_transfers(self, **params: Any) -> OfflineTransferListPage:
-        """List offline transfers via ``GET /v1/offline/transfers``."""
-
-        response = self._request(
-            "GET",
-            "/v1/offline/transfers",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return OfflineTransferListPage.from_payload(response.json())
-
-    def query_offline_transfers(
-        self,
-        envelope: Mapping[str, Any],
-    ) -> OfflineTransferListPage:
-        """Query offline transfers via ``POST /v1/offline/transfers/query``."""
-
-        payload = self._post_json(
-            "/v1/offline/transfers/query",
-            dict(envelope),
-            context="offline transfers query",
-        )
-        return OfflineTransferListPage.from_payload(payload)
-
     def list_offline_summaries(self, **params: Any) -> OfflineSummaryListPage:
         """List offline counter summaries via ``GET /v1/offline/summaries``."""
 

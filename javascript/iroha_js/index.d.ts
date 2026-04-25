@@ -3696,22 +3696,13 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
-export interface ToriiOfflineCashReadinessResponse {
-  offline_recursive_stark: boolean;
-  [key: string]: unknown;
-}
-
-export interface ToriiOfflineCashRequest {
-  [key: string]: unknown;
-}
-
-export interface ToriiOfflineCashEnvelope {
-  lineage_state: Record<string, unknown>;
-  settlement?: Record<string, unknown> | null;
-  [key: string]: unknown;
-}
-
-export interface ToriiOfflineRevocationBundle {
+export interface ToriiOfflineV2ReadinessResponse {
+  offline_note_v2: boolean;
+  offline_one_use_keys: boolean;
+  offline_recursive_note_proof: boolean;
+  offline_fountain_qr_v1: boolean;
+  offline_sync_optional: boolean;
+  offline_telemetry: boolean;
   [key: string]: unknown;
 }
 
@@ -8138,32 +8129,9 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  getOfflineCashReadiness(
+  getOfflineV2Readiness(
     options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCashReadinessResponse>;
-  setupOfflineCash(
-    request: ToriiOfflineCashRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCashEnvelope>;
-  loadOfflineCash(
-    request: ToriiOfflineCashRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCashEnvelope>;
-  refreshOfflineCash(
-    request: ToriiOfflineCashRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCashEnvelope>;
-  syncOfflineCash(
-    request: ToriiOfflineCashRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCashEnvelope>;
-  redeemOfflineCash(
-    request: ToriiOfflineCashRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCashEnvelope>;
-  getOfflineRevocationBundle(
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineRevocationBundle>;
+  ): Promise<ToriiOfflineV2ReadinessResponse>;
   listOfflineAllowances(
     options?: OfflineAllowanceListOptions,
   ): Promise<ToriiOfflineAllowanceListResponse>;
@@ -8176,28 +8144,6 @@ export declare class ToriiClient {
   iterateOfflineAllowancesQuery(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
-  listOfflineTransfers(
-    options?: OfflineTransferListOptions,
-  ): Promise<ToriiOfflineTransferListResponse>;
-  queryOfflineTransfers(
-    options?: OfflineTransferQueryOptions,
-  ): Promise<ToriiOfflineTransferListResponse>;
-  iterateOfflineTransfers(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineTransferItem, void, unknown>;
-  iterateOfflineTransfersQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineTransferItem, void, unknown>;
-  listOfflineRevocations(
-    options?: IterableListOptions,
-  ): Promise<ToriiOfflineRevocationListResponse>;
-  iterateOfflineRevocations(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>;
-  issueOfflineBuildClaim(
-    request: ToriiOfflineBuildClaimIssueRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineBuildClaimIssueResponse>;
   getOfflineRejectionStats(options?: {
     telemetryProfile?: string;
     signal?: AbortSignal;

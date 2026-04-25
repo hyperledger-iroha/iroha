@@ -7,6 +7,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
+- Removed JS client helpers for legacy offline cash, transfer, revocation, and
+  build-claim routes that Torii no longer mounts. `getOfflineV2Readiness()` is
+  the supported readiness probe for `/v1/offline/v2/readiness`.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, offline summary counter aliases are dropped, and account address
@@ -53,10 +56,6 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   snippet, and Jest coverage so JS-04/DA-8 callers can mirror the
   `iroha da submit` payload (BLAKE3 digest, typed metadata, retention policy) directly from
   Node without shelling out to the CLI.【javascript/iroha_js/src/toriiClient.js:1163】【javascript/iroha_js/src/dataAvailability.js:22】【javascript/iroha_js/index.d.ts:4030】【javascript/iroha_js/README.md:770】【javascript/iroha_js/test/toriiClient.test.js:1408】
-- Added offline verdict revocation helpers (`listOfflineRevocations`,
-  `queryOfflineRevocations`, iterator variants, DTO normalisers, TypeScript definitions,
-  README docs, and Jest coverage) so JS-04 validation covers the OA7 revocation surfaces and
-  SDK consumers can inspect `/v1/offline/revocations{,/query}` without bespoke parsing.【javascript/iroha_js/src/toriiClient.js:408】【javascript/iroha_js/index.d.ts:2005】【javascript/iroha_js/README.md:1857】【javascript/iroha_js/test/toriiClient.test.js:8095】
 - Added `buildDaProofSummaryArtifact` and `emitDaProofSummaryArtifact` so DA-8 proof
   workflows can serialise PoR summaries into the same Norito JSON emitted by
   `iroha da prove-availability`, with README usage, typings, and Jest coverage to keep the

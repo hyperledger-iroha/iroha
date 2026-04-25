@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Smoke test for the maintained offline cash app routes.
+//! Smoke test for the maintained Offline V2 app route.
 
 use std::sync::Arc;
 
@@ -9,6 +9,7 @@ use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
 use iroha_data_model::{ChainId, peer::PeerId};
+use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -19,7 +20,7 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 }
 
 #[tokio::test]
-async fn offline_cash_routes_are_mounted_and_legacy_allowances_are_absent() {
+async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -104,7 +105,33 @@ async fn offline_cash_routes_are_mounted_and_legacy_allowances_are_absent() {
         )
         .await
         .unwrap();
+    assert_eq!(readiness.status(), StatusCode::NOT_FOUND);
+
+    let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/offline/v2/readiness"))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(readiness.status(), StatusCode::OK);
+    let body = readiness
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("\"offline_note_v2\":true"));
+    assert!(body.contains("\"offline_one_use_keys\":true"));
+    assert!(body.contains("\"offline_recursive_note_proof\":true"));
+    assert!(body.contains("\"offline_fountain_qr_v1\":true"));
+    assert!(body.contains("\"offline_sync_optional\":true"));
+    assert!(body.contains("\"offline_telemetry\":true"));
 
     for path in [
         "/v1/offline/cash/setup",
@@ -112,6 +139,10 @@ async fn offline_cash_routes_are_mounted_and_legacy_allowances_are_absent() {
         "/v1/offline/cash/refresh",
         "/v1/offline/cash/sync",
         "/v1/offline/cash/redeem",
+        "/v1/offline/transfers",
+        "/v1/offline/transfers/query",
+        "/v1/offline/revocations",
+        "/v1/offline/revocations/bundle",
     ] {
         let response = app
             .clone()
@@ -126,29 +157,10 @@ async fn offline_cash_routes_are_mounted_and_legacy_allowances_are_absent() {
             )
             .await
             .unwrap();
-        assert_ne!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "offline cash route should be mounted: {path}"
-        );
-    }
-
-    for retired_path in ["/v1/offline/allowances", "/v1/offline/allowances/query"] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(retired_path)
-                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND,
-            "legacy offline route should be absent: {retired_path}"
+            "legacy offline route should be absent: {path}"
         );
     }
 }

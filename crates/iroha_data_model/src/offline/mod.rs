@@ -1203,6 +1203,99 @@ mod model {
         }
     }
 
+    /// Compact CA-issued certificate for an Offline V2 one-use note key.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteKeyCertificateV2 {
+        /// Certificate version. Production V2 uses `2`.
+        pub version: u16,
+        /// Platform class, for example `ios-appattest` or `android-keymint`.
+        pub platform: String,
+        /// Issuer-scoped one-use key identifier.
+        pub key_id: String,
+        /// Device identifier bound by the offline CA.
+        pub device_id: String,
+        /// Account authorized to control the note key.
+        pub account_id: AccountId,
+        /// Public key bytes or platform key handle digest.
+        pub public_key: Vec<u8>,
+        /// True when the issuer verified hardware one-use semantics.
+        pub one_use: bool,
+        /// Offline CA signature over the compact certificate payload.
+        pub issuer_signature: Signature,
+    }
+
+    /// Verifier-key-backed recursive proof carried by Offline V2 note tokens.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteRecursiveProofV2 {
+        /// Stable verifier key identifier selected by the operator.
+        pub verifier_key_id: String,
+        /// Public input commitment hash.
+        pub public_inputs_hash: Hash,
+        /// Compact proof bytes.
+        pub proof: Vec<u8>,
+    }
+
+    /// Issuer-side note issuance record for online load/consolidation.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteIssueV2 {
+        /// Deterministic note commitment.
+        pub note_commitment: Hash,
+        /// Owner key certificate for this note.
+        pub key_certificate: OfflineNoteKeyCertificateV2,
+        /// Asset held by the note.
+        pub asset: AssetId,
+        /// Note amount. Backend-issued notes should follow the configured denomination ladder.
+        pub amount: Numeric,
+    }
+
+    /// Redemption/audit token submitted online after optional sync.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteRedeemV2 {
+        /// Nullifiers consumed by the redeeming token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Recipient account credited online.
+        pub recipient: AccountId,
+        /// Asset being redeemed.
+        pub asset: AssetId,
+        /// Redeemed amount.
+        pub amount: Numeric,
+        /// Compact recursive proof for the final note lineage.
+        pub recursive_proof: OfflineNoteRecursiveProofV2,
+    }
+
+    /// Optional audit bundle. It is not required for offline finality.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteAuditBundleV2 {
+        /// Payment token identifier.
+        pub token_id: Hash,
+        /// Input nullifiers observed in the token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Output note commitments created by the token.
+        pub output_commitments: Vec<Hash>,
+        /// Optional recursive proof for audit/replay checks.
+        pub recursive_proof: OfflineNoteRecursiveProofV2,
+    }
+
     /// Operator-signed certificate binding a spend key + device attestation to an allowance.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3373,77 +3466,6 @@ mod model {
         pub envelope_bytes: Vec<u8>,
     }
 
-    /// Public inputs committed by an offline source-lineage proof.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct OfflineSourceLineagePublicInputs {
-        /// Incoming/outgoing transfer identifier bound across sender and receiver receipts.
-        pub transfer_id: String,
-        /// Hash of the sender's signed outgoing receipt.
-        pub source_receipt_hash: String,
-        /// Sender bearer lineage identifier.
-        pub sender_lineage_id: String,
-        /// Recipient bearer lineage identifier.
-        pub recipient_lineage_id: String,
-        /// Asset definition carried by the source lineage.
-        pub asset_definition_id: String,
-        /// Canonical transfer amount.
-        pub amount: String,
-        /// Sender local state hash before the outgoing transfer.
-        pub source_pre_state_hash: String,
-        /// Sender local state hash after the outgoing transfer.
-        pub source_post_state_hash: String,
-        /// Sender local revision after the outgoing transfer.
-        pub source_local_revision: u64,
-        /// Device-proof key identifier observed on the sender receipt.
-        pub device_proof_key_id: String,
-        /// Sender device-proof counter checkpoint.
-        pub device_proof_counter: u64,
-        /// Nullifier consumed once by authoritative sync.
-        pub source_nullifier: String,
-    }
-
-    /// Verifier-backed FASTPQ proof artifact for a source-lineage envelope.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct OfflineSourceLineageFastpqProof {
-        /// Canonical FASTPQ parameter set used by the prover.
-        pub parameter: String,
-        /// Norito-encoded FASTPQ proof bytes as standard Base64.
-        pub proof_bytes_base64: String,
-        /// SHA-256 digest of `proof_bytes_base64` after Base64 decoding.
-        pub proof_sha256: String,
-        /// SHA-256 manifest for the deterministic FASTPQ batch verified by Torii.
-        pub batch_manifest_sha256: String,
-    }
-
-    /// Versioned FastPQ source-lineage proof envelope for incoming offline receipts.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct OfflineSourceLineageEnvelope {
-        /// Wire-format version.
-        pub version: i32,
-        /// Circuit identifier, currently `offline-source-lineage-v1`.
-        pub circuit_id: String,
-        /// Public inputs bound to the containing incoming receipt.
-        pub public_inputs: OfflineSourceLineagePublicInputs,
-        /// Canonical outgoing source payload witness validated by Torii.
-        pub witness_payload: String,
-        /// Verifier-backed FASTPQ proof bytes for the source-lineage batch.
-        pub fastpq_proof: OfflineSourceLineageFastpqProof,
-        /// FastPQ/STARK-FRI proof material.
-        pub proof: OfflineTransparentZkProof,
-    }
-
     /// Settlement artifact proving a load or redeem mutation finalized on-ledger.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3538,34 +3560,10 @@ mod model {
         pub authorization: Option<OfflineSpendAuthorization>,
         /// Device attestation snapshot bound to this receipt.
         pub attestation: OfflineDeviceAttestation,
-        /// Required source-lineage proof for incoming offline-offline receipts.
-        #[norito(default)]
-        pub source_lineage_proof: Option<OfflineSourceLineageEnvelope>,
-        /// Rejected legacy outgoing payload field; first release has no fallback.
-        #[norito(default)]
-        pub source_payload: Option<String>,
         /// Sender signature over the canonical unsigned receipt payload.
         pub sender_signature_base64: String,
         /// Receipt creation timestamp (unix ms).
         pub created_at_ms: u64,
-    }
-
-    /// Outgoing transfer payload shared with a receiver for continuity validation.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct OfflineOutgoingTransferPayload {
-        /// Wire-format version.
-        pub version: i32,
-        /// Latest authoritative lineage anchor known to the sender.
-        pub anchor: OfflineLineageState,
-        /// Optional ancestry receipts bridging from the anchor to the current sender state.
-        #[norito(default)]
-        pub ancestry_receipts: Vec<OfflineTransferReceipt>,
-        /// The outgoing receipt being handed to the receiver.
-        pub receipt: OfflineTransferReceipt,
     }
 
     /// Persisted App Attest binding captured during lineage setup.

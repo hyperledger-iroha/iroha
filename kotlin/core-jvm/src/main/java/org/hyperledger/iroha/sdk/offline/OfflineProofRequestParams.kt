@@ -2,7 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 
-/** Parameters accepted by the Torii `/v1/offline/transfers/proof` endpoint; requires a transfer payload. */
+/** Legacy proof-request parameters retained for local fixture parsing. */
 class OfflineProofRequestParams(
     transferPayload: Map<String, Any>,
     val kind: OfflineProofRequestKind,

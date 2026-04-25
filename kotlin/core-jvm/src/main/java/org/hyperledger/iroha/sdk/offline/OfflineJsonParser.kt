@@ -7,6 +7,20 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 object OfflineJsonParser {
 
     @JvmStatic
+    fun parseOfflineV2Readiness(payload: ByteArray): OfflineV2Readiness {
+        val root = parse(payload)
+        val obj = expectObject(root, "root")
+        return OfflineV2Readiness(
+            asBoolean(obj["offline_note_v2"], "offline_note_v2"),
+            asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
+            asBoolean(obj["offline_recursive_note_proof"], "offline_recursive_note_proof"),
+            asBoolean(obj["offline_fountain_qr_v1"], "offline_fountain_qr_v1"),
+            asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
+            asBoolean(obj["offline_telemetry"], "offline_telemetry"),
+        )
+    }
+
+    @JvmStatic
     fun parseAllowances(payload: ByteArray): OfflineAllowanceList {
         val root = parse(payload)
         val obj = expectObject(root, "root")
@@ -248,6 +262,11 @@ object OfflineJsonParser {
     private fun asOptionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
         return asLong(value, path)
+    }
+
+    private fun asBoolean(value: Any?, path: String): Boolean {
+        check(value is Boolean) { "$path is not a boolean" }
+        return value
     }
 
     private fun asOptionalBoolean(value: Any?, path: String): Boolean? {

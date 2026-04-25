@@ -35,6 +35,21 @@ final class NativeBridgeLoaderTests: XCTestCase {
         }
     }
 
+    func testManifestlessBridgeUsesPinnedFallbackHash() throws {
+        let original = try bundledBridgeBinary()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: original.identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: original.url, to: bridgeURL)
+
+        let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
+        XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
+    }
+
     func testUntrustedPathIsDeniedWhenOverridesDisabled() throws {
         let original = try bundledBridgeBinary()
         let tempDir = FileManager.default.temporaryDirectory

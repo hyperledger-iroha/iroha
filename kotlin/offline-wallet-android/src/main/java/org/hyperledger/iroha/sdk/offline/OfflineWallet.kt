@@ -202,30 +202,8 @@ class OfflineWallet : Any {
         notifyModeChange()
     }
 
-    fun fetchTransfers(params: OfflineListParams): CompletableFuture<OfflineTransferList> =
-        toriiClient.listTransfers(params)
-
-    fun fetchTransfers(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineTransferList> =
-        toriiClient.queryTransfers(envelope)
-
-    fun fetchRevocations(params: OfflineListParams): CompletableFuture<OfflineRevocationList> =
-        toriiClient.listRevocations(params)
-
-    fun fetchTransfersWithAudit(params: OfflineListParams): CompletableFuture<OfflineTransferList> =
-        toriiClient.listTransfers(params).whenComplete { list, throwable ->
-            if (throwable != null || list == null || !auditLogger.isEnabled) return@whenComplete
-            for (item in list.items) {
-                try { recordTransferAudit(item) } catch (e: IOException) { throw CompletionException(e) }
-            }
-        }
-
-    fun fetchTransfersWithAudit(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineTransferList> =
-        toriiClient.queryTransfers(envelope).whenComplete { list, throwable ->
-            if (throwable != null || list == null || !auditLogger.isEnabled) return@whenComplete
-            for (item in list.items) {
-                try { recordTransferAudit(item) } catch (e: IOException) { throw CompletionException(e) }
-            }
-        }
+    fun offlineV2Readiness(): CompletableFuture<OfflineV2Readiness> =
+        toriiClient.getOfflineV2Readiness()
 
     var isAuditLoggingEnabled: Boolean
         get() = auditLogger.isEnabled

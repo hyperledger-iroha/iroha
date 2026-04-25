@@ -10,50 +10,36 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
 class OfflineToriiClientCashTest {
     @Test
-    fun cashEndpointsPostCanonicalPathsAndBodies() {
-        val cases = listOf(
-            Triple("/v1/offline/cash/setup", """{"operation_id":"setup-1"}""", { client: OfflineToriiClient, body: String -> client.setupCash(body) }),
-            Triple("/v1/offline/cash/load", """{"operation_id":"load-1"}""", { client: OfflineToriiClient, body: String -> client.loadCash(body) }),
-            Triple("/v1/offline/cash/refresh", """{"operation_id":"refresh-1"}""", { client: OfflineToriiClient, body: String -> client.refreshCash(body) }),
-            Triple("/v1/offline/cash/sync", """{"operation_id":"sync-1"}""", { client: OfflineToriiClient, body: String -> client.syncCash(body) }),
-            Triple("/v1/offline/cash/redeem", """{"operation_id":"redeem-1"}""", { client: OfflineToriiClient, body: String -> client.redeemCash(body) }),
+    fun readinessUsesCanonicalGetPathAndParsesBody() {
+        val executor = CapturingExecutor(
+            """
+            {
+              "offline_note_v2": true,
+              "offline_one_use_keys": true,
+              "offline_recursive_note_proof": false,
+              "offline_fountain_qr_v1": true,
+              "offline_sync_optional": true,
+              "offline_telemetry": true
+            }
+            """.trimIndent(),
         )
-        val responseJson = """{"lineage_state":{"lineage_id":"deadbeef"}}"""
-
-        for ((path, requestJson, operation) in cases) {
-            val executor = CapturingExecutor(responseJson)
-            val client = OfflineToriiClient.builder()
-                .executor(executor)
-                .baseUri(URI.create("https://example.com"))
-                .build()
-
-            val response = operation(client, requestJson).join()
-
-            assertEquals(responseJson, response)
-            assertEquals("POST", executor.lastRequest.method)
-            assertEquals(path, executor.lastRequest.uri.path)
-            assertEquals(requestJson, executor.lastBody)
-            assertEquals("application/json", firstHeader(executor.lastRequest, "Accept"))
-            assertEquals("application/json", firstHeader(executor.lastRequest, "Content-Type"))
-        }
-    }
-
-    @Test
-    fun revocationBundleUsesCanonicalGetPath() {
-        val responseJson = """{"bundle":{"issued_at_ms":1}}"""
-        val executor = CapturingExecutor(responseJson)
         val client = OfflineToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
             .build()
 
-        val response = client.getRevocationBundleJson().join()
+        val readiness = client.getOfflineV2Readiness().join()
 
-        assertEquals(responseJson, response)
         assertEquals("GET", executor.lastRequest.method)
-        assertEquals("/v1/offline/revocations/bundle", executor.lastRequest.uri.path)
+        assertEquals("/v1/offline/v2/readiness", executor.lastRequest.uri.path)
         assertEquals("", executor.lastBody)
         assertEquals("application/json", firstHeader(executor.lastRequest, "Accept"))
+        assertEquals(true, readiness.offlineNoteV2)
+        assertEquals(true, readiness.offlineOneUseKeys)
+        assertEquals(false, readiness.offlineRecursiveNoteProof)
+        assertEquals(true, readiness.offlineFountainQrV1)
+        assertEquals(true, readiness.offlineSyncOptional)
+        assertEquals(true, readiness.offlineTelemetry)
     }
 
     private class CapturingExecutor(
