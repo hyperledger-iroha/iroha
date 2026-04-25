@@ -130,10 +130,11 @@ const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
 const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
 const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 60_000;
 const IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS: u64 = 90_000;
+const IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS: u64 = 150_000;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER: u32 = 2;
-const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 120;
+const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 180;
 const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 2;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 const IZANAMI_TELEMETRY_PROFILE: &str = "developer";
@@ -2982,6 +2983,7 @@ impl IzanamiRunner {
             submission_confirmation,
             SubmissionConfirmationMode::AcceptedByIngress
         ) {
+            let wait_options = throughput_confirmation_wait_options_for(&self.config);
             let (tx, rx) = mpsc::channel(IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP);
             (
                 Some(tx),
@@ -2990,6 +2992,7 @@ impl IzanamiRunner {
                     &ingress_pool,
                     &run_control,
                     rx,
+                    wait_options,
                 )),
             )
         } else {
@@ -3371,6 +3374,7 @@ impl IzanamiRunner {
         ingress_pool: &Arc<IngressEndpointPool>,
         run_control: &Arc<RunControl>,
         mut confirmation_audit_rx: mpsc::Receiver<SubmissionAuditCandidate>,
+        wait_options: TransactionWaitOptions,
     ) -> JoinHandle<()> {
         let metrics = Arc::clone(metrics);
         let ingress_pool = Arc::clone(ingress_pool);
@@ -3392,7 +3396,6 @@ impl IzanamiRunner {
                     break;
                 };
                 let now = Instant::now();
-                let wait_options = throughput_confirmation_wait_options();
                 if !confirmation_audit_has_deadline_budget(now, deadline, &wait_options) {
                     metrics.record_confirmation_audit_budget_skipped();
                     debug!(
@@ -3431,7 +3434,14 @@ impl IzanamiRunner {
                     );
                     continue;
                 }
-                audit_submitted_transaction(&ingress_pool, &run_control, &metrics, candidate).await;
+                audit_submitted_transaction(
+                    &ingress_pool,
+                    &run_control,
+                    &metrics,
+                    candidate,
+                    wait_options.clone(),
+                )
+                .await;
             }
         })
     }
@@ -4975,9 +4985,9 @@ fn terminal_confirmation_wait_options() -> TransactionWaitOptions {
     }
 }
 
-fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
+fn confirmation_wait_options_with_timeout(timeout: Duration) -> TransactionWaitOptions {
     TransactionWaitOptions {
-        timeout: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS),
+        timeout,
         poll_interval: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS),
         terminal_statuses: vec![
             TransactionWaitTerminalStatus::Applied,
@@ -4985,6 +4995,28 @@ fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
             TransactionWaitTerminalStatus::Expired,
         ],
     }
+}
+
+fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
+    confirmation_wait_options_with_timeout(Duration::from_millis(
+        IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS,
+    ))
+}
+
+fn npos_recovery_confirmation_window_needed(config: &ChaosConfig) -> bool {
+    config.nexus.is_some()
+        && config.faulty_peers > 0
+        && (config.faults.crash_restart()
+            || (config.faults.network_partition() && !config.faults.network_latency()))
+}
+
+fn throughput_confirmation_wait_options_for(config: &ChaosConfig) -> TransactionWaitOptions {
+    let timeout = if npos_recovery_confirmation_window_needed(config) {
+        Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
+    } else {
+        Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
+    };
+    confirmation_wait_options_with_timeout(timeout)
 }
 
 fn confirmation_audit_has_deadline_budget(
@@ -5187,6 +5219,7 @@ async fn audit_submitted_transaction(
     run_control: &Arc<RunControl>,
     metrics: &Arc<Metrics>,
     candidate: SubmissionAuditCandidate,
+    wait_options: TransactionWaitOptions,
 ) {
     let SubmissionAuditCandidate {
         endpoint_idx,
@@ -5205,7 +5238,7 @@ async fn audit_submitted_transaction(
             endpoint_idx,
             &signer,
             hash,
-            throughput_confirmation_wait_options(),
+            wait_options,
         )
     })
     .await;
@@ -9164,11 +9197,91 @@ mod tests {
         );
     }
 
+    fn chaos_config_for_audit_window(
+        nexus: bool,
+        faulty_peers: usize,
+        faults: FaultToggles,
+    ) -> ChaosConfig {
+        ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers,
+            duration: Duration::from_secs(120),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(7),
+            tps: 15.0,
+            max_inflight: 64,
+            submitters: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
+            log_filter: "info".to_string(),
+            faults,
+            nexus: nexus.then(|| NexusProfile::sora_defaults().expect("nexus profile")),
+        }
+    }
+
+    #[test]
+    fn npos_crash_restart_faults_use_recovery_confirmation_window() {
+        let config = chaos_config_for_audit_window(
+            true,
+            1,
+            FaultToggles::from_explicit_array([true, false, false, false, false, false, false]),
+        );
+        let options = throughput_confirmation_wait_options_for(&config);
+
+        assert!(npos_recovery_confirmation_window_needed(&config));
+        assert_eq!(
+            options.timeout,
+            Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
+        );
+        assert!(
+            options.timeout > throughput_confirmation_wait_options().timeout,
+            "NPoS restart recovery audits need a longer terminal-status window"
+        );
+    }
+
+    #[test]
+    fn npos_packet_loss_keeps_baseline_confirmation_window() {
+        let config = chaos_config_for_audit_window(
+            true,
+            1,
+            FaultToggles::from_explicit_array([false, false, false, true, true, false, false]),
+        );
+        let options = throughput_confirmation_wait_options_for(&config);
+
+        assert!(!npos_recovery_confirmation_window_needed(&config));
+        assert_eq!(
+            options.timeout,
+            Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn permissioned_faults_keep_baseline_confirmation_window() {
+        let config = chaos_config_for_audit_window(
+            false,
+            1,
+            FaultToggles::from_explicit_array([true, false, false, false, false, false, false]),
+        );
+        let options = throughput_confirmation_wait_options_for(&config);
+
+        assert!(!npos_recovery_confirmation_window_needed(&config));
+        assert_eq!(
+            options.timeout,
+            Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
+        );
+    }
+
     #[test]
     fn worker_shutdown_timeout_covers_confirmation_audit_window() {
         assert!(
             Duration::from_secs(IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS)
-                > throughput_confirmation_wait_options().timeout,
+                > Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS),
             "audit workers need enough shutdown grace to finish an in-flight confirmation wait"
         );
     }

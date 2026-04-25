@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <thread>
 
 enum {
@@ -211,8 +212,23 @@ static cudaError_t wait_until_cuda_ready(QueryFn query) {
     }
 }
 
-static cudaError_t wait_for_default_stream() {
-    return wait_until_cuda_ready([]() { return cudaStreamQuery(nullptr); });
+static cudaError_t wait_for_event(cudaEvent_t event) {
+    return wait_until_cuda_ready([event]() { return cudaEventQuery(event); });
+}
+
+template <typename T>
+static cudaError_t alloc_pinned(T** ptr, size_t count) {
+    if (ptr == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    *ptr = nullptr;
+    if (count == 0) {
+        return cudaSuccess;
+    }
+    if (count > SIZE_MAX / sizeof(T)) {
+        return cudaErrorInvalidValue;
+    }
+    return cudaHostAlloc(reinterpret_cast<void**>(ptr), count * sizeof(T), cudaHostAllocDefault);
 }
 
 extern "C" int gpuzstd_cuda_count_sequences(const uint8_t* input,
@@ -249,9 +265,25 @@ extern "C" int gpuzstd_cuda_count_sequences(const uint8_t* input,
 
     uint8_t* d_input = nullptr;
     uint32_t* d_counts = nullptr;
+    uint8_t* h_input = nullptr;
+    uint32_t* h_counts = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t event = nullptr;
     int ret = RC_OK;
     bool free_device_buffers = true;
+    bool free_host_buffers = true;
+    bool destroy_stream_resources = true;
     cudaError_t wait_status = cudaSuccess;
+
+    if (alloc_pinned(&h_input, len) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (alloc_pinned(&h_counts, chunk_count) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    memcpy(h_input, input, len);
 
     if (cudaMalloc((void**)&d_input, len) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
@@ -261,7 +293,15 @@ extern "C" int gpuzstd_cuda_count_sequences(const uint8_t* input,
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
-    if (cudaMemcpy(d_input, input, len, cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(d_input, h_input, len, cudaMemcpyHostToDevice, stream) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
@@ -271,31 +311,51 @@ extern "C" int gpuzstd_cuda_count_sequences(const uint8_t* input,
     params.chunk_size = chunk_size;
     params.min_match = min_match;
     params.max_match = max_match;
-    gpuzstd_count_sequences_kernel<<<chunk_count, 1>>>(d_input, d_counts, params);
+    gpuzstd_count_sequences_kernel<<<chunk_count, 1, 0, stream>>>(d_input, d_counts, params);
     if (cudaGetLastError() != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
-    wait_status = wait_for_default_stream();
+    if (cudaMemcpyAsync(h_counts,
+                        d_counts,
+                        chunk_count * sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaEventRecord(event, stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    wait_status = wait_for_event(event);
     if (wait_status != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         free_device_buffers = wait_status != cudaErrorLaunchTimeout;
+        free_host_buffers = wait_status != cudaErrorLaunchTimeout;
+        destroy_stream_resources = wait_status != cudaErrorLaunchTimeout;
         goto cleanup;
     }
-    if (cudaMemcpy(out_counts,
-                   d_counts,
-                   chunk_count * sizeof(uint32_t),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-        ret = RC_GPU_UNAVAILABLE;
-        goto cleanup;
-    }
+    memcpy(out_counts, h_counts, chunk_count * sizeof(uint32_t));
 
 cleanup:
+    if (destroy_stream_resources && event != nullptr) {
+        cudaEventDestroy(event);
+    }
+    if (destroy_stream_resources && stream != nullptr) {
+        cudaStreamDestroy(stream);
+    }
     if (free_device_buffers && d_input != nullptr) {
         cudaFree(d_input);
     }
     if (free_device_buffers && d_counts != nullptr) {
         cudaFree(d_counts);
+    }
+    if (free_host_buffers && h_input != nullptr) {
+        cudaFreeHost(h_input);
+    }
+    if (free_host_buffers && h_counts != nullptr) {
+        cudaFreeHost(h_counts);
     }
     return ret;
 }
@@ -335,16 +395,36 @@ extern "C" int gpuzstd_cuda_write_sequences(const uint8_t* input,
     uint32_t* d_offsets = nullptr;
     GpuZstdSequence* d_seqs = nullptr;
     uint32_t* d_status = nullptr;
+    uint8_t* h_input = nullptr;
+    uint32_t* h_offsets = nullptr;
     uint32_t* host_status = nullptr;
+    GpuZstdSequence* host_seqs = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t event = nullptr;
     int ret = RC_OK;
     bool free_device_buffers = true;
+    bool free_host_buffers = true;
+    bool destroy_stream_resources = true;
     cudaError_t wait_status = cudaSuccess;
 
-    host_status = (uint32_t*)malloc(chunk_count * sizeof(uint32_t));
-    if (host_status == nullptr) {
+    if (alloc_pinned(&h_input, len) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
+    if (alloc_pinned(&h_offsets, offsets_len) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (alloc_pinned(&host_status, chunk_count) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (alloc_pinned(&host_seqs, seq_capacity) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    memcpy(h_input, input, len);
+    memcpy(h_offsets, offsets, offsets_len * sizeof(uint32_t));
 
     if (cudaMalloc((void**)&d_input, len) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
@@ -362,18 +442,27 @@ extern "C" int gpuzstd_cuda_write_sequences(const uint8_t* input,
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
-    if (cudaMemset(d_status, 0, chunk_count * sizeof(uint32_t)) != cudaSuccess) {
+    if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
-    if (cudaMemcpy(d_input, input, len, cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
-    if (cudaMemcpy(d_offsets,
-                   offsets,
-                   offsets_len * sizeof(uint32_t),
-                   cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaMemsetAsync(d_status, 0, chunk_count * sizeof(uint32_t), stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(d_input, h_input, len, cudaMemcpyHostToDevice, stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(d_offsets,
+                        h_offsets,
+                        offsets_len * sizeof(uint32_t),
+                        cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
@@ -383,23 +472,38 @@ extern "C" int gpuzstd_cuda_write_sequences(const uint8_t* input,
     params.chunk_size = chunk_size;
     params.min_match = min_match;
     params.max_match = max_match;
-    gpuzstd_write_sequences_kernel<<<chunk_count, 1>>>(
+    gpuzstd_write_sequences_kernel<<<chunk_count, 1, 0, stream>>>(
         d_input, d_offsets, d_seqs, seq_capacity, d_status, params);
     if (cudaGetLastError() != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         goto cleanup;
     }
-    wait_status = wait_for_default_stream();
+    if (cudaMemcpyAsync(host_status,
+                        d_status,
+                        chunk_count * sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(host_seqs,
+                        d_seqs,
+                        seq_capacity * sizeof(GpuZstdSequence),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    if (cudaEventRecord(event, stream) != cudaSuccess) {
+        ret = RC_GPU_UNAVAILABLE;
+        goto cleanup;
+    }
+    wait_status = wait_for_event(event);
     if (wait_status != cudaSuccess) {
         ret = RC_GPU_UNAVAILABLE;
         free_device_buffers = wait_status != cudaErrorLaunchTimeout;
-        goto cleanup;
-    }
-    if (cudaMemcpy(host_status,
-                   d_status,
-                   chunk_count * sizeof(uint32_t),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-        ret = RC_GPU_UNAVAILABLE;
+        free_host_buffers = wait_status != cudaErrorLaunchTimeout;
+        destroy_stream_resources = wait_status != cudaErrorLaunchTimeout;
         goto cleanup;
     }
     for (uint32_t idx = 0; idx < chunk_count; ++idx) {
@@ -408,15 +512,15 @@ extern "C" int gpuzstd_cuda_write_sequences(const uint8_t* input,
             goto cleanup;
         }
     }
-    if (cudaMemcpy(out_seqs,
-                   d_seqs,
-                   seq_capacity * sizeof(GpuZstdSequence),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-        ret = RC_GPU_UNAVAILABLE;
-        goto cleanup;
-    }
+    memcpy(out_seqs, host_seqs, seq_capacity * sizeof(GpuZstdSequence));
 
 cleanup:
+    if (destroy_stream_resources && event != nullptr) {
+        cudaEventDestroy(event);
+    }
+    if (destroy_stream_resources && stream != nullptr) {
+        cudaStreamDestroy(stream);
+    }
     if (free_device_buffers && d_input != nullptr) {
         cudaFree(d_input);
     }
@@ -429,6 +533,17 @@ cleanup:
     if (free_device_buffers && d_status != nullptr) {
         cudaFree(d_status);
     }
-    free(host_status);
+    if (free_host_buffers && h_input != nullptr) {
+        cudaFreeHost(h_input);
+    }
+    if (free_host_buffers && h_offsets != nullptr) {
+        cudaFreeHost(h_offsets);
+    }
+    if (free_host_buffers && host_status != nullptr) {
+        cudaFreeHost(host_status);
+    }
+    if (free_host_buffers && host_seqs != nullptr) {
+        cudaFreeHost(host_seqs);
+    }
     return ret;
 }

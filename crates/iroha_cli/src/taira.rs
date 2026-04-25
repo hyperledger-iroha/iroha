@@ -50,15 +50,22 @@ const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.transactions.submit_and_wait",
 ];
 
-const ROUTE_CHECKS: &[(&str, &str)] = &[
-    ("status", "/status"),
-    ("sumeragi_status", "/v1/sumeragi/status"),
-    ("sccp_capabilities", "/v1/sccp/capabilities"),
-    ("zk_proofs_count", "/v1/zk/proofs/count"),
-    ("validator_sets", "/v1/sumeragi/validator-sets"),
-    ("public_lane_validators", "/v1/nexus/public_lanes/0/validators"),
-    ("contracts_state", "/v1/contracts/state"),
-    ("musubi_search", "/v1/musubi/packages?query=&limit=1"),
+const ROUTE_CHECKS: &[(&str, &str, &[u16])] = &[
+    ("status", "/status", &[200]),
+    ("sumeragi_status", "/v1/sumeragi/status", &[200]),
+    ("sccp_capabilities", "/v1/sccp/capabilities", &[200]),
+    ("zk_proofs_count", "/v1/zk/proofs/count", &[200]),
+    ("validator_sets", "/v1/sumeragi/validator-sets", &[200]),
+    (
+        "public_lane_validators",
+        "/v1/nexus/public_lanes/0/validators",
+        &[200],
+    ),
+    // A missing selector should reach the mounted contract-state route and be
+    // rejected as bad input. Treating that as mounted keeps the doctor aligned
+    // with the rollout harness instead of requiring a real contract key.
+    ("contracts_state", "/v1/contracts/state", &[400]),
+    ("musubi_search", "/v1/musubi/packages?query=&limit=1", &[200]),
 ];
 
 /// Taira public testnet helpers.
@@ -154,13 +161,27 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
 
-    for (name, path) in ROUTE_CHECKS {
+    for (name, path, expected_statuses) in ROUTE_CHECKS {
         let url = join_url(&public_root, path)?;
         let result = http_json(&http, reqwest::Method::GET, url.as_str(), None)?;
-        let ok = (200..300).contains(&result.status);
-        push_check(&mut checks, name, result.status, ok, None);
+        let ok = expected_statuses.contains(&result.status);
+        push_check(
+            &mut checks,
+            name,
+            result.status,
+            ok,
+            route_check_detail(expected_statuses),
+        );
         if !ok {
-            failures.push(format!("{name} returned HTTP {}", result.status));
+            failures.push(format!(
+                "{name} returned HTTP {}; expected {}",
+                result.status,
+                expected_statuses
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            ));
         }
         if *name == "status" && ok {
             collect_status_warnings(result.body.as_ref(), &mut warnings);
@@ -546,6 +567,15 @@ fn push_check(
         object.insert("detail".into(), Value::String(detail));
     }
     checks.push(Value::Object(object));
+}
+
+fn route_check_detail(expected_statuses: &[u16]) -> Option<String> {
+    (expected_statuses.len() == 1 && expected_statuses[0] != 200).then(|| {
+        format!(
+            "mounted route is expected to return HTTP {} for this preflight shape",
+            expected_statuses[0]
+        )
+    })
 }
 
 fn normalize_root_url(raw: &str) -> Result<String> {
@@ -1169,6 +1199,9 @@ mod tests {
                     "queue_size": 0
                 }),
             ),
+            ("GET", "/v1/contracts/state") => {
+                MockResponse::json(400, norito::json!({"error": "missing selector"}))
+            }
             ("GET", "/v1/mcp") => MockResponse::json(200, norito::json!({"ok": true})),
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS

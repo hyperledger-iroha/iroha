@@ -22,8 +22,10 @@ unsafe extern "C" {
 }
 
 const RC_INVALID: i32 = 1;
+#[cfg_attr(all(jsonstage1_cuda_available, crc64_cuda_available), allow(dead_code))]
 const RC_GPU_UNAVAILABLE: i32 = 3;
 
+#[cfg_attr(jsonstage1_cuda_available, allow(dead_code))]
 fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize {
     let mut count = 0usize;
     let mut base = 0usize;
@@ -109,6 +111,7 @@ pub unsafe extern "C" fn json_stage1_build_tape(
     }
 }
 
+#[cfg_attr(jsonstage1_cuda_available, allow(dead_code))]
 unsafe fn json_stage1_build_tape_cpu(
     input_ptr: *const u8,
     input_len: usize,
@@ -137,6 +140,7 @@ unsafe fn json_stage1_build_tape_cpu(
     0
 }
 
+#[cfg_attr(crc64_cuda_available, allow(dead_code))]
 fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     const POLY: u64 = 0xC96C_5795_D787_0F42;
     let mut crc = init;
@@ -153,6 +157,7 @@ fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     crc
 }
 
+#[cfg_attr(crc64_cuda_available, allow(dead_code))]
 fn crc64_cpu(bytes: &[u8]) -> u64 {
     const INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -188,7 +193,7 @@ pub unsafe extern "C" fn norito_crc64_cuda(
 #[cfg(test)]
 mod tests {
     use super::{
-        RC_GPU_UNAVAILABLE, crc64_cpu, crc64_raw, json_stage1_build_tape,
+        RC_GPU_UNAVAILABLE, RC_INVALID, crc64_cpu, crc64_raw, json_stage1_build_tape,
         json_stage1_build_tape_cpu, norito_crc64_cuda, scan_structural_offsets,
     };
 
@@ -295,11 +300,151 @@ mod tests {
     }
 
     #[test]
+    fn public_ffi_rejects_null_pointers() {
+        let s = b"{\"a\":1}";
+        let mut out = [0u32; 8];
+        let mut len = 0usize;
+        let mut crc = 0u64;
+
+        let rc = unsafe {
+            json_stage1_build_tape(
+                std::ptr::null(),
+                s.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc = unsafe {
+            json_stage1_build_tape(s.as_ptr(), s.len(), std::ptr::null_mut(), 0, &mut len)
+        };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc = unsafe {
+            json_stage1_build_tape(
+                s.as_ptr(),
+                s.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc = unsafe { norito_crc64_cuda(std::ptr::null(), s.len(), &mut crc) };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc = unsafe { norito_crc64_cuda(s.as_ptr(), s.len(), std::ptr::null_mut()) };
+        assert_eq!(rc, RC_INVALID);
+    }
+
+    #[test]
+    fn cpu_stage1_empty_input_reports_zero_offsets() {
+        let s = b"";
+        let mut out = [0u32; 1];
+        let mut len = usize::MAX;
+        let rc = unsafe {
+            json_stage1_build_tape_cpu(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn cpu_stage1_exact_capacity_writes_offsets() {
+        let s = br#"{"exact":[1,2,3]}"#;
+        let expected = reference_offsets(s);
+        let mut out = vec![0u32; expected.len()];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape_cpu(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
+        };
+        assert_eq!(rc, 0);
+        out.truncate(len);
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn cpu_stage1_zero_capacity_reports_required_length() {
+        let s = br#"{"zero":[1,2,3]}"#;
+        let expected = reference_offsets(s);
+        let mut out = [0u32; 1];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape_cpu(s.as_ptr(), s.len(), out.as_mut_ptr(), 0, &mut len)
+        };
+        assert_eq!(rc, 2);
+        assert_eq!(len, expected.len());
+    }
+
+    #[test]
+    fn crc64_cpu_empty_matches_xz_identity() {
+        assert_eq!(crc64_cpu(b""), 0);
+    }
+
+    #[test]
+    fn public_cuda_entrypoints_handle_empty_inputs_without_device_work() {
+        let s = b"";
+        let mut offsets = [123u32; 1];
+        let mut len = usize::MAX;
+        let rc = unsafe {
+            json_stage1_build_tape(
+                s.as_ptr(),
+                s.len(),
+                offsets.as_mut_ptr(),
+                offsets.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(len, 0);
+
+        let mut crc = u64::MAX;
+        let rc = unsafe { norito_crc64_cuda(s.as_ptr(), s.len(), &mut crc) };
+        assert_eq!(rc, 0);
+        assert_eq!(crc, 0);
+    }
+
+    #[test]
+    fn cuda_stage1_zero_capacity_reports_required_len_when_available() {
+        let s = br#"{"zero":[1,2,3],"quoted":"a\"b"}"#;
+        let expected = reference_offsets(s);
+        let mut out = [0u32; 1];
+        let mut len = 0usize;
+        let rc =
+            unsafe { json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), 0, &mut len) };
+        if skip_if_unavailable(rc, "jsonstage1_cuda") {
+            return;
+        }
+        assert_eq!(rc, 2);
+        assert_eq!(len, expected.len());
+    }
+
+    #[test]
     fn cuda_stage1_matches_reference_when_available() {
         let s = br#"{"left":[1,2],"right":{"quoted":"a\"b"}}"#;
         let expected = reference_offsets(s);
 
         let mut out = vec![0u32; expected.len() + 8];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
+        };
+        if skip_if_unavailable(rc, "jsonstage1_cuda") {
+            return;
+        }
+        assert_eq!(rc, 0);
+        out.truncate(len);
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn cuda_stage1_exact_capacity_matches_reference_when_available() {
+        let s = br#"{"exact":[1,2,3],"quoted":"a\"b"}"#;
+        let expected = reference_offsets(s);
+        let mut out = vec![0u32; expected.len()];
         let mut len = 0usize;
         let rc = unsafe {
             json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)

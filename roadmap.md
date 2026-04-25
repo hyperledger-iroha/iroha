@@ -77,17 +77,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Targeted follow-ups
 
-- Capture Norito CUDA helper validation on a CUDA host.
-  - Run `GPUZSTD_CUDA_REQUIRE=1 cargo test -p gpuzstd_cuda --features cuda-kernel -- --nocapture`, `JSONSTAGE1_CUDA_REQUIRE=1 cargo test -p jsonstage1_cuda --features cuda-kernel -- --nocapture`, and the Norito required-loader tests on an SM80+ host with `nvcc` available.
-  - Record encode/decode throughput and Stage-1 tape latency against CPU SIMD baselines, then adjust the GPU cutoff only with benchmark evidence.
-  - Keep the current `gpu_unavailable` contract intact: helpers without built kernels or a CUDA device must not register as accelerated backends.
-- Close the remaining CUDA hardening gaps on real NVIDIA hardware.
-  - Run `cargo test -p ivm --features cuda -- --nocapture` and the FASTPQ CUDA-focused tests on an SM80+ host with `nvcc`, confirming the new bounded stream/event waits fail closed instead of hanging.
-  - Add focused timeout-path tests or a small CUDA fault harness that can exercise stream/event timeout handling without requiring a wedged GPU.
-  - Audit IVM CUDA drop paths after timeout: `cust::DeviceBuffer` drops call `cuMemFree`, so timeout exits should either use stream-ordered async frees or intentionally abandon device allocations instead of risking a second blocking driver call.
-  - Move remaining synchronous CUDA host transfers in FASTPQ, Norito JSON/CRC, and GPU zstd to explicit non-blocking streams with pinned host buffers where practical, with the same bounded event polling before host-visible results are read.
-  - Add a CUDA CI lane or nightly hardware job that builds real PTX, runs the IVM/FASTPQ/Norito accelerator suites, and records GPU model, driver, CUDA toolkit, and `IVM_CUDA_GENCODE` in `status.md`.
-  - Add CPU-vs-CUDA determinism fixtures for IVM vector/hash/AES/BN254/Ed25519 helpers and FASTPQ transforms, including repeated runs on the same input to catch nondeterministic reductions or stale-buffer reuse.
 - Reconcile the app-facing alias auto-renew mutation endpoint with the on-chain NFT/domain permission model.
   - The new coverage pass confirmed the read path, but a user-signed disable/update flow still hits `Can't modify NFT from domain owned by another account` when the subscription NFT lives in the operator-owned subscription domain.
   - Decide whether alias auto-renew mutations should be operator-submitted, whether the subscription asset should live in a user-controlled domain, or whether a narrower on-chain permission needs to be granted for this subscription NFT class.

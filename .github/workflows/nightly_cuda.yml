@@ -1,0 +1,71 @@
+name: Nightly CUDA Hardware
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  IVM_CUDA_GENCODE: arch=compute_86,code=sm_86
+  GPUZSTD_CUDA_ARCH: -arch=sm_86
+  JSONSTAGE1_CUDA_ARCH: -arch=sm_86
+  GPUZSTD_CUDA_REQUIRE: "1"
+  JSONSTAGE1_CUDA_REQUIRE: "1"
+  CARGO_TARGET_DIR: target/cuda-nightly
+  RUST_TEST_THREADS: "1"
+
+jobs:
+  cuda-hardware:
+    runs-on: [self-hosted, Linux, cuda]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          workspaces: "."
+      - name: Capture CUDA host inventory
+        run: |
+          mkdir -p dist/cuda-nightly
+          {
+            echo "# CUDA Nightly Hardware"
+            echo
+            echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- IVM_CUDA_GENCODE: ${IVM_CUDA_GENCODE}"
+            echo "- GPUZSTD_CUDA_ARCH: ${GPUZSTD_CUDA_ARCH}"
+            echo "- JSONSTAGE1_CUDA_ARCH: ${JSONSTAGE1_CUDA_ARCH}"
+            echo
+            echo "## nvidia-smi"
+            nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader || true
+            echo
+            echo "## nvcc"
+            nvcc --version || true
+          } | tee dist/cuda-nightly/hardware.md
+          cat dist/cuda-nightly/hardware.md >> "$GITHUB_STEP_SUMMARY"
+      - name: IVM CUDA tests
+        run: cargo test -p ivm --lib cuda_ --features cuda -- --nocapture
+      - name: FASTPQ CUDA tests
+        run: cargo test -p fastpq_prover --lib --features fastpq-gpu cuda -- --nocapture
+      - name: Norito CUDA zstd helper and loader tests
+        run: |
+          cargo test -p gpuzstd_cuda --features cuda-kernel -- --nocapture
+          cargo build -p gpuzstd_cuda --features cuda-kernel
+          cargo test -p norito gpu_zstd --features gpu-compression -- --nocapture
+          cargo test -p norito required_cuda_backend_is_registered_when_requested --features gpu-compression -- --nocapture
+      - name: Norito JSON Stage-1 CUDA helper and loader tests
+        run: |
+          cargo test -p jsonstage1_cuda --features cuda-kernel -- --nocapture
+          cargo build -p jsonstage1_cuda --features cuda-kernel
+          cargo test -p norito stage1_helper --features cuda-stage1,stage1-validate -- --nocapture
+          cargo test -p norito cuda_stage1_backend_matches_scalar_when_required_or_available --features cuda-stage1,stage1-validate -- --nocapture
+      - name: Upload CUDA inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-nightly-hardware
+          path: dist/cuda-nightly
+          retention-days: 14

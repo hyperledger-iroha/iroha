@@ -624,15 +624,24 @@ mod tests {
             "GPUZSTD_CUDA_REQUIRE requires Norito to register the CUDA zstd backend"
         );
 
-        let data = vec![
-            0x5au8;
-            crate::core::heuristics::get()
-                .min_compress_bytes_gpu
-                .max(1024)
-        ];
-        let encoded = encode_all(data.clone(), 1).expect("gpu encode");
-        let decoded = decode_all(&encoded, data.len() as u64).expect("gpu decode");
-        assert_eq!(decoded, data);
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            let data = vec![0x5au8; 1024 * 1024];
+            match backend() {
+                Backend::Cuda {
+                    compress,
+                    decompress,
+                } => {
+                    let encoded = try_gpu_encode(*compress, &data, 1).expect("gpu encode");
+                    let decoded = zstd::decode_all(Cursor::new(&encoded)).expect("cpu decode");
+                    assert_eq!(decoded, data);
+                    let helper_decoded =
+                        try_gpu_decode(*decompress, &encoded, data.len()).expect("gpu decode");
+                    assert_eq!(helper_decoded, data);
+                }
+                Backend::Cpu => panic!("GPUZSTD_CUDA_REQUIRE requires CUDA backend"),
+            }
+        }
     }
 
     #[test]
