@@ -9,6 +9,7 @@ PREPARE_PORTABLE="auto"
 SKIP_PORTABLE=0
 SKIP_INTEGRATION=0
 MIXED_HOST_INVENTORY=""
+OBSERVABILITY_EVIDENCE=""
 STEP_TIMEOUT_SECONDS="${SORACLOUD_READINESS_STEP_TIMEOUT_SECONDS:-7200}"
 CARGO_TARGET_DIR_OVERRIDE="${SORACLOUD_READINESS_CARGO_TARGET_DIR:-}"
 ISOLATE_CARGO_TARGET=0
@@ -30,6 +31,7 @@ Options:
   --skip-portable                   skip PortableVm QEMU smoke even in full profile
   --skip-integration                skip multi-peer integration tests
   --mixed-host-inventory PATH       run the mixed-host Inrou gate against this inventory in full/load profile
+  --observability-evidence PATH     validate production metrics/status/alert/dashboard evidence in full/load profile
   -h, --help                        show this help
 USAGE
 }
@@ -85,6 +87,11 @@ while [ "$#" -gt 0 ]; do
       MIXED_HOST_INVENTORY="$2"
       shift 2
       ;;
+    --observability-evidence)
+      [ "$#" -ge 2 ] || { echo "ERROR: --observability-evidence requires a path" >&2; exit 2; }
+      OBSERVABILITY_EVIDENCE="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -138,6 +145,8 @@ cat > "$REPORT" <<EOF
 - Step timeout seconds: \`${STEP_TIMEOUT_SECONDS}\`
 - Cargo target dir: \`${CARGO_TARGET_DIR:-workspace default}\`
 - Allow open blockers: \`${ALLOW_OPEN_BLOCKERS}\`
+- Mixed-host inventory: \`${MIXED_HOST_INVENTORY:-not provided}\`
+- Observability evidence: \`${OBSERVABILITY_EVIDENCE:-not provided}\`
 
 EOF
 
@@ -335,6 +344,15 @@ run_mixed_host_gate() {
     "env -u LOG_FORMAT cargo run -p xtask --bin xtask -- soracloud-inrou-smoke mixed-host --inventory $(shell_quote "$MIXED_HOST_INVENTORY")"
 }
 
+run_observability_gate() {
+  if [ -z "$OBSERVABILITY_EVIDENCE" ]; then
+    block_step "production observability evidence" "No --observability-evidence was provided; public rollout readiness requires operator evidence for Soracloud metrics, status fields, alerts, and dashboards."
+    return
+  fi
+  run_step "production observability evidence" \
+    "python3 scripts/ci/check_soracloud_observability_evidence.py --evidence $(shell_quote "$OBSERVABILITY_EVIDENCE")"
+}
+
 run_focused_gates
 
 case "$PROFILE" in
@@ -344,10 +362,12 @@ case "$PROFILE" in
     run_portable_gate
     run_integration_load_gates
     run_mixed_host_gate
+    run_observability_gate
     ;;
   load)
     run_integration_load_gates
     run_mixed_host_gate
+    run_observability_gate
     ;;
 esac
 

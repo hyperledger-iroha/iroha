@@ -25,6 +25,7 @@ mod space_directory;
 mod staking;
 mod subscriptions;
 mod sumeragi;
+mod taira;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
 use iroha_i18n::{Bundle, Localizer, detect_language};
@@ -270,6 +271,9 @@ enum Command {
     /// Developer utilities and diagnostics
     #[command(subcommand)]
     Tools(tools::Command),
+    /// SORA Taira public testnet diagnostics and canaries
+    #[command(subcommand)]
+    Taira(taira::Command),
 }
 
 /// Context inside which commands run
@@ -536,6 +540,7 @@ impl Run for Command {
             App(variant) => Run::run(variant, context),
             Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
+            Taira(variant) => Run::run(variant, context),
         }
     }
 }
@@ -7682,6 +7687,52 @@ mod tests {
         assert!(ctx.err_write.is_empty(), "stderr should be empty");
         let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
         assert_eq!(stdout, "input,status\n");
+    }
+
+    #[test]
+    fn taira_doctor_cli_parses_public_root_and_json() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "taira",
+            "doctor",
+            "--public-root",
+            "https://taira.sora.org",
+            "--json",
+        ])
+        .expect("parse args");
+        let Command::Taira(crate::taira::Command::Doctor(cmd)) = args.command else {
+            panic!("expected taira doctor command");
+        };
+        assert_eq!(cmd.public_root, "https://taira.sora.org");
+        assert!(cmd.json);
+    }
+
+    #[test]
+    fn taira_write_canary_cli_parses_defaults_and_overrides() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "taira",
+            "write-canary",
+            "--alias-prefix",
+            "rollout",
+            "--gas-asset-id",
+            "asset",
+            "--write-config",
+            "/tmp/taira-canary-client.toml",
+            "--json",
+        ])
+        .expect("parse args");
+        let Command::Taira(crate::taira::Command::WriteCanary(cmd)) = args.command else {
+            panic!("expected taira write-canary command");
+        };
+        assert_eq!(cmd.public_root, "https://taira.sora.org");
+        assert_eq!(cmd.alias_prefix, "rollout");
+        assert_eq!(cmd.gas_asset_id, "asset");
+        assert_eq!(
+            cmd.write_config.as_deref(),
+            Some(std::path::Path::new("/tmp/taira-canary-client.toml"))
+        );
+        assert!(cmd.json);
     }
 
     #[test]

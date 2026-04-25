@@ -38,6 +38,8 @@ fn main() {
     let mut build = cc::Build::new();
     build.cuda(true);
     build.compiler(nvcc);
+    build.no_default_flags(true);
+    build.warnings(false);
     build.debug(false);
     build.file("src/cuda_crc64.cu");
     build.flag("-std=c++17");

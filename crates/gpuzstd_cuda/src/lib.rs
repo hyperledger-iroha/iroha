@@ -15,6 +15,7 @@ use gpuzstd_metal::{GpuZstdSequence, zstd_frame};
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
 const RC_NO_SPACE: i32 = 2;
+#[cfg_attr(gpuzstd_cuda_available, allow(dead_code))]
 const RC_GPU_UNAVAILABLE: i32 = 3;
 const RC_ZSTD: i32 = 4;
 
@@ -308,6 +309,207 @@ mod tests {
         }
     }
 
+    fn assert_payload_eq(actual: &[u8], expected: &[u8], context: &str) {
+        if actual == expected {
+            return;
+        }
+        let mismatch = actual
+            .iter()
+            .zip(expected)
+            .position(|(actual, expected)| actual != expected);
+        panic!(
+            "{context}: decoded payload mismatch: actual_len={} expected_len={} first_mismatch={mismatch:?}",
+            actual.len(),
+            expected.len()
+        );
+    }
+
+    #[test]
+    fn ffi_rejects_null_pointers() {
+        let payload = b"gpuzstd ffi boundary";
+        let mut out = [0u8; 64];
+        let mut out_len = out.len();
+
+        let rc = unsafe {
+            gpu_zstd_compress(
+                std::ptr::null(),
+                payload.len(),
+                1,
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc = unsafe {
+            gpu_zstd_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                std::ptr::null_mut(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_INVALID);
+
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                payload.as_ptr(),
+                payload.len(),
+                out.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, RC_INVALID);
+    }
+
+    #[test]
+    fn ffi_reports_no_space_before_cuda_work_for_zero_capacity() {
+        let payload = b"gpuzstd ffi boundary";
+        let mut out = [0u8; 1];
+        let mut out_len = 0usize;
+
+        let rc = unsafe {
+            gpu_zstd_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_NO_SPACE);
+
+        let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                encoded.as_ptr(),
+                encoded.len(),
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_NO_SPACE);
+    }
+
+    #[test]
+    fn gpu_decode_accepts_exact_output_capacity() {
+        let payload = b"gpuzstd exact output capacity";
+        let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
+        let mut out = vec![0u8; payload.len()];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                encoded.as_ptr(),
+                encoded.len(),
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_OK);
+        out.truncate(out_len);
+        assert_eq!(out, payload);
+    }
+
+    #[test]
+    fn gpu_compress_reports_no_space_for_short_output_buffer_when_available() {
+        let payload = b"gpuzstd cuda no-space branch gpuzstd cuda no-space branch";
+        let mut out = [0u8; 4];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        if skip_if_unavailable(rc) {
+            return;
+        }
+        assert_eq!(rc, RC_NO_SPACE);
+    }
+
+    #[test]
+    fn gpu_compress_empty_payload_roundtrips_when_available() {
+        let payload: &[u8] = b"";
+        let mut encoded = vec![0u8; 64];
+        let mut encoded_len = encoded.len();
+        let rc = unsafe {
+            gpu_zstd_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                encoded.as_mut_ptr(),
+                &mut encoded_len,
+            )
+        };
+        if skip_if_unavailable(rc) {
+            return;
+        }
+        assert_eq!(rc, RC_OK);
+        encoded.truncate(encoded_len);
+        assert!(
+            zstd::decode_all(Cursor::new(&encoded))
+                .expect("cpu decode")
+                .is_empty()
+        );
+
+        let mut decoded = [0u8; 1];
+        let mut decoded_len = decoded.len();
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                encoded.as_ptr(),
+                encoded.len(),
+                decoded.as_mut_ptr(),
+                &mut decoded_len,
+            )
+        };
+        assert_eq!(rc, RC_OK);
+        assert_eq!(decoded_len, 0);
+    }
+
+    #[test]
+    fn gpu_compress_accepts_exact_output_capacity_when_available() {
+        let payload = b"gpuzstd exact compression capacity gpuzstd exact compression capacity";
+        let encoded = match try_gpu_compress(payload) {
+            Ok(bytes) => bytes,
+            Err(rc) => {
+                if skip_if_unavailable(rc) {
+                    return;
+                }
+                panic!("gpu compress failed: {rc}");
+            }
+        };
+
+        let mut exact = vec![0u8; encoded.len()];
+        let mut exact_len = exact.len();
+        let rc = unsafe {
+            gpu_zstd_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                exact.as_mut_ptr(),
+                &mut exact_len,
+            )
+        };
+        assert_eq!(rc, RC_OK);
+        exact.truncate(exact_len);
+        assert_eq!(exact, encoded);
+    }
+
+    #[test]
+    fn gpu_decode_empty_source_reports_zstd_error() {
+        let input: &[u8] = b"";
+        let mut out = [0u8; 8];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_decompress(input.as_ptr(), input.len(), out.as_mut_ptr(), &mut out_len)
+        };
+        assert_eq!(rc, RC_ZSTD);
+    }
+
     #[test]
     fn gpu_compress_roundtrips_when_cuda_is_available() {
         let payload = b"gpuzstd cuda roundtrip gpuzstd cuda roundtrip";
@@ -404,11 +606,11 @@ mod tests {
             assert_eq!(compressed_a, compressed_b);
 
             let decoded_cpu = zstd::decode_all(Cursor::new(&compressed_a)).expect("cpu decode");
-            assert_eq!(decoded_cpu, payload);
+            assert_payload_eq(&decoded_cpu, payload, "cpu zstd decode");
 
             let decoded_gpu =
                 try_gpu_decompress(&compressed_a, payload.len()).expect("gpu helper frame decode");
-            assert_eq!(decoded_gpu, payload);
+            assert_payload_eq(&decoded_gpu, payload, "helper zstd decode");
         }
     }
 
@@ -426,7 +628,11 @@ mod tests {
         let repeated = vec![0x5au8; 256 * 1024];
         let randomish = lcg_payload(384 * 1024, 0x9e37_79b9_7f4a_7c15);
 
-        for payload in [patterned, repeated, randomish] {
+        for (case, payload) in [
+            ("patterned", patterned),
+            ("repeated", repeated),
+            ("randomish", randomish),
+        ] {
             let compressed_a = match try_gpu_compress_level(&payload, 3) {
                 Ok(bytes) => bytes,
                 Err(rc) => {
@@ -443,11 +649,11 @@ mod tests {
             );
 
             let cpu_decoded = zstd::decode_all(Cursor::new(&compressed_a)).expect("cpu decode");
-            assert_eq!(cpu_decoded, payload);
+            assert_payload_eq(&cpu_decoded, &payload, case);
 
             let helper_decoded =
                 try_gpu_decompress(&compressed_a, payload.len()).expect("helper decode");
-            assert_eq!(helper_decoded, payload);
+            assert_payload_eq(&helper_decoded, &payload, case);
         }
     }
 

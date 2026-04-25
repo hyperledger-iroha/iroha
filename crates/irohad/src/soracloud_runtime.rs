@@ -53,6 +53,7 @@ use iroha_data_model::{
     ChainId, Encode,
     account::AccountId,
     isi::{self, InstructionBox},
+    metadata::Metadata,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -90,6 +91,7 @@ use iroha_data_model::{
     transaction::TransactionBuilder,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_primitives::json::Json;
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
     api::StorageManifestResponseDto,
@@ -118,6 +120,9 @@ const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
 const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
+const INROU_PORTABLE_BUNDLE_METADATA_PATH: &str = "/soracloud/bundle.tgz";
+const INROU_PORTABLE_BUNDLE_METADATA_MEMBER: &str = "soracloud/bundle.tgz";
+const INROU_PORTABLE_BUNDLE_GUEST_ROOT: &str = "/var/lib/soracloud/materialization/bundle";
 
 /// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,6 +217,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     ) -> eyre::Result<()> {
         let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
             .with_instructions([instruction])
+            .with_metadata(soracloud_runtime_submission_metadata())
             .sign(self.key_pair.private_key());
         let view = self.state.view();
         let params = view.world().parameters();
@@ -287,6 +293,23 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         });
         self.submit_instruction(instruction, "/internal/soracloud/runtime/inrou-host-advert")
     }
+}
+
+fn soracloud_runtime_submission_metadata() -> Metadata {
+    let mut metadata = Metadata::default();
+    let gas_asset_id = std::env::var("IROHA_SORACLOUD_GAS_ASSET_ID")
+        .ok()
+        .or_else(|| std::env::var("IROHA_GAS_ASSET_ID").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(asset_id) = gas_asset_id {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, Json::new(asset_id));
+    }
+
+    metadata
 }
 
 fn current_host_inrou_guest_isa() -> SoraInrouGuestIsaV1 {
@@ -3702,6 +3725,7 @@ impl SoracloudRuntimeManager {
             &shared_filesystem_mounts,
             bootstrap_user_data.as_deref(),
             hosts_overlay.as_deref(),
+            Some(&plan.bundle_hash),
         );
         let cloud_init_root = write_inrou_cloud_init_documents(
             &materialization_dir,
@@ -3710,6 +3734,8 @@ impl SoracloudRuntimeManager {
             &user_data,
         )
         .wrap_err("write PortableVm cloud-init documents")?;
+        stage_portable_vm_metadata_bundle(&cloud_init_root, &PathBuf::from(&plan.bundle_cache_path))
+            .wrap_err("stage PortableVm app bundle for metadata download")?;
         let metadata_server = start_portable_vm_metadata_server(&cloud_init_root)
             .wrap_err("start PortableVm cloud-init metadata server")?;
         let datasource_base_url = metadata_server.datasource_base_url();
@@ -11391,10 +11417,17 @@ fn serve_portable_vm_metadata_request(
         )?;
         return Ok(());
     }
-    let file_name = match path {
-        "/meta-data" => "meta-data",
-        "/network-config" => "network-config",
-        "/user-data" => "user-data",
+    let (file_path, content_type) = match path {
+        "/meta-data" => (seed_root.join("meta-data"), "text/plain; charset=utf-8"),
+        "/network-config" => (
+            seed_root.join("network-config"),
+            "text/plain; charset=utf-8",
+        ),
+        "/user-data" => (seed_root.join("user-data"), "text/plain; charset=utf-8"),
+        INROU_PORTABLE_BUNDLE_METADATA_PATH => (
+            seed_root.join(INROU_PORTABLE_BUNDLE_METADATA_MEMBER),
+            "application/gzip",
+        ),
         _ => {
             stream.write_all(
                 b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -11402,13 +11435,31 @@ fn serve_portable_vm_metadata_request(
             return Ok(());
         }
     };
-    let body = fs::read(seed_root.join(file_name))?;
+    let body = fs::read(file_path)?;
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n",
-        body.len()
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+        body.len(),
     );
     stream.write_all(response.as_bytes())?;
     stream.write_all(&body)?;
+    Ok(())
+}
+
+fn stage_portable_vm_metadata_bundle(seed_root: &Path, bundle_cache_path: &Path) -> eyre::Result<()> {
+    let bundle_path = seed_root.join(INROU_PORTABLE_BUNDLE_METADATA_MEMBER);
+    fs::create_dir_all(
+        bundle_path
+            .parent()
+            .ok_or_else(|| eyre::eyre!("path must have parent: {}", bundle_path.display()))?,
+    )
+    .wrap_err_with(|| format!("create parent for {}", bundle_path.display()))?;
+    fs::copy(bundle_cache_path, &bundle_path).wrap_err_with(|| {
+        format!(
+            "copy {} to {}",
+            bundle_cache_path.display(),
+            bundle_path.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -11515,6 +11566,7 @@ fn build_inrou_bootstrap_seed(
         guest_port,
         shared_filesystem_mounts,
         bootstrap_user_data_overlay,
+        None,
         None,
     );
     build_inrou_bootstrap_seed_from_documents(
@@ -12058,10 +12110,64 @@ fn build_inrou_user_data(
     shared_filesystem_mounts: &[InrouSharedFilesystemMount],
     bootstrap_user_data_overlay: Option<&str>,
     allowlist_hosts_overlay: Option<&str>,
+    portable_bundle_hash: Option<&str>,
 ) -> String {
     let mut prepare_script = String::from("#!/bin/sh\nset -eu\n");
     prepare_script
         .push_str("mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
+    if let Some(bundle_hash) = portable_bundle_hash {
+        let guest_entrypoint = format!(
+            "{}/{}",
+            INROU_PORTABLE_BUNDLE_GUEST_ROOT,
+            strip_leading_slashes(&cache_key.entrypoint)
+        );
+        prepare_script.push_str("bundle_root=");
+        prepare_script.push_str(&shell_single_quote(INROU_PORTABLE_BUNDLE_GUEST_ROOT));
+        prepare_script.push('\n');
+        prepare_script.push_str("bundle_marker='/var/lib/soracloud/materialization/.bundle_hash'\n");
+        prepare_script.push_str("bundle_entrypoint=");
+        prepare_script.push_str(&shell_single_quote(&guest_entrypoint));
+        prepare_script.push('\n');
+        prepare_script.push_str("if [ \"$(cat \"$bundle_marker\" 2>/dev/null || true)\" != ");
+        prepare_script.push_str(&shell_single_quote(bundle_hash));
+        prepare_script.push_str(" ] || [ ! -x \"$bundle_entrypoint\" ]; then\n");
+        prepare_script.push_str("  if ! command -v python3 >/dev/null 2>&1; then\n");
+        prepare_script.push_str(
+            "    echo 'Inrou PortableVm bundle materialization requires python3 in the guest image' >&2\n",
+        );
+        prepare_script.push_str("    exit 1\n");
+        prepare_script.push_str("  fi\n");
+        prepare_script.push_str(
+            "  datasource_url=$(sed -n 's/.*ds=nocloud-net;s=\\([^ ]*\\).*/\\1/p' /proc/cmdline | head -n 1)\n",
+        );
+        prepare_script.push_str("  if [ -z \"$datasource_url\" ]; then\n");
+        prepare_script.push_str(
+            "    echo 'Inrou PortableVm metadata datasource URL not found in /proc/cmdline' >&2\n",
+        );
+        prepare_script.push_str("    exit 1\n");
+        prepare_script.push_str("  fi\n");
+        prepare_script.push_str("  bundle_tmp=$(mktemp /tmp/soracloud-bundle.XXXXXX.tgz)\n");
+        prepare_script.push_str("  python3 - \"${datasource_url%/}");
+        prepare_script.push_str(INROU_PORTABLE_BUNDLE_METADATA_PATH);
+        prepare_script.push_str("\" \"$bundle_tmp\" <<'PY'\n");
+        prepare_script.push_str("import sys\n");
+        prepare_script.push_str("import urllib.request\n");
+        prepare_script.push_str("url, dest = sys.argv[1], sys.argv[2]\n");
+        prepare_script.push_str("with urllib.request.urlopen(url, timeout=30) as response:\n");
+        prepare_script.push_str("    data = response.read()\n");
+        prepare_script.push_str("with open(dest, 'wb') as handle:\n");
+        prepare_script.push_str("    handle.write(data)\n");
+        prepare_script.push_str("PY\n");
+        prepare_script.push_str("  rm -rf \"$bundle_root\"\n");
+        prepare_script.push_str("  mkdir -p \"$bundle_root\"\n");
+        prepare_script.push_str("  tar -xzf \"$bundle_tmp\" -C \"$bundle_root\"\n");
+        prepare_script.push_str("  chown -R inrou:inrou \"$bundle_root\"\n");
+        prepare_script.push_str("  printf '%s\\n' ");
+        prepare_script.push_str(&shell_single_quote(bundle_hash));
+        prepare_script.push_str(" > \"$bundle_marker\"\n");
+        prepare_script.push_str("  rm -f \"$bundle_tmp\"\n");
+        prepare_script.push_str("fi\n");
+    }
     if allowlist_hosts_overlay.is_some() {
         prepare_script.push_str("if [ -f /etc/soracloud/allowlist-hosts ]; then\n");
         prepare_script.push_str("  cp /etc/hosts /tmp/soracloud-hosts\n");
@@ -12167,8 +12273,18 @@ fn build_inrou_user_data(
     launcher_script.push_str("export PORT=");
     launcher_script.push_str(&shell_single_quote(&guest_port.to_string()));
     launcher_script.push('\n');
+    let launcher_entrypoint = portable_bundle_hash.map_or_else(
+        || cache_key.entrypoint.clone(),
+        |_| {
+            format!(
+                "{}/{}",
+                INROU_PORTABLE_BUNDLE_GUEST_ROOT,
+                strip_leading_slashes(&cache_key.entrypoint)
+            )
+        },
+    );
     launcher_script.push_str("exec ");
-    launcher_script.push_str(&shell_single_quote(&cache_key.entrypoint));
+    launcher_script.push_str(&shell_single_quote(&launcher_entrypoint));
     for arg in &cache_key.args {
         launcher_script.push(' ');
         launcher_script.push_str(&shell_single_quote(arg));
@@ -20392,8 +20508,11 @@ mod tests {
             &shared_mounts,
             Some("package_update: true\npackages:\n  - python3-minimal\n"),
             Some("127.0.0.1 api.sora.internal\n10.0.0.5 rpc.sora.internal\n"),
+            Some(&replica_plan.bundle_hash),
         );
 
+        assert!(user_data.contains("/soracloud/bundle.tgz"));
+        assert!(user_data.contains("/var/lib/soracloud/materialization/bundle"));
         assert!(user_data.contains("/etc/soracloud/allowlist-hosts"));
         assert!(user_data.contains("if [ -f /etc/soracloud/allowlist-hosts ]; then"));
         assert!(user_data.contains(
@@ -20435,6 +20554,7 @@ mod tests {
                 .get(),
             &shared_mounts,
             Some("package_update: true\npackages:\n  - python3-minimal\n"),
+            None,
             None,
         );
 
