@@ -28,7 +28,7 @@ IROHA_INROU_LINUX_KVM_INITRD_IMAGE = "/var/lib/inrou/initrd.img"
 [proxy_only_host]
 ssh_target = "validator@proxy-only-host.example"
 repo_path = "/srv/iroha"
-command = "cargo check -p irohad --features embedded-soracloud-runtime --bin irohad --message-format short"
+command = "cargo test -p irohad --features embedded-soracloud-runtime --bin irohad proxy_only_inrou_host -- --nocapture"
 
 [proxy_only_host.env]
 IROHA_INROU_PROXY_ONLY = "true"

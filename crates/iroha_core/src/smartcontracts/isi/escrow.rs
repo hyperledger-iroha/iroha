@@ -252,6 +252,42 @@ fn ensure_single_escrow_nullifier(nullifiers: &[[u8; 32]]) -> Result<(), Error> 
     Ok(())
 }
 
+fn ensure_close_proof_spends_escrow_commitment(
+    proof: &ProofAttachment,
+    escrow_commitment: [u8; 32],
+) -> Result<(), Error> {
+    let (input_commitments, _nullifiers, _outputs, _root, _asset_tag, _chain_tag) =
+        crate::zk::confidential_v2::parse_transfer_public_inputs(&proof.proof.bytes).map_err(
+            |err| {
+                validation_err(format!(
+                    "invalid anonymous escrow close proof public inputs: {err}"
+                ))
+            },
+        )?;
+
+    let zero = [0u8; 32];
+    let mut non_zero_inputs = input_commitments
+        .iter()
+        .copied()
+        .filter(|commitment| commitment != &zero);
+    let Some(proof_commitment) = non_zero_inputs.next() else {
+        return Err(validation_err(
+            "anonymous escrow close proof must spend exactly one escrow commitment",
+        ));
+    };
+    if non_zero_inputs.next().is_some() {
+        return Err(validation_err(
+            "anonymous escrow close proof must spend exactly one escrow commitment",
+        ));
+    }
+    if proof_commitment != escrow_commitment {
+        return Err(validation_err(
+            "anonymous escrow close proof input commitment mismatch",
+        ));
+    }
+    Ok(())
+}
+
 fn proof_record(
     proof: &ProofAttachment,
     nullifiers: Vec<[u8; 32]>,
@@ -380,6 +416,11 @@ impl Execute for OpenAssetEscrow {
             .asset_escrows
             .get(&self.escrow_id)
             .is_some()
+            || state_transaction
+                .world
+                .anonymous_asset_escrows
+                .get(&self.escrow_id)
+                .is_some()
         {
             return Err(validation_err("escrow already exists"));
         }
@@ -855,6 +896,7 @@ impl Execute for ReleaseAnonymousAssetEscrow {
         }
         ensure_single_escrow_nullifier(&self.escrow_nullifiers)?;
         ensure_unique_non_zero_bytes("buyer output commitment", &self.buyer_output_commitments)?;
+        ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
         let release = execute_anonymous_escrow_transfer(
             authority,
             state_transaction,
@@ -895,6 +937,7 @@ impl Execute for CancelAnonymousAssetEscrow {
         }
         ensure_single_escrow_nullifier(&self.escrow_nullifiers)?;
         ensure_unique_non_zero_bytes("seller output commitment", &self.seller_output_commitments)?;
+        ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
         let cancellation = execute_anonymous_escrow_transfer(
             authority,
             state_transaction,
@@ -983,6 +1026,7 @@ impl Execute for ResolveAnonymousEscrowDispute {
         let mut outputs = self.buyer_output_commitments.clone();
         outputs.extend(self.seller_output_commitments.iter().copied());
         ensure_unique_non_zero_bytes("resolution output commitment", &outputs)?;
+        ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
         let proof = execute_anonymous_escrow_transfer(
             authority,
             state_transaction,
@@ -1402,6 +1446,54 @@ mod tests {
             .expect("anonymous escrow record")
     }
 
+    fn anonymous_close_proof_with_input_commitments(
+        input_commitments: [[u8; 32]; 2],
+    ) -> ProofAttachment {
+        let zero = [0u8; 32];
+        let public_inputs = vec![
+            input_commitments[0],
+            input_commitments[1],
+            [0x11; 32],
+            zero,
+            [0x22; 32],
+            zero,
+            [0x33; 32],
+            [0x44; 32],
+            [0x55; 32],
+        ];
+        let inner = iroha_zkp_halo2::Halo2ProofEnvelope::new(
+            18,
+            2,
+            4,
+            iroha_zkp_halo2::FLAG_LOOKUPS,
+            public_inputs,
+            vec![0xAB; 64],
+        )
+        .expect("confidential transfer public-input envelope")
+        .to_bytes();
+        let outer = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+            vk_hash: [0u8; 32],
+            public_inputs: Vec::new(),
+            proof_bytes: inner,
+            aux: Vec::new(),
+        };
+        let proof_bytes = norito::to_bytes(&outer).expect("encode proof envelope");
+        ProofAttachment {
+            backend: crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+            proof: iroha_data_model::proof::ProofBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                proof_bytes,
+            ),
+            vk_ref: None,
+            vk_inline: None,
+            vk_commitment: None,
+            envelope_hash: None,
+            lane_privacy: None,
+        }
+    }
+
     fn grant_court_permission(state_transaction: &mut StateTransaction<'_, '_>, court: &AccountId) {
         let mut permissions = Permissions::default();
         permissions.insert(CanResolveEscrowDispute.into());
@@ -1485,6 +1577,39 @@ mod tests {
         assert!(ensure_unique_non_zero_bytes("test", &[[0x01; 32], [0x01; 32]]).is_err());
         assert!(ensure_single_escrow_nullifier(&[[0x01; 32]]).is_ok());
         assert!(ensure_single_escrow_nullifier(&[[0x01; 32], [0x02; 32]]).is_err());
+    }
+
+    #[test]
+    fn anonymous_escrow_close_proof_must_bind_stored_commitment() {
+        let escrow_commitment = [0x22; 32];
+
+        let matching = anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
+        ensure_close_proof_spends_escrow_commitment(&matching, escrow_commitment)
+            .expect("matching close proof must pass");
+
+        let wrong = anonymous_close_proof_with_input_commitments([[0x44; 32], [0; 32]]);
+        let err = ensure_close_proof_spends_escrow_commitment(&wrong, escrow_commitment)
+            .expect_err("wrong close proof input commitment must fail");
+        assert!(
+            err.to_string().contains("input commitment mismatch"),
+            "unexpected error: {err}"
+        );
+
+        let missing = anonymous_close_proof_with_input_commitments([[0; 32], [0; 32]]);
+        let err = ensure_close_proof_spends_escrow_commitment(&missing, escrow_commitment)
+            .expect_err("close proof without a non-zero input must fail");
+        assert!(
+            err.to_string().contains("exactly one escrow commitment"),
+            "unexpected error: {err}"
+        );
+
+        let extra = anonymous_close_proof_with_input_commitments([escrow_commitment, [0x55; 32]]);
+        let err = ensure_close_proof_spends_escrow_commitment(&extra, escrow_commitment)
+            .expect_err("close proof with multiple non-zero inputs must fail");
+        assert!(
+            err.to_string().contains("exactly one escrow commitment"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1651,6 +1776,53 @@ mod tests {
             .execute(&court, &mut tx)
             .is_err(),
             "court needs CanResolveEscrowDispute before proof verification"
+        );
+    }
+
+    #[test]
+    fn escrow_open_rejects_id_used_by_anonymous_escrow() {
+        let seller = fixture_account("seller");
+        let buyer = fixture_account("buyer");
+        let court = fixture_account("court");
+        let asset_definition = fixture_asset_definition_id();
+        let escrow_id = fixture_escrow_id("public-collides-with-anonymous");
+        let state = state_with_parties(
+            &seller,
+            &buyer,
+            &court,
+            &asset_definition,
+            Numeric::new(100_u32, 0),
+        );
+        let mut block = state.block(block_header(7_000));
+        let mut tx = block.transaction();
+        tx.world.anonymous_asset_escrows.insert(
+            escrow_id,
+            anonymous_escrow_fixture(
+                escrow_id,
+                seller.clone(),
+                None,
+                asset_definition.clone(),
+                AssetEscrowStatus::Open,
+            ),
+        );
+
+        let err = OpenAssetEscrow {
+            escrow_id,
+            asset_definition: asset_definition.clone(),
+            amount: Numeric::new(40_u32, 0),
+            evidence_hashes: Vec::new(),
+        }
+        .execute(&seller, &mut tx)
+        .expect_err("public escrow id must not collide with anonymous escrow id");
+
+        assert!(
+            err.to_string().contains("escrow already exists"),
+            "unexpected error: {err}"
+        );
+        assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
+        assert_eq!(
+            balance(&tx, &seller, &asset_definition),
+            Numeric::new(100_u32, 0)
         );
     }
 

@@ -352,6 +352,25 @@ relabels it for the native PortableVm guest profile, removes cloud-image fstab
 entries for unattached partitions, and exports the matching kernel/initrd paths.
 Use `--force` to refresh an existing cache.
 
+The mixed-host inventory's proxy-only host gate should run the focused
+`proxy_only_inrou_host` runtime tests, proving the host advertises zero hosted
+capacity and does not publish local replica runtime state even if a placement is
+assigned to it.
+
+Production readiness also requires an operator observability evidence JSON file.
+Validate the artifact locally before attaching it to a `full` or `load`
+readiness run:
+
+```bash
+python3 scripts/ci/check_soracloud_observability_evidence.py \
+  --evidence ./fixtures/soracloud/production_observability_evidence.example.json
+```
+
+Use the example as a schema reference only; production evidence must point to
+the real deployment's metrics, status fields, alerts, runbooks, and dashboards.
+The readiness runner refuses `full` and `load` profiles without
+`--observability-evidence`.
+
 Firecracker smoke expects:
 
 - `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`

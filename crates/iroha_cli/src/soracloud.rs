@@ -14,6 +14,7 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
+    str::FromStr as _,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -12790,12 +12791,27 @@ fn submit_soracloud_draft_transaction(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
     config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
     let client = Client::new(config);
-    let transaction = client.build_transaction(instructions, Metadata::default());
+    let transaction = client.build_transaction(instructions, soracloud_submission_metadata());
     client
         .submit_transaction_blocking(&transaction)
         .map(Into::into)
         .map(Some)
         .wrap_err("failed to submit Soracloud mutation transaction")
+}
+
+fn soracloud_submission_metadata() -> Metadata {
+    let mut metadata = Metadata::default();
+    let gas_asset_id = std::env::var("IROHA_SORACLOUD_GAS_ASSET_ID")
+        .ok()
+        .or_else(|| std::env::var("IROHA_GAS_ASSET_ID").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if let Some(asset_id) = gas_asset_id {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, Json::new(asset_id));
+    }
+    metadata
 }
 
 fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {

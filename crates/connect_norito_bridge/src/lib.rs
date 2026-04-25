@@ -25,6 +25,12 @@ use curve25519_dalek::{
     ristretto::{CompressedRistretto, RistrettoPoint},
     scalar::Scalar,
 };
+use fastpq_prover::{
+    Proof as FastpqProof, Prover as FastpqProver, VerifyLimits as FastpqVerifyLimits,
+    batch_manifest_sha256 as fastpq_batch_manifest_sha256,
+    build_batch_from_binding as build_fastpq_batch_from_binding,
+    verify_with_limits as verify_fastpq_with_limits,
+};
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
     PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
@@ -56,6 +62,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
+    nexus::AxtFastpqBinding,
     offline::{
         OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
         OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
@@ -64,8 +71,8 @@ use iroha_data_model::{
         OfflineFastpqCounterProof, OfflineFastpqReplayProof, OfflineFastpqSumProof,
         OfflinePlatformProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
         OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
-        OfflineSpendReceipt, OfflineSpendReceiptPayload, PoseidonDigest, chain_bound_receipt_hash,
-        compute_receipts_root,
+        OfflineSourceLineageFastpqProof, OfflineSpendReceipt, OfflineSpendReceiptPayload,
+        PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -96,7 +103,7 @@ use sorafs_car::{
 };
 use zeroize::Zeroize;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 1;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 2;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -168,6 +175,14 @@ const OFFLINE_BALANCE_PROOF_BYTES: usize =
 const OFFLINE_PROOF_TRANSCRIPT_LABEL: &[u8] = b"iroha.offline.balance.v1";
 const OFFLINE_RANGE_PROOF_TRANSCRIPT_LABEL: &[u8] = b"iroha.offline.balance.range.v1";
 const OFFLINE_GENERATOR_LABEL: &[u8] = b"iroha.offline.balance.generator.H.v1";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER: &str = "fastpq-lane-balanced";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DSID: u64 = 0;
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DATASPACE: &str = "offline";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_CLAIM_TYPE: &str = "value_conservation";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_EFFECT_TYPE: &str = "offline-source-lineage-v1";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_CORRIDOR: &str = "offline-offline";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_ID: &str = "torii-offline-source-lineage";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_VERSION: &str = "v1";
 
 static PEDERSEN_H: OnceLock<RistrettoPoint> = OnceLock::new();
 
@@ -1356,6 +1371,121 @@ fn offline_fastpq_proof_replay(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
     to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)
 }
 
+struct OfflineSourceLineageFastpqProofRequest {
+    transfer_id: String,
+    source_receipt_hash: String,
+    source_nullifier: String,
+    public_inputs_commitment_hex: String,
+    witness_payload: String,
+}
+
+fn parse_source_lineage_fastpq_proof_request(
+    request_json: &[u8],
+) -> BridgeResult<OfflineSourceLineageFastpqProofRequest> {
+    let value = norito::json::from_slice::<JsonValue>(request_json)
+        .map_err(|_| BridgeError::OfflineSerialize)?;
+    let object = value.as_object().ok_or(BridgeError::OfflineSerialize)?;
+    fn required_string(object: &JsonMap, field: &str) -> BridgeResult<String> {
+        let value = object
+            .get(field)
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or(BridgeError::OfflineSerialize)?;
+        Ok(value.to_owned())
+    }
+
+    Ok(OfflineSourceLineageFastpqProofRequest {
+        transfer_id: required_string(object, "transfer_id")?,
+        source_receipt_hash: required_string(object, "source_receipt_hash")?,
+        source_nullifier: required_string(object, "source_nullifier")?,
+        public_inputs_commitment_hex: required_string(object, "public_inputs_commitment_hex")?,
+        witness_payload: required_string(object, "witness_payload")?,
+    })
+}
+
+fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    hex::encode(Sha256::digest(bytes.as_ref()))
+}
+
+fn source_lineage_fastpq_binding(
+    request: &OfflineSourceLineageFastpqProofRequest,
+) -> AxtFastpqBinding {
+    AxtFastpqBinding {
+        parameter: OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER.to_owned(),
+        source_dsid: OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DSID,
+        source_dataspace: OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DATASPACE.to_owned(),
+        source_receipt_id: request.transfer_id.clone(),
+        source_tx_commitment: request.source_receipt_hash.clone(),
+        claim_type: OFFLINE_SOURCE_LINEAGE_FASTPQ_CLAIM_TYPE.to_owned(),
+        claim_digest: request.public_inputs_commitment_hex.clone(),
+        witness_commitment: sha256_hex(request.witness_payload.trim().as_bytes()),
+        policy_commitment: request.source_nullifier.clone(),
+        verified_effect_type: OFFLINE_SOURCE_LINEAGE_FASTPQ_EFFECT_TYPE.to_owned(),
+        corridor: OFFLINE_SOURCE_LINEAGE_FASTPQ_CORRIDOR.to_owned(),
+        verifier_id: OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_ID.to_owned(),
+        verifier_version: OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_VERSION.to_owned(),
+        target_dsids: vec![OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DSID],
+        effect_binding: None,
+    }
+}
+
+fn offline_source_lineage_fastpq_proof(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
+    let request = parse_source_lineage_fastpq_proof_request(request_json)?;
+    let binding = source_lineage_fastpq_binding(&request);
+    let batch =
+        build_fastpq_batch_from_binding(&binding).map_err(|_| BridgeError::OfflineSerialize)?;
+    let manifest =
+        fastpq_batch_manifest_sha256(&binding).map_err(|_| BridgeError::OfflineSerialize)?;
+    let proof = FastpqProver::canonical(OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER)
+        .map_err(|_| BridgeError::OfflineSerialize)?
+        .prove(&batch)
+        .map_err(|_| BridgeError::OfflineSerialize)?;
+    verify_fastpq_with_limits(&batch, &proof, FastpqVerifyLimits::default())
+        .map_err(|_| BridgeError::OfflineSerialize)?;
+    let proof_bytes = to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)?;
+    let artifact = OfflineSourceLineageFastpqProof {
+        parameter: OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER.to_owned(),
+        proof_bytes_base64: b64gp::STANDARD.encode(&proof_bytes),
+        proof_sha256: sha256_hex(&proof_bytes),
+        batch_manifest_sha256: manifest,
+    };
+    norito::json::to_vec(&artifact).map_err(|_| BridgeError::OfflineSerialize)
+}
+
+fn verify_source_lineage_fastpq_artifact(
+    request_json: &[u8],
+    artifact_json: &[u8],
+) -> BridgeResult<()> {
+    let request = parse_source_lineage_fastpq_proof_request(request_json)?;
+    let binding = source_lineage_fastpq_binding(&request);
+    let artifact: OfflineSourceLineageFastpqProof =
+        norito::json::from_slice(artifact_json).map_err(|_| BridgeError::OfflineSerialize)?;
+    if artifact.parameter != OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER {
+        return Err(BridgeError::OfflineSerialize);
+    }
+    let expected_manifest =
+        fastpq_batch_manifest_sha256(&binding).map_err(|_| BridgeError::OfflineSerialize)?;
+    if artifact.batch_manifest_sha256 != expected_manifest {
+        return Err(BridgeError::OfflineSerialize);
+    }
+    let proof_bytes = b64gp::STANDARD
+        .decode(artifact.proof_bytes_base64.as_bytes())
+        .map_err(|_| BridgeError::OfflineSerialize)?;
+    if sha256_hex(&proof_bytes) != artifact.proof_sha256 {
+        return Err(BridgeError::OfflineSerialize);
+    }
+    let proof: FastpqProof =
+        decode_from_bytes(&proof_bytes).map_err(|_| BridgeError::OfflineSerialize)?;
+    if proof.parameter != artifact.parameter {
+        return Err(BridgeError::OfflineSerialize);
+    }
+    let batch =
+        build_fastpq_batch_from_binding(&binding).map_err(|_| BridgeError::OfflineSerialize)?;
+    verify_fastpq_with_limits(&batch, &proof, FastpqVerifyLimits::default())
+        .map_err(|_| BridgeError::OfflineSerialize)
+}
+
 fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
     match result {
         Ok(()) => 0,
@@ -2107,6 +2237,45 @@ pub unsafe extern "C" fn connect_norito_offline_proof_replay(
         let proof = offline_fastpq_proof_replay(bytes)?;
         unsafe { write_bytes_bridge(out_proof_ptr, out_proof_len, &proof) }?;
         Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_source_lineage_fastpq_proof(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    out_proof_ptr: *mut *mut c_uchar,
+    out_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if request_ptr.is_null() || out_proof_ptr.is_null() || out_proof_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len as usize) };
+        let proof = offline_source_lineage_fastpq_proof(bytes)?;
+        unsafe { write_bytes_bridge(out_proof_ptr, out_proof_len, &proof) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_source_lineage_fastpq_verify(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    artifact_ptr: *const c_uchar,
+    artifact_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if request_ptr.is_null() || artifact_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let request = unsafe { slice::from_raw_parts(request_ptr, request_len as usize) };
+        let artifact = unsafe { slice::from_raw_parts(artifact_ptr, artifact_len as usize) };
+        verify_source_lineage_fastpq_artifact(request, artifact)
     })();
 
     bridge_result_to_code(result)
@@ -12049,6 +12218,69 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
         Err(message) => {
             throw_java_illegal_argument(&mut env, message);
             std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineSourceLineageFastpqProof_nativeGenerate(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_json: jni::objects::JString<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let request = jstring_to_string(&mut env, request_json)?;
+        let proof = offline_source_lineage_fastpq_proof(request.as_bytes())
+            .map_err(|err| format!("source lineage FastPQ proof error {}", err.code()))?;
+        let array = env
+            .byte_array_from_slice(&proof)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(&mut env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineSourceLineageFastpqProof_nativeVerify(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_json: jni::objects::JString<'_>,
+    artifact_json: jni::objects::JString<'_>,
+) -> jni::sys::jboolean {
+    let result = (|| -> Result<jni::sys::jboolean, String> {
+        let request = jstring_to_string(&mut env, request_json)?;
+        let artifact = jstring_to_string(&mut env, artifact_json)?;
+        verify_source_lineage_fastpq_artifact(request.as_bytes(), artifact.as_bytes())
+            .map_err(|err| format!("source lineage FastPQ verification error {}", err.code()))?;
+        Ok(jni::sys::JNI_TRUE)
+    })();
+
+    match result {
+        Ok(value) => value,
+        Err(message) => {
+            throw_java_illegal_argument(&mut env, message);
+            jni::sys::JNI_FALSE
         }
     }
 }
