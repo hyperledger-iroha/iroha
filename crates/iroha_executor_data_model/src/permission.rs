@@ -327,6 +327,17 @@ pub mod asset {
     }
 }
 
+/// Permission tokens covering native asset escrow operations.
+pub mod escrow {
+    use super::*;
+
+    permission! {
+        /// Permission to resolve a disputed native asset escrow.
+        #[derive(Copy)]
+        pub struct CanResolveEscrowDispute;
+    }
+}
+
 /// Permission tokens covering NFT operations.
 pub mod nft {
     use super::*;
@@ -650,6 +661,8 @@ pub mod soranet {
 #[cfg(test)]
 mod tests {
     use super::account::CanRegisterAccount;
+    use super::escrow::CanResolveEscrowDispute;
+    use crate::permission::Permission as _;
     use iroha_data_model::DomainId;
 
     #[test]
@@ -667,6 +680,14 @@ mod tests {
             norito::json!({
                 "domain": "wonderland.universal",
             })
+        );
+    }
+
+    #[test]
+    fn escrow_court_permission_uses_expected_name() {
+        assert_eq!(
+            CanResolveEscrowDispute::name().as_str(),
+            "CanResolveEscrowDispute"
         );
     }
 }

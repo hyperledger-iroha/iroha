@@ -35,6 +35,7 @@ Files
 - `hello/hello.ko`: Minimal contract whose raw-IVM `main()` entrypoint logs a greeting and calls `write_detail()`.
 - `transfer/transfer.ko`: Example that calls `transfer_asset(...)` using typed pointer constructors.
 - `nft/nft.ko`: Examples that call `nft_mint_asset(...)` and `nft_transfer_asset(...)`.
+- `crates/kotodama_lang/src/samples/native_escrow.ko`: Native escrow wrapper that calls the ledger-managed escrow ISIs instead of using a contract escrow account.
 - `map/map.ko`: Design example showing deterministic map iteration using `.take(n)`; compile/run may depend on compiler/runtime support.
 
 Docs

@@ -177,6 +177,8 @@ pub struct Root {
 /// Embedded Soracloud runtime-manager configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntime {
+    /// Whether production posture checks are enabled for Soracloud runtime startup.
+    pub production_mode: bool,
     /// Root directory for node-local Soracloud runtime state.
     pub state_dir: PathBuf,
     /// Reconciliation cadence against authoritative world state.
@@ -196,6 +198,7 @@ pub struct SoracloudRuntime {
 impl Default for SoracloudRuntime {
     fn default() -> Self {
         Self {
+            production_mode: defaults::soracloud_runtime::PRODUCTION_MODE,
             state_dir: defaults::soracloud_runtime::state_dir(),
             reconcile_interval: Duration::from_millis(
                 defaults::soracloud_runtime::RECONCILE_INTERVAL_MS,
@@ -205,6 +208,44 @@ impl Default for SoracloudRuntime {
             inrou: SoracloudRuntimeInrou::default(),
             egress: SoracloudRuntimeEgress::default(),
             hf: SoracloudRuntimeHuggingFace::default(),
+        }
+    }
+}
+
+impl SoracloudRuntime {
+    /// Assert that production mode is paired with fail-closed runtime settings.
+    ///
+    /// This method is intentionally available on the parsed `actual` config so
+    /// callers that construct runtime settings directly cannot bypass the
+    /// production posture checks performed by user-config parsing.
+    pub fn assert_production_posture(&self) {
+        if !self.production_mode {
+            return;
+        }
+        if self.inrou.proxy_only {
+            panic!(
+                "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
+            );
+        }
+        if self.egress.default_allow {
+            panic!(
+                "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
+            );
+        }
+        if self.egress.rate_per_minute.is_none() {
+            panic!(
+                "soracloud_runtime.production_mode requires soracloud_runtime.egress.rate_per_minute"
+            );
+        }
+        if self.egress.max_bytes_per_minute.is_none() {
+            panic!(
+                "soracloud_runtime.production_mode requires soracloud_runtime.egress.max_bytes_per_minute"
+            );
+        }
+        if self.hf.allow_inference_bridge_fallback {
+            panic!(
+                "soracloud_runtime.production_mode forbids soracloud_runtime.hf.allow_inference_bridge_fallback"
+            );
         }
     }
 }
@@ -4318,6 +4359,48 @@ impl Default for AdaptiveObservability {
     }
 }
 
+/// Runtime Sumeragi resilience profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SumeragiResilienceProfile {
+    /// Balanced mode keeps normal operation close to baseline and widens only on distress.
+    Balanced,
+}
+
+impl Default for SumeragiResilienceProfile {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+/// Volatile Sumeragi resilience tuning limits.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiResilience {
+    /// Enable volatile resilience mitigation from local telemetry.
+    pub enabled: bool,
+    /// Active resilience profile.
+    pub profile: SumeragiResilienceProfile,
+    /// Maximum collector redundancy used while mitigation is active.
+    pub max_redundant_send_r: u8,
+    /// Maximum extra topology fan-out used while mitigation is active.
+    pub max_parallel_topology_fanout: usize,
+    /// Pipeline-status capacity reserved for local status reads under transaction load.
+    pub status_query_reserved_capacity: usize,
+}
+
+impl Default for SumeragiResilience {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sumeragi::RESILIENCE_ENABLED,
+            profile: SumeragiResilienceProfile::default(),
+            max_redundant_send_r: defaults::sumeragi::RESILIENCE_MAX_REDUNDANT_SEND_R,
+            max_parallel_topology_fanout:
+                defaults::sumeragi::RESILIENCE_MAX_PARALLEL_TOPOLOGY_FANOUT,
+            status_query_reserved_capacity:
+                defaults::sumeragi::RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY,
+        }
+    }
+}
+
 /// Deterministic pacing governor configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiPacingGovernor {
@@ -4729,6 +4812,8 @@ pub struct Sumeragi {
     pub pacemaker: SumeragiPacemaker,
     /// Deterministic pacing governor configuration.
     pub pacing_governor: SumeragiPacingGovernor,
+    /// Volatile resilience tuning limits.
+    pub resilience: SumeragiResilience,
     /// DA (data-availability) configuration.
     pub da: SumeragiDa,
     /// Persistence/retry configuration.
@@ -5320,6 +5405,16 @@ pub struct Torii {
     pub soracloud_public_burst_per_ip: Option<NonZeroU32>,
     /// Maximum concurrent public Soracloud local-read executions.
     pub soracloud_public_max_inflight: NonZeroUsize,
+    /// Optional signed Soracloud mutation rate per account+origin (tokens/sec).
+    pub soracloud_mutation_rate_per_account_origin_per_sec: Option<NonZeroU32>,
+    /// Optional signed Soracloud mutation burst per account+origin (tokens).
+    pub soracloud_mutation_burst_per_account_origin: Option<NonZeroU32>,
+    /// Maximum concurrent signed Soracloud mutation executions.
+    pub soracloud_mutation_max_inflight: NonZeroUsize,
+    /// Maximum signed Soracloud mutation body size before signature verification.
+    pub soracloud_mutation_max_body_bytes: Bytes<u64>,
+    /// Maximum signed Soracloud upload body size before signature verification.
+    pub soracloud_upload_max_body_bytes: Bytes<u64>,
     /// Require a valid API token for app-facing endpoints.
     pub require_api_token: bool,
     /// Allowed API tokens (opaque strings). Empty means no tokens defined.

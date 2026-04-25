@@ -180,6 +180,13 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
 const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "register_asset",
     "create_new_asset",
+    "escrow_open_offer",
+    "escrow_accept",
+    "escrow_mark_payment_sent",
+    "escrow_release",
+    "escrow_cancel",
+    "escrow_open_dispute",
+    "escrow_resolve_dispute",
     "transfer_domain",
     "register_peer",
     "unregister_peer",

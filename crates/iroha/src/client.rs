@@ -5015,7 +5015,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5118,7 +5118,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5216,7 +5216,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5271,7 +5271,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5324,7 +5324,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5429,7 +5429,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5482,6 +5482,55 @@ mod evidence_http_tests {
         assert!(
             snapshot.url.query_pairs().all(|(key, _)| key != "scope"),
             "generic status lookups should keep the public auto-scope behavior"
+        );
+    }
+
+    #[test]
+    fn get_transaction_status_response_auto_sets_auto_scope() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x45; Hash::LENGTH]),
+            );
+        let payload = PipelineTransactionStatusResponse {
+            hash: hash.to_string(),
+            status: PipelineTransactionStatus {
+                kind: "Committed".to_owned(),
+                block_height: Some(7),
+                rejection_reason: None,
+            },
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
+        let body = norito::json::to_string(
+            &norito::json::to_value(&payload).expect("status payload value"),
+        )
+        .expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_transaction_status_response_auto(hash)
+        })
+        .expect("transaction status response")
+        .expect("status payload");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("auto".to_owned())
         );
     }
 
@@ -5668,7 +5717,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 
@@ -5720,7 +5769,7 @@ mod evidence_http_tests {
                 .query_pairs()
                 .find(|(key, _)| key == "scope")
                 .map(|(_, value)| value.to_string()),
-            Some("local".to_owned())
+            Some("auto".to_owned())
         );
     }
 }
@@ -7152,7 +7201,7 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         _entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        match self.get_transaction_status_response_with_scope(hash, Some("local")) {
+        match self.get_transaction_status_response_with_scope(hash, Some("auto")) {
             Ok(Some(payload)) => Ok(tx_confirmation_status_from_pipeline_response(&payload)),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
@@ -7207,6 +7256,19 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         self.get_transaction_status_response_with_scope(hash, None)
+    }
+
+    /// GET `/v1/pipeline/transactions/status?scope=auto` — typed pipeline status lookup
+    /// using Torii's local-cache-first routing and global fallback.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_transaction_status_response_auto(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.get_transaction_status_response_with_scope(hash, Some("auto"))
     }
 
     /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
@@ -7269,7 +7331,7 @@ impl Client {
         loop {
             attempts = attempts.saturating_add(1);
             if let Some(response) =
-                self.get_transaction_status_response_with_scope(hash, Some("local"))?
+                self.get_transaction_status_response_with_scope(hash, Some("auto"))?
             {
                 let kind = response.status.kind.as_str();
                 if tx_confirmation_status_from_pipeline_response(&response).is_none() {

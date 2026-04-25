@@ -170,6 +170,8 @@ pub mod genesis {
 pub mod soracloud_runtime {
     use super::*;
 
+    /// Enable Soracloud production posture checks.
+    pub const PRODUCTION_MODE: bool = false;
     /// Default root directory for Soracloud runtime-manager state.
     pub const STATE_DIR: &str = "./storage/soracloud_runtime";
     /// Default reconciliation cadence in milliseconds.
@@ -222,7 +224,7 @@ pub mod soracloud_runtime {
         /// Default TTL for runtime-originated authoritative model-host heartbeats.
         pub const MODEL_HOST_HEARTBEAT_TTL_MS: u64 = 30_000;
         /// Whether generated HF services may fall back to the HF Inference bridge.
-        pub const ALLOW_INFERENCE_BRIDGE_FALLBACK: bool = true;
+        pub const ALLOW_INFERENCE_BRIDGE_FALLBACK: bool = false;
         /// Default maximum number of Hub files imported into the shared local cache for one source.
         pub const IMPORT_MAX_FILES: u32 = 32;
         /// Default maximum size of one imported Hub file.
@@ -1415,6 +1417,16 @@ pub mod torii {
     pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(10);
     /// Default maximum number of concurrent public Soracloud local-read executions.
     pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    /// Default signed Soracloud mutation rate per account+origin every second.
+    pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(8);
+    /// Default signed Soracloud mutation burst per account+origin.
+    pub const SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN: Option<u32> = Some(16);
+    /// Default maximum number of concurrent signed Soracloud mutation executions.
+    pub const SORACLOUD_MUTATION_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
+    /// Maximum body size for signed Soracloud control-plane mutations before signature verification.
+    pub const SORACLOUD_MUTATION_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024);
+    /// Maximum body size for signed Soracloud uploaded-model upload mutations before signature verification.
+    pub const SORACLOUD_UPLOAD_MAX_BODY_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
     /// Steady-state proof endpoint rate (requests per minute). None disables.
     pub const PROOF_RATE_PER_MIN: Option<u32> = Some(120);
     /// Burst tokens for proof endpoints (requests).
@@ -2965,6 +2977,14 @@ pub mod sumeragi {
     pub const ADAPTIVE_COLLECTOR_REDUNDANT_R: u8 = 3;
     /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
     pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
+    /// Enable volatile Sumeragi resilience tuning by default.
+    pub const RESILIENCE_ENABLED: bool = true;
+    /// Maximum collector redundancy used while resilience mitigation is active.
+    pub const RESILIENCE_MAX_REDUNDANT_SEND_R: u8 = 13;
+    /// Maximum extra topology fan-out used while resilience mitigation is active.
+    pub const RESILIENCE_MAX_PARALLEL_TOPOLOGY_FANOUT: usize = 8;
+    /// Pipeline-status reads reserved while transaction ingress is saturated.
+    pub const RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY: usize = 1024;
     /// Number of recent blocks to sample for the pacing governor window.
     pub const PACING_GOVERNOR_WINDOW_BLOCKS: usize = 20;
     /// View-change pressure threshold (permille of view-change increments per block).
@@ -3636,5 +3656,11 @@ mod tests {
         assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(5));
         assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(10));
         assert_eq!(torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get(), 32);
+        assert_eq!(
+            torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC,
+            Some(8)
+        );
+        assert_eq!(torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN, Some(16));
+        assert_eq!(torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(), 64);
     }
 }

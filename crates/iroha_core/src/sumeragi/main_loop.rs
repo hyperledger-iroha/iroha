@@ -17391,6 +17391,23 @@ impl Actor {
         self.telemetry.set_collectors_targeted_current(0);
     }
 
+    fn effective_collector_k_for_routing(
+        &self,
+        consensus_mode: ConsensusMode,
+        topology: &super::network_topology::Topology,
+        configured_k: usize,
+    ) -> usize {
+        if !self.config.resilience.enabled || !self.subsystems.propose.adaptive_state.applied() {
+            return configured_k;
+        }
+        let max_remote = topology.as_ref().len().saturating_sub(1).max(1);
+        match consensus_mode {
+            ConsensusMode::Permissioned => configured_k.max(topology.min_votes_for_commit()),
+            ConsensusMode::Npos => max_remote,
+        }
+        .min(max_remote)
+    }
+
     fn init_collector_plan(
         &mut self,
         topology: &super::network_topology::Topology,
@@ -17413,7 +17430,9 @@ impl Actor {
             return;
         }
 
-        let targets = deterministic_collectors(topology, consensus_mode, k, prf_seed, height, view);
+        let routing_k = self.effective_collector_k_for_routing(consensus_mode, topology, k);
+        let targets =
+            deterministic_collectors(topology, consensus_mode, routing_k, prf_seed, height, view);
         if targets.is_empty() {
             return;
         }
@@ -17511,6 +17530,15 @@ impl Actor {
                 }
                 next
             })
+    }
+
+    fn effective_parallel_topology_fanout(&self) -> usize {
+        let baseline = self.config.collectors.parallel_topology_fanout;
+        if self.config.resilience.enabled && self.subsystems.propose.adaptive_state.applied() {
+            baseline.max(self.config.resilience.max_parallel_topology_fanout)
+        } else {
+            baseline
+        }
     }
 
     fn finalize_collector_plan(&mut self, committed: bool) {
@@ -17611,9 +17639,16 @@ impl Actor {
     }
 
     fn apply_adaptive_observability(&mut self, now: Instant) -> bool {
-        let metrics = AdaptiveObservabilityMetrics::gather();
+        let mut metrics = AdaptiveObservabilityMetrics::gather();
+        metrics.queue_saturated = self
+            .subsystems
+            .propose
+            .backpressure_gate
+            .state()
+            .is_saturated();
         match self.subsystems.propose.adaptive_state.evaluate(
             self.subsystems.propose.adaptive_cfg,
+            self.config.resilience,
             metrics,
             &mut self.subsystems.propose.pacemaker,
             &mut self.subsystems.propose.collector_redundant_limit,

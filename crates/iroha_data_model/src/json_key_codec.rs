@@ -89,6 +89,16 @@ impl JsonKeyCodec for crate::runtime::RuntimeUpgradeId {
     }
 }
 
+impl JsonKeyCodec for crate::escrow::EscrowId {
+    fn encode_json_key(&self, out: &mut String) {
+        self.as_hash().encode_json_key(out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
+    }
+}
+
 impl JsonKeyCodec for crate::account::rekey::AccountAlias {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();

@@ -23,6 +23,24 @@ static NSString* kMSLSource = @"\n"
 "    out[gid] = h;\n"
 "}\n";
 
+static BOOL wait_for_command_buffer(id<MTLCommandBuffer> command) {
+    static const NSTimeInterval kGpuCommandTimeoutSeconds = 10.0;
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:kGpuCommandTimeoutSeconds];
+    while (true) {
+        MTLCommandBufferStatus status = [command status];
+        if (status == MTLCommandBufferStatusCompleted) {
+            return [command error] == nil;
+        }
+        if (status == MTLCommandBufferStatusError) {
+            return NO;
+        }
+        if ([deadline timeIntervalSinceNow] <= 0.0) {
+            return NO;
+        }
+        [NSThread sleepForTimeInterval:0.001];
+    }
+}
+
 int gpuzstd_metal_prepass(const uint8_t* input_ptr, size_t input_len, uint64_t* out_digest) {
     if (!out_digest) { return 1; }
     @autoreleasepool {
@@ -69,7 +87,7 @@ int gpuzstd_metal_prepass(const uint8_t* input_ptr, size_t input_len, uint64_t* 
         [enc dispatchThreads:threadsPerGrid threadsPerThreadgroup:threadsPerTG];
         [enc endEncoding];
         [cb commit];
-        [cb waitUntilCompleted];
+        if (!wait_for_command_buffer(cb)) { return 3; }
 
         uint64_t digest = 0;
         const uint32_t* out = (const uint32_t*)[outbuf contents];

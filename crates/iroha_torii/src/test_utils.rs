@@ -565,6 +565,18 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                     .and_then(std::num::NonZeroU32::new),
             soracloud_public_max_inflight:
                 iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+            soracloud_mutation_rate_per_account_origin_per_sec:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_burst_per_account_origin:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_max_inflight:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
+            soracloud_mutation_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
+            soracloud_upload_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
             proof_api: iroha_config::parameters::actual::ProofApi {
                 rate_per_minute: defaults::torii::PROOF_RATE_PER_MIN
                     .and_then(std::num::NonZeroU32::new),
@@ -945,6 +957,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 epoch_length_blocks: 0,
                 use_stake_snapshot_roster: false,
             },
+            resilience: A::SumeragiResilience::default(),
             adaptive_observability: A::AdaptiveObservability::default(),
             debug: A::SumeragiDebug {
                 force_soft_fork: false,

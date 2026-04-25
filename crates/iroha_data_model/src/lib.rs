@@ -74,6 +74,8 @@ pub mod domain;
 pub mod error;
 /// Canonical error codes and structured contexts surfaced by AMX/DA/settlement.
 pub mod errors;
+/// Generic native asset escrow records.
+pub mod escrow;
 /// Event payloads emitted by the ledger.
 pub mod events;
 /// Executor configuration and API types.
@@ -347,6 +349,7 @@ pub mod prelude {
         content::prelude::*,
         domain::prelude::*,
         error::EnumTryAsError,
+        escrow::prelude::*,
         events::prelude::*,
         executor::prelude::*,
         fastpq::*,

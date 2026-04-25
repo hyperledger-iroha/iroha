@@ -46,11 +46,23 @@ For a local smoke pass:
 scripts/run_izanami_communication_vulnerability_matrix.sh --mode quick
 ```
 
+Run both Sumeragi validator-selection modes when comparing Iroha against the
+paper:
+
+```bash
+scripts/run_izanami_communication_vulnerability_matrix.sh --mode quick --sumeragi-mode both
+```
+
 For a paper-shaped pass:
 
 ```bash
 scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper -- --seed 7
 ```
+
+The runner accepts `--sumeragi-mode permissioned`, `--sumeragi-mode npos`, or
+`--sumeragi-mode both`. Permissioned mode uses the default Sumeragi validator
+roster. NPoS mode passes `--nexus` to Izanami, which loads the Nexus/Sora
+profile and sets `sumeragi.consensus_mode = "npos"`.
 
 The helper writes `summary.md`, `summary.tsv`, and per-scenario logs under
 `dist/izanami-communication-vuln-*`. The Markdown report includes the paper

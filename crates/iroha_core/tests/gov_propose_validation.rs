@@ -119,6 +119,39 @@ fn propose_rejects_invalid_hex() {
 }
 
 #[test]
+fn propose_rejects_non_canonical_abi_hash_for_v1() {
+    let (state, authority) = mk_state_and_authority();
+    let contract_address = proposal_contract_address(&authority);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let perm: Permission = CanProposeContractDeployment {
+        contract_address: contract_address.clone(),
+    }
+    .into();
+    Grant::account_permission(perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant propose");
+
+    let result = iroha_data_model::isi::governance::ProposeDeployContract {
+        contract_address,
+        code_hash_hex: "11".repeat(32),
+        abi_hash_hex: "00".repeat(32),
+        abi_version: "1".into(),
+        window: None,
+        mode: None,
+        manifest_provenance: None,
+    }
+    .execute(&authority, &mut stx);
+
+    assert!(
+        result.is_err(),
+        "v1 contract proposals must use the canonical ABI hash"
+    );
+}
+
+#[test]
 fn propose_window_override_applied() {
     let (state, authority) = mk_state_and_authority();
     let contract_address = proposal_contract_address(&authority);

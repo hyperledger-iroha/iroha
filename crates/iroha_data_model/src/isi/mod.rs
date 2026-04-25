@@ -768,6 +768,43 @@ impl From<crate::isi::social::CancelTwitterEscrow> for InstructionBox {
     }
 }
 
+// Allow direct boxing of native asset escrow instructions.
+impl From<crate::isi::escrow::OpenAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::AcceptAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::AcceptAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::MarkEscrowPaymentSent> for InstructionBox {
+    fn from(i: crate::isi::escrow::MarkEscrowPaymentSent) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ReleaseAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::ReleaseAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::CancelAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::CancelAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::OpenEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ResolveEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::ResolveEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of SoraFS capacity marketplace instructions.
 impl From<crate::isi::sorafs::RegisterCapacityDeclaration> for InstructionBox {
     fn from(i: crate::isi::sorafs::RegisterCapacityDeclaration) -> Self {
@@ -2089,6 +2126,8 @@ pub mod content;
 pub mod contract_alias;
 /// Account subject and domain link instructions.
 pub mod domain_link;
+/// Ledger-managed asset escrow instructions.
+pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
 /// Kaigi collaboration instructions.
@@ -2939,6 +2978,10 @@ pub mod prelude {
         domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
+        },
+        escrow::{
+            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
         },
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,

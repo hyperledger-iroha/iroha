@@ -48,7 +48,11 @@ use std::{
     },
 };
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use std::{mem::transmute, sync::atomic::AtomicUsize};
+use std::{
+    mem::transmute,
+    sync::atomic::AtomicUsize,
+    time::{Duration, Instant},
+};
 
 /// The SIMD backend selected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2341,18 +2345,30 @@ fn finalize_command_buffer(
 ) -> bool {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     const MTL_COMMAND_BUFFER_STATUS_COMPLETED: NSUInteger = 4;
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    const MTL_COMMAND_BUFFER_STATUS_ERROR: NSUInteger = 5;
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
-    let status_raw: NSUInteger = unsafe {
-        cmd_buf.waitUntilCompleted();
-        transmute(cmd_buf.status())
-    };
-    if status_raw == MTL_COMMAND_BUFFER_STATUS_COMPLETED {
-        true
-    } else {
-        record_metal_disable(format!(
-            "{context} command buffer exited with status {status_raw:?}"
-        ));
-        false
+    let started = Instant::now();
+    loop {
+        let status_raw: NSUInteger = unsafe { transmute(cmd_buf.status()) };
+        if status_raw == MTL_COMMAND_BUFFER_STATUS_COMPLETED {
+            return true;
+        }
+        if status_raw == MTL_COMMAND_BUFFER_STATUS_ERROR {
+            record_metal_disable(format!(
+                "{context} command buffer exited with status {status_raw:?}"
+            ));
+            return false;
+        }
+        if started.elapsed() >= METAL_COMMAND_TIMEOUT {
+            record_metal_disable(format!(
+                "{context} command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"
+            ));
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 

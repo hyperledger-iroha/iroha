@@ -32,7 +32,7 @@ use iroha_config::parameters::actual::{
     SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
     SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
     SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues, SumeragiRbc,
-    SumeragiRecovery, SumeragiWorker,
+    SumeragiRecovery, SumeragiResilience, SumeragiWorker,
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -1700,6 +1700,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             epoch_length_blocks: 0,
             use_stake_snapshot_roster: false,
         },
+        resilience: SumeragiResilience::default(),
         adaptive_observability: AdaptiveObservability::default(),
         debug: SumeragiDebug {
             force_soft_fork: false,
@@ -46344,6 +46345,44 @@ async fn init_collector_plan_bumps_redundant_limit_to_quorum() {
     assert_eq!(
         harness.actor.subsystems.propose.collector_redundant_limit,
         expected
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn npos_resilience_collector_widening_reaches_full_remote_topology() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.collectors.k = 1;
+    consensus_cfg.resilience.enabled = true;
+    consensus_cfg.resilience.max_redundant_send_r = 4;
+
+    let mut harness = test_actor_harness_with_config(5, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let now = Instant::now();
+    let action = actor.subsystems.propose.adaptive_state.evaluate(
+        actor.subsystems.propose.adaptive_cfg,
+        actor.config.resilience,
+        AdaptiveObservabilityMetrics {
+            missing_local_data_total: 0,
+            max_qc_latency_ms: 0,
+            queue_saturated: true,
+        },
+        &mut actor.subsystems.propose.pacemaker,
+        &mut actor.subsystems.propose.collector_redundant_limit,
+        now,
+    );
+    assert_eq!(action, super::AdaptiveAction::Applied);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    actor.init_collector_plan(&topology, 4, 0);
+
+    assert_eq!(
+        actor.subsystems.propose.collector_plan_targets.len(),
+        topology.as_ref().len().saturating_sub(1),
+        "NPoS resilience widening should cover every non-leader collector candidate"
     );
 
     harness.shutdown.send();
@@ -134727,6 +134766,13 @@ fn kickstart_pacemaker_after_commit_triggers_only_when_allowed() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+fn disabled_resilience() -> SumeragiResilience {
+    SumeragiResilience {
+        enabled: false,
+        ..SumeragiResilience::default()
+    }
+}
+
 #[test]
 fn adaptive_observability_applies_on_da_burst() {
     let cfg = AdaptiveObservability {
@@ -134743,9 +134789,11 @@ fn adaptive_observability_applies_on_da_burst() {
     let mut state = super::AdaptiveObservabilityState::new(cfg, base_interval, collector_limit, 0);
     let action = state.evaluate(
         cfg,
+        disabled_resilience(),
         AdaptiveObservabilityMetrics {
             missing_local_data_total: 2,
             max_qc_latency_ms: 0,
+            queue_saturated: false,
         },
         &mut pacemaker,
         &mut collector_limit,
@@ -134782,9 +134830,11 @@ fn adaptive_observability_noops_when_disabled() {
 
     let action = state.evaluate(
         cfg,
+        disabled_resilience(),
         AdaptiveObservabilityMetrics {
             missing_local_data_total: 10,
             max_qc_latency_ms: 10_000,
+            queue_saturated: false,
         },
         &mut pacemaker,
         &mut collector_limit,
@@ -134800,6 +134850,81 @@ fn adaptive_observability_noops_when_disabled() {
         pacemaker.propose_interval, base_interval,
         "pacemaker interval should be untouched when the feature is disabled"
     );
+}
+
+#[test]
+fn adaptive_observability_resilience_applies_when_adaptive_disabled() {
+    let cfg = AdaptiveObservability {
+        enabled: false,
+        qc_latency_alert_ms: 10,
+        da_reschedule_burst: 1,
+        pacemaker_extra_ms: 25,
+        collector_redundant_r: 2,
+        cooldown_ms: 10,
+    };
+    let resilience = SumeragiResilience {
+        enabled: true,
+        max_redundant_send_r: 7,
+        ..SumeragiResilience::default()
+    };
+    let base_interval = Duration::from_millis(120);
+    let mut pacemaker = super::Pacemaker::with_interval(base_interval, Instant::now());
+    let mut collector_limit = 1u8;
+    let mut state = super::AdaptiveObservabilityState::new(cfg, base_interval, collector_limit, 0);
+
+    let action = state.evaluate(
+        cfg,
+        resilience,
+        AdaptiveObservabilityMetrics {
+            missing_local_data_total: 0,
+            max_qc_latency_ms: cfg.qc_latency_alert_ms,
+            queue_saturated: false,
+        },
+        &mut pacemaker,
+        &mut collector_limit,
+        Instant::now(),
+    );
+
+    assert_eq!(action, super::AdaptiveAction::Applied);
+    assert_eq!(collector_limit, resilience.max_redundant_send_r);
+    assert!(state.applied());
+}
+
+#[test]
+fn adaptive_observability_resilience_uses_queue_saturation_signal() {
+    let cfg = AdaptiveObservability {
+        enabled: false,
+        qc_latency_alert_ms: 10_000,
+        da_reschedule_burst: 10,
+        pacemaker_extra_ms: 25,
+        collector_redundant_r: 2,
+        cooldown_ms: 10,
+    };
+    let resilience = SumeragiResilience {
+        enabled: true,
+        max_redundant_send_r: 5,
+        ..SumeragiResilience::default()
+    };
+    let base_interval = Duration::from_millis(120);
+    let mut pacemaker = super::Pacemaker::with_interval(base_interval, Instant::now());
+    let mut collector_limit = 1u8;
+    let mut state = super::AdaptiveObservabilityState::new(cfg, base_interval, collector_limit, 0);
+
+    let action = state.evaluate(
+        cfg,
+        resilience,
+        AdaptiveObservabilityMetrics {
+            missing_local_data_total: 0,
+            max_qc_latency_ms: 0,
+            queue_saturated: true,
+        },
+        &mut pacemaker,
+        &mut collector_limit,
+        Instant::now(),
+    );
+
+    assert_eq!(action, super::AdaptiveAction::Applied);
+    assert_eq!(collector_limit, resilience.max_redundant_send_r);
 }
 
 #[test]
@@ -134821,9 +134946,17 @@ fn adaptive_observability_waits_for_cooldown_before_reapplying() {
     let metrics = AdaptiveObservabilityMetrics {
         missing_local_data_total: cfg.da_reschedule_burst,
         max_qc_latency_ms: cfg.qc_latency_alert_ms,
+        queue_saturated: false,
     };
 
-    let first = state.evaluate(cfg, metrics, &mut pacemaker, &mut collector_limit, now);
+    let first = state.evaluate(
+        cfg,
+        disabled_resilience(),
+        metrics,
+        &mut pacemaker,
+        &mut collector_limit,
+        now,
+    );
     assert_eq!(first, super::AdaptiveAction::Applied);
     assert_eq!(collector_limit, cfg.collector_redundant_r);
     assert_eq!(
@@ -134834,6 +134967,7 @@ fn adaptive_observability_waits_for_cooldown_before_reapplying() {
     // Within cooldown: do not re-apply or change intervals/limits.
     let second = state.evaluate(
         cfg,
+        disabled_resilience(),
         metrics,
         &mut pacemaker,
         &mut collector_limit,
@@ -134849,6 +134983,7 @@ fn adaptive_observability_waits_for_cooldown_before_reapplying() {
     // After cooldown: allow re-application, but the values should stay clamped to the configured caps.
     let third = state.evaluate(
         cfg,
+        disabled_resilience(),
         metrics,
         &mut pacemaker,
         &mut collector_limit,
@@ -134880,9 +135015,11 @@ fn adaptive_observability_stays_applied_until_cooldown_expires() {
 
     let _ = state.evaluate(
         cfg,
+        disabled_resilience(),
         AdaptiveObservabilityMetrics {
             missing_local_data_total: cfg.da_reschedule_burst,
             max_qc_latency_ms: cfg.qc_latency_alert_ms,
+            queue_saturated: false,
         },
         &mut pacemaker,
         &mut collector_limit,
@@ -134892,9 +135029,11 @@ fn adaptive_observability_stays_applied_until_cooldown_expires() {
     // Alerts clear but cooldown has not expired yet: stay applied.
     let action = state.evaluate(
         cfg,
+        disabled_resilience(),
         AdaptiveObservabilityMetrics {
             missing_local_data_total: cfg.da_reschedule_burst, // no new missing availability warnings
             max_qc_latency_ms: 0,                              // alert cleared
+            queue_saturated: false,
         },
         &mut pacemaker,
         &mut collector_limit,
@@ -134927,9 +135066,11 @@ fn adaptive_observability_resets_after_cooldown_without_alerts() {
     let start = Instant::now();
     let _ = state.evaluate(
         cfg,
+        disabled_resilience(),
         AdaptiveObservabilityMetrics {
             missing_local_data_total: 1,
             max_qc_latency_ms: 0,
+            queue_saturated: false,
         },
         &mut pacemaker,
         &mut collector_limit,
@@ -134938,9 +135079,11 @@ fn adaptive_observability_resets_after_cooldown_without_alerts() {
 
     let action = state.evaluate(
         cfg,
+        disabled_resilience(),
         AdaptiveObservabilityMetrics {
             missing_local_data_total: 1,
             max_qc_latency_ms: 0,
+            queue_saturated: false,
         },
         &mut pacemaker,
         &mut collector_limit,

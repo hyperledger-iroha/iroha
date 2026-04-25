@@ -982,6 +982,60 @@ seiyaku JsonAssetDefinitionTest {
     }
 
     #[test]
+    fn native_escrow_builtins_emit_escrow_syscalls() {
+        let src = r#"
+fn main() {
+  let evidence = norito_bytes("00");
+  escrow_open_offer(name("aitai_offer"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 10, evidence);
+  escrow_accept(name("aitai_offer"));
+  escrow_mark_payment_sent(name("aitai_offer"));
+  escrow_release(name("aitai_offer"));
+  escrow_cancel(name("aitai_offer"));
+  escrow_open_dispute(name("aitai_offer"), evidence);
+  escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile native escrow builtins");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_ESCROW_OPEN_OFFER,
+                "ESCROW_OPEN_OFFER",
+            ),
+            (ivm_abi::syscalls::SYSCALL_ESCROW_ACCEPT, "ESCROW_ACCEPT"),
+            (
+                ivm_abi::syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT,
+                "ESCROW_MARK_PAYMENT_SENT",
+            ),
+            (ivm_abi::syscalls::SYSCALL_ESCROW_RELEASE, "ESCROW_RELEASE"),
+            (ivm_abi::syscalls::SYSCALL_ESCROW_CANCEL, "ESCROW_CANCEL"),
+            (
+                ivm_abi::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE,
+                "ESCROW_OPEN_DISPUTE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE,
+                "ESCROW_RESOLVE_DISPUTE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("escrow syscall id fits in u8"),
+            )
+            .to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall in compiled code"
+            );
+        }
+    }
+
+    #[test]
     fn account_id_alias_literal_emits_resolve_account_alias_syscall() {
         let compiler = Compiler::new();
         let bytes = compiler
@@ -5456,6 +5510,172 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
+                        Instr::EscrowOpenOffer {
+                            escrow,
+                            asset,
+                            amount,
+                            evidence_hashes,
+                        } => {
+                            let r_amount = src_reg(amount, scratch1, &mut code)?;
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            if let Some(asset_str) = string_map
+                                .get(&(func_idx, *asset))
+                                .map(|s| DataKey(DataKind::AssetDef, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, asset_str);
+                            } else {
+                                let r_asset = src_reg(asset, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r_asset, 0)?);
+                            }
+                            push_word(&mut code, encode_addi(12, r_amount, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            if let Some(evidence_hashes) = evidence_hashes {
+                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
+                                code.extend_from_slice(&pub_word.to_le_bytes());
+                                push_word(&mut code, encode_addi(13, 10, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(13, 0, 0)?);
+                            }
+                            push_word(&mut code, encode_addi(10, 14, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ESCROW_OPEN_OFFER as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::EscrowAccept { escrow }
+                        | Instr::EscrowMarkPaymentSent { escrow }
+                        | Instr::EscrowRelease { escrow }
+                        | Instr::EscrowCancel { escrow } => {
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let syscall = match instr {
+                                Instr::EscrowAccept { .. } => syscalls::SYSCALL_ESCROW_ACCEPT,
+                                Instr::EscrowMarkPaymentSent { .. } => {
+                                    syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT
+                                }
+                                Instr::EscrowRelease { .. } => syscalls::SYSCALL_ESCROW_RELEASE,
+                                Instr::EscrowCancel { .. } => syscalls::SYSCALL_ESCROW_CANCEL,
+                                _ => unreachable!(),
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscall as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::EscrowOpenDispute {
+                            escrow,
+                            evidence_hashes,
+                        } => {
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(evidence_hashes) = evidence_hashes {
+                                push_word(&mut code, encode_addi(14, 10, 0)?);
+                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
+                                code.extend_from_slice(&pub_word.to_le_bytes());
+                                push_word(&mut code, encode_addi(11, 10, 0)?);
+                                push_word(&mut code, encode_addi(10, 14, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(11, 0, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ESCROW_OPEN_DISPUTE as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::EscrowResolveDispute {
+                            escrow,
+                            buyer_amount,
+                            seller_amount,
+                            evidence_hashes,
+                        } => {
+                            let r_buyer = src_reg(buyer_amount, scratch1, &mut code)?;
+                            let r_seller = src_reg(seller_amount, scratch2, &mut code)?;
+                            push_word(&mut code, encode_addi(11, r_buyer, 0)?);
+                            push_word(&mut code, encode_addi(12, r_seller, 0)?);
+                            if let Some(escrow_str) = string_map
+                                .get(&(func_idx, *escrow))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, escrow_str);
+                            } else {
+                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            if let Some(evidence_hashes) = evidence_hashes {
+                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
+                                code.extend_from_slice(&pub_word.to_le_bytes());
+                                push_word(&mut code, encode_addi(13, 10, 0)?);
+                            } else {
+                                push_word(&mut code, encode_addi(13, 0, 0)?);
+                            }
+                            push_word(&mut code, encode_addi(10, 14, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
                         Instr::TransferBatchBegin => {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -9143,6 +9363,15 @@ fn record_isi_access(
     }
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
+        ir::Instr::EscrowOpenOffer { .. }
+        | ir::Instr::EscrowAccept { .. }
+        | ir::Instr::EscrowMarkPaymentSent { .. }
+        | ir::Instr::EscrowRelease { .. }
+        | ir::Instr::EscrowCancel { .. }
+        | ir::Instr::EscrowOpenDispute { .. }
+        | ir::Instr::EscrowResolveDispute { .. } => {
+            return apply_fallback(access_set, hint_diagnostics);
+        }
         ir::Instr::TransferAsset {
             from, to, asset, ..
         } => {
@@ -9828,6 +10057,13 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
         ir::Instr::RegisterAsset { .. }
             | ir::Instr::CreateNewAsset { .. }
             | ir::Instr::TransferAsset { .. }
+            | ir::Instr::EscrowOpenOffer { .. }
+            | ir::Instr::EscrowAccept { .. }
+            | ir::Instr::EscrowMarkPaymentSent { .. }
+            | ir::Instr::EscrowRelease { .. }
+            | ir::Instr::EscrowCancel { .. }
+            | ir::Instr::EscrowOpenDispute { .. }
+            | ir::Instr::EscrowResolveDispute { .. }
             | ir::Instr::TransferBatchBegin
             | ir::Instr::TransferBatchEnd
             | ir::Instr::MintAsset { .. }

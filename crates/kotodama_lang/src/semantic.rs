@@ -201,6 +201,13 @@ thread_local! {
 const SENSITIVE_SYSCALLS: &[&str] = &[
     "set_account_detail",
     "transfer_asset",
+    "escrow_open_offer",
+    "escrow_accept",
+    "escrow_mark_payment_sent",
+    "escrow_release",
+    "escrow_cancel",
+    "escrow_open_dispute",
+    "escrow_resolve_dispute",
     "transfer_v1_batch_begin",
     "transfer_v1_batch_end",
     "mint_asset",
@@ -3804,6 +3811,83 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             ty: Type::Unit,
                         })
                     }
+                    "escrow_open_offer" => {
+                        if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                            || !(arg_typed[0].ty == Type::Name
+                                && arg_typed[1].ty == Type::AssetDefinitionId
+                                && is_int_like(&arg_typed[2].ty))
+                            || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                        {
+                            return Err(SemanticError {
+                                message:
+                                    "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
+                                        .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "escrow_accept"
+                    | "escrow_mark_payment_sent"
+                    | "escrow_release"
+                    | "escrow_cancel" => {
+                        if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                            return Err(SemanticError {
+                                message: format!("{callee} expects (Name)"),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "escrow_open_dispute" => {
+                        if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                            || arg_typed[0].ty != Type::Name
+                            || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+                        {
+                            return Err(SemanticError {
+                                message:
+                                    "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                                        .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "escrow_resolve_dispute" => {
+                        if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                            || !(arg_typed[0].ty == Type::Name
+                                && is_int_like(&arg_typed[1].ty)
+                                && is_int_like(&arg_typed[2].ty))
+                            || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                        {
+                            return Err(SemanticError {
+                                message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
+                                    .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
                     "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
                         if !arg_typed.is_empty() {
                             return Err(SemanticError {
@@ -5414,6 +5498,82 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             message:
                                 "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)"
                                     .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_open_offer" => {
+                    if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                        || !(arg_typed[0].ty == Type::Name
+                            && arg_typed[1].ty == Type::AssetDefinitionId
+                            && is_int_like(&arg_typed[2].ty))
+                        || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                    {
+                        return Err(SemanticError {
+                            message: "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
+                                .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_accept"
+                | "escrow_mark_payment_sent"
+                | "escrow_release"
+                | "escrow_cancel" => {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                        return Err(SemanticError {
+                            message: format!("{name} expects (Name)"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_open_dispute" => {
+                    if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                        || arg_typed[0].ty != Type::Name
+                        || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+                    {
+                        return Err(SemanticError {
+                            message:
+                                "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                                    .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_resolve_dispute" => {
+                    if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                        || !(arg_typed[0].ty == Type::Name
+                            && is_int_like(&arg_typed[1].ty)
+                            && is_int_like(&arg_typed[2].ty))
+                        || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                    {
+                        return Err(SemanticError {
+                            message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
+                                .into(),
                         });
                     }
                     Ok(TypedExpr {

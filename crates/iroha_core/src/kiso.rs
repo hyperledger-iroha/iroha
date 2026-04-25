@@ -806,6 +806,18 @@ mod tests {
                         .and_then(std::num::NonZeroU32::new),
                 soracloud_public_max_inflight:
                     iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+                soracloud_mutation_rate_per_account_origin_per_sec:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_mutation_burst_per_account_origin:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_mutation_max_inflight:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
+                soracloud_mutation_max_body_bytes:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
+                soracloud_upload_max_body_bytes:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
                 require_api_token: false,
                 api_tokens: Vec::new(),
                 api_fee_asset_id: None,
@@ -1334,6 +1346,7 @@ mod tests {
                     use_stake_snapshot_roster:
                         iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
                 },
+                resilience: iroha_config::parameters::actual::SumeragiResilience::default(),
                 adaptive_observability:
                     iroha_config::parameters::actual::AdaptiveObservability::default(),
                 debug: iroha_config::parameters::actual::SumeragiDebug {

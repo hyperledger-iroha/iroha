@@ -14,7 +14,9 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
 };
-use iroha::client::{Client, TransactionWaitOptions, TransactionWaitTerminalStatus};
+use iroha::client::{
+    Client, TransactionWaitOptions, TransactionWaitOutcome, TransactionWaitTerminalStatus,
+};
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
@@ -28,7 +30,9 @@ use iroha_data_model::{
     query::trigger::prelude::FindTriggers,
     trigger::action::Repeats,
 };
-use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
+use iroha_executor_data_model::permission::{
+    asset::CanMintAssetWithDefinition, nexus::CanPublishSpaceDirectoryManifest,
+};
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -426,6 +430,40 @@ impl EndpointHealthPool {
         )
     }
 
+    fn run_with_failover_from_endpoint<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: usize,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(usize, &str) -> Result<T>,
+    {
+        self.run_with_failover_at_with_preference(
+            op_name,
+            Some(preferred_endpoint_idx),
+            Instant::now(),
+            operation,
+        )
+    }
+
+    fn run_with_failover_until_some_from_endpoint<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: usize,
+        operation: F,
+    ) -> Result<Option<(usize, T)>>
+    where
+        F: FnMut(usize, &str) -> Result<Option<T>>,
+    {
+        self.run_with_failover_until_some_at_with_preference(
+            op_name,
+            Some(preferred_endpoint_idx),
+            Instant::now(),
+            operation,
+        )
+    }
+
     fn select_endpoint_preferred(
         &self,
         op_name: &'static str,
@@ -596,6 +634,92 @@ impl EndpointHealthPool {
                     }
                 }
             }
+        }
+        match last_error {
+            Some(err) => Err(err).wrap_err_with(|| {
+                format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
+            }),
+            None => Err(eyre!(
+                "ingress operation `{op_name}` failed without making an endpoint attempt"
+            )),
+        }
+    }
+
+    fn run_with_failover_until_some_at_with_preference<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: Option<usize>,
+        now: Instant,
+        mut operation: F,
+    ) -> Result<Option<(usize, T)>>
+    where
+        F: FnMut(usize, &str) -> Result<Option<T>>,
+    {
+        let attempt_order = self.attempt_order_at_with_preference(now, preferred_endpoint_idx);
+        if attempt_order.is_empty() {
+            return Err(eyre!(
+                "no ingress endpoints available for operation `{op_name}`"
+            ));
+        }
+        let max_attempts = self.config.max_attempts.max(1).min(attempt_order.len());
+        let mut last_error = None;
+        let mut attempted = 0usize;
+        let mut observed_empty = false;
+        for (attempt_idx, endpoint_idx) in attempt_order.into_iter().take(max_attempts).enumerate()
+        {
+            if attempt_idx > 0 {
+                self.ingress_stats.record_failover(endpoint_idx);
+            }
+            let label = self
+                .labels
+                .get(endpoint_idx)
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+            attempted = attempted.saturating_add(1);
+            match operation(endpoint_idx, label) {
+                Ok(Some(value)) => {
+                    self.mark_success_at(endpoint_idx, now);
+                    return Ok(Some((endpoint_idx, value)));
+                }
+                Ok(None) => {
+                    observed_empty = true;
+                    self.mark_success_at(endpoint_idx, now);
+                }
+                Err(err) => {
+                    let failure_class = classify_ingress_failure(&err);
+                    let retryable = failure_class.is_retryable();
+                    let transitioned_unhealthy = ingress_failure_affects_submit_health(op_name)
+                        && self.mark_failure_at(endpoint_idx, now, failure_class);
+                    if transitioned_unhealthy {
+                        self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
+                        warn!(
+                            target: "izanami::ingress",
+                            operation = op_name,
+                            endpoint = label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            "marking ingress endpoint unhealthy"
+                        );
+                    }
+                    warn!(
+                        target: "izanami::ingress",
+                        ?err,
+                        operation = op_name,
+                        endpoint = label,
+                        attempt = attempt_idx + 1,
+                        failure_class = failure_class.as_str(),
+                        retryable,
+                        "ingress endpoint request failed"
+                    );
+                    last_error = Some(err);
+                    if !retryable {
+                        break;
+                    }
+                }
+            }
+        }
+        if observed_empty {
+            return Ok(None);
         }
         match last_error {
             Some(err) => Err(err).wrap_err_with(|| {
@@ -1163,6 +1287,50 @@ impl IngressEndpointPool {
         )
     }
 
+    fn run_with_failover_from_endpoint<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: usize,
+        mut operation: F,
+    ) -> Result<(usize, T)>
+    where
+        F: FnMut(&NetworkPeer) -> Result<T>,
+    {
+        let endpoints = Arc::clone(&self.endpoints);
+        self.health.run_with_failover_from_endpoint(
+            op_name,
+            preferred_endpoint_idx,
+            move |endpoint_idx, _label| {
+                let endpoint = endpoints
+                    .get(endpoint_idx)
+                    .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+                operation(&endpoint.peer).map(|value| (endpoint_idx, value))
+            },
+        )
+    }
+
+    fn run_with_failover_until_some_from_endpoint<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: usize,
+        mut operation: F,
+    ) -> Result<Option<(usize, T)>>
+    where
+        F: FnMut(&NetworkPeer) -> Result<Option<T>>,
+    {
+        let endpoints = Arc::clone(&self.endpoints);
+        self.health.run_with_failover_until_some_from_endpoint(
+            op_name,
+            preferred_endpoint_idx,
+            move |endpoint_idx, _label| {
+                let endpoint = endpoints
+                    .get(endpoint_idx)
+                    .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+                operation(&endpoint.peer)
+            },
+        )
+    }
+
     fn select_endpoint_preferred(
         &self,
         op_name: &'static str,
@@ -1286,6 +1454,7 @@ fn is_idempotent_duplicate_submission(error: &color_eyre::Report) -> bool {
 
 fn is_ingress_queue_pressure_message(message: &str) -> bool {
     message.contains("transaction queued for too long")
+        || message.contains("transaction did not reach")
         || message.contains("status_timeout_ms")
         || message.contains("haven't got tx confirmation within")
         || contains_http_429_status(message)
@@ -2049,7 +2218,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         .nexus
         .as_ref()
         .map(|profile| {
-            extract_nexus_bootstrap_post_topology(&mut genesis, config.peer_count, profile)
+            let post_topology =
+                extract_nexus_bootstrap_post_topology(&mut genesis, config.peer_count, profile);
+            compact_nexus_retained_genesis(&mut genesis);
+            post_topology
         })
         .unwrap_or_default();
     let recovery_profile = recovery_profile_for(config);
@@ -2565,6 +2737,44 @@ fn extract_nexus_bootstrap_post_topology(
     bootstrap
 }
 
+fn compact_nexus_retained_genesis(genesis: &mut Vec<Vec<InstructionBox>>) {
+    if genesis.len() <= 1 {
+        return;
+    }
+
+    let mut compacted: Vec<Vec<InstructionBox>> = Vec::with_capacity(genesis.len());
+    for transaction in genesis.drain(..) {
+        if is_universal_dataspace_grant_transaction(&transaction) && !compacted.is_empty() {
+            compacted
+                .first_mut()
+                .expect("checked non-empty compacted genesis")
+                .extend(transaction);
+        } else {
+            compacted.push(transaction);
+        }
+    }
+    *genesis = compacted;
+}
+
+fn is_universal_dataspace_grant_transaction(transaction: &[InstructionBox]) -> bool {
+    !transaction.is_empty()
+        && transaction.iter().all(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<GrantBox>()
+                .is_some_and(|grant| match grant {
+                    GrantBox::Permission(permission) => {
+                        permission.object
+                            == CanPublishSpaceDirectoryManifest {
+                                dataspace: DataSpaceId::UNIVERSAL,
+                            }
+                            .into()
+                    }
+                    _ => false,
+                })
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn classify_nexus_bootstrap_instruction(
     instruction: &InstructionBox,
@@ -2841,7 +3051,7 @@ impl IzanamiRunner {
             )
             .await
         } else {
-            Ok(TargetProgressResult::default())
+            wait_for_duration_deadline(&run_control).await
         };
 
         let mut run_error = None;
@@ -2878,9 +3088,7 @@ impl IzanamiRunner {
             }
         }
 
-        if self.config.target_blocks.is_some() {
-            run_control.stop();
-        }
+        run_control.stop();
 
         if run_error.is_some() {
             // Cut off peer services first on fatal progress failure so blocking submitters
@@ -3158,7 +3366,20 @@ impl IzanamiRunner {
         let run_control = Arc::clone(run_control);
         tokio::spawn(async move {
             let mut budgets = vec![SubmissionAuditBudget::default(); ingress_pool.endpoint_count()];
-            while let Some(candidate) = confirmation_audit_rx.recv().await {
+            let stop_notify = run_control.stop_notifier();
+            let deadline = run_control.deadline();
+            loop {
+                if run_control.should_stop() {
+                    break;
+                }
+                let candidate = tokio::select! {
+                    candidate = confirmation_audit_rx.recv() => candidate,
+                    () = stop_notify.notified() => break,
+                    () = time::sleep_until(deadline.into()) => break,
+                };
+                let Some(candidate) = candidate else {
+                    break;
+                };
                 let now = Instant::now();
                 let Some(budget) = budgets.get_mut(candidate.endpoint_idx) else {
                     metrics.record_confirmation_audit_failed();
@@ -3582,6 +3803,17 @@ struct TargetProgressResult {
     target_reached: bool,
     quorum_min_height: u64,
     strict_min_height: u64,
+}
+
+async fn wait_for_duration_deadline(run_control: &RunControl) -> Result<TargetProgressResult> {
+    if run_control.stop_requested() {
+        return Err(eyre!("izanami run stopped before duration completed"));
+    }
+    let stop_notify = run_control.stop_notifier();
+    tokio::select! {
+        () = stop_notify.notified() => Err(eyre!("izanami run stopped before duration completed")),
+        () = time::sleep_until(run_control.deadline().into()) => Ok(TargetProgressResult::default()),
+    }
 }
 
 fn enforce_latency_p95_gate(
@@ -4442,7 +4674,7 @@ async fn submit_plan(
             effective_submission_confirmation,
             move || {
                 let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool_for_submit);
-                run_with_queue_timeout_retry_with_policy_and_delay_result(
+                let submitted = run_with_queue_timeout_retry_with_policy_and_delay_result(
                     plan_label,
                     IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
                     Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
@@ -4460,29 +4692,35 @@ async fn submit_plan(
                                             &signer_for_submit.id,
                                             signer_for_submit.key_pair.private_key().clone(),
                                         ),
-                                        effective_submission_confirmation,
+                                        SubmissionConfirmationMode::AcceptedByIngress,
                                     );
                                     let metadata =
                                         submission_metadata(submission_counter_for_submit.as_ref());
-                                    match effective_submission_confirmation {
-                                        SubmissionConfirmationMode::BlockingApplied => client
-                                            .submit_all_blocking_with_metadata(
-                                                instructions_for_submit.clone(),
-                                                metadata,
-                                            )
-                                            .map(|hash| hash),
-                                        SubmissionConfirmationMode::AcceptedByIngress => client
-                                            .submit_all_with_metadata(
-                                                instructions_for_submit.clone(),
-                                                metadata,
-                                            )
-                                            .map(|hash| hash),
-                                    }
+                                    client
+                                        .submit_all_with_metadata(
+                                            instructions_for_submit.clone(),
+                                            metadata,
+                                        )
+                                        .map(|hash| hash)
                                 },
                             )
                             .map(|(endpoint_idx, hash)| SubmissionOutcome { endpoint_idx, hash })
                     },
-                )
+                )?;
+                if matches!(
+                    effective_submission_confirmation,
+                    SubmissionConfirmationMode::BlockingApplied
+                ) {
+                    let _ = wait_for_transaction_terminal_status_with_failover(
+                        &ingress_pool_for_submit,
+                        "confirm_transaction_plan",
+                        submitted.endpoint_idx,
+                        &signer_for_submit,
+                        submitted.hash.clone(),
+                        terminal_confirmation_wait_options(),
+                    )?;
+                }
+                Ok(submitted)
             },
         )
         .await
@@ -4601,56 +4839,57 @@ fn submit_repeatable_trigger_plan_on_endpoint(
     submission_confirmation: SubmissionConfirmationMode,
     submission_counter: &AtomicU64,
 ) -> Result<SubmissionOutcome> {
-    match ingress_pool.run_on_endpoint("submit_repeatable_trigger_plan", endpoint_idx, |peer| {
+    let submit_to_endpoint = |resolved_endpoint_idx: usize, peer: &NetworkPeer| {
         let client = tune_ingress_client(
             peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
-            submission_confirmation,
+            SubmissionConfirmationMode::AcceptedByIngress,
         );
         let metadata = submission_metadata(submission_counter);
-        match submission_confirmation {
-            SubmissionConfirmationMode::BlockingApplied => client
-                .submit_all_blocking_with_metadata(instructions.to_vec(), metadata)
-                .map(|hash| SubmissionOutcome { endpoint_idx, hash }),
-            SubmissionConfirmationMode::AcceptedByIngress => client
-                .submit_all_with_metadata(instructions.to_vec(), metadata)
-                .map(|hash| SubmissionOutcome { endpoint_idx, hash }),
-        }
-    }) {
-        Ok(outcome) => Ok(outcome),
-        Err(err) if is_route_unavailable_error(&err) => {
-            warn!(
-                target: "izanami::workload",
-                ?err,
-                endpoint_idx,
-                "repinning repeatable trigger submit after route_unavailable"
-            );
-            ingress_pool
-                .run_with_failover_excluding(
+        client
+            .submit_all_with_metadata(instructions.to_vec(), metadata)
+            .map(|hash| SubmissionOutcome {
+                endpoint_idx: resolved_endpoint_idx,
+                hash,
+            })
+    };
+    let submission =
+        match ingress_pool.run_on_endpoint("submit_repeatable_trigger_plan", endpoint_idx, |peer| {
+            submit_to_endpoint(endpoint_idx, peer)
+        }) {
+            Ok(outcome) => outcome,
+            Err(err) if is_route_unavailable_error(&err) => {
+                warn!(
+                    target: "izanami::workload",
+                    ?err,
+                    endpoint_idx,
+                    "repinning repeatable trigger submit after route_unavailable"
+                );
+                let (resolved_endpoint_idx, hash) = ingress_pool.run_with_failover_excluding(
                     "submit_repeatable_trigger_plan_route_failover",
                     endpoint_idx,
-                    |peer| {
-                        let client = tune_ingress_client(
-                            peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
-                            submission_confirmation,
-                        );
-                        let metadata = submission_metadata(submission_counter);
-                        match submission_confirmation {
-                            SubmissionConfirmationMode::BlockingApplied => client
-                                .submit_all_blocking_with_metadata(instructions.to_vec(), metadata)
-                                .map(|hash| hash),
-                            SubmissionConfirmationMode::AcceptedByIngress => client
-                                .submit_all_with_metadata(instructions.to_vec(), metadata)
-                                .map(|hash| hash),
-                        }
-                    },
-                )
-                .map(|(resolved_endpoint_idx, hash)| SubmissionOutcome {
+                    |peer| submit_to_endpoint(endpoint_idx, peer).map(|outcome| outcome.hash),
+                )?;
+                SubmissionOutcome {
                     endpoint_idx: resolved_endpoint_idx,
                     hash,
-                })
-        }
-        Err(err) => Err(err),
+                }
+            }
+            Err(err) => return Err(err),
+        };
+    if matches!(
+        submission_confirmation,
+        SubmissionConfirmationMode::BlockingApplied
+    ) {
+        let _ = wait_for_transaction_terminal_status_with_failover(
+            ingress_pool,
+            "confirm_repeatable_trigger_plan",
+            submission.endpoint_idx,
+            signer,
+            submission.hash.clone(),
+            terminal_confirmation_wait_options(),
+        )?;
     }
+    Ok(submission)
 }
 
 async fn reconcile_repeatable_trigger_with_endpoint(
@@ -4689,7 +4928,7 @@ async fn reconcile_repeatable_trigger_with_endpoint(
     }
 }
 
-fn confirmation_audit_wait_options() -> TransactionWaitOptions {
+fn terminal_confirmation_wait_options() -> TransactionWaitOptions {
     TransactionWaitOptions {
         timeout: Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS),
         poll_interval: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS),
@@ -4698,6 +4937,116 @@ fn confirmation_audit_wait_options() -> TransactionWaitOptions {
             TransactionWaitTerminalStatus::Rejected,
             TransactionWaitTerminalStatus::Expired,
         ],
+    }
+}
+
+fn pipeline_status_kind_is_supported(kind: &str) -> bool {
+    matches!(
+        kind,
+        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
+    )
+}
+
+fn pipeline_status_kind_is_wait_terminal(
+    kind: &str,
+    terminal_statuses: &[TransactionWaitTerminalStatus],
+) -> bool {
+    matches!(kind, "Applied" | "Rejected" | "Expired")
+        || terminal_statuses
+            .iter()
+            .any(|status| status.as_str().eq_ignore_ascii_case(kind))
+}
+
+fn elapsed_ms_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn transaction_wait_target_description(
+    terminal_statuses: &[TransactionWaitTerminalStatus],
+) -> String {
+    terminal_statuses
+        .iter()
+        .map(|status| status.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn wait_for_transaction_terminal_status_with_failover(
+    ingress_pool: &IngressEndpointPool,
+    op_name: &'static str,
+    preferred_endpoint_idx: usize,
+    signer: &AccountRecord,
+    hash: HashOf<SignedTransaction>,
+    options: TransactionWaitOptions,
+) -> Result<(usize, TransactionWaitOutcome)> {
+    let TransactionWaitOptions {
+        timeout,
+        poll_interval,
+        terminal_statuses,
+    } = options;
+    let poll_interval = if poll_interval == Duration::ZERO {
+        Duration::from_millis(1)
+    } else {
+        poll_interval
+    };
+    let stop_statuses = if terminal_statuses.is_empty() {
+        TransactionWaitOptions::default().terminal_statuses
+    } else {
+        terminal_statuses
+    };
+    let target_description = transaction_wait_target_description(&stop_statuses);
+    let start = Instant::now();
+    let mut attempts = 0_u64;
+    let mut last_error = None;
+
+    loop {
+        attempts = attempts.saturating_add(1);
+        match ingress_pool.run_with_failover_until_some_from_endpoint(
+            op_name,
+            preferred_endpoint_idx,
+            |peer| {
+                let client = tune_ingress_client(
+                    peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                    SubmissionConfirmationMode::AcceptedByIngress,
+                );
+                client.get_transaction_status_response_auto(hash.clone())
+            },
+        ) {
+            Ok(Some((endpoint_idx, response))) => {
+                let kind = response.status.kind.as_str();
+                if !pipeline_status_kind_is_supported(kind) {
+                    return Err(eyre!("unsupported pipeline status kind `{kind}`"));
+                }
+                if pipeline_status_kind_is_wait_terminal(kind, &stop_statuses) {
+                    return Ok((
+                        endpoint_idx,
+                        TransactionWaitOutcome {
+                            hash: response.hash.clone(),
+                            terminal_kind: kind.to_owned(),
+                            attempts,
+                            elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                            r#final: response,
+                        },
+                    ));
+                }
+            }
+            Ok(None) => {}
+            Err(err) => last_error = Some(err),
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            let timeout_error = eyre!(
+                "transaction did not reach {target_description} within {} ms",
+                timeout.as_millis()
+            );
+            return if let Some(err) = last_error {
+                Err(err.wrap_err(timeout_error))
+            } else {
+                Err(timeout_error)
+            };
+        }
+        std::thread::sleep(poll_interval.min(timeout.saturating_sub(elapsed)));
     }
 }
 
@@ -4718,17 +5067,18 @@ async fn audit_submitted_transaction(
     let run_control = Arc::clone(run_control);
     let metrics = Arc::clone(metrics);
     let result = spawn_blocking(move || {
-        ingress_pool.run_on_endpoint("audit_confirmation", endpoint_idx, |peer| {
-            let client = tune_ingress_client(
-                peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
-                SubmissionConfirmationMode::AcceptedByIngress,
-            );
-            client.wait_for_transaction_terminal_status(hash, confirmation_audit_wait_options())
-        })
+        wait_for_transaction_terminal_status_with_failover(
+            &ingress_pool,
+            "audit_confirmation",
+            endpoint_idx,
+            &signer,
+            hash,
+            terminal_confirmation_wait_options(),
+        )
     })
     .await;
     match result {
-        Ok(Ok(outcome)) => match outcome.terminal_kind.as_str() {
+        Ok(Ok((_resolved_endpoint_idx, outcome))) => match outcome.terminal_kind.as_str() {
             "Applied" => metrics.record_confirmation_audit_applied(),
             "Rejected" => metrics.record_confirmation_audit_rejected(),
             "Expired" => metrics.record_confirmation_audit_expired(),
@@ -7032,6 +7382,15 @@ mod tests {
     }
 
     #[test]
+    fn ingress_failover_marks_transaction_wait_timeout_retryable() {
+        let err = eyre!("transaction did not reach Applied within 20000 ms");
+        assert!(
+            is_ingress_failover_retryable(&err),
+            "transaction wait timeouts should trigger endpoint failover"
+        );
+    }
+
+    #[test]
     fn ingress_failover_marks_http_429_retryable() {
         let err = eyre!("Failed to get pipeline transaction status: 429 Too Many Requests");
         assert!(
@@ -7140,6 +7499,82 @@ mod tests {
         assert_eq!(
             result.expect("query should fail over to alternate endpoint"),
             Some(9)
+        );
+        assert_eq!(attempts, vec![0, 1]);
+    }
+
+    #[test]
+    fn endpoint_pool_status_read_prefers_hint_then_fails_over() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:21".to_string(),
+                "http://127.0.0.1:22".to_string(),
+                "http://127.0.0.1:23".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<usize> = pool.run_with_failover_at_with_preference(
+            "audit_confirmation",
+            Some(1),
+            now,
+            |idx, _| {
+                attempts.push(idx);
+                if idx == 1 {
+                    Err(eyre!("connection refused"))
+                } else {
+                    Ok(idx)
+                }
+            },
+        );
+        assert_eq!(result.expect("status read should fail over"), 2);
+        assert_eq!(attempts, vec![1, 2]);
+    }
+
+    #[test]
+    fn endpoint_pool_status_fanout_continues_after_empty_response() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:24".to_string(),
+                "http://127.0.0.1:25".to_string(),
+                "http://127.0.0.1:26".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<Option<(usize, &'static str)>> = pool
+            .run_with_failover_until_some_at_with_preference(
+                "audit_confirmation",
+                Some(0),
+                now,
+                |idx, _| {
+                    attempts.push(idx);
+                    if idx == 0 {
+                        Ok(None)
+                    } else {
+                        Ok(Some("applied"))
+                    }
+                },
+            );
+        assert_eq!(
+            result.expect("status fanout should succeed"),
+            Some((1, "applied"))
         );
         assert_eq!(attempts, vec![0, 1]);
     }
@@ -8513,6 +8948,54 @@ mod tests {
     }
 
     #[test]
+    fn terminal_confirmation_wait_options_require_applied_terminal_status() {
+        let options = terminal_confirmation_wait_options();
+        assert_eq!(
+            options.timeout,
+            Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS)
+        );
+        assert!(
+            options
+                .terminal_statuses
+                .contains(&TransactionWaitTerminalStatus::Applied)
+        );
+        assert!(
+            options
+                .terminal_statuses
+                .contains(&TransactionWaitTerminalStatus::Rejected)
+        );
+        assert!(
+            options
+                .terminal_statuses
+                .contains(&TransactionWaitTerminalStatus::Expired)
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_duration_deadline_completes_when_no_target_blocks_are_set() {
+        let run_control = RunControl::new(Instant::now() + Duration::from_millis(5));
+        let result = wait_for_duration_deadline(&run_control)
+            .await
+            .expect("duration wait should complete normally");
+        assert!(!result.target_reached);
+        assert_eq!(result.quorum_min_height, 0);
+        assert_eq!(result.strict_min_height, 0);
+    }
+
+    #[tokio::test]
+    async fn wait_for_duration_deadline_reports_explicit_stop() {
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(60));
+        run_control.stop();
+        let err = wait_for_duration_deadline(&run_control)
+            .await
+            .expect_err("explicit stop should end duration wait with an error");
+        assert!(
+            err.to_string().contains("before duration completed"),
+            "unexpected duration wait error: {err}"
+        );
+    }
+
+    #[test]
     fn shutdown_noise_only_applies_to_status_reads_after_stop() {
         let deadline = Instant::now() + Duration::from_secs(5);
         let run_control = RunControl::new(deadline);
@@ -9177,6 +9660,65 @@ mod tests {
                 path
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn make_network_builder_npos_genesis_stays_within_transaction_cap() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(23),
+            tps: 1.0,
+            max_inflight: 4,
+            submitters: 1,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+
+        let tx_count = network.genesis().0.transactions_vec().len();
+        assert!(
+            (1..=16).contains(&tx_count),
+            "NPoS genesis must fit Iroha's startup validation cap; got {tx_count} transactions"
+        );
         Ok(())
     }
 

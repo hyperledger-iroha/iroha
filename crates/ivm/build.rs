@@ -2,8 +2,7 @@ use std::{
     env,
     error::Error,
     ffi::OsStr,
-    fs::{self, File},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -25,7 +24,7 @@ fn main() {
     if env::var_os("CARGO_FEATURE_CUDA").is_some()
         && let Err(err) = build_cuda_artifacts()
     {
-        println!("cargo:warning=ivm cuda build: {err}");
+        panic!("ivm cuda build failed: {err}");
     }
     dump_dep_env();
 }
@@ -106,7 +105,11 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
         }
 
         if !fallback_copy(&cuda_dir, &target, &stem)? {
-            write_stub_ptx(&target, &stem)?;
+            return Err(format!(
+                "no real PTX available for {stem}: nvcc failed and {} does not exist",
+                cuda_dir.join(format!("{stem}.ptx")).display()
+            )
+            .into());
         }
     }
 
@@ -120,15 +123,6 @@ fn fallback_copy(cuda_dir: &Path, target: &Path, stem: &str) -> Result<bool, Box
         return Ok(true);
     }
     Ok(false)
-}
-
-fn write_stub_ptx(target: &Path, stem: &str) -> Result<(), Box<dyn Error>> {
-    let mut file = File::create(target)?;
-    writeln!(
-        file,
-        "// Placeholder PTX for {stem}. No GPU kernels were built; CUDA runtime will stay disabled."
-    )?;
-    Ok(())
 }
 
 fn dump_dep_env() {

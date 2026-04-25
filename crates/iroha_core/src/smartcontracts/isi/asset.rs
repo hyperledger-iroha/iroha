@@ -153,6 +153,21 @@ pub mod isi {
         Ok(())
     }
 
+    fn ensure_not_native_escrow_source(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
+            state_transaction,
+            source_id,
+        )? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "direct debit from native escrow custody account is not allowed; use escrow instructions".into(),
+            ));
+        }
+        Ok(())
+    }
+
     static ASSET_ISSUER_POLICY_KEY: LazyLock<Name> = LazyLock::new(|| {
         ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
             .parse()
@@ -722,6 +737,7 @@ pub mod isi {
             Some(amount),
         )?;
         ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+        ensure_not_native_escrow_source(state_transaction, &source_id)?;
 
         let remove_source_asset;
         let from_balance_before;
@@ -881,6 +897,7 @@ pub mod isi {
                 )],
                 Some(self.object()),
             )?;
+            ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
 
             // Withdraw from source asset balance and remove if it reaches zero
             let amount = self.object().clone();

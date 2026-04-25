@@ -1,13 +1,16 @@
-//! CUDA-named GPU-assisted zstd helper for Norito.
+//! CUDA GPU-assisted zstd helper for Norito.
 //!
 //! This crate exports the same C ABI as `gpuzstd_metal`, but under the
 //! `gpuzstd_cuda` artifact name so Unix/Windows Norito builds can load an
-//! in-tree `libgpuzstd_cuda` helper directly. Compression still reports
-//! `gpu_unavailable` until dedicated CUDA kernels land; decode remains
-//! self-contained so workspace builds can compile both helper crates together
-//! without linking duplicate exported symbols.
+//! in-tree CUDA helper directly. The CUDA path performs deterministic
+//! match-finding and sequence generation on the GPU, then uses the shared zstd
+//! frame encoder for host-side frame assembly. Decode uses the
+//! shared frame decoder and falls back to the CPU zstd decoder for frames the
+//! in-crate decoder does not yet support.
 
 use std::{io::Cursor, ptr, slice};
+
+use gpuzstd_metal::{GpuZstdSequence, zstd_frame};
 
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
@@ -15,9 +18,133 @@ const RC_NO_SPACE: i32 = 2;
 const RC_GPU_UNAVAILABLE: i32 = 3;
 const RC_ZSTD: i32 = 4;
 
-unsafe fn decompress_cpu_fallback(
+const CHUNK_SIZE: u32 = 32 * 1024;
+#[cfg_attr(not(gpuzstd_cuda_available), allow(dead_code))]
+const MIN_MATCH: u32 = 3;
+#[cfg_attr(not(gpuzstd_cuda_available), allow(dead_code))]
+const MAX_MATCH: u32 = 64;
+
+#[cfg(gpuzstd_cuda_available)]
+unsafe extern "C" {
+    fn gpuzstd_cuda_count_sequences(
+        input: *const u8,
+        input_len: usize,
+        chunk_size: u32,
+        min_match: u32,
+        max_match: u32,
+        out_counts: *mut u32,
+        counts_len: u32,
+    ) -> i32;
+
+    fn gpuzstd_cuda_write_sequences(
+        input: *const u8,
+        input_len: usize,
+        chunk_size: u32,
+        min_match: u32,
+        max_match: u32,
+        offsets: *const u32,
+        offsets_len: u32,
+        out_seqs: *mut GpuZstdSequence,
+        seq_capacity: u32,
+    ) -> i32;
+}
+
+#[derive(Default)]
+struct GpuSequences {
+    counts: Vec<u32>,
+    offsets: Vec<u32>,
+    seqs: Vec<GpuZstdSequence>,
+}
+
+#[cfg(gpuzstd_cuda_available)]
+fn gpu_sequences(input: &[u8]) -> Result<GpuSequences, i32> {
+    if input.is_empty() {
+        return Ok(GpuSequences::default());
+    }
+    let chunk_count = input.len().div_ceil(CHUNK_SIZE as usize);
+    if chunk_count == 0 {
+        return Ok(GpuSequences::default());
+    }
+    if chunk_count > u32::MAX as usize {
+        return Err(RC_ZSTD);
+    }
+
+    let mut counts = vec![0u32; chunk_count];
+    let rc = unsafe {
+        gpuzstd_cuda_count_sequences(
+            input.as_ptr(),
+            input.len(),
+            CHUNK_SIZE,
+            MIN_MATCH,
+            MAX_MATCH,
+            counts.as_mut_ptr(),
+            counts.len() as u32,
+        )
+    };
+    if rc != RC_OK {
+        return Err(rc);
+    }
+
+    let mut offsets = Vec::with_capacity(chunk_count);
+    let mut total: u64 = 0;
+    for count in &counts {
+        offsets.push(total as u32);
+        total = total.saturating_add(*count as u64);
+    }
+    if total == 0 {
+        return Ok(GpuSequences {
+            counts,
+            offsets,
+            seqs: Vec::new(),
+        });
+    }
+    if total > u32::MAX as u64 {
+        return Err(RC_ZSTD);
+    }
+
+    let seq_len = total as usize;
+    let mut seqs = vec![GpuZstdSequence::default(); seq_len];
+    let rc = unsafe {
+        gpuzstd_cuda_write_sequences(
+            input.as_ptr(),
+            input.len(),
+            CHUNK_SIZE,
+            MIN_MATCH,
+            MAX_MATCH,
+            offsets.as_ptr(),
+            offsets.len() as u32,
+            seqs.as_mut_ptr(),
+            seqs.len() as u32,
+        )
+    };
+    if rc != RC_OK {
+        return Err(rc);
+    }
+
+    let mut consumed: u64 = 0;
+    for seq in &seqs {
+        consumed = consumed.saturating_add(seq.lit_len as u64);
+        consumed = consumed.saturating_add(seq.match_len as u64);
+    }
+    if consumed != input.len() as u64 {
+        return Err(RC_ZSTD);
+    }
+    Ok(GpuSequences {
+        counts,
+        offsets,
+        seqs,
+    })
+}
+
+#[cfg(not(gpuzstd_cuda_available))]
+fn gpu_sequences(_input: &[u8]) -> Result<GpuSequences, i32> {
+    Err(RC_GPU_UNAVAILABLE)
+}
+
+unsafe fn compress_ffi(
     src: *const u8,
     src_len: usize,
+    _level: i32,
     dst: *mut u8,
     dst_len: *mut usize,
 ) -> i32 {
@@ -29,9 +156,45 @@ unsafe fn decompress_cpu_fallback(
     if capacity == 0 {
         return RC_NO_SPACE;
     }
-    let decoded = match zstd::decode_all(Cursor::new(src_slice)) {
+    let encoded = match gpu_sequences(src_slice) {
+        Ok(sequences) => match zstd_frame::encode_frame(
+            src_slice,
+            CHUNK_SIZE as usize,
+            &sequences.counts,
+            &sequences.offsets,
+            &sequences.seqs,
+            false,
+        ) {
+            Ok(bytes) => bytes,
+            Err(_) => return RC_ZSTD,
+        },
+        Err(rc) => return rc,
+    };
+    if encoded.len() > capacity {
+        return RC_NO_SPACE;
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(encoded.as_ptr(), dst, encoded.len());
+        *dst_len = encoded.len();
+    }
+    RC_OK
+}
+
+unsafe fn decompress_ffi(src: *const u8, src_len: usize, dst: *mut u8, dst_len: *mut usize) -> i32 {
+    if src.is_null() || dst.is_null() || dst_len.is_null() {
+        return RC_INVALID;
+    }
+    let src_slice = unsafe { slice::from_raw_parts(src, src_len) };
+    let capacity = unsafe { *dst_len };
+    if capacity == 0 {
+        return RC_NO_SPACE;
+    }
+    let decoded = match zstd_frame::decode_frame(src_slice) {
         Ok(bytes) => bytes,
-        Err(_) => return RC_ZSTD,
+        Err(_) => match zstd::decode_all(Cursor::new(src_slice)) {
+            Ok(bytes) => bytes,
+            Err(_) => return RC_ZSTD,
+        },
     };
     if decoded.len() > capacity {
         return RC_NO_SPACE;
@@ -43,7 +206,7 @@ unsafe fn decompress_cpu_fallback(
     RC_OK
 }
 
-/// Compress `src` into `dst` using the CUDA-named helper artifact.
+/// Compress `src` into `dst` using the CUDA helper.
 ///
 /// # Safety
 /// `src` must point to `src_len` readable bytes. `dst` must point to a writable
@@ -51,16 +214,16 @@ unsafe fn decompress_cpu_fallback(
 /// and writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpu_zstd_compress(
-    _src: *const u8,
-    _src_len: usize,
-    _level: i32,
-    _dst: *mut u8,
-    _dst_len: *mut usize,
+    src: *const u8,
+    src_len: usize,
+    level: i32,
+    dst: *mut u8,
+    dst_len: *mut usize,
 ) -> i32 {
-    RC_GPU_UNAVAILABLE
+    unsafe { compress_ffi(src, src_len, level, dst, dst_len) }
 }
 
-/// Decompress `src` into `dst` using the CUDA-named helper artifact.
+/// Decompress `src` into `dst` using the CUDA helper.
 ///
 /// # Safety
 /// `src` must point to `src_len` readable bytes. `dst` must point to a writable
@@ -73,7 +236,7 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
     dst: *mut u8,
     dst_len: *mut usize,
 ) -> i32 {
-    unsafe { decompress_cpu_fallback(src, src_len, dst, dst_len) }
+    unsafe { decompress_ffi(src, src_len, dst, dst_len) }
 }
 
 #[cfg(test)]
@@ -81,14 +244,27 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn lcg_payload(len: usize, mut seed: u64) -> Vec<u8> {
+        let mut out = vec![0u8; len];
+        for byte in &mut out {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *byte = (seed >> 32) as u8;
+        }
+        out
+    }
+
     fn try_gpu_compress(payload: &[u8]) -> Result<Vec<u8>, i32> {
+        try_gpu_compress_level(payload, 1)
+    }
+
+    fn try_gpu_compress_level(payload: &[u8], level: i32) -> Result<Vec<u8>, i32> {
         let mut out = vec![0u8; payload.len().saturating_mul(4).saturating_add(512)];
         let mut out_len = out.len();
         let rc = unsafe {
             gpu_zstd_compress(
                 payload.as_ptr(),
                 payload.len(),
-                1,
+                level,
                 out.as_mut_ptr(),
                 &mut out_len,
             )
@@ -118,10 +294,34 @@ mod tests {
         Ok(out)
     }
 
+    fn skip_if_unavailable(rc: i32) -> bool {
+        if rc == RC_GPU_UNAVAILABLE {
+            if std::env::var_os("GPUZSTD_CUDA_REQUIRE").is_some() {
+                panic!(
+                    "gpuzstd_cuda unavailable while GPUZSTD_CUDA_REQUIRE is set; build with nvcc and run on a CUDA host"
+                );
+            }
+            eprintln!("gpuzstd_cuda unavailable; skipping CUDA-only assertion");
+            true
+        } else {
+            false
+        }
+    }
+
     #[test]
-    fn gpu_compress_reports_unavailable_without_dedicated_kernels() {
-        let payload = b"gpuzstd cuda roundtrip";
-        assert_eq!(try_gpu_compress(payload), Err(RC_GPU_UNAVAILABLE));
+    fn gpu_compress_roundtrips_when_cuda_is_available() {
+        let payload = b"gpuzstd cuda roundtrip gpuzstd cuda roundtrip";
+        let compressed = match try_gpu_compress(payload) {
+            Ok(bytes) => bytes,
+            Err(rc) => {
+                if skip_if_unavailable(rc) {
+                    return;
+                }
+                panic!("gpu compress failed: {rc}");
+            }
+        };
+        let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
+        assert_eq!(decoded, payload);
     }
 
     #[test]
@@ -151,25 +351,6 @@ mod tests {
     }
 
     #[test]
-    fn gpu_decode_writes_payload_bytes() {
-        let payload = b"gpuzstd cuda payload";
-        let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
-        let mut out = vec![0u8; payload.len().saturating_mul(2).saturating_add(256)];
-        let mut out_len = out.len();
-        let rc = unsafe {
-            gpu_zstd_decompress(
-                encoded.as_ptr(),
-                encoded.len(),
-                out.as_mut_ptr(),
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, RC_OK);
-        out.truncate(out_len);
-        assert_eq!(out, payload);
-    }
-
-    #[test]
     fn gpu_decode_reports_no_space_for_short_output_buffer() {
         let payload = b"gpuzstd cuda payload";
         let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
@@ -184,5 +365,101 @@ mod tests {
             )
         };
         assert_eq!(rc, RC_NO_SPACE);
+    }
+
+    #[test]
+    fn cuda_determinism_corpus_roundtrip_when_available() {
+        let corpus = [
+            b"gpuzstd verification corpus".as_slice(),
+            &[0u8; 1][..],
+            &[0x5a; 64][..],
+            &[0xa5; 1023][..],
+            &[0x33; 1024][..],
+        ];
+        let random_1 = lcg_payload(257, 0x1234_5678_9abc_def0);
+        let random_2 = lcg_payload(4096, 0xfeed_beef_cafe_f00d);
+
+        for payload in corpus
+            .into_iter()
+            .chain([random_1.as_slice(), random_2.as_slice()])
+        {
+            let compressed_a = match try_gpu_compress(payload) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    if skip_if_unavailable(rc) {
+                        return;
+                    }
+                    panic!("gpu compress failed: {rc}");
+                }
+            };
+            let compressed_b = match try_gpu_compress(payload) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    if skip_if_unavailable(rc) {
+                        return;
+                    }
+                    panic!("gpu compress failed: {rc}");
+                }
+            };
+            assert_eq!(compressed_a, compressed_b);
+
+            let decoded_cpu = zstd::decode_all(Cursor::new(&compressed_a)).expect("cpu decode");
+            assert_eq!(decoded_cpu, payload);
+
+            let decoded_gpu =
+                try_gpu_decompress(&compressed_a, payload.len()).expect("gpu helper frame decode");
+            assert_eq!(decoded_gpu, payload);
+        }
+    }
+
+    #[test]
+    fn cuda_large_corpus_validation_when_available() {
+        let mut patterned = Vec::with_capacity(512 * 1024);
+        for idx in 0..(512 * 1024) {
+            patterned.push(match idx % 17 {
+                0..=7 => b'A',
+                8..=11 => b'B',
+                12..=14 => (idx as u8).wrapping_mul(31),
+                _ => b'\n',
+            });
+        }
+        let repeated = vec![0x5au8; 256 * 1024];
+        let randomish = lcg_payload(384 * 1024, 0x9e37_79b9_7f4a_7c15);
+
+        for payload in [patterned, repeated, randomish] {
+            let compressed_a = match try_gpu_compress_level(&payload, 3) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    if skip_if_unavailable(rc) {
+                        return;
+                    }
+                    panic!("gpu compress failed: {rc}");
+                }
+            };
+            let compressed_b = try_gpu_compress_level(&payload, 3).expect("second gpu encode");
+            assert_eq!(
+                compressed_a, compressed_b,
+                "CUDA zstd output must be deterministic for identical input"
+            );
+
+            let cpu_decoded = zstd::decode_all(Cursor::new(&compressed_a)).expect("cpu decode");
+            assert_eq!(cpu_decoded, payload);
+
+            let helper_decoded =
+                try_gpu_decompress(&compressed_a, payload.len()).expect("helper decode");
+            assert_eq!(helper_decoded, payload);
+        }
+    }
+
+    #[test]
+    fn cuda_required_env_fails_if_helper_is_not_accelerated() {
+        if std::env::var_os("GPUZSTD_CUDA_REQUIRE").is_none() {
+            return;
+        }
+        let payload = b"required cuda validation payload required cuda validation payload";
+        let compressed = try_gpu_compress(payload)
+            .expect("GPUZSTD_CUDA_REQUIRE requires CUDA compression to succeed");
+        let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
+        assert_eq!(decoded, payload);
     }
 }

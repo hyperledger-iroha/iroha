@@ -92,6 +92,8 @@ mod model {
         Offline(super::offline::OfflineTransferEvent),
         /// Space Directory manifest lifecycle events
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
+        /// Native asset escrow lifecycle events
+        Escrow(super::escrow::EscrowEvent),
         /// Oracle feed aggregation lifecycle events
         Oracle(super::oracle::OracleEvent),
         #[cfg(feature = "governance")]

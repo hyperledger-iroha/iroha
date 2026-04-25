@@ -20,6 +20,7 @@ use tokio::task;
 
 #[derive(Clone)]
 pub(crate) struct SoracloudRuntimeManagerConfig {
+    pub production_mode: bool,
     pub state_dir: PathBuf,
     pub local_peer_id: Option<String>,
 }
@@ -29,7 +30,12 @@ impl SoracloudRuntimeManagerConfig {
     pub fn from_runtime_config(
         config: &iroha_config::parameters::actual::SoracloudRuntime,
     ) -> Self {
+        assert!(
+            !config.production_mode,
+            "soracloud_runtime.production_mode requires building irohad with the `embedded-soracloud-runtime` feature"
+        );
         Self {
+            production_mode: config.production_mode,
             state_dir: config.state_dir.clone(),
             local_peer_id: None,
         }
@@ -69,6 +75,10 @@ pub struct SoracloudRuntimeManager {
 impl SoracloudRuntimeManager {
     #[must_use]
     pub fn new(config: SoracloudRuntimeManagerConfig, _state: Arc<State>) -> Self {
+        assert!(
+            !config.production_mode,
+            "soracloud_runtime.production_mode requires building irohad with the `embedded-soracloud-runtime` feature"
+        );
         Self { config }
     }
 
@@ -184,5 +194,48 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         Err(unavailable(
             "embedded Soracloud runtime is disabled for this build",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn production_runtime_config() -> iroha_config::parameters::actual::SoracloudRuntime {
+        iroha_config::parameters::actual::SoracloudRuntime {
+            production_mode: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn stub_runtime_config_rejects_production_mode() {
+        let runtime = production_runtime_config();
+        let result = std::panic::catch_unwind(|| {
+            let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn stub_runtime_manager_rejects_production_mode() {
+        let config = SoracloudRuntimeManagerConfig {
+            production_mode: true,
+            state_dir: PathBuf::from("runtime"),
+            local_peer_id: None,
+        };
+        let state = {
+            let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+            let query = iroha_core::query::store::LiveQueryStore::start_test();
+            Arc::new(State::new_for_testing(
+                iroha_core::state::World::new(),
+                kura,
+                query,
+            ))
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = SoracloudRuntimeManager::new(config, state);
+        }));
+        assert!(result.is_err());
     }
 }

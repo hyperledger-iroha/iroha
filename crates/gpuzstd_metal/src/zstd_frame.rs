@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ZstdEncodeError {
+pub enum ZstdEncodeError {
     InvalidInput,
     Capacity,
     Huffman(HuffmanError),
@@ -27,7 +27,7 @@ impl From<fse::FseError> for ZstdEncodeError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ZstdDecodeError {
+pub enum ZstdDecodeError {
     InvalidInput,
     Unsupported,
     Huffman(HuffmanError),
@@ -99,7 +99,7 @@ struct SeqDef {
     offset: u32,
 }
 
-pub(crate) fn encode_frame(
+pub fn encode_frame(
     input: &[u8],
     chunk_size: usize,
     counts: &[u32],
@@ -135,7 +135,7 @@ pub(crate) fn encode_frame(
     Ok(out)
 }
 
-pub(crate) fn decode_frame(input: &[u8]) -> Result<Vec<u8>, ZstdDecodeError> {
+pub fn decode_frame(input: &[u8]) -> Result<Vec<u8>, ZstdDecodeError> {
     let mut idx = 0usize;
     if input.len() < 5 {
         return Err(ZstdDecodeError::InvalidInput);

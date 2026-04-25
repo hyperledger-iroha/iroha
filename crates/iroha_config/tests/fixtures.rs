@@ -21,8 +21,8 @@ use iroha_config::parameters::{
         LaneProfile, NexusStorage, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
         OperatorTokenSource, OracleChangeThresholds, OracleEconomics, OracleGovernance,
         OracleTwitterBinding, Queue, RbcRs16InitialFanout, Root as Config, SoranetVpn, Streaming,
-        StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, ToriiOperatorAuth,
-        TransactionGossiper,
+        StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, SumeragiResilience,
+        SumeragiResilienceProfile, ToriiOperatorAuth, TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -551,6 +551,19 @@ fn minimal_config_snapshot() {
                     10,
                 ),
                 soracloud_public_max_inflight: 32,
+                soracloud_mutation_rate_per_account_origin_per_sec: Some(
+                    8,
+                ),
+                soracloud_mutation_burst_per_account_origin: Some(
+                    16,
+                ),
+                soracloud_mutation_max_inflight: 64,
+                soracloud_mutation_max_body_bytes: Bytes(
+                    8388608,
+                ),
+                soracloud_upload_max_body_bytes: Bytes(
+                    67108864,
+                ),
                 require_api_token: false,
                 api_tokens: [],
                 api_fee_asset_id: None,
@@ -1074,6 +1087,7 @@ fn minimal_config_snapshot() {
                 },
             },
             soracloud_runtime: SoracloudRuntime {
+                production_mode: false,
                 state_dir: "./storage/soracloud_runtime",
                 reconcile_interval: 5s,
                 hydration_concurrency: 4,
@@ -1106,7 +1120,7 @@ fn minimal_config_snapshot() {
                     local_runner_program: "python3",
                     local_runner_timeout: 120s,
                     model_host_heartbeat_ttl: 30s,
-                    allow_inference_bridge_fallback: true,
+                    allow_inference_bridge_fallback: false,
                     import_max_files: 32,
                     import_max_file_bytes: 268435456,
                     import_max_total_bytes: 2147483648,
@@ -1214,6 +1228,13 @@ fn minimal_config_snapshot() {
                     step_down_bps: 100,
                     min_factor_bps: 10000,
                     max_factor_bps: 20000,
+                },
+                resilience: SumeragiResilience {
+                    enabled: true,
+                    profile: Balanced,
+                    max_redundant_send_r: 13,
+                    max_parallel_topology_fanout: 8,
+                    status_query_reserved_capacity: 1024,
                 },
                 da: SumeragiDa {
                     enabled: true,

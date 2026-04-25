@@ -280,6 +280,41 @@ pub enum Instr {
         asset: Temp,
         amount: Temp,
     },
+    /// Open and fund a native asset escrow.
+    EscrowOpenOffer {
+        escrow: Temp,
+        asset: Temp,
+        amount: Temp,
+        evidence_hashes: Option<Temp>,
+    },
+    /// Accept a native asset escrow.
+    EscrowAccept {
+        escrow: Temp,
+    },
+    /// Mark escrow off-chain payment as sent.
+    EscrowMarkPaymentSent {
+        escrow: Temp,
+    },
+    /// Release a paid escrow.
+    EscrowRelease {
+        escrow: Temp,
+    },
+    /// Cancel an escrow before payment is marked.
+    EscrowCancel {
+        escrow: Temp,
+    },
+    /// Open an escrow dispute.
+    EscrowOpenDispute {
+        escrow: Temp,
+        evidence_hashes: Option<Temp>,
+    },
+    /// Resolve a disputed escrow with a buyer/seller split.
+    EscrowResolveDispute {
+        escrow: Temp,
+        buyer_amount: Temp,
+        seller_amount: Temp,
+        evidence_hashes: Option<Temp>,
+    },
     /// Begin a FASTPQ transfer batch scope.
     TransferBatchBegin,
     /// End the current FASTPQ transfer batch scope.
@@ -4659,6 +4694,75 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         to,
                         asset,
                         amount: amt,
+                    });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_open_offer" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    let asset = lower_expr(ctx, &args[1], vars);
+                    let amount = lower_expr_as_numeric(ctx, &args[2], vars);
+                    let evidence_hashes = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
+                    ctx.current_instr(Instr::EscrowOpenOffer {
+                        escrow,
+                        asset,
+                        amount,
+                        evidence_hashes,
+                    });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_accept" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::EscrowAccept { escrow });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_mark_payment_sent" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::EscrowMarkPaymentSent { escrow });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_release" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::EscrowRelease { escrow });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_cancel" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    ctx.current_instr(Instr::EscrowCancel { escrow });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_open_dispute" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
+                    ctx.current_instr(Instr::EscrowOpenDispute {
+                        escrow,
+                        evidence_hashes,
+                    });
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
+                    t
+                }
+                "escrow_resolve_dispute" => {
+                    let escrow = lower_expr(ctx, &args[0], vars);
+                    let buyer_amount = lower_expr_as_numeric(ctx, &args[1], vars);
+                    let seller_amount = lower_expr_as_numeric(ctx, &args[2], vars);
+                    let evidence_hashes = args.get(3).map(|arg| lower_expr(ctx, arg, vars));
+                    ctx.current_instr(Instr::EscrowResolveDispute {
+                        escrow,
+                        buyer_amount,
+                        seller_amount,
+                        evidence_hashes,
                     });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });

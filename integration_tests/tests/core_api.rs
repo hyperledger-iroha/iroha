@@ -31,6 +31,8 @@ mod misc;
 mod multisig;
 #[path = "musubi_registry.rs"]
 mod musubi_registry;
+#[path = "native_escrow.rs"]
+mod native_escrow;
 #[path = "nft.rs"]
 mod nft;
 #[path = "non_mintable.rs"]

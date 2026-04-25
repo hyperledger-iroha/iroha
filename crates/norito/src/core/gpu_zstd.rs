@@ -1,16 +1,14 @@
 //! GPU-accelerated zstd compression utilities.
 //!
 //! The functions in this module detect the available GPU backend at runtime and
-//! currently fall back to the CPU implementation if no supported accelerator is
-//! present. They are structured so that true GPU offloading can be added later
-//! without changing the public API.
+//! fall back to the CPU implementation if no supported accelerator is present.
+//! Helper libraries must pass an encode/decode self-test before Norito registers
+//! them as accelerated backends.
 
 #[cfg(unix)]
 use std::ffi::{c_char, c_int};
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
 use std::{
@@ -177,36 +175,21 @@ fn ensure_secure_dll_search_path() -> Result<(), String> {
         .clone()
 }
 
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-fn cuda_available() -> bool {
-    Command::new("nvidia-smi")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 #[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
 fn unix_gpu_helper_library_names() -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
-        &[
-            "libgpuzstd_cuda.dylib",
-            "libgpuzstd_cuda.so",
-            "libgpuzstd_metal.dylib",
-            "libgpuzstd_metal.so",
-        ]
+        &["libgpuzstd_cuda.dylib", "libgpuzstd_cuda.so"]
     }
     #[cfg(not(target_os = "macos"))]
     {
-        &["libgpuzstd_cuda.so", "libgpuzstd_metal.so"]
+        &["libgpuzstd_cuda.so"]
     }
 }
 
 #[cfg(windows)]
 fn windows_gpu_helper_library_names() -> &'static [&'static str] {
-    &["gpuzstd_cuda.dll", "gpuzstd_metal.dll"]
+    &["gpuzstd_cuda.dll"]
 }
 
 fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), SelfTestFailure> {
@@ -223,34 +206,6 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
             &mut gpu_len,
         )
     };
-    if rc == RC_GPU_UNAVAILABLE {
-        // Helper is loaded but GPU kernels are currently unavailable.
-        // Accept this mode if GPU-side decode still roundtrips CPU zstd frames.
-        let cpu_encoded = zstd::encode_all(std::io::Cursor::new(SAMPLE), 1)
-            .map_err(SelfTestFailure::CpuEncode)?;
-        let mut gpu_decoded = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
-        let mut gpu_decoded_len = gpu_decoded.len();
-        let rc = unsafe {
-            decompress(
-                cpu_encoded.as_ptr(),
-                cpu_encoded.len(),
-                gpu_decoded.as_mut_ptr(),
-                &mut gpu_decoded_len,
-            )
-        };
-        if rc != 0 || gpu_decoded_len == 0 || gpu_decoded_len > gpu_decoded.len() {
-            return Err(SelfTestFailure::GpuDecodeCpu {
-                rc,
-                len: gpu_decoded_len,
-                cap: gpu_decoded.len(),
-            });
-        }
-        gpu_decoded.truncate(gpu_decoded_len);
-        if gpu_decoded != SAMPLE {
-            return Err(SelfTestFailure::GpuDecodeMismatch);
-        }
-        return Ok(());
-    }
     if rc != 0 || gpu_len == 0 || gpu_len > gpu_encoded.len() {
         return Err(SelfTestFailure::GpuCompress {
             rc,
@@ -344,7 +299,9 @@ unsafe fn init_backend() -> Option<Backend> {
     unsafe {
         objc_autoreleasePoolPop(pool);
     }
-    let _has_device = !device.is_null();
+    if device.is_null() {
+        return None;
+    }
     let (lib, compress_fn, decompress_fn) =
         match unsafe { load_gpu_symbols(&["libgpuzstd_metal.dylib"]) } {
             Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
@@ -366,9 +323,6 @@ unsafe fn init_backend() -> Option<Backend> {
 
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 unsafe fn init_backend() -> Option<Backend> {
-    if !cuda_available() {
-        return None;
-    }
     #[cfg(unix)]
     {
         let (lib, compress_fn, decompress_fn) =
@@ -634,6 +588,10 @@ mod tests {
     use super::*;
     use crate::core::hw;
 
+    fn cuda_required() -> bool {
+        std::env::var_os("GPUZSTD_CUDA_REQUIRE").is_some()
+    }
+
     #[test]
     fn raw_roundtrip() {
         let data = b"hello world".to_vec();
@@ -654,6 +612,27 @@ mod tests {
     fn availability_probe_runs() {
         // Should simply return a boolean without panicking
         let _ = available();
+    }
+
+    #[test]
+    fn required_cuda_backend_is_registered_when_requested() {
+        if !cuda_required() {
+            return;
+        }
+        assert!(
+            available(),
+            "GPUZSTD_CUDA_REQUIRE requires Norito to register the CUDA zstd backend"
+        );
+
+        let data = vec![
+            0x5au8;
+            crate::core::heuristics::get()
+                .min_compress_bytes_gpu
+                .max(1024)
+        ];
+        let encoded = encode_all(data.clone(), 1).expect("gpu encode");
+        let decoded = decode_all(&encoded, data.len() as u64).expect("gpu decode");
+        assert_eq!(decoded, data);
     }
 
     #[test]
@@ -837,8 +816,16 @@ mod self_test {
     }
 
     #[test]
-    fn gpu_self_test_accepts_unavailable_compress_when_decode_works() {
-        assert!(gpu_self_test(compress_unavailable_stub, decompress_stub).is_ok());
+    fn gpu_self_test_rejects_unavailable_compress_even_when_decode_works() {
+        let err = gpu_self_test(compress_unavailable_stub, decompress_stub)
+            .expect_err("unavailable compression must not report a GPU backend");
+        assert!(matches!(
+            err,
+            SelfTestFailure::GpuCompress {
+                rc: RC_GPU_UNAVAILABLE,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -881,7 +868,7 @@ mod self_test {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
-    fn unix_gpu_helper_names_include_workspace_fallback() {
+    fn unix_gpu_helper_names_use_cuda_helper_only() {
         let names = unix_gpu_helper_library_names();
         assert_eq!(
             names.first().copied(),
@@ -892,10 +879,7 @@ mod self_test {
             names.contains(&"libgpuzstd_cuda.so"),
             "linux helper search must keep the CUDA helper name first-class"
         );
-        assert!(
-            names.contains(&"libgpuzstd_metal.so"),
-            "linux helper search should also accept the workspace-built gpuzstd_metal artifact"
-        );
+        assert!(!names.contains(&"libgpuzstd_metal.so"));
     }
 
     unsafe extern "C" fn compress_corrupt(

@@ -253,6 +253,15 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             soracloud_public_burst_per_ip: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
                 .and_then(std::num::NonZeroU32::new),
             soracloud_public_max_inflight: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+            soracloud_mutation_rate_per_account_origin_per_sec: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_burst_per_account_origin: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_max_inflight: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
+            soracloud_mutation_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
+            soracloud_upload_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
             proof_api: A::ProofApi {
                 rate_per_minute: iroha_config::parameters::defaults::torii::PROOF_RATE_PER_MIN
                     .and_then(std::num::NonZeroU32::new),
@@ -689,6 +698,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 use_stake_snapshot_roster:
                     iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
             },
+            resilience: A::SumeragiResilience::default(),
             adaptive_observability:
                 iroha_config::parameters::actual::AdaptiveObservability::default(),
             debug: A::SumeragiDebug {

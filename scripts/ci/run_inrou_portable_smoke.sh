@@ -17,10 +17,14 @@ require_env_file() {
   local value="${!name:-}"
   if [ -z "$value" ]; then
     echo "ERROR: environment variable '$name' must point to an existing file." >&2
+    echo "Hint: prepare local Debian genericcloud assets with:" >&2
+    echo "  eval \"\$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)\"" >&2
     exit 1
   fi
   if [ ! -f "$value" ]; then
     echo "ERROR: environment variable '$name' points to a missing file: $value" >&2
+    echo "Hint: refresh local Debian genericcloud assets with:" >&2
+    echo "  eval \"\$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --force --print-env)\"" >&2
     exit 1
   fi
 }

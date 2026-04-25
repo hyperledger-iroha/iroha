@@ -9,6 +9,7 @@ use iroha_config::parameters::{
     defaults::pipeline as pipeline_defaults,
 };
 use iroha_data_model::{
+    escrow::AssetEscrowRecord,
     offline::{
         OfflineAllowanceRecord, OfflineCounterSummary, OfflineTransferRecord,
         OfflineVerdictRevocation,
@@ -59,6 +60,7 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::proof::ProofRecord>,
         dm_query::ErasedIterQuery<dm::offline::OfflineAllowanceRecord>,
         dm_query::ErasedIterQuery<dm::offline::OfflineTransferRecord>,
+        dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::offline::OfflineCounterSummary>,
         dm_query::ErasedIterQuery<dm::offline::OfflineVerdictRevocation>,
     ]);
@@ -423,6 +425,18 @@ impl SortableQueryOutput for RepoAgreement {
     }
 }
 
+impl SortableQueryOutput for AssetEscrowRecord {
+    type TiebreakKey = iroha_data_model::escrow::EscrowId;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id
+    }
+}
+
 trait ExecuteSingularQuery {
     fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error>;
 }
@@ -464,6 +478,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindAssetDefinitionById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindAssetEscrowById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindTriggerById(q) => {
@@ -631,6 +648,7 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
                 dm::query::offline::prelude::FindOfflineCounterSummaries,
             dm::offline::OfflineTransferRecord =>
                 dm::query::offline::prelude::FindOfflineToOnlineTransfers,
+            dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
             dm::offline::OfflineVerdictRevocation =>
                 dm::query::offline::prelude::FindOfflineVerdictRevocations,
         }
@@ -1991,6 +2009,10 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
                                 )
                             }
+                            QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
+                                iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrows
+                            ),
                             QueryItemKind::OfflineCounterSummary => run_payload_or_default!(
                                 iroha_data_model::offline::OfflineCounterSummary,
                                 iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
@@ -2118,6 +2140,10 @@ impl ValidQueryRequest {
                             iroha_data_model::offline::OfflineTransferRecord,
                             iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
                         ),
+                        QueryItemKind::AssetEscrowRecord => run_unit!(
+                            iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrows
+                        ),
                         QueryItemKind::OfflineCounterSummary => run_unit!(
                             iroha_data_model::offline::OfflineCounterSummary,
                             iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
@@ -2231,6 +2257,10 @@ impl ValidQueryRequest {
                         QueryItemKind::OfflineToOnlineTransfer => run_unit!(
                             iroha_data_model::offline::OfflineTransferRecord,
                             iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
+                        ),
+                        QueryItemKind::AssetEscrowRecord => run_unit!(
+                            iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
                         QueryItemKind::OfflineCounterSummary => run_unit!(
                             iroha_data_model::offline::OfflineCounterSummary,
@@ -2351,6 +2381,10 @@ impl ValidQueryRequest {
                         QueryItemKind::OfflineToOnlineTransfer => run_unit!(
                             iroha_data_model::offline::OfflineTransferRecord,
                             iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
+                        ),
+                        QueryItemKind::AssetEscrowRecord => run_unit!(
+                            iroha_data_model::escrow::AssetEscrowRecord,
+                            iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
                         QueryItemKind::OfflineCounterSummary => run_unit!(
                             iroha_data_model::offline::OfflineCounterSummary,
@@ -3435,6 +3469,10 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
                                 )
                             }
+                            QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
+                                iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrows
+                            ),
                             QueryItemKind::OfflineCounterSummary => run_payload_or_default!(
                                 iroha_data_model::offline::OfflineCounterSummary,
                                 iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries

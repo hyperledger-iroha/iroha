@@ -210,7 +210,10 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use iroha_config::{
     base::{WithOrigin, util::Bytes as ConfigBytes},
     client_api::ConfigUpdateDTO,
-    parameters::actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config},
+    parameters::{
+        actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config},
+        defaults,
+    },
 };
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
@@ -1350,6 +1353,10 @@ struct AppState {
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     soracloud_public_rate_limiter: limits::RateLimiter,
+    soracloud_mutation_rate_limiter: limits::RateLimiter,
+    soracloud_mutation_inflight: Arc<tokio::sync::Semaphore>,
+    soracloud_mutation_max_body_bytes: usize,
+    soracloud_upload_max_body_bytes: usize,
     content_request_limiter: limits::RateLimiter,
     content_egress_limiter: limits::RateLimiter,
     proof_limits: routing::ProofApiLimits,
@@ -2603,20 +2610,17 @@ async fn enforce_soracloud_signed_mutation_request(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    if !soracloud::requires_signed_mutation_request(req.method(), req.uri().path()) {
+    let path = req.uri().path().to_owned();
+    if !soracloud::requires_signed_mutation_request(req.method(), &path) {
         return Ok(next.run(req).await);
     }
 
     let (mut parts, body) = req.into_parts();
-    let body = match axum::body::to_bytes(body, usize::MAX).await {
+    let body_limit = soracloud_signed_mutation_body_limit(&app, &path);
+    let body = match axum::body::to_bytes(body, body_limit).await {
         Ok(body) => body,
         Err(error) => {
-            return Ok(
-                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
-                    "failed to read Soracloud mutation body: {error}"
-                )))
-                .into_response(),
-            );
+            return Ok(soracloud_body_limit_response(body_limit, &path, error).into_response());
         }
     };
     let verified = match crate::app_auth::verify_canonical_request(
@@ -2635,6 +2639,19 @@ async fn enforce_soracloud_signed_mutation_request(
             .into_response());
         }
         Err(error) => return Ok(error.into_response()),
+    };
+
+    let route_group = soracloud_signed_mutation_route_group(&path);
+    let rate_key =
+        soracloud_signed_mutation_rate_key(&parts.headers, &verified.account, route_group);
+    if !app.soracloud_mutation_rate_limiter.allow(&rate_key).await {
+        return Ok(soracloud_rate_limit_response(route_group).into_response());
+    }
+    let _mutation_permit = match app.soracloud_mutation_inflight.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return Ok(soracloud_inflight_limit_response(route_group).into_response());
+        }
     };
 
     if let Ok(value) = HeaderValue::from_bytes(verified.account.to_string().as_bytes()) {
@@ -2662,6 +2679,79 @@ async fn enforce_soracloud_signed_mutation_request(
     Ok(next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
         .await)
+}
+
+fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
+    if path.starts_with("/v1/soracloud/model/upload/") {
+        app.soracloud_upload_max_body_bytes.max(1)
+    } else {
+        app.soracloud_mutation_max_body_bytes.max(1)
+    }
+}
+
+fn soracloud_body_limit_response(
+    body_limit: usize,
+    path: &str,
+    error: axum::Error,
+) -> axum::response::Response {
+    let route_group = if path.starts_with("/v1/soracloud/model/upload/") {
+        "upload"
+    } else {
+        "mutation"
+    };
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!(
+            "Soracloud {route_group} request body exceeds configured limit of {body_limit} bytes before signature verification: {error}"
+        ),
+    )
+        .into_response()
+}
+
+fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
+    if path.starts_with("/v1/soracloud/model/upload/") {
+        "upload"
+    } else if path.starts_with("/v1/soracloud/model/") {
+        "model"
+    } else if path.starts_with("/v1/soracloud/hf/") {
+        "hf"
+    } else {
+        "mutation"
+    }
+}
+
+fn soracloud_signed_mutation_rate_key(
+    headers: &HeaderMap,
+    account: &AccountId,
+    route_group: &str,
+) -> String {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("no-origin")
+        .chars()
+        .take(256)
+        .collect::<String>();
+    format!("soracloud:{route_group}:account:{account}:origin:{origin}")
+}
+
+fn soracloud_rate_limit_response(route_group: &str) -> axum::response::Response {
+    Response::builder()
+        .status(StatusCode::TOO_MANY_REQUESTS)
+        .header(axum::http::header::RETRY_AFTER, "1")
+        .body(Body::from(format!(
+            "Soracloud {route_group} request rate limit exceeded"
+        )))
+        .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response())
+}
+
+fn soracloud_inflight_limit_response(route_group: &str) -> axum::response::Response {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .body(Body::from(format!(
+            "Soracloud {route_group} request concurrency limit exceeded"
+        )))
+        .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
 }
 
 fn is_json_content_type(raw: &str) -> bool {
@@ -13713,6 +13803,10 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::OfflineToOnlineTransfer(right),
         ) => merge_variant!(left, right, OfflineToOnlineTransfer),
         (
+            QueryOutputBatchBox::AssetEscrowRecord(mut left),
+            QueryOutputBatchBox::AssetEscrowRecord(right),
+        ) => merge_variant!(left, right, AssetEscrowRecord),
+        (
             QueryOutputBatchBox::OfflineCounterSummary(mut left),
             QueryOutputBatchBox::OfflineCounterSummary(right),
         ) => merge_variant!(left, right, OfflineCounterSummary),
@@ -13822,6 +13916,9 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::OfflineToOnlineTransfer(items) => {
             canonicalize_variant!(items, OfflineToOnlineTransfer)
+        }
+        QueryOutputBatchBox::AssetEscrowRecord(items) => {
+            canonicalize_variant!(items, AssetEscrowRecord)
         }
         QueryOutputBatchBox::OfflineCounterSummary(items) => {
             canonicalize_variant!(items, OfflineCounterSummary)
@@ -27853,14 +27950,6 @@ async fn handler_pipeline_transaction_status(
     AxQuery(query): AxQuery<PipelineStatusQuery>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    check_access_with_rate_limiter(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/pipeline/transactions/status",
-        &app.pipeline_status_rate_limiter,
-    )
-    .await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(resp) => return Ok(resp),
@@ -27881,6 +27970,15 @@ async fn handler_pipeline_transaction_status(
     if matches!(read_scope, PipelineStatusReadScope::Local) {
         return Err(pipeline_status_not_found_error());
     }
+
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/pipeline/transactions/status",
+        &app.pipeline_status_rate_limiter,
+    )
+    .await?;
 
     let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
     if let Some(route) = queue::routing_hint(&hash) {
@@ -30264,6 +30362,13 @@ pub struct Torii {
     #[allow(dead_code)]
     soracloud_public_burst_per_ip: Option<std::num::NonZeroU32>,
     soracloud_public_max_inflight: usize,
+    #[allow(dead_code)]
+    soracloud_mutation_rate_per_account_origin_per_sec: Option<std::num::NonZeroU32>,
+    #[allow(dead_code)]
+    soracloud_mutation_burst_per_account_origin: Option<std::num::NonZeroU32>,
+    soracloud_mutation_max_inflight: usize,
+    soracloud_mutation_max_body_bytes: usize,
+    soracloud_upload_max_body_bytes: usize,
     rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
@@ -30271,6 +30376,7 @@ pub struct Torii {
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     soracloud_public_rate_limiter: limits::RateLimiter,
+    soracloud_mutation_rate_limiter: limits::RateLimiter,
     content_request_limiter: limits::RateLimiter,
     content_egress_limiter: limits::RateLimiter,
     proof_limits: routing::ProofApiLimits,
@@ -32731,14 +32837,21 @@ impl Torii {
                 .query_burst_per_authority
                 .map(std::num::NonZeroU32::get),
         );
-        let pipeline_status_rl = limits::RateLimiter::new(
-            config
-                .query_rate_per_authority_per_sec
-                .map(std::num::NonZeroU32::get),
-            config
-                .query_burst_per_authority
-                .map(std::num::NonZeroU32::get),
-        );
+        let status_reserved_capacity =
+            u32::try_from(defaults::sumeragi::RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY)
+                .unwrap_or(u32::MAX)
+                .max(1);
+        let pipeline_status_rate = config
+            .query_rate_per_authority_per_sec
+            .map(std::num::NonZeroU32::get)
+            .map(|rate| rate.max(status_reserved_capacity));
+        let pipeline_status_burst = config
+            .query_burst_per_authority
+            .map(std::num::NonZeroU32::get)
+            .map(|burst| burst.max(status_reserved_capacity))
+            .or(Some(status_reserved_capacity));
+        let pipeline_status_rl =
+            limits::RateLimiter::new(pipeline_status_rate, pipeline_status_burst);
         let tx_rl = limits::RateLimiter::new(
             config
                 .tx_rate_per_authority_per_sec
@@ -32783,6 +32896,14 @@ impl Torii {
                 .map(std::num::NonZeroU32::get),
             config
                 .soracloud_public_burst_per_ip
+                .map(std::num::NonZeroU32::get),
+        );
+        let soracloud_mutation_rate_limiter = limits::RateLimiter::new(
+            config
+                .soracloud_mutation_rate_per_account_origin_per_sec
+                .map(std::num::NonZeroU32::get),
+            config
+                .soracloud_mutation_burst_per_account_origin
                 .map(std::num::NonZeroU32::get),
         );
         let proof_limits = routing::ProofApiLimits::new(
@@ -33103,6 +33224,19 @@ impl Torii {
             soracloud_public_rate_per_ip_per_sec: config.soracloud_public_rate_per_ip_per_sec,
             soracloud_public_burst_per_ip: config.soracloud_public_burst_per_ip,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
+            soracloud_mutation_rate_per_account_origin_per_sec: config
+                .soracloud_mutation_rate_per_account_origin_per_sec,
+            soracloud_mutation_burst_per_account_origin: config
+                .soracloud_mutation_burst_per_account_origin,
+            soracloud_mutation_max_inflight: config.soracloud_mutation_max_inflight.get(),
+            soracloud_mutation_max_body_bytes: usize::try_from(
+                config.soracloud_mutation_max_body_bytes.get(),
+            )
+            .unwrap_or(usize::MAX),
+            soracloud_upload_max_body_bytes: usize::try_from(
+                config.soracloud_upload_max_body_bytes.get(),
+            )
+            .unwrap_or(usize::MAX),
             rate_limiter: rl,
             pipeline_status_rate_limiter: pipeline_status_rl,
             tx_rate_limiter: tx_rl,
@@ -33110,6 +33244,7 @@ impl Torii {
             proof_rate_limiter,
             proof_egress_limiter,
             soracloud_public_rate_limiter,
+            soracloud_mutation_rate_limiter,
             content_request_limiter,
             content_egress_limiter,
             proof_limits,
@@ -33357,6 +33492,10 @@ impl Torii {
         let soracloud_public_inflight_total = self.soracloud_public_max_inflight.max(1);
         let soracloud_public_inflight =
             Arc::new(tokio::sync::Semaphore::new(soracloud_public_inflight_total));
+        let soracloud_mutation_inflight_total = self.soracloud_mutation_max_inflight.max(1);
+        let soracloud_mutation_inflight = Arc::new(tokio::sync::Semaphore::new(
+            soracloud_mutation_inflight_total,
+        ));
         let zk_ivm_prove_max_inflight = self.zk_ivm_prove_max_inflight.max(1);
         let zk_ivm_prove_slots_total =
             zk_ivm_prove_max_inflight.saturating_add(self.zk_ivm_prove_max_queue);
@@ -33384,6 +33523,10 @@ impl Torii {
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
+            soracloud_mutation_rate_limiter: self.soracloud_mutation_rate_limiter.clone(),
+            soracloud_mutation_inflight,
+            soracloud_mutation_max_body_bytes: self.soracloud_mutation_max_body_bytes,
+            soracloud_upload_max_body_bytes: self.soracloud_upload_max_body_bytes,
             content_request_limiter: self.content_request_limiter.clone(),
             content_egress_limiter: self.content_egress_limiter.clone(),
             proof_limits: self.proof_limits,
@@ -37026,6 +37169,9 @@ pub(crate) mod tests_runtime_handlers {
         let soracloud_public_inflight_total = defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get();
         let soracloud_public_inflight =
             Arc::new(tokio::sync::Semaphore::new(soracloud_public_inflight_total));
+        let soracloud_mutation_inflight = Arc::new(tokio::sync::Semaphore::new(
+            defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(),
+        ));
         let zk_ivm_prove_max_inflight = defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT.max(1);
         let zk_ivm_prove_slots_total =
             zk_ivm_prove_max_inflight.saturating_add(defaults::torii::ZK_IVM_PROVE_MAX_QUEUE);
@@ -37061,6 +37207,16 @@ pub(crate) mod tests_runtime_handlers {
             proof_rate_limiter: limits::RateLimiter::new(None, None),
             proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
             soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
+            soracloud_mutation_rate_limiter: limits::RateLimiter::new(None, None),
+            soracloud_mutation_inflight,
+            soracloud_mutation_max_body_bytes: usize::try_from(
+                defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES.get(),
+            )
+            .unwrap_or(usize::MAX),
+            soracloud_upload_max_body_bytes: usize::try_from(
+                defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES.get(),
+            )
+            .unwrap_or(usize::MAX),
             content_request_limiter: limits::RateLimiter::new(None, None),
             content_egress_limiter: limits::RateLimiter::new_u64(None, None),
             proof_limits: routing::ProofApiLimits::default(),
@@ -40876,6 +41032,51 @@ pub(crate) mod tests_runtime_handlers {
         )
         .await
         .expect("cached pipeline status should stay available under tx-ingress pressure");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_cache_hit_ignores_pipeline_status_rate_limiter_pressure() {
+        let mut app = mk_app_state_for_tests();
+        let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x73; Hash::LENGTH],
+        ));
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.pipeline_status_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.pipeline_status_cache.record_entry(
+                tx_hash,
+                PipelineStatusEntry::fresh(PipelineStatusKind::Applied, None, None),
+            );
+        }
+
+        let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        let rate_key = rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            "v1/pipeline/transactions/status",
+            false,
+        );
+        assert!(
+            limits::allow_conditionally(&app.pipeline_status_rate_limiter, &rate_key, true).await
+        );
+        assert!(
+            !limits::allow_conditionally(&app.pipeline_status_rate_limiter, &rate_key, true).await
+        );
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("local".to_owned()),
+            }),
+        )
+        .await
+        .expect("cached pipeline status should bypass the pipeline-status limiter");
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -57223,6 +57424,274 @@ mod tests {
             .expect("body")
             .to_bytes();
         assert!(String::from_utf8_lossy(&replay_body).contains("nonce already used"));
+    }
+
+    #[tokio::test]
+    async fn soracloud_signed_mutation_middleware_applies_route_body_caps_before_auth() {
+        use axum::{Router, routing::post};
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        async fn probe() -> axum::response::Response {
+            StatusCode::OK.into_response()
+        }
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account_id),
+        );
+        let app_state = Arc::get_mut(&mut app).expect("test owns app state");
+        app_state.soracloud_mutation_max_body_bytes = 8;
+        app_state.soracloud_upload_max_body_bytes = 64;
+
+        let router = Router::new()
+            .route("/v1/soracloud/test", post(probe))
+            .route("/v1/soracloud/model/upload/chunk", post(probe))
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                enforce_soracloud_signed_mutation_request,
+            ))
+            .with_state(app);
+
+        let body = vec![b'x'; 32];
+        let oversized = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/v1/soracloud/test")
+            .body(Body::from(body.clone()))
+            .expect("request");
+        let oversized_response = router.clone().oneshot(oversized).await.expect("response");
+        assert_eq!(oversized_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let oversized_body = oversized_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert!(String::from_utf8_lossy(&oversized_body).contains("mutation request body exceeds"));
+
+        let upload = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/v1/soracloud/model/upload/chunk")
+            .body(Body::from(body))
+            .expect("request");
+        let upload_response = router.oneshot(upload).await.expect("response");
+        assert_eq!(upload_response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn soracloud_signed_mutation_middleware_rate_limits_account_origin() {
+        use axum::{Router, routing::post};
+        use tower::ServiceExt as _;
+
+        async fn probe() -> axum::response::Response {
+            StatusCode::OK.into_response()
+        }
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account_id),
+        );
+        Arc::get_mut(&mut app)
+            .expect("test owns app state")
+            .soracloud_mutation_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+
+        let router = Router::new()
+            .route("/v1/soracloud/hf/deploy", post(probe))
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                enforce_soracloud_signed_mutation_request,
+            ))
+            .with_state(app);
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/soracloud/hf/deploy".parse().expect("uri");
+        let body = br#"{"model":"test"}"#;
+
+        let mut statuses = Vec::new();
+        for _ in 0..2 {
+            let headers = crate::tests_runtime_handlers::signed_app_headers(
+                &account_id,
+                &key_pair,
+                &method,
+                &uri,
+                body,
+            );
+            let mut builder = axum::http::Request::builder()
+                .method(method.clone())
+                .uri(uri.to_string())
+                .header(axum::http::header::ORIGIN, "https://apps.sora.test");
+            for (name, value) in &headers {
+                builder = builder.header(name, value);
+            }
+            let response = router
+                .clone()
+                .oneshot(
+                    builder
+                        .body(Body::from(body.to_vec()))
+                        .expect("signed request"),
+                )
+                .await
+                .expect("response");
+            statuses.push(response.status());
+        }
+
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS]);
+    }
+
+    #[test]
+    fn soracloud_signed_mutation_route_groups_cover_load_gate_paths() {
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::ORIGIN,
+            HeaderValue::from_static("https://apps.sora.test"),
+        );
+
+        assert_eq!(
+            super::soracloud_signed_mutation_route_group("/v1/soracloud/deploy"),
+            "mutation"
+        );
+        assert_eq!(
+            super::soracloud_signed_mutation_route_group("/v1/soracloud/model/session/start"),
+            "model"
+        );
+        assert_eq!(
+            super::soracloud_signed_mutation_route_group("/v1/soracloud/model/upload/chunk"),
+            "upload"
+        );
+        assert_eq!(
+            super::soracloud_signed_mutation_route_group("/v1/soracloud/hf/deploy"),
+            "hf"
+        );
+
+        let model_key = super::soracloud_signed_mutation_rate_key(&headers, &account_id, "model");
+        let hf_key = super::soracloud_signed_mutation_rate_key(&headers, &account_id, "hf");
+        assert_ne!(model_key, hf_key);
+        assert!(model_key.contains("origin:https://apps.sora.test"));
+        assert!(hf_key.contains("soracloud:hf:account:"));
+    }
+
+    #[tokio::test]
+    async fn soracloud_signed_mutation_middleware_enforces_global_inflight_limit() {
+        use axum::{Router, routing::post};
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        async fn probe() -> axum::response::Response {
+            StatusCode::OK.into_response()
+        }
+
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            crate::tests_runtime_handlers::world_with_account(&account_id),
+        );
+        Arc::get_mut(&mut app)
+            .expect("test owns app state")
+            .soracloud_mutation_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+
+        let router = Router::new()
+            .route("/v1/soracloud/model/session/start", post(probe))
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                enforce_soracloud_signed_mutation_request,
+            ))
+            .with_state(app);
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/soracloud/model/session/start".parse().expect("uri");
+        let body = br#"{"session":"test"}"#;
+        let headers = crate::tests_runtime_handlers::signed_app_headers(
+            &account_id,
+            &key_pair,
+            &method,
+            &uri,
+            body,
+        );
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(uri.to_string());
+        for (name, value) in &headers {
+            builder = builder.header(name, value);
+        }
+
+        let response = router
+            .oneshot(
+                builder
+                    .body(Body::from(body.to_vec()))
+                    .expect("signed request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let response_body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert!(
+            String::from_utf8_lossy(&response_body)
+                .contains("Soracloud model request concurrency limit exceeded")
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_public_runtime_rate_and_inflight_limits_fail_closed() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let app_state = Arc::get_mut(&mut app).expect("test owns app state");
+        app_state.soracloud_public_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        let method = axum::http::Method::GET;
+        let uri: axum::http::Uri = "/healthz".parse().expect("uri");
+        let remote_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            HeaderValue::from_static("portal.sora.test"),
+        );
+
+        let first = super::execute_soracloud_public_runtime_request(
+            app.clone(),
+            method.clone(),
+            uri.clone(),
+            headers.clone(),
+            remote_ip,
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::NOT_FOUND);
+        let second = super::execute_soracloud_public_runtime_request(
+            app.clone(),
+            method.clone(),
+            uri.clone(),
+            headers.clone(),
+            remote_ip,
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let mut busy_app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let busy_state = Arc::get_mut(&mut busy_app).expect("test owns app state");
+        busy_state.soracloud_public_rate_limiter = limits::RateLimiter::new(None, None);
+        busy_state.soracloud_public_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        let busy = super::execute_soracloud_public_runtime_request(
+            busy_app,
+            method,
+            uri,
+            headers,
+            remote_ip,
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
