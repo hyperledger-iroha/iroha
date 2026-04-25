@@ -127,8 +127,6 @@ const AGENT_AUTONOMY_MAX_REQUEST_BYTES: usize = 16 * 1024;
 const HF_ADAPTIVE_TARGET_HOST_COUNT_SMALL: u16 = 3;
 const HF_ADAPTIVE_TARGET_HOST_COUNT_MEDIUM: u16 = 2;
 const HF_ADAPTIVE_TARGET_HOST_COUNT_LARGE: u16 = 2;
-#[cfg(test)]
-const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
 
 #[derive(Clone, Copy, Debug, Default)]
 struct HfHostReservationUsage {
