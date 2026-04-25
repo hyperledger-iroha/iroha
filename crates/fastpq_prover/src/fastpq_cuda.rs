@@ -100,6 +100,8 @@ mod native {
     #[link(name = "fastpq_cuda", kind = "static")]
     unsafe extern "C" {
         fn fastpq_pending_wait_cuda(handle: *mut c_void) -> i32;
+        #[cfg(test)]
+        fn fastpq_test_wait_timeout_cuda(timeout_ms: u32) -> i32;
         fn fastpq_fft_async_submit_cuda(
             elements: *mut u64,
             column_count: usize,
@@ -190,6 +192,12 @@ mod native {
     pub(super) fn pending_wait(handle: *mut c_void) -> Result<()> {
         // SAFETY: the caller passes a handle previously returned by the matching submit wrapper.
         let code = unsafe { fastpq_pending_wait_cuda(handle) };
+        map_cuda(code)
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_wait_timeout(timeout_ms: u32) -> Result<()> {
+        let code = unsafe { fastpq_test_wait_timeout_cuda(timeout_ms) };
         map_cuda(code)
     }
 
@@ -410,6 +418,11 @@ mod native {
 
     #[cfg(feature = "fastpq-gpu")]
     pub(super) fn pending_wait(_handle: *mut c_void) -> Result<()> {
+        Err(CudaBackendError::Unavailable)
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_wait_timeout(_timeout_ms: u32) -> Result<()> {
         Err(CudaBackendError::Unavailable)
     }
 
@@ -884,8 +897,11 @@ pub fn fastpq_poseidon_hash_columns_fused(
 mod tests {
     use iroha_zkp_halo2::Bn254Scalar;
 
+    #[cfg(feature = "fastpq-gpu")]
+    use super::validate_poseidon_states;
     use super::{
-        CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, usize_to_u32, validate_bn254_dense,
+        CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_lde, usize_to_u32,
+        validate_bn254_dense, validate_dense,
     };
     use crate::bn254::{
         BN254_LIMBS, canonical_to_scalars, cpu_fft, cpu_lde, sample_columns, sample_coset,
@@ -905,6 +921,94 @@ mod tests {
     }
 
     #[test]
+    fn validate_dense_reports_shape_mismatch_and_overflow() {
+        let err = validate_dense(7, 2, 2).expect_err("shape mismatch");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: 8,
+                got: 7,
+            }
+        );
+
+        let err = validate_dense(0, usize::MAX, 2).expect_err("overflow");
+        assert_eq!(err, CudaBackendError::Unavailable);
+
+        let err = validate_dense(0, 1, usize::BITS).expect_err("invalid shift");
+        assert_eq!(err, CudaBackendError::Unavailable);
+    }
+
+    #[test]
+    fn usize_to_u32_saturates_reported_lengths() {
+        assert_eq!(usize_to_u32(0), 0);
+        assert_eq!(usize_to_u32(u32::MAX as usize), u32::MAX);
+        assert_eq!(usize_to_u32((u32::MAX as usize) + 1), u32::MAX);
+        assert_eq!(usize_to_u32(usize::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn fastpq_fft_and_lde_reject_shape_before_backend_call() {
+        let mut dense = vec![0u64; 7];
+        let err = fastpq_fft(&mut dense, 2, 2, 1).expect_err("shape mismatch");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: 8,
+                got: 7,
+            }
+        );
+
+        let coeffs = vec![0u64; 4];
+        let mut out = vec![0u64; 7];
+        let err = fastpq_lde(&coeffs, 1, 2, 1, 1, 1, &mut out).expect_err("shape mismatch");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: 8,
+                got: 7,
+            }
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn validate_poseidon_states_reports_padded_shape() {
+        assert_eq!(validate_poseidon_states(0), Ok(0));
+        assert_eq!(validate_poseidon_states(3), Ok(1));
+        assert_eq!(
+            validate_poseidon_states(4),
+            Err(CudaBackendError::ShapeMismatch {
+                expected: 6,
+                got: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn cuda_backend_error_display_is_stable() {
+        assert_eq!(
+            CudaBackendError::Unavailable.to_string(),
+            "GPU backend unavailable"
+        );
+        assert_eq!(
+            CudaBackendError::InvalidInput("bad input").to_string(),
+            "bad input"
+        );
+        assert_eq!(
+            CudaBackendError::ShapeMismatch {
+                expected: 4,
+                got: 3,
+            }
+            .to_string(),
+            "buffer length mismatch (expected 4, got 3)"
+        );
+        assert_eq!(
+            CudaBackendError::Cuda { code: 700 }.to_string(),
+            "cudaError_t(700)"
+        );
+    }
+
+    #[test]
     fn fastpq_bn254_lde_rejects_invalid_coset() {
         let coeffs = vec![0u64; BN254_LIMBS << 1];
         let mut out = vec![0u64; BN254_LIMBS << 2];
@@ -918,6 +1022,43 @@ mod tests {
         )
         .expect_err("invalid coset rejected");
         assert!(matches!(err, CudaBackendError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn fastpq_bn254_wrappers_reject_shape_before_backend_call() {
+        let mut dense = vec![0u64; BN254_LIMBS * 2 - 1];
+        let err = fastpq_bn254_fft(&mut dense, 1, 1).expect_err("shape mismatch");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32(BN254_LIMBS * 2),
+                got: usize_to_u32(BN254_LIMBS * 2 - 1),
+            }
+        );
+
+        let coeffs = vec![0u64; BN254_LIMBS * 2];
+        let mut out = vec![0u64; BN254_LIMBS * 4 - 1];
+        let err = fastpq_bn254_lde(&coeffs, 1, 1, 1, sample_coset(), &mut out)
+            .expect_err("output shape mismatch");
+        assert_eq!(
+            err,
+            CudaBackendError::ShapeMismatch {
+                expected: usize_to_u32(BN254_LIMBS * 4),
+                got: usize_to_u32(BN254_LIMBS * 4 - 1),
+            }
+        );
+    }
+
+    #[test]
+    fn cuda_wait_timeout_harness_fails_closed_without_wedged_gpu() {
+        match super::native::test_wait_timeout(1) {
+            Err(CudaBackendError::Cuda { .. }) => {}
+            Err(CudaBackendError::Unavailable) => {
+                eprintln!("skipping CUDA timeout harness: backend unavailable");
+            }
+            Ok(()) => panic!("timeout harness unexpectedly reported success"),
+            Err(err) => panic!("unexpected timeout harness error: {err}"),
+        }
     }
 
     #[test]
@@ -984,5 +1125,63 @@ mod tests {
         let eval_extent = (1usize << (trace_log + blowup_log)) * BN254_LIMBS;
         let gpu_eval: Vec<Vec<u64>> = out.chunks_exact(eval_extent).map(<[u64]>::to_vec).collect();
         assert_eq!(gpu_eval, cpu_expected);
+    }
+
+    #[test]
+    fn fastpq_bn254_cuda_transforms_are_repeat_deterministic_when_available() {
+        let log_size = 4;
+        let column_count = 2;
+        let columns = sample_columns(log_size, column_count);
+        let mut expected_fft: Option<Vec<u64>> = None;
+        for _ in 0..3 {
+            let mut dense = columns.concat();
+            match fastpq_bn254_fft(&mut dense, column_count, log_size) {
+                Ok(()) => {}
+                Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. })) => {
+                    eprintln!("skipping BN254 CUDA repeat determinism test: {err}");
+                    return;
+                }
+                Err(err) => panic!("BN254 CUDA FFT failed: {err}"),
+            }
+            if let Some(expected) = &expected_fft {
+                assert_eq!(
+                    &dense, expected,
+                    "repeated BN254 CUDA FFT runs must be byte-stable"
+                );
+            }
+            expected_fft = Some(dense);
+        }
+
+        let trace_log = 3;
+        let blowup_log = 2;
+        let coeffs = sample_columns(trace_log, column_count);
+        let coset_limbs = sample_coset();
+        let mut expected_lde: Option<Vec<u64>> = None;
+        for _ in 0..3 {
+            let mut out =
+                vec![0u64; column_count * (1usize << (trace_log + blowup_log)) * BN254_LIMBS];
+            match fastpq_bn254_lde(
+                &coeffs.concat(),
+                column_count,
+                trace_log,
+                blowup_log,
+                coset_limbs,
+                &mut out,
+            ) {
+                Ok(()) => {}
+                Err(err @ (CudaBackendError::Unavailable | CudaBackendError::Cuda { .. })) => {
+                    eprintln!("skipping BN254 CUDA repeat determinism test: {err}");
+                    return;
+                }
+                Err(err) => panic!("BN254 CUDA LDE failed: {err}"),
+            }
+            if let Some(expected) = &expected_lde {
+                assert_eq!(
+                    &out, expected,
+                    "repeated BN254 CUDA LDE runs must be byte-stable"
+                );
+            }
+            expected_lde = Some(out);
+        }
     }
 }
