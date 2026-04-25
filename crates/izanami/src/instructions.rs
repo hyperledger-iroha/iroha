@@ -628,7 +628,7 @@ pub fn prepare_state(
         )));
     }
     let initial_float: Numeric = 1_000_000_000_u64.into();
-    let initial_user_balance: Numeric = 1_000_u64.into();
+    let initial_user_balance: Numeric = 1_000_000_000_u64.into();
     let treasury_asset_id = AssetId::new(asset_numeric_id.clone(), treasury.id.clone());
     genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
         initial_float,
@@ -1284,11 +1284,16 @@ impl ChaosState {
     }
 
     fn plan_transfer_asset(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let receiver = self.random_user(rng)?.clone();
+        let sender = self
+            .users
+            .choose(rng)
+            .cloned()
+            .unwrap_or_else(|| self.treasury.clone());
+        let receiver = self.random_user_except(rng, &sender.id)?;
         let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
-        let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
+        let source_asset = AssetId::new(self.asset_numeric.clone(), sender.id.clone());
         let instructions = vec![InstructionBox::from(Transfer::asset_numeric(
-            treasury_asset,
+            source_asset,
             amount,
             receiver.id.clone(),
         ))];
@@ -1296,7 +1301,7 @@ impl ChaosState {
             state_updates: Vec::new(),
             label: "transfer_asset",
             instructions,
-            signer: self.treasury.clone(),
+            signer: sender,
             expect_success: true,
         })
     }
@@ -4075,6 +4080,22 @@ mod tests {
                 .downcast_ref::<TransferBox>()
                 .is_some(),
             "stable transfer path should submit only the transfer instruction"
+        );
+        let transfer = plan.instructions[0]
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        let TransferBox::Asset(transfer) = transfer else {
+            panic!("stable transfer should move a numeric asset");
+        };
+        assert_eq!(
+            transfer.source.account(),
+            &plan.signer.id,
+            "stable transfer signer should own the source asset"
+        );
+        assert_ne!(
+            plan.signer.id, state.treasury.id,
+            "stable transfer load should distribute authority across prefunded users"
         );
         assert!(
             plan.instructions

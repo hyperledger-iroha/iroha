@@ -12,6 +12,7 @@ MIXED_HOST_INVENTORY=""
 STEP_TIMEOUT_SECONDS="${SORACLOUD_READINESS_STEP_TIMEOUT_SECONDS:-7200}"
 CARGO_TARGET_DIR_OVERRIDE="${SORACLOUD_READINESS_CARGO_TARGET_DIR:-}"
 ISOLATE_CARGO_TARGET=0
+ALLOW_OPEN_BLOCKERS=0
 
 usage() {
   cat <<'USAGE' >&2
@@ -23,6 +24,7 @@ Options:
   --step-timeout-seconds SECONDS    timeout each gate after SECONDS (default: 7200; use 0 to disable)
   --cargo-target-dir DIR            run Cargo gates with this CARGO_TARGET_DIR
   --isolate-cargo-target            run Cargo gates under OUT_DIR/cargo-target to avoid workspace lock contention
+  --allow-open-blockers             exit 0 when runnable gates pass but production-only gates are blocked
   --prepare-portable-assets         prepare verified Debian genericcloud assets when portable env vars are missing
   --no-prepare-portable-assets      require caller-provided IROHA_INROU_PORTABLE_* asset paths
   --skip-portable                   skip PortableVm QEMU smoke even in full profile
@@ -56,6 +58,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --isolate-cargo-target)
       ISOLATE_CARGO_TARGET=1
+      shift
+      ;;
+    --allow-open-blockers)
+      ALLOW_OPEN_BLOCKERS=1
       shift
       ;;
     --prepare-portable-assets)
@@ -131,11 +137,14 @@ cat > "$REPORT" <<EOF
 - Workspace: \`${ROOT_DIR}\`
 - Step timeout seconds: \`${STEP_TIMEOUT_SECONDS}\`
 - Cargo target dir: \`${CARGO_TARGET_DIR:-workspace default}\`
+- Allow open blockers: \`${ALLOW_OPEN_BLOCKERS}\`
 
 EOF
 
 FAILED=0
+BLOCKED=0
 STEP_INDEX=0
+OPEN_BLOCKERS=()
 
 slugify() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-//; s/-$//'
@@ -236,6 +245,19 @@ skip_step() {
   record_step "$label" "skipped" "0" "$log_path"
 }
 
+block_step() {
+  local label="$1"
+  local reason="$2"
+  STEP_INDEX=$((STEP_INDEX + 1))
+  local slug
+  slug="$(slugify "$label")"
+  local log_path="${OUT_DIR}/logs/$(printf '%02d' "$STEP_INDEX")-${slug}.log"
+  printf '%s\n' "$reason" > "$log_path"
+  BLOCKED=1
+  OPEN_BLOCKERS+=("${label}: ${reason}")
+  record_step "$label" "blocked" "0" "$log_path"
+}
+
 portable_assets_present() {
   [ -f "${IROHA_INROU_PORTABLE_KERNEL_IMAGE:-}" ] &&
     [ -f "${IROHA_INROU_PORTABLE_ROOTFS_IMAGE:-}" ] &&
@@ -278,20 +300,20 @@ run_focused_gates() {
 
 run_portable_gate() {
   if [ "$SKIP_PORTABLE" -eq 1 ]; then
-    skip_step "portable inrou smoke" "--skip-portable was set"
+    block_step "portable inrou smoke" "--skip-portable was set; full production readiness requires the PortableVm QEMU smoke gate."
     return
   fi
   if maybe_prepare_portable_assets; then
     run_step "portable inrou smoke" \
       "env -u LOG_FORMAT IROHA_INROU_PORTABLE_KERNEL_IMAGE=$(shell_quote "$IROHA_INROU_PORTABLE_KERNEL_IMAGE") IROHA_INROU_PORTABLE_ROOTFS_IMAGE=$(shell_quote "$IROHA_INROU_PORTABLE_ROOTFS_IMAGE") IROHA_INROU_PORTABLE_INITRD_IMAGE=$(shell_quote "${IROHA_INROU_PORTABLE_INITRD_IMAGE:-}") cargo run -p xtask --bin xtask -- soracloud-inrou-smoke portable"
   else
-    skip_step "portable inrou smoke" "Portable guest assets are missing; run scripts/ci/prepare_inrou_portable_guest_assets.py --print-env or pass --prepare-portable-assets."
+    block_step "portable inrou smoke" "Portable guest assets are missing; run scripts/ci/prepare_inrou_portable_guest_assets.py --print-env or pass --prepare-portable-assets."
   fi
 }
 
 run_integration_load_gates() {
   if [ "$SKIP_INTEGRATION" -eq 1 ]; then
-    skip_step "multi-peer soracloud integration load" "--skip-integration was set"
+    block_step "multi-peer soracloud integration load" "--skip-integration was set; full/load readiness requires live multi-peer Soracloud gates."
     return
   fi
   run_step "multi-peer soracloud status control plane" \
@@ -306,7 +328,7 @@ run_integration_load_gates() {
 
 run_mixed_host_gate() {
   if [ -z "$MIXED_HOST_INVENTORY" ]; then
-    skip_step "mixed-host inrou smoke" "No --mixed-host-inventory was provided."
+    block_step "mixed-host inrou smoke" "No --mixed-host-inventory was provided; public rollout readiness requires the mixed-host Inrou smoke gate against the operator inventory."
     return
   fi
   run_step "mixed-host inrou smoke" \
@@ -331,10 +353,18 @@ esac
 
 {
   printf "## Summary\n\n"
-  if [ "$FAILED" -eq 0 ]; then
+  if [ "$FAILED" -eq 0 ] && [ "$BLOCKED" -eq 0 ]; then
     printf "All required Soracloud production readiness gates passed for profile \`%s\`.\n" "$PROFILE"
+  elif [ "$FAILED" -eq 0 ]; then
+    printf "All runnable Soracloud readiness gates passed for profile \`%s\`, but production readiness is blocked by missing required gates.\n" "$PROFILE"
   else
     printf "One or more Soracloud production readiness gates failed for profile \`%s\`. Inspect the logs above.\n" "$PROFILE"
+  fi
+  if [ "$BLOCKED" -ne 0 ]; then
+    printf "\n### Open Blockers\n\n"
+    for blocker in "${OPEN_BLOCKERS[@]}"; do
+      printf -- "- %s\n" "$blocker"
+    done
   fi
   printf "\n- TSV: \`%s\`\n" "$TSV"
 } >> "$REPORT"
@@ -342,6 +372,6 @@ esac
 printf 'Soracloud readiness report: %s\n' "$REPORT"
 printf 'Soracloud readiness TSV: %s\n' "$TSV"
 
-if [ "$FAILED" -ne 0 ]; then
+if [ "$FAILED" -ne 0 ] || { [ "$BLOCKED" -ne 0 ] && [ "$ALLOW_OPEN_BLOCKERS" -ne 1 ]; }; then
   exit 1
 fi
