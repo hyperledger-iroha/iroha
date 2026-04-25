@@ -1565,6 +1565,73 @@ pub mod handles {
         }
     }
 
+    /// Receiver set kept alive by network tests that need a synthetic peer handle.
+    #[cfg(test)]
+    pub(crate) struct TestPeerHandleReceivers<T: Pload> {
+        _hi_consensus: post_channel::Receiver<T>,
+        _hi_consensus_payload: post_channel::Receiver<T>,
+        _hi_consensus_chunk: post_channel::Receiver<T>,
+        _hi_control: post_channel::Receiver<T>,
+        _lo_block_sync: post_channel::Receiver<T>,
+        _lo_tx_gossip: post_channel::Receiver<T>,
+        _lo_peer_gossip: post_channel::Receiver<T>,
+        _lo_health: post_channel::Receiver<T>,
+        lo_other: post_channel::Receiver<T>,
+    }
+
+    #[cfg(test)]
+    impl<T: Pload> TestPeerHandleReceivers<T> {
+        /// Receive the next generic-lane message, if any.
+        pub(crate) fn try_recv_other(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.lo_other.try_recv()
+        }
+    }
+
+    /// Build a synthetic peer handle for network unit tests.
+    #[cfg(test)]
+    pub(crate) fn test_peer_handle<T: Pload>(
+        cap: usize,
+    ) -> (PeerHandle<T>, TestPeerHandleReceivers<T>) {
+        let (hi_consensus_tx, hi_consensus_rx) = post_channel::channel(cap);
+        let (hi_consensus_payload_tx, hi_consensus_payload_rx) = post_channel::channel(cap);
+        let (hi_consensus_chunk_tx, hi_consensus_chunk_rx) = post_channel::channel(cap);
+        let (hi_control_tx, hi_control_rx) = post_channel::channel(cap);
+        let (lo_block_sync_tx, lo_block_sync_rx) = post_channel::channel(cap);
+        let (lo_tx_gossip_tx, lo_tx_gossip_rx) = post_channel::channel(cap);
+        let (lo_peer_gossip_tx, lo_peer_gossip_rx) = post_channel::channel(cap);
+        let (lo_health_tx, lo_health_rx) = post_channel::channel(cap);
+        let (lo_other_tx, lo_other_rx) = post_channel::channel(cap);
+
+        (
+            PeerHandle {
+                senders: TopicSenders {
+                    hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
+                    hi_consensus_chunk: hi_consensus_chunk_tx,
+                    hi_control: hi_control_tx,
+                    lo_block_sync: lo_block_sync_tx,
+                    lo_tx_gossip: lo_tx_gossip_tx,
+                    lo_peer_gossip: lo_peer_gossip_tx,
+                    lo_health: lo_health_tx,
+                    lo_other: lo_other_tx,
+                },
+            },
+            TestPeerHandleReceivers {
+                _hi_consensus: hi_consensus_rx,
+                _hi_consensus_payload: hi_consensus_payload_rx,
+                _hi_consensus_chunk: hi_consensus_chunk_rx,
+                _hi_control: hi_control_rx,
+                _lo_block_sync: lo_block_sync_rx,
+                _lo_tx_gossip: lo_tx_gossip_rx,
+                _lo_peer_gossip: lo_peer_gossip_rx,
+                _lo_health: lo_health_rx,
+                lo_other: lo_other_rx,
+            },
+        )
+    }
+
     #[cfg(test)]
     mod tests {
         use norito::codec::{Decode, Encode};
