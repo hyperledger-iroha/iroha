@@ -295,6 +295,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
         let tamperedEnvelope = ToriiOfflineSourceLineageEnvelope(
             publicInputs: fixture.envelope.publicInputs,
             witnessPayload: fixture.envelope.witnessPayload,
+            fastpqProof: fixture.envelope.fastpqProof,
             proof: tamperedProof
         )
 
