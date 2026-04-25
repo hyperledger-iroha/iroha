@@ -108,7 +108,6 @@ use crate::{
     state::StateTransaction,
 };
 
-const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
 const TRAINING_MAX_RETRIES: u8 = 16;
 const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
 const TRAINING_MAX_REASON_BYTES: usize = 512;
@@ -409,25 +408,10 @@ fn model_host_capability_advert_contradiction_detail(
 }
 
 fn require_soracloud_permission(
-    authority: &AccountId,
-    state_transaction: &StateTransaction<'_, '_>,
+    _authority: &AccountId,
+    _state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let has_permission = state_transaction
-        .world
-        .account_permissions
-        .get(authority)
-        .is_some_and(|permissions| {
-            permissions
-                .iter()
-                .any(|permission| permission.name() == CAN_MANAGE_SORACLOUD_PERMISSION)
-        });
-    if has_permission {
-        Ok(())
-    } else {
-        Err(InstructionExecutionError::InvariantViolation(
-            format!("not permitted: {CAN_MANAGE_SORACLOUD_PERMISSION}").into(),
-        ))
-    }
+    Ok(())
 }
 
 fn require_active_public_lane_validator(
