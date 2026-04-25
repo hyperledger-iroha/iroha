@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-25
 
+## 2026-04-25 Taira devex CLI and onboarding diagnostics
+
+- Added the first-class `iroha taira` CLI surface. `iroha taira doctor` performs read-only checks against the public Taira root by default, including `/status`, route availability, MCP initialize, curated MCP tool availability, and recent status warnings. `iroha taira write-canary` now drives the preferred real-write path: ephemeral signer by default, alias/public-key onboarding, faucet PoW claim, gas metadata insertion, signed ping submission, Applied wait, query verification attempt, optional restrictive `--write-config`, and redacted text/JSON receipts.
+- Torii MCP `accounts.onboard` now advertises and forwards the `public_key_hex` shortcut, matching the HTTP onboarding path. JSON onboarding clients now receive stable `error_code`, `message`, and optional `hint` diagnostics while explicit Norito clients keep the existing Norito error envelope.
+- The Taira rollout docs now steer single-endpoint devex checks to `iroha taira doctor` and `iroha taira write-canary`; `check_mcp_rollout.sh` remains available as the multi-step compatibility harness.
+- Focused validation for this slice:
+  - `cargo check -p iroha_cli --bin iroha`
+  - `cargo check -p iroha_torii --lib`
+  - `cargo test -p iroha_cli --bin iroha taira -- --nocapture`
+  - `cargo test -p iroha_cli`
+  - `cargo test -p iroha_torii --lib onboarding -- --nocapture`
+  - `cargo test -p iroha_torii --lib build_accounts_onboard_body -- --nocapture`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh configs/soranexus/taira/check_mcp_rollout_mock_test.sh`
+  - `bash configs/soranexus/taira/check_mcp_rollout_mock_test.sh`
+  - `cargo clippy -q -p iroha_cli --bin iroha --no-deps -- -D warnings`
+
 ## 2026-04-25 Norito CUDA GPU helpers
 
 - `gpuzstd_cuda` now builds CUDA kernels by default when `nvcc` is available. Compression runs deterministic CUDA match-finding/sequence generation and uses the shared zstd frame encoder; helpers without built kernels or a CUDA device report `gpu_unavailable` instead of registering a CPU-only helper as a GPU backend. CUDA and frame-assembly failures now return errors to Norito rather than CPU-encoding inside the helper.

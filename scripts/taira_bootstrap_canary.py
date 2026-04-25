@@ -645,6 +645,20 @@ def resolve_alias_account_id(torii_root: str, alias: str) -> str:
     raise RuntimeError(f"alias resolve failed: status={status} body={payload!r}")
 
 
+def faucet_registration_fallback_record(
+    onboarding_error: RuntimeError,
+    alias_resolve_error: RuntimeError,
+) -> dict[str, Any]:
+    """Describe a bootstrap fallback that relies on faucet account registration."""
+
+    return {
+        "status": "faucet_registration_fallback",
+        "response_status": 400,
+        "response": str(onboarding_error),
+        "alias_resolve_error": str(alias_resolve_error),
+    }
+
+
 def attempt_faucet(
     account_id: str,
     torii_root: str,
@@ -864,6 +878,7 @@ def main(argv: list[str] | None = None) -> int:
 
     alias = build_alias(args.alias_prefix, public_key, domain)
     account_id = None
+    requires_faucet_registration = False
     try:
         onboarding = onboard_account(
             args.torii_root,
@@ -900,14 +915,35 @@ def main(argv: list[str] | None = None) -> int:
                 gas_limit=args.gas_limit,
             )
         else:
-            account_id = resolve_alias_account_id(args.torii_root, alias)
-            onboarding = {
-                "status": "existing",
-                "response_status": 400,
-                "response": str(onboarding_error),
-            }
+            try:
+                account_id = resolve_alias_account_id(args.torii_root, alias)
+                onboarding = {
+                    "status": "existing",
+                    "response_status": 400,
+                    "response": str(onboarding_error),
+                }
+            except RuntimeError as alias_resolve_error:
+                derived_account_id = canonical_account_id_from_public_key(
+                    public_key,
+                    chain_discriminant,
+                    args.iroha_bin,
+                )
+                if not derived_account_id:
+                    raise RuntimeError(
+                        "account onboarding failed, alias is unresolved, and the canonical account id could not be derived"
+                    ) from onboarding_error
+                account_id = derived_account_id
+                onboarding = faucet_registration_fallback_record(
+                    onboarding_error,
+                    alias_resolve_error,
+                )
+                requires_faucet_registration = True
     if account_id is None:
         account_id = resolve_alias_account_id(args.torii_root, alias)
+    if requires_faucet_registration and args.skip_faucet:
+        raise RuntimeError(
+            "account onboarding failed and alias is unresolved; faucet registration fallback requires the faucet"
+        )
     faucet = (
         {"status": "skipped"}
         if args.skip_faucet
@@ -920,6 +956,10 @@ def main(argv: list[str] | None = None) -> int:
             iroha_bin=args.iroha_bin,
         )
     )
+    if requires_faucet_registration and faucet.get("status") != "claimed":
+        raise RuntimeError(
+            f"account onboarding failed and faucet registration fallback did not claim funds: {faucet!r}"
+        )
 
     write_config(
         output_config,

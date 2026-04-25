@@ -7842,17 +7842,28 @@ fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
         .get("alias")
         .and_then(Value::as_str)
         .ok_or_else(|| "`alias` is required (or provide `body.alias`)".to_owned())?;
-    let account_id = arguments
-        .get("account_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`account_id` is required (or provide `body.account_id`)".to_owned())?;
+    let account_id = arguments.get("account_id").and_then(Value::as_str);
+    let public_key_hex = arguments.get("public_key_hex").and_then(Value::as_str);
+    if account_id.is_none() && public_key_hex.is_none() {
+        return Err(
+            "`account_id` or `public_key_hex` is required (or provide a raw `body`)".to_owned(),
+        );
+    }
 
     let mut payload = Map::new();
     payload.insert("alias".to_owned(), Value::String(alias.to_owned()));
-    payload.insert(
-        "account_id".to_owned(),
-        Value::String(account_id.to_owned()),
-    );
+    if let Some(account_id) = account_id {
+        payload.insert(
+            "account_id".to_owned(),
+            Value::String(account_id.to_owned()),
+        );
+    }
+    if let Some(public_key_hex) = public_key_hex {
+        payload.insert(
+            "public_key_hex".to_owned(),
+            Value::String(public_key_hex.to_owned()),
+        );
+    }
 
     if let Some(identity) = arguments.get("identity") {
         let identity_obj = identity
@@ -7862,6 +7873,18 @@ fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
     }
     if let Some(uaid) = arguments.get("uaid").and_then(Value::as_str) {
         payload.insert("uaid".to_owned(), Value::String(uaid.to_owned()));
+    }
+    if let Some(permissions) = arguments.get("permissions") {
+        let permissions_array = permissions
+            .as_array()
+            .ok_or_else(|| "`permissions` must be an array when provided".to_owned())?;
+        if !permissions_array.iter().all(Value::is_string) {
+            return Err("`permissions` must contain only strings".to_owned());
+        }
+        payload.insert(
+            "permissions".to_owned(),
+            Value::Array(permissions_array.clone()),
+        );
     }
 
     Ok(Value::Object(payload))
@@ -11392,7 +11415,7 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.onboard".to_owned(),
         description:
-            "Onboard an account (`alias` + `account_id` shortcuts supported when `body` is omitted)."
+            "Onboard an account (`alias` + `account_id` or `public_key_hex` shortcuts supported when `body` is omitted)."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/accounts/onboard".to_owned(),
@@ -11408,6 +11431,10 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
                     "type": "string",
                     "description": "Convenience shortcut for `body.account_id`."
                 },
+                "public_key_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.public_key_hex` for Ed25519 public key bytes."
+                },
                 "identity": {
                     "type": "object",
                     "additionalProperties": true,
@@ -11416,6 +11443,11 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
                 "uaid": {
                     "type": "string",
                     "description": "Optional UAID literal."
+                },
+                "permissions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional permission literals to request during onboarding."
                 },
                 "body": {
                     "type": "object",
@@ -15584,13 +15616,34 @@ mod tests {
             "alias": "alice",
             "account_id": TEST_ACCOUNT_I105,
             "identity": { "tier": "gold" },
-            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "permissions": ["CanRegisterDomain"]
         });
         let body = build_accounts_onboard_body(args.as_object().expect("object")).expect("body");
         let body = body.as_object().expect("object");
         assert_eq!(body.get("alias").and_then(Value::as_str), Some("alice"));
+        assert_eq!(
+            body.get("account_id").and_then(Value::as_str),
+            Some(TEST_ACCOUNT_I105)
+        );
         assert!(body.get("identity").is_some_and(Value::is_object));
         assert!(body.get("uaid").is_some_and(Value::is_string));
+        assert!(body.get("permissions").is_some_and(Value::is_array));
+    }
+
+    #[test]
+    fn build_accounts_onboard_body_accepts_public_key_hex_shortcut() {
+        let args = norito::json!({
+            "alias": "alice",
+            "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+        });
+        let body = build_accounts_onboard_body(args.as_object().expect("object")).expect("body");
+        let body = body.as_object().expect("object");
+        assert_eq!(
+            body.get("public_key_hex").and_then(Value::as_str),
+            Some("1111111111111111111111111111111111111111111111111111111111111111")
+        );
+        assert!(body.get("account_id").is_none());
     }
 
     #[test]

@@ -28,6 +28,16 @@ queried node's current remote-peer count, not the chain's validator-set size.
 `https://taira.sora.org` is the shared Torii origin, not an app website. Do
 not bind product frontends to that host root through `sorafs_sites.json`.
 
+For day-to-day validation, prefer the first-class CLI:
+
+- `iroha taira doctor --public-root https://taira.sora.org --output-format text`
+- `iroha taira write-canary --public-root https://taira.sora.org --output-format text`
+
+`check_mcp_rollout.sh` remains the fuller rollout harness for operators who
+need local/public comparisons, curl `--resolve` overrides, or shell-only
+environments. The CLI is the blessed single-node Taira devex path and emits a
+redacted JSON receipt with `--json`.
+
 The shipped public Taira profile pins the first-release Torii posture in
 config rather than wrapper-local defaults:
 
@@ -529,8 +539,13 @@ not valid for Taira. If the configured file is missing or still contains the
 placeholder authority, the rollout scripts now generate a fresh keypair,
 onboard the account on public Taira, solve the faucet puzzle, claim starter
 funds, and rewrite `/run/secrets/taira-canary-client.toml` automatically before
-retrying the signed ping. Keep the populated canary config out of the repo and
-out of shell history where possible.
+retrying the signed ping. If alias onboarding is unavailable but the public
+faucet is healthy, the bootstrap falls back to faucet account registration so
+the signed write canary can still prove the public transaction path. The signed
+ping attaches Taira's accepted XOR gas asset metadata by default; pass
+`--gas-asset-id ""` only against a network that does not enforce pipeline gas
+metadata. Keep the populated canary config out of the repo and out of shell
+history where possible.
 
 If the script fails with `route_unavailable`, treat that as a deployment or
 topology failure, not an app-level validation issue: the public Torii ingress is

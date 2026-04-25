@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib import error, request
@@ -45,6 +46,50 @@ def build_challenge(
     return hasher.digest()
 
 
+def scrypt_digest(password: bytes, *, salt: bytes, n: int, r: int, p: int, dklen: int) -> bytes:
+    """Derive an scrypt digest, falling back to OpenSSL when Python omits it."""
+
+    native_scrypt = getattr(hashlib, "scrypt", None)
+    if native_scrypt is not None:
+        return native_scrypt(password, salt=salt, n=n, r=r, p=p, dklen=dklen)
+
+    proc = subprocess.run(
+        [
+            "openssl",
+            "kdf",
+            "-keylen",
+            str(dklen),
+            "-kdfopt",
+            f"hexpass:{password.hex()}",
+            "-kdfopt",
+            f"hexsalt:{salt.hex()}",
+            "-kdfopt",
+            f"n:{n}",
+            "-kdfopt",
+            f"r:{r}",
+            "-kdfopt",
+            f"p:{p}",
+            "SCRYPT",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+        raise RuntimeError(f"openssl scrypt derivation failed: {detail}")
+    rendered = "".join(ch for ch in proc.stdout if ch in "0123456789abcdefABCDEF")
+    try:
+        digest = bytes.fromhex(rendered)
+    except ValueError as exc:
+        raise RuntimeError(f"openssl scrypt output was not hex: {proc.stdout!r}") from exc
+    if len(digest) != dklen:
+        raise RuntimeError(f"openssl scrypt output length mismatch: expected {dklen}, got {len(digest)}")
+    return digest
+
+
 def solve_puzzle(account_id: str, puzzle: dict[str, Any]) -> dict[str, Any]:
     """Solve the Taira faucet PoW challenge and build the request body."""
 
@@ -69,7 +114,7 @@ def solve_puzzle(account_id: str, puzzle: dict[str, Any]) -> dict[str, Any]:
 
     for nonce in range(0, 1 << 63):
         nonce_bytes = nonce.to_bytes(8, byteorder="big", signed=False)
-        digest = hashlib.scrypt(
+        digest = scrypt_digest(
             nonce_bytes,
             salt=challenge,
             n=n,

@@ -95,6 +95,7 @@ toml = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tiny-keccak = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+scrypt = { workspace = true }
 aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "gif"], optional = true }
 png = "0.18.0"
