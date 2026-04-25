@@ -54,6 +54,28 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
     )
 }
 
+fileprivate func normalizeToriiParticipantQueryValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#")
+    else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace or URL control characters.")
+    }
+    if trimmed.contains("@") {
+        return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
+    }
+    if let address = try? AccountAddress.parseEncoded(trimmed) {
+        return try address.toI105(networkPrefix: 0x02F1)
+    }
+    return trimmed
+}
+
 fileprivate func normalizeToriiAccountAliasLiteral(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -2304,6 +2326,94 @@ public struct ToriiExplorerRwasPage: Decodable, Sendable, Equatable {
     public let items: [ToriiExplorerRwaRecord]
 }
 
+/// Contract-call activity item returned by `/v1/contracts/activity`.
+public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
+    public let authority: String?
+    public let timestampMs: UInt64?
+    public let entrypointHash: String
+    public let resultOk: Bool
+    public let contractAddress: String
+    public let contractAlias: String?
+    public let contractEntrypoint: String?
+    public let contractPayload: ToriiJSONValue?
+    public let gasAssetId: String?
+    public let feeSponsor: String?
+    public let gasLimit: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case timestampMs = "timestamp_ms"
+        case entrypointHash = "entrypoint_hash"
+        case resultOk = "result_ok"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
+        case contractEntrypoint = "contract_entrypoint"
+        case contractPayload = "contract_payload"
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case gasLimit = "gas_limit"
+    }
+}
+
+/// Contract-call activity envelope returned by `/v1/contracts/activity`.
+public struct ToriiContractActivityList: Decodable, Sendable, Equatable {
+    public let items: [ToriiContractActivityItem]
+    public let total: UInt64
+}
+
+/// Generic contract event item returned by `/v1/contracts/events`.
+public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
+    public let eventId: String
+    public let schemaVersion: UInt64
+    public let provenance: String
+    public let authority: String?
+    public let timestampMs: UInt64?
+    public let txHashHex: String
+    public let blockHeight: UInt64
+    public let blockHashHex: String
+    public let resultOk: Bool
+    public let contractAddress: String
+    public let contractAlias: String?
+    public let module: String
+    public let eventKind: String
+    public let participants: [String]?
+    public let assetIds: [String]?
+    public let numericFields: [String: ToriiJSONValue]?
+    public let payload: ToriiJSONValue?
+    public let gasAssetId: String?
+    public let feeSponsor: String?
+    public let gasLimit: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case schemaVersion = "schema_version"
+        case provenance
+        case authority
+        case timestampMs = "timestamp_ms"
+        case txHashHex = "tx_hash_hex"
+        case blockHeight = "block_height"
+        case blockHashHex = "block_hash_hex"
+        case resultOk = "result_ok"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
+        case module
+        case eventKind = "event_kind"
+        case participants
+        case assetIds = "asset_ids"
+        case numericFields = "numeric_fields"
+        case payload
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case gasLimit = "gas_limit"
+    }
+}
+
+/// Generic contract event envelope returned by `/v1/contracts/events`.
+public struct ToriiContractEventList: Decodable, Sendable, Equatable {
+    public let items: [ToriiContractEventItem]
+    public let total: UInt64
+}
+
 /// Explorer duration wrapper (milliseconds).
 public struct ToriiExplorerDuration: Decodable, Sendable, Equatable {
     public let ms: UInt64
@@ -2912,6 +3022,185 @@ public struct ToriiExplorerRwasParams: Sendable, Equatable {
         }
         if let domain = try ToriiRequestValidation.normalizedOptionalNonEmpty(domain, field: "domain") {
             items.append(URLQueryItem(name: "domain", value: domain))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+/// Query parameters accepted by `/v1/contracts/activity`.
+public struct ToriiContractActivityParams: Sendable, Equatable {
+    public var limit: UInt64?
+    public var offset: UInt64?
+    public var authority: String?
+    public var contractAddress: String?
+    public var contractAlias: String?
+    public var contractEntrypoint: String?
+    public var sinceTimestampMs: UInt64?
+    public var untilTimestampMs: UInt64?
+    public var resultOk: Bool?
+
+    public init(limit: UInt64? = nil,
+                offset: UInt64? = nil,
+                authority: String? = nil,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
+                contractEntrypoint: String? = nil,
+                sinceTimestampMs: UInt64? = nil,
+                untilTimestampMs: UInt64? = nil,
+                resultOk: Bool? = nil) {
+        self.limit = limit
+        self.offset = offset
+        self.authority = authority
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
+        self.contractEntrypoint = contractEntrypoint
+        self.sinceTimestampMs = sinceTimestampMs
+        self.untilTimestampMs = untilTimestampMs
+        self.resultOk = resultOk
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let limit {
+            guard limit > 0 else {
+                throw ToriiClientError.invalidPayload("limit must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !authority.isEmpty {
+            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+            items.append(URLQueryItem(name: "authority", value: normalized))
+        }
+        if let contractAddress = contractAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAddress.isEmpty {
+            let normalized = try normalizeToriiContractAddressLiteral(contractAddress, field: "contractAddress")
+            items.append(URLQueryItem(name: "contract_address", value: normalized))
+        }
+        if let contractAlias = contractAlias?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAlias.isEmpty {
+            let normalized = try normalizeToriiContractAliasLiteral(contractAlias, field: "contractAlias")
+            items.append(URLQueryItem(name: "contract_alias", value: normalized))
+        }
+        if let contractEntrypoint = try ToriiRequestValidation.normalizedOptionalNonEmpty(
+            contractEntrypoint,
+            field: "contractEntrypoint"
+        ) {
+            items.append(URLQueryItem(name: "contract_entrypoint", value: contractEntrypoint))
+        }
+        if let sinceTimestampMs {
+            items.append(URLQueryItem(name: "since_timestamp_ms", value: String(sinceTimestampMs)))
+        }
+        if let untilTimestampMs {
+            items.append(URLQueryItem(name: "until_timestamp_ms", value: String(untilTimestampMs)))
+        }
+        if let resultOk {
+            items.append(URLQueryItem(name: "result_ok", value: resultOk ? "true" : "false"))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+/// Query parameters accepted by `/v1/contracts/events`.
+public struct ToriiContractEventParams: Sendable, Equatable {
+    public var limit: UInt64?
+    public var offset: UInt64?
+    public var authority: String?
+    public var contractAddress: String?
+    public var contractAlias: String?
+    public var module: String?
+    public var eventKind: String?
+    public var participant: String?
+    public var assetId: String?
+    public var provenance: String?
+    public var sinceTimestampMs: UInt64?
+    public var untilTimestampMs: UInt64?
+    public var resultOk: Bool?
+
+    public init(limit: UInt64? = nil,
+                offset: UInt64? = nil,
+                authority: String? = nil,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
+                module: String? = nil,
+                eventKind: String? = nil,
+                participant: String? = nil,
+                assetId: String? = nil,
+                provenance: String? = nil,
+                sinceTimestampMs: UInt64? = nil,
+                untilTimestampMs: UInt64? = nil,
+                resultOk: Bool? = nil) {
+        self.limit = limit
+        self.offset = offset
+        self.authority = authority
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
+        self.module = module
+        self.eventKind = eventKind
+        self.participant = participant
+        self.assetId = assetId
+        self.provenance = provenance
+        self.sinceTimestampMs = sinceTimestampMs
+        self.untilTimestampMs = untilTimestampMs
+        self.resultOk = resultOk
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let limit {
+            guard limit > 0 else {
+                throw ToriiClientError.invalidPayload("limit must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !authority.isEmpty {
+            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+            items.append(URLQueryItem(name: "authority", value: normalized))
+        }
+        if let contractAddress = contractAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAddress.isEmpty {
+            let normalized = try normalizeToriiContractAddressLiteral(contractAddress, field: "contractAddress")
+            items.append(URLQueryItem(name: "contract_address", value: normalized))
+        }
+        if let contractAlias = contractAlias?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAlias.isEmpty {
+            let normalized = try normalizeToriiContractAliasLiteral(contractAlias, field: "contractAlias")
+            items.append(URLQueryItem(name: "contract_alias", value: normalized))
+        }
+        if let module = try ToriiRequestValidation.normalizedOptionalNonEmpty(module, field: "module") {
+            items.append(URLQueryItem(name: "module", value: module))
+        }
+        if let eventKind = try ToriiRequestValidation.normalizedOptionalNonEmpty(eventKind, field: "eventKind") {
+            items.append(URLQueryItem(name: "event_kind", value: eventKind))
+        }
+        if let participant = participant?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !participant.isEmpty {
+            let normalized = try normalizeToriiParticipantQueryValue(participant, field: "participant")
+            items.append(URLQueryItem(name: "participant", value: normalized))
+        }
+        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(assetId, field: "assetId")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
+        }
+        if let provenance = try ToriiRequestValidation.normalizedOptionalNonEmpty(provenance, field: "provenance") {
+            items.append(URLQueryItem(name: "provenance", value: provenance))
+        }
+        if let sinceTimestampMs {
+            items.append(URLQueryItem(name: "since_timestamp_ms", value: String(sinceTimestampMs)))
+        }
+        if let untilTimestampMs {
+            items.append(URLQueryItem(name: "until_timestamp_ms", value: String(untilTimestampMs)))
+        }
+        if let resultOk {
+            items.append(URLQueryItem(name: "result_ok", value: resultOk ? "true" : "false"))
         }
         return items.isEmpty ? nil : items
     }
@@ -10495,6 +10784,20 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
+    public func getContractActivity(params: ToriiContractActivityParams? = nil,
+                                    completion: @escaping (Result<ToriiContractActivityList, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getContractActivity(params: params) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getContractEvents(params: ToriiContractEventParams? = nil,
+                                  completion: @escaping (Result<ToriiContractEventList, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getContractEvents(params: params) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
     public func getExplorerRwaDetail(rwaId: String,
                                      completion: @escaping (Result<ToriiExplorerRwaRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getExplorerRwaDetail(rwaId: rwaId) }
@@ -11538,6 +11841,20 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       queryItems: try params?.queryItems())
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerRwasPage.self, from: data)
+    }
+
+    public func getContractActivity(params: ToriiContractActivityParams? = nil) async throws -> ToriiContractActivityList {
+        let request = try makeRequest(path: "/v1/contracts/activity",
+                                      queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiContractActivityList.self, from: data)
+    }
+
+    public func getContractEvents(params: ToriiContractEventParams? = nil) async throws -> ToriiContractEventList {
+        let request = try makeRequest(path: "/v1/contracts/events",
+                                      queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiContractEventList.self, from: data)
     }
 
     public func getExplorerRwaDetail(rwaId: String) async throws -> ToriiExplorerRwaRecord {

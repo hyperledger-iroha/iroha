@@ -5722,10 +5722,16 @@ async fn handler_offline_cash_redeem(
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_cash_readiness() -> Result<impl IntoResponse, Error> {
-    json_ok(json_object([json_entry(
-        "offline_recursive_stark",
-        crate::offline_lineage::offline_recursive_stark_ready(),
-    )]))
+    json_ok(json_object([
+        json_entry(
+            "offline_recursive_stark",
+            crate::offline_lineage::offline_recursive_stark_ready(),
+        ),
+        json_entry(
+            "offline_source_lineage_fastpq",
+            crate::offline_lineage::offline_source_lineage_fastpq_ready(),
+        ),
+    ]))
 }
 
 #[cfg(feature = "app_api")]
