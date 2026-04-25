@@ -46,6 +46,7 @@ norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
 iroha_version = { path = "crates/iroha_version", default-features = false, features = ["json"] }
 connect_norito_bridge = { path = "crates/connect_norito_bridge" }
+fastpq_prover = { path = "crates/fastpq_prover" }
 iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 

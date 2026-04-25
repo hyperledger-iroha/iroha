@@ -3406,6 +3406,23 @@ mod model {
         pub source_nullifier: String,
     }
 
+    /// Verifier-backed FASTPQ proof artifact for a source-lineage envelope.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineSourceLineageFastpqProof {
+        /// Canonical FASTPQ parameter set used by the prover.
+        pub parameter: String,
+        /// Norito-encoded FASTPQ proof bytes as standard Base64.
+        pub proof_bytes_base64: String,
+        /// SHA-256 digest of `proof_bytes_base64` after Base64 decoding.
+        pub proof_sha256: String,
+        /// SHA-256 manifest for the deterministic FASTPQ batch verified by Torii.
+        pub batch_manifest_sha256: String,
+    }
+
     /// Versioned FastPQ source-lineage proof envelope for incoming offline receipts.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3421,6 +3438,8 @@ mod model {
         pub public_inputs: OfflineSourceLineagePublicInputs,
         /// Canonical outgoing source payload witness validated by Torii.
         pub witness_payload: String,
+        /// Verifier-backed FASTPQ proof bytes for the source-lineage batch.
+        pub fastpq_proof: OfflineSourceLineageFastpqProof,
         /// FastPQ/STARK-FRI proof material.
         pub proof: OfflineTransparentZkProof,
     }

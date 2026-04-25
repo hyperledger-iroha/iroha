@@ -250,6 +250,66 @@ final class OfflineSettlementProofsTests: XCTestCase {
         )
     }
 
+    func testSourceLineageEnvelopeVerifierRejectsTamperedAirOpening() throws {
+        let fixture = try makeSourceLineageFixture()
+        let envelope = fixture.envelope.proof.envelope
+        let proof = envelope.proof
+        let air = try XCTUnwrap(proof.air)
+        var openings = air.openings
+        var row = openings[0].row
+        row[0] += 1
+        openings[0] = ToriiOfflineStarkAirOpeningV1(
+            index: openings[0].index,
+            row: row,
+            nextRow: openings[0].nextRow,
+            rowPath: openings[0].rowPath,
+            nextRowPath: openings[0].nextRowPath,
+            compositionValue: openings[0].compositionValue,
+            compositionPath: openings[0].compositionPath
+        )
+        let tamperedProof = try ToriiOfflineTransparentZkProof(
+            backend: fixture.envelope.proof.backend,
+            circuitId: fixture.envelope.proof.circuitId,
+            recursionDepth: fixture.envelope.proof.recursionDepth,
+            publicInputsHex: fixture.envelope.proof.publicInputsHex,
+            envelope: ToriiOfflineStarkVerifyEnvelopeV1(
+                params: envelope.params,
+                proof: ToriiOfflineStarkProofV1(
+                    version: proof.version,
+                    commits: proof.commits,
+                    queries: proof.queries,
+                    compValues: proof.compValues,
+                    air: try ToriiOfflineStarkAirProofV1(
+                        version: air.version,
+                        circuitId: air.circuitId,
+                        publicDigest: air.publicDigest,
+                        traceRoot: air.traceRoot,
+                        compositionRoot: air.compositionRoot,
+                        traceWidth: air.traceWidth,
+                        openings: openings
+                    )
+                ),
+                transcriptLabel: envelope.transcriptLabel
+            )
+        )
+        let tamperedEnvelope = ToriiOfflineSourceLineageEnvelope(
+            publicInputs: fixture.envelope.publicInputs,
+            witnessPayload: fixture.envelope.witnessPayload,
+            proof: tamperedProof
+        )
+
+        XCTAssertThrowsError(
+            try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+                tamperedEnvelope,
+                expectedTransferId: fixture.transferId,
+                recipientLineageId: fixture.recipientLineageId,
+                assetDefinitionId: fixture.assetDefinitionId,
+                amount: fixture.amount,
+                issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+            )
+        )
+    }
+
     func testSourceLineageEnvelopeVerifierAcceptsPrefixedBase64WitnessPayload() throws {
         let fixture = try makeSourceLineageFixture()
         let encodedWitness = base64URL(Data(fixture.envelope.witnessPayload.utf8))
@@ -399,6 +459,19 @@ final class OfflineSettlementProofsTests: XCTestCase {
         XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
     }
 
+    func testSourceLineageEnvelopeVerifierRejectsSourceProofOnOutgoingReceipt() throws {
+        let nested = try makeSourceLineageFixture(
+            transferId: "nested-source-transfer",
+            recipientLineageId: "nested-recipient-lineage"
+        )
+        let fixture = try makeSourceLineageFixture(
+            transferId: "source-transfer-with-invalid-proof-shape",
+            outgoingSourceLineageProof: nested.envelope
+        )
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
     private func makeRedeemRequest() throws -> ToriiOfflineCashRedeemRequest {
         let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let deviceBinding = sampleDeviceBinding()
@@ -474,7 +547,8 @@ final class OfflineSettlementProofsTests: XCTestCase {
         tamperAnchorIssuerSignature: Bool = false,
         tamperAncestryPostStateHash: Bool = false,
         useNoncanonicalSenderAccountId: Bool = false,
-        useNoncanonicalCounterpartyAccountId: Bool = false
+        useNoncanonicalCounterpartyAccountId: Bool = false,
+        outgoingSourceLineageProof: ToriiOfflineSourceLineageEnvelope? = nil
     ) throws -> SourceLineageFixture {
         let issuerSigningKey = Curve25519.Signing.PrivateKey()
         let issuerPublicKeyBase64 = issuerSigningKey.publicKey.rawRepresentation.base64EncodedString()
@@ -569,7 +643,8 @@ final class OfflineSettlementProofsTests: XCTestCase {
             counter: UInt64,
             createdAtMs: UInt64,
             tamperPostStateHash: Bool = false,
-            tamperChallengeHash: Bool = false
+            tamperChallengeHash: Bool = false,
+            sourceLineageProof: ToriiOfflineSourceLineageEnvelope? = nil
         ) throws -> ToriiOfflineTransferReceipt {
             let postBalance = try ToriiOfflineCashCodec.subtractAmounts(preBalance, amount)
             let postLockedBalance = "0"
@@ -627,6 +702,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
                     assertionBase64: "YXNzZXJ0aW9u",
                     counter: counter
                 ),
+                sourceLineageProof: sourceLineageProof,
                 sourcePayload: nil,
                 senderSignatureBase64: "",
                 createdAtMs: createdAtMs
@@ -655,6 +731,7 @@ final class OfflineSettlementProofsTests: XCTestCase {
                 amount: unsignedReceipt.amount,
                 authorization: unsignedReceipt.authorization,
                 deviceProof: unsignedReceipt.deviceProof,
+                sourceLineageProof: unsignedReceipt.sourceLineageProof,
                 sourcePayload: nil,
                 senderSignatureBase64: signature.derRepresentation.base64EncodedString(),
                 createdAtMs: unsignedReceipt.createdAtMs
@@ -696,7 +773,8 @@ final class OfflineSettlementProofsTests: XCTestCase {
             preStateHash: currentStateHash,
             counter: replayFinalCounter ? 1 : (includeAncestry ? 2 : 1),
             createdAtMs: 1_000,
-            tamperChallengeHash: tamperFinalAttestationHash
+            tamperChallengeHash: tamperFinalAttestationHash,
+            sourceLineageProof: outgoingSourceLineageProof
         )
         let witnessPayload = try sourceLineageWitnessPayload(
             anchor: anchor,
