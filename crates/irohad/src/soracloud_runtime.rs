@@ -2583,6 +2583,7 @@ impl SoracloudRuntimeManager {
             self.artifacts_root(),
             self.config.local_validator_account_id.as_ref(),
             self.config.local_peer_id.as_deref(),
+            !self.config.inrou.proxy_only,
         )?;
 
         self.write_service_materializations(&initial_snapshot, &bundle_registry, &view)?;
@@ -2602,6 +2603,7 @@ impl SoracloudRuntimeManager {
             self.artifacts_root(),
             self.config.local_validator_account_id.as_ref(),
             self.config.local_peer_id.as_deref(),
+            !self.config.inrou.proxy_only,
         )?;
         self.prune_stale_hf_local_workers(&snapshot);
         self.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
@@ -8945,6 +8947,7 @@ fn build_runtime_snapshot(
     artifacts_root: PathBuf,
     local_validator_account_id: Option<&AccountId>,
     local_peer_id: Option<&str>,
+    local_inrou_hosting_enabled: bool,
 ) -> eyre::Result<SoracloudRuntimeSnapshot> {
     let mut services = BTreeMap::new();
     let world = view.world();
@@ -9013,7 +9016,9 @@ fn build_runtime_snapshot(
                         .iter()
                         .all(|volume| current_sequence < volume.lease_expires_sequence));
             let local_inrou_assignments =
-                if bundle.container.runtime == SoraContainerRuntimeV1::Inrou {
+                if local_inrou_hosting_enabled
+                    && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+                {
                     local_inrou_replica_placements(
                         world,
                         &service_name,
@@ -15095,6 +15100,31 @@ mod tests {
     }
 
     #[test]
+    fn proxy_only_inrou_host_advertises_zero_capacity() {
+        let mut config =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-proxy-only"));
+        config.inrou.proxy_only = true;
+        config.inrou.max_concurrent_vms =
+            std::num::NonZeroUsize::new(7).expect("nonzero inrou vm limit");
+        config = config.with_local_host_identity(
+            ALICE_ID.clone(),
+            "12D3KooWProxyOnlyRuntimeHostAdvert",
+        );
+        let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
+
+        assert_eq!(manager.hosted_http_concurrency_limit(), 0);
+        let (capability, auto_proxy_only) = manager
+            .build_local_inrou_host_capability_record(123)
+            .expect("host identity configured");
+        assert!(!auto_proxy_only);
+        assert!(capability.proxy_only);
+        assert_eq!(capability.max_hosted_replica_capacity, 0);
+        assert_eq!(capability.max_cpu_millis, 0);
+        assert_eq!(capability.max_memory_bytes, 0);
+        assert_eq!(capability.max_storage_bytes, 0);
+    }
+
+    #[test]
     fn derive_hf_runtime_status_distinguishes_pending_deployment_and_ready() {
         assert_eq!(
             derive_hf_runtime_status(
@@ -18117,6 +18147,84 @@ mod tests {
 
         let snapshot = manager.snapshot.read().clone();
         assert_eq!(snapshot.local_peer_id.as_deref(), Some(local_peer_id));
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_proxy_only_inrou_host_does_not_publish_replica_runtime_state() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let local_peer_id = "12D3KooWProxyOnlyRuntimeHost";
+        let deployment_state = sample_deployment_state(&bundle);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), deployment_state);
+            world
+                .soracloud_inrou_service_placements_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+                        service_name: bundle.service.service_name.clone(),
+                        service_version: bundle.service.service_version.clone(),
+                        desired_replica_count: bundle.service.replicas.get(),
+                        eligible_validator_count: 1,
+                        placements: vec![SoraInrouReplicaPlacementV1 {
+                            replica_slot: 1,
+                            validator_account_id: ALICE_ID.clone(),
+                            peer_id: local_peer_id.to_owned(),
+                            selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+                            selected_guest_isa: current_host_inrou_guest_isa(),
+                            selected_geography_tag: None,
+                            selection_latency_ms: None,
+                        }],
+                        reconciled_at_ms: 1,
+                        last_error: None,
+                    },
+                );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        config.inrou.proxy_only = true;
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+
+        manager.reconcile_once()?;
+
+        let capabilities = mutation_sink.submitted_inrou_host_capabilities();
+        assert_eq!(capabilities.len(), 1);
+        assert!(capabilities[0].capability.proxy_only);
+        assert_eq!(capabilities[0].capability.max_hosted_replica_capacity, 0);
+        assert!(mutation_sink
+            .submitted_inrou_replica_runtime_states()
+            .is_empty());
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("Inrou runtime plan present");
+        assert_eq!(plan.runtime, SoraContainerRuntimeV1::Inrou);
+        assert_eq!(plan.process_generation, None);
+        assert!(plan.local_replica_slots.is_empty());
+        assert!(plan.local_replicas.is_empty());
+        assert!(manager.hosted_http_workers.lock().is_empty());
         Ok(())
     }
 

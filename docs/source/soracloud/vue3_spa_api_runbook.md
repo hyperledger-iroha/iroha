@@ -178,6 +178,10 @@ Linux Firecracker host, one non-Linux PortableVm host, and one proxy-only
 validator that publishes zero hosted capacity while still proxying routed
 hosted-HTTP traffic correctly.
 
+The proxy-only host command in the example inventory runs the focused
+`proxy_only_inrou_host` runtime tests instead of a plain compile check, so the
+gate proves that proxy-only nodes fail closed for local Inrou materialization.
+
 Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
 `IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional

@@ -352,6 +352,11 @@ relabels it for the native PortableVm guest profile, removes cloud-image fstab
 entries for unattached partitions, and exports the matching kernel/initrd paths.
 Use `--force` to refresh an existing cache.
 
+The mixed-host inventory's proxy-only host gate should run the focused
+`proxy_only_inrou_host` runtime tests, proving the host advertises zero hosted
+capacity and does not publish local replica runtime state even if a placement is
+assigned to it.
+
 Firecracker smoke expects:
 
 - `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`

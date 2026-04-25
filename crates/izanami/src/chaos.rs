@@ -430,23 +430,6 @@ impl EndpointHealthPool {
         )
     }
 
-    fn run_with_failover_until_some_from_endpoint<T, F>(
-        &self,
-        op_name: &'static str,
-        preferred_endpoint_idx: usize,
-        operation: F,
-    ) -> Result<Option<(usize, T)>>
-    where
-        F: FnMut(usize, &str) -> Result<Option<T>>,
-    {
-        self.run_with_failover_until_some_at_with_preference(
-            op_name,
-            Some(preferred_endpoint_idx),
-            Instant::now(),
-            operation,
-        )
-    }
-
     fn select_endpoint_preferred(
         &self,
         op_name: &'static str,
@@ -626,25 +609,6 @@ impl EndpointHealthPool {
                 "ingress operation `{op_name}` failed without making an endpoint attempt"
             )),
         }
-    }
-
-    fn run_with_failover_until_some_at_with_preference<T, F>(
-        &self,
-        op_name: &'static str,
-        preferred_endpoint_idx: Option<usize>,
-        now: Instant,
-        operation: F,
-    ) -> Result<Option<(usize, T)>>
-    where
-        F: FnMut(usize, &str) -> Result<Option<T>>,
-    {
-        self.run_with_failover_until_some_at_with_preference_and_limit(
-            op_name,
-            preferred_endpoint_idx,
-            now,
-            self.config.max_attempts,
-            operation,
-        )
     }
 
     fn run_with_failover_until_some_at_with_preference_and_limit<T, F>(
@@ -7563,10 +7527,11 @@ mod tests {
         let now = Instant::now();
         let mut attempts = Vec::new();
         let result: Result<Option<(usize, &'static str)>> = pool
-            .run_with_failover_until_some_at_with_preference(
+            .run_with_failover_until_some_at_with_preference_and_limit(
                 "audit_confirmation",
                 Some(0),
                 now,
+                3,
                 |idx, _| {
                     attempts.push(idx);
                     if idx == 0 {
