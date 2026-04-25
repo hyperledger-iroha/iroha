@@ -31,7 +31,7 @@ enum NoritoBridgeLoader {
     }
 
     static let expectedVersion = "0.1.0"
-    static let expectedBridgeAbiVersion: UInt32 = 1
+    static let expectedBridgeAbiVersion: UInt32 = 2
     private static let expectedHashes: [String: String] = [
         "macos-arm64": "fcdcb9f488985556ae82f2d2ef48a92f5ebc9ae6739ff9e3cc3b47830c7d1f8f",
         "ios-arm64": "962ad99cb7ee30946771b302026feb4411ebcf500ff1bf960284e9e7118f8e91",
@@ -40,7 +40,9 @@ enum NoritoBridgeLoader {
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        "connect_norito_encode_transfer_signed_transaction"
+        "connect_norito_encode_transfer_signed_transaction",
+        "connect_norito_source_lineage_fastpq_proof",
+        "connect_norito_source_lineage_fastpq_verify"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -1312,6 +1314,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
     ) -> Int32
 
+    private typealias OfflineFastpqVerifyFn = @convention(c) (
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt
+    ) -> Int32
+
     private typealias Sm2DefaultDistidFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
@@ -1745,6 +1752,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var offlineProofSumFn: OfflineFastpqProofFn? = nil
     private var offlineProofCounterFn: OfflineFastpqProofFn? = nil
     private var offlineProofReplayFn: OfflineFastpqProofFn? = nil
+    private var sourceLineageFastpqProofFn: OfflineFastpqProofFn? = nil
+    private var sourceLineageFastpqVerifyFn: OfflineFastpqVerifyFn? = nil
     private var offlineCommitmentUpdateFn: OfflineCommitmentUpdateFn? = nil
     private var offlineBlindingFromSeedFn: OfflineBlindingFromSeedFn? = nil
     private var offlineBalanceProofFn: OfflineBalanceProofFn? = nil
@@ -1856,6 +1865,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let offlineProofSumFn: Any? = nil
     private let offlineProofCounterFn: Any? = nil
     private let offlineProofReplayFn: Any? = nil
+    private let sourceLineageFastpqProofFn: Any? = nil
+    private let sourceLineageFastpqVerifyFn: Any? = nil
     private let offlineCommitmentUpdateFn: Any? = nil
     private let offlineBlindingFromSeedFn: Any? = nil
     private let offlineBalanceProofFn: Any? = nil
@@ -2302,6 +2313,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.offlineProofReplayFn = nil
             }
+            if let sourceLineageFastpqProofSymbol = dlsym(handle, "connect_norito_source_lineage_fastpq_proof") {
+                self.sourceLineageFastpqProofFn = unsafeBitCast(sourceLineageFastpqProofSymbol, to: OfflineFastpqProofFn.self)
+            } else {
+                self.sourceLineageFastpqProofFn = nil
+            }
+            if let sourceLineageFastpqVerifySymbol = dlsym(handle, "connect_norito_source_lineage_fastpq_verify") {
+                self.sourceLineageFastpqVerifyFn = unsafeBitCast(sourceLineageFastpqVerifySymbol, to: OfflineFastpqVerifyFn.self)
+            } else {
+                self.sourceLineageFastpqVerifyFn = nil
+            }
             if let offlineCommitmentSymbol = dlsym(handle, "connect_norito_offline_commitment_update") {
                 self.offlineCommitmentUpdateFn = unsafeBitCast(offlineCommitmentSymbol, to: OfflineCommitmentUpdateFn.self)
             } else {
@@ -2620,6 +2641,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.offlineProofSumFn = nil
             self.offlineProofCounterFn = nil
             self.offlineProofReplayFn = nil
+            self.sourceLineageFastpqProofFn = nil
+            self.sourceLineageFastpqVerifyFn = nil
             self.offlineCommitmentUpdateFn = nil
             self.offlineBlindingFromSeedFn = nil
             self.offlineBalanceProofFn = nil
@@ -7322,6 +7345,37 @@ extension NoritoNativeBridge {
 
     func offlineFastpqProofReplay(requestJson: Data) throws -> Data? {
         try offlineFastpqProof(requestJson: requestJson, bridgeFn: offlineProofReplayFn)
+    }
+
+    func sourceLineageFastpqProof(requestJson: Data) throws -> Data? {
+        try offlineFastpqProof(requestJson: requestJson, bridgeFn: sourceLineageFastpqProofFn)
+    }
+
+    func verifySourceLineageFastpqProof(requestJson: Data, artifactJson: Data) throws -> Bool? {
+        #if canImport(Darwin)
+        guard let verifyFn = sourceLineageFastpqVerifyFn else { return nil }
+        guard !requestJson.isEmpty, !artifactJson.isEmpty else { return false }
+        let status = requestJson.withUnsafeBytes { requestBuffer -> Int32 in
+            artifactJson.withUnsafeBytes { artifactBuffer -> Int32 in
+                guard let requestBase = requestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                      let artifactBase = artifactBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                    return -1
+                }
+                return verifyFn(
+                    requestBase,
+                    UInt(requestJson.count),
+                    artifactBase,
+                    UInt(artifactJson.count)
+                )
+            }
+        }
+        guard status == 0 else {
+            throw OfflineFastpqProofBridgeError.callFailed(status)
+        }
+        return true
+        #else
+        return nil
+        #endif
     }
 
     private func offlineFastpqProof(

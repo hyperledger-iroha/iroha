@@ -11304,6 +11304,42 @@ mod tests {
         Ok(state)
     }
 
+    #[test]
+    fn soracloud_permission_allows_granted_authority() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let state_transaction = state_block.transaction();
+
+        require_soracloud_permission(&ALICE_ID, &state_transaction)?;
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_permission_rejects_ungranted_authority() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+
+        let err = require_soracloud_permission(&BOB_ID, &state_transaction)
+            .expect_err("authority without Soracloud permission must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.as_ref() == "not permitted: CanManageSoracloud"
+        ));
+        Ok(())
+    }
+
     fn insert_active_public_lane_validator(
         state_transaction: &mut StateTransaction<'_, '_>,
         validator: AccountId,

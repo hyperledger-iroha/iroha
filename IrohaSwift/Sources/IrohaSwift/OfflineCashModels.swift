@@ -422,6 +422,7 @@ public struct ToriiOfflineSourceLineageEnvelope: Codable, Sendable, Equatable {
     public let circuitId: String
     public let publicInputs: ToriiOfflineSourceLineagePublicInputs
     public let witnessPayload: String
+    public let fastpqProof: ToriiOfflineSourceLineageFastpqProof
     public let proof: ToriiOfflineTransparentZkProof
 
     public init(
@@ -429,12 +430,14 @@ public struct ToriiOfflineSourceLineageEnvelope: Codable, Sendable, Equatable {
         circuitId: String = "offline-source-lineage-v1",
         publicInputs: ToriiOfflineSourceLineagePublicInputs,
         witnessPayload: String,
+        fastpqProof: ToriiOfflineSourceLineageFastpqProof,
         proof: ToriiOfflineTransparentZkProof
     ) {
         self.version = version
         self.circuitId = circuitId
         self.publicInputs = publicInputs
         self.witnessPayload = witnessPayload
+        self.fastpqProof = fastpqProof
         self.proof = proof
     }
 
@@ -443,7 +446,34 @@ public struct ToriiOfflineSourceLineageEnvelope: Codable, Sendable, Equatable {
         case circuitId = "circuit_id"
         case publicInputs = "public_inputs"
         case witnessPayload = "witness_payload"
+        case fastpqProof = "fastpq_proof"
         case proof
+    }
+}
+
+public struct ToriiOfflineSourceLineageFastpqProof: Codable, Sendable, Equatable {
+    public let parameter: String
+    public let proofBytesBase64: String
+    public let proofSha256: String
+    public let batchManifestSha256: String
+
+    public init(
+        parameter: String,
+        proofBytesBase64: String,
+        proofSha256: String,
+        batchManifestSha256: String
+    ) {
+        self.parameter = parameter
+        self.proofBytesBase64 = proofBytesBase64
+        self.proofSha256 = proofSha256
+        self.batchManifestSha256 = batchManifestSha256
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case parameter
+        case proofBytesBase64 = "proof_bytes_base64"
+        case proofSha256 = "proof_sha256"
+        case batchManifestSha256 = "batch_manifest_sha256"
     }
 }
 

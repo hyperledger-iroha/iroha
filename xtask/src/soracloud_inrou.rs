@@ -201,7 +201,7 @@ fn run_mixed_host(inventory_path: &Path) -> Result<(), Box<dyn Error>> {
             .command
             .as_deref()
             .unwrap_or(
-                "cargo check -p irohad --features embedded-soracloud-runtime --bin irohad --message-format short",
+                "cargo test -p irohad --features embedded-soracloud-runtime --bin irohad proxy_only_inrou_host -- --nocapture",
             ),
         inventory.proxy_only_host.env.as_ref(),
     )?;
