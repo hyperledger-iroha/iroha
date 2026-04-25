@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -236,6 +237,168 @@ final class OfflineSettlementProofsTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiOfflineCashRedeemRequest.self, from: data))
     }
 
+    func testSourceLineageEnvelopeVerifierAcceptsWitnessBoundReceipt() throws {
+        let fixture = try makeSourceLineageFixture()
+
+        try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+            fixture.envelope,
+            expectedTransferId: fixture.transferId,
+            recipientLineageId: fixture.recipientLineageId,
+            assetDefinitionId: fixture.assetDefinitionId,
+            amount: fixture.amount,
+            issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+        )
+    }
+
+    func testSourceLineageEnvelopeVerifierAcceptsPrefixedBase64WitnessPayload() throws {
+        let fixture = try makeSourceLineageFixture()
+        let encodedWitness = base64URL(Data(fixture.envelope.witnessPayload.utf8))
+        let envelope = try ToriiOfflineSettlementProofs.buildSourceLineageEnvelope(
+            publicInputs: fixture.envelope.publicInputs,
+            witnessPayload: "wallet-offline-transfer:\(encodedWitness)"
+        )
+
+        try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+            envelope,
+            expectedTransferId: fixture.transferId,
+            recipientLineageId: fixture.recipientLineageId,
+            assetDefinitionId: fixture.assetDefinitionId,
+            amount: fixture.amount,
+            issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+        )
+    }
+
+    func testSourceLineageEnvelopeVerifierAcceptsProductionDeviceProofWitnessPayload() throws {
+        let fixture = try makeSourceLineageFixture()
+        let envelope = try ToriiOfflineSettlementProofs.buildSourceLineageEnvelope(
+            publicInputs: fixture.envelope.publicInputs,
+            witnessPayload: fixture.productionWitnessPayload
+        )
+
+        try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+            envelope,
+            expectedTransferId: fixture.transferId,
+            recipientLineageId: fixture.recipientLineageId,
+            assetDefinitionId: fixture.assetDefinitionId,
+            amount: fixture.amount,
+            issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+        )
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsWitnessMismatchedPublicInputs() throws {
+        let fixture = try makeSourceLineageFixture()
+
+        try assertSourceLineageMutationRejected(fixture) {
+            try sourceInputs(from: $0, sourceReceiptHash: String(repeating: "0", count: 64))
+        }
+        try assertSourceLineageMutationRejected(fixture) {
+            try sourceInputs(from: $0, senderLineageId: "other-sender-lineage")
+        }
+        try assertSourceLineageMutationRejected(fixture) {
+            try sourceInputs(from: $0, sourcePreStateHash: String(repeating: "1", count: 64))
+        }
+        try assertSourceLineageMutationRejected(fixture) {
+            try sourceInputs(from: $0, deviceProofKeyId: "other-key")
+        }
+        try assertSourceLineageMutationRejected(fixture) {
+            try sourceInputs(from: $0, deviceProofCounter: 9)
+        }
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsAssetNotBoundToWitnessAnchor() throws {
+        let fixture = try makeSourceLineageFixture()
+        let tampered = try rebindSourceLineageEnvelope(fixture.envelope) {
+            try sourceInputs(from: $0, assetDefinitionId: "usd#paynet")
+        }
+
+        XCTAssertThrowsError(
+            try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+                tampered,
+                expectedTransferId: fixture.transferId,
+                recipientLineageId: fixture.recipientLineageId,
+                assetDefinitionId: "usd#paynet",
+                amount: fixture.amount,
+                issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+            )
+        )
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsNoncanonicalWitnessAssetDefinition() throws {
+        let fixture = try makeSourceLineageFixture(assetDefinitionId: "asset-1")
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsNoncanonicalWitnessAccount() throws {
+        let fixture = try makeSourceLineageFixture(useNoncanonicalSenderAccountId: true)
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsNoncanonicalCounterpartyAccount() throws {
+        let fixture = try makeSourceLineageFixture(useNoncanonicalCounterpartyAccountId: true)
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsRevokedAuthorization() throws {
+        let fixture = try makeSourceLineageFixture()
+
+        XCTAssertThrowsError(
+            try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+                fixture.envelope,
+                expectedTransferId: fixture.transferId,
+                recipientLineageId: fixture.recipientLineageId,
+                assetDefinitionId: fixture.assetDefinitionId,
+                amount: fixture.amount,
+                issuerPublicKeyBase64: fixture.issuerPublicKeyBase64,
+                revokedVerdictIds: ["SENDER-VERDICT"]
+            )
+        )
+    }
+
+    func testSourceLineageEnvelopeVerifierAcceptsWitnessWithAncestry() throws {
+        let fixture = try makeSourceLineageFixture(includeAncestry: true)
+
+        try verifySourceLineageFixture(fixture)
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsInvalidIssuerSignature() throws {
+        let fixture = try makeSourceLineageFixture(tamperAnchorIssuerSignature: true)
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsInvalidAuthorizationIssuerSignature() throws {
+        let fixture = try makeSourceLineageFixture(tamperAuthorizationIssuerSignature: true)
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsInvalidAttestationChallengeHash() throws {
+        let fixture = try makeSourceLineageFixture(tamperFinalAttestationHash: true)
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsCounterReplayAcrossAncestry() throws {
+        let fixture = try makeSourceLineageFixture(
+            includeAncestry: true,
+            replayFinalCounter: true
+        )
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
+    func testSourceLineageEnvelopeVerifierRejectsAncestryContinuityMismatch() throws {
+        let fixture = try makeSourceLineageFixture(
+            includeAncestry: true,
+            tamperAncestryPostStateHash: true
+        )
+
+        XCTAssertThrowsError(try verifySourceLineageFixture(fixture))
+    }
+
     private func makeRedeemRequest() throws -> ToriiOfflineCashRedeemRequest {
         let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let deviceBinding = sampleDeviceBinding()
@@ -286,6 +449,297 @@ final class OfflineSettlementProofsTests: XCTestCase {
             amount: "30.00",
             receipts: [receipt],
             redeemProof: redeemProof
+        )
+    }
+
+    private struct SourceLineageFixture {
+        let envelope: ToriiOfflineSourceLineageEnvelope
+        let productionWitnessPayload: String
+        let transferId: String
+        let recipientLineageId: String
+        let assetDefinitionId: String
+        let amount: String
+        let issuerPublicKeyBase64: String
+    }
+
+    private func makeSourceLineageFixture(
+        assetDefinitionId: String = "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+        transferId: String = "source-transfer",
+        recipientLineageId: String = "receiver-lineage",
+        amount: String = "10",
+        includeAncestry: Bool = false,
+        replayFinalCounter: Bool = false,
+        tamperFinalAttestationHash: Bool = false,
+        tamperAuthorizationIssuerSignature: Bool = false,
+        tamperAnchorIssuerSignature: Bool = false,
+        tamperAncestryPostStateHash: Bool = false,
+        useNoncanonicalSenderAccountId: Bool = false,
+        useNoncanonicalCounterpartyAccountId: Bool = false
+    ) throws -> SourceLineageFixture {
+        let issuerSigningKey = Curve25519.Signing.PrivateKey()
+        let issuerPublicKeyBase64 = issuerSigningKey.publicKey.rawRepresentation.base64EncodedString()
+        let signingKey = P256.Signing.PrivateKey()
+        let offlinePublicKey = signingKey.publicKey.x963Representation.base64EncodedString()
+        let senderAccountId = useNoncanonicalSenderAccountId
+            ? "sender-account"
+            : try AccountId.makeI105(publicKey: Data(repeating: 0x11, count: 32))
+        let counterpartyAccountId = useNoncanonicalCounterpartyAccountId
+            ? "receiver-account"
+            : try AccountId.makeI105(publicKey: Data(repeating: 0x22, count: 32))
+        let deviceBinding = ToriiOfflineDeviceBinding(
+            platform: "ios",
+            attestationKeyId: "sender-key",
+            deviceId: "sender-device",
+            offlinePublicKey: offlinePublicKey,
+            attestationReportBase64: ""
+        )
+        let unsignedAuthorization = try ToriiOfflineSpendAuthorization(
+            authorizationId: "source-auth",
+            lineageId: "sender-lineage",
+            accountId: senderAccountId,
+            verdictId: "sender-verdict",
+            policyMaxBalance: "1000",
+            policyMaxTxValue: "1000",
+            issuedAtMs: 1,
+            refreshAtMs: 2,
+            expiresAtMs: 1_700_000_000_000,
+            deviceBinding: deviceBinding,
+            issuerSignatureBase64: ""
+        )
+        let authorizationSignature = tamperAuthorizationIssuerSignature
+            ? Data("invalid authorization issuer signature".utf8).base64EncodedString()
+            : try issuerSigningKey.signature(
+                for: ToriiOfflineCashCodec.authorizationUnsignedPayload(unsignedAuthorization)
+            ).base64EncodedString()
+        let authorization = try ToriiOfflineSpendAuthorization(
+            authorizationId: unsignedAuthorization.authorizationId,
+            lineageId: unsignedAuthorization.lineageId,
+            accountId: unsignedAuthorization.accountId,
+            verdictId: unsignedAuthorization.verdictId,
+            policyMaxBalance: unsignedAuthorization.policyMaxBalance,
+            policyMaxTxValue: unsignedAuthorization.policyMaxTxValue,
+            issuedAtMs: unsignedAuthorization.issuedAtMs,
+            refreshAtMs: unsignedAuthorization.refreshAtMs,
+            expiresAtMs: unsignedAuthorization.expiresAtMs,
+            deviceBinding: unsignedAuthorization.deviceBinding,
+            issuerSignatureBase64: authorizationSignature
+        )
+        let unsignedAnchor = try ToriiOfflineCashState(
+            lineageId: "sender-lineage",
+            accountId: senderAccountId,
+            deviceId: deviceBinding.deviceId,
+            offlinePublicKey: offlinePublicKey,
+            assetDefinitionId: assetDefinitionId,
+            balance: "25",
+            lockedBalance: "0",
+            serverRevision: 1,
+            serverStateHash: String(repeating: "a", count: 64),
+            pendingLocalRevision: 0,
+            authorization: authorization,
+            issuerSignatureBase64: ""
+        )
+        let anchorSignature = tamperAnchorIssuerSignature
+            ? Data("invalid issuer signature".utf8).base64EncodedString()
+            : try issuerSigningKey.signature(
+                for: ToriiOfflineCashCodec.lineageStateUnsignedPayload(unsignedAnchor)
+            ).base64EncodedString()
+        let anchor = try ToriiOfflineCashState(
+            lineageId: unsignedAnchor.lineageId,
+            accountId: unsignedAnchor.accountId,
+            deviceId: unsignedAnchor.deviceId,
+            offlinePublicKey: unsignedAnchor.offlinePublicKey,
+            assetDefinitionId: unsignedAnchor.assetDefinitionId,
+            balance: unsignedAnchor.balance,
+            lockedBalance: unsignedAnchor.lockedBalance,
+            serverRevision: unsignedAnchor.serverRevision,
+            serverStateHash: unsignedAnchor.serverStateHash,
+            pendingLocalRevision: unsignedAnchor.pendingLocalRevision,
+            authorization: authorization,
+            issuerSignatureBase64: anchorSignature
+        )
+
+        func signedOutgoingReceipt(
+            transferId: String,
+            recipientLineageId: String,
+            amount: String,
+            localRevision: UInt64,
+            preBalance: String,
+            preLockedBalance: String,
+            preStateHash: String,
+            counter: UInt64,
+            createdAtMs: UInt64,
+            tamperPostStateHash: Bool = false,
+            tamperChallengeHash: Bool = false
+        ) throws -> ToriiOfflineTransferReceipt {
+            let postBalance = try ToriiOfflineCashCodec.subtractAmounts(preBalance, amount)
+            let postLockedBalance = "0"
+            let computedPostStateHash = try ToriiOfflineCashCodec.nextLocalStateHash(
+                lineageId: anchor.lineageId,
+                previousStateHash: preStateHash,
+                transferId: transferId,
+                direction: .outgoing,
+                counterpartyLineageId: recipientLineageId,
+                amount: amount,
+                localRevision: localRevision,
+                postBalance: postBalance,
+                postLockedBalance: postLockedBalance
+            )
+            let challengeHash: String
+            if tamperChallengeHash {
+                challengeHash = String(repeating: "f", count: 64)
+            } else {
+                challengeHash = try attestationChallengeHash(
+                    accountId: anchor.accountId,
+                    lineageId: anchor.lineageId,
+                    operation: "send",
+                    innerPayload: [
+                        "amount": amount,
+                        "lineage_id": anchor.lineageId,
+                        "receiver_lineage_id": recipientLineageId,
+                        "transfer_id": transferId
+                    ]
+                )
+            }
+            let unsignedReceipt = try ToriiOfflineTransferReceipt(
+                transferId: transferId,
+                direction: .outgoing,
+                lineageId: anchor.lineageId,
+                accountId: anchor.accountId,
+                deviceId: anchor.deviceId,
+                offlinePublicKey: anchor.offlinePublicKey,
+                preBalance: preBalance,
+                postBalance: postBalance,
+                preLockedBalance: preLockedBalance,
+                postLockedBalance: postLockedBalance,
+                preStateHash: preStateHash,
+                postStateHash: tamperPostStateHash ? String(repeating: "e", count: 64) : computedPostStateHash,
+                localRevision: localRevision,
+                counterpartyLineageId: recipientLineageId,
+                counterpartyAccountId: counterpartyAccountId,
+                counterpartyDeviceId: "receiver-device",
+                counterpartyOfflinePublicKey: "receiver-public-key",
+                amount: amount,
+                authorization: authorization,
+                deviceProof: ToriiOfflineDeviceProof(
+                    platform: "ios",
+                    attestationKeyId: deviceBinding.attestationKeyId,
+                    challengeHashHex: challengeHash,
+                    assertionBase64: "YXNzZXJ0aW9u",
+                    counter: counter
+                ),
+                sourcePayload: nil,
+                senderSignatureBase64: "",
+                createdAtMs: createdAtMs
+            )
+            let signature = try signingKey.signature(
+                for: ToriiOfflineCashCodec.cashTransferReceiptUnsignedPayload(unsignedReceipt)
+            )
+            return try ToriiOfflineTransferReceipt(
+                transferId: unsignedReceipt.transferId,
+                direction: unsignedReceipt.direction,
+                lineageId: unsignedReceipt.lineageId,
+                accountId: unsignedReceipt.accountId,
+                deviceId: unsignedReceipt.deviceId,
+                offlinePublicKey: unsignedReceipt.offlinePublicKey,
+                preBalance: unsignedReceipt.preBalance,
+                postBalance: unsignedReceipt.postBalance,
+                preLockedBalance: unsignedReceipt.preLockedBalance,
+                postLockedBalance: unsignedReceipt.postLockedBalance,
+                preStateHash: unsignedReceipt.preStateHash,
+                postStateHash: unsignedReceipt.postStateHash,
+                localRevision: unsignedReceipt.localRevision,
+                counterpartyLineageId: unsignedReceipt.counterpartyLineageId,
+                counterpartyAccountId: unsignedReceipt.counterpartyAccountId,
+                counterpartyDeviceId: unsignedReceipt.counterpartyDeviceId,
+                counterpartyOfflinePublicKey: unsignedReceipt.counterpartyOfflinePublicKey,
+                amount: unsignedReceipt.amount,
+                authorization: unsignedReceipt.authorization,
+                deviceProof: unsignedReceipt.deviceProof,
+                sourcePayload: nil,
+                senderSignatureBase64: signature.derRepresentation.base64EncodedString(),
+                createdAtMs: unsignedReceipt.createdAtMs
+            )
+        }
+
+        var ancestryReceipts: [ToriiOfflineTransferReceipt] = []
+        var currentBalance = anchor.balance
+        var currentLockedBalance = anchor.lockedBalance
+        var currentStateHash = anchor.serverStateHash
+        var currentRevision = anchor.pendingLocalRevision
+        if includeAncestry {
+            let ancestryReceipt = try signedOutgoingReceipt(
+                transferId: "source-ancestry-transfer",
+                recipientLineageId: "ancestry-recipient-lineage",
+                amount: "5",
+                localRevision: currentRevision + 1,
+                preBalance: currentBalance,
+                preLockedBalance: currentLockedBalance,
+                preStateHash: currentStateHash,
+                counter: 1,
+                createdAtMs: 900,
+                tamperPostStateHash: tamperAncestryPostStateHash
+            )
+            ancestryReceipts = [ancestryReceipt]
+            currentBalance = ancestryReceipt.postBalance
+            currentLockedBalance = ancestryReceipt.postLockedBalance
+            currentStateHash = ancestryReceipt.postStateHash
+            currentRevision = ancestryReceipt.localRevision
+        }
+
+        let receipt = try signedOutgoingReceipt(
+            transferId: transferId,
+            recipientLineageId: recipientLineageId,
+            amount: amount,
+            localRevision: currentRevision + 1,
+            preBalance: currentBalance,
+            preLockedBalance: currentLockedBalance,
+            preStateHash: currentStateHash,
+            counter: replayFinalCounter ? 1 : (includeAncestry ? 2 : 1),
+            createdAtMs: 1_000,
+            tamperChallengeHash: tamperFinalAttestationHash
+        )
+        let witnessPayload = try sourceLineageWitnessPayload(
+            anchor: anchor,
+            ancestryReceipts: ancestryReceipts,
+            receipt: receipt
+        )
+        let productionPayload = ToriiOfflineOutgoingTransferPayload(
+            anchor: anchor,
+            ancestryReceipts: ancestryReceipts,
+            receipt: receipt
+        )
+        let productionWitnessData = try ToriiOfflineCashCodec.canonicalData(productionPayload)
+        let productionWitnessPayload = "wallet-offline-transfer:\(base64URL(productionWitnessData))"
+        let sourceReceiptHash = try sha256Hex(rustReceiptData(receipt))
+        let unsignedInputs = try ToriiOfflineSourceLineagePublicInputs(
+            transferId: transferId,
+            sourceReceiptHash: sourceReceiptHash,
+            senderLineageId: receipt.lineageId,
+            recipientLineageId: recipientLineageId,
+            assetDefinitionId: assetDefinitionId,
+            amount: amount,
+            sourcePreStateHash: receipt.preStateHash,
+            sourcePostStateHash: receipt.postStateHash,
+            sourceLocalRevision: receipt.localRevision,
+            deviceProofKeyId: receipt.deviceProof.attestationKeyId,
+            deviceProofCounter: receipt.deviceProof.counter ?? 0,
+            sourceNullifier: ""
+        )
+        let inputs = try sourceInputs(
+            from: unsignedInputs,
+            sourceNullifier: ToriiOfflineSettlementProofs.sourceLineageNullifierHex(unsignedInputs)
+        )
+        return SourceLineageFixture(
+            envelope: try ToriiOfflineSettlementProofs.buildSourceLineageEnvelope(
+                publicInputs: inputs,
+                witnessPayload: witnessPayload
+            ),
+            productionWitnessPayload: productionWitnessPayload,
+            transferId: transferId,
+            recipientLineageId: recipientLineageId,
+            assetDefinitionId: assetDefinitionId,
+            amount: amount,
+            issuerPublicKeyBase64: issuerPublicKeyBase64
         )
     }
 
@@ -354,6 +808,179 @@ final class OfflineSettlementProofsTests: XCTestCase {
         envelope["proof"] = proof
         jsonObject["envelope"] = envelope
         return jsonObject
+    }
+
+    private func assertSourceLineageMutationRejected(
+        _ fixture: SourceLineageFixture,
+        mutate: (ToriiOfflineSourceLineagePublicInputs) throws -> ToriiOfflineSourceLineagePublicInputs,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let tampered = try rebindSourceLineageEnvelope(fixture.envelope, mutate: mutate)
+        XCTAssertThrowsError(
+            try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+                tampered,
+                expectedTransferId: fixture.transferId,
+                recipientLineageId: fixture.recipientLineageId,
+                assetDefinitionId: fixture.assetDefinitionId,
+                amount: fixture.amount,
+                issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+            ),
+            file: file,
+            line: line
+        )
+    }
+
+    private func verifySourceLineageFixture(_ fixture: SourceLineageFixture) throws {
+        try ToriiOfflineSettlementProofs.verifySourceLineageEnvelope(
+            fixture.envelope,
+            expectedTransferId: fixture.transferId,
+            recipientLineageId: fixture.recipientLineageId,
+            assetDefinitionId: fixture.assetDefinitionId,
+            amount: fixture.amount,
+            issuerPublicKeyBase64: fixture.issuerPublicKeyBase64
+        )
+    }
+
+    private func rebindSourceLineageEnvelope(
+        _ envelope: ToriiOfflineSourceLineageEnvelope,
+        mutate: (ToriiOfflineSourceLineagePublicInputs) throws -> ToriiOfflineSourceLineagePublicInputs
+    ) throws -> ToriiOfflineSourceLineageEnvelope {
+        let mutatedInputs = try mutate(envelope.publicInputs)
+        let reboundInputs = try sourceInputs(
+            from: mutatedInputs,
+            sourceNullifier: ToriiOfflineSettlementProofs.sourceLineageNullifierHex(mutatedInputs)
+        )
+        return try ToriiOfflineSettlementProofs.buildSourceLineageEnvelope(
+            publicInputs: reboundInputs,
+            witnessPayload: envelope.witnessPayload
+        )
+    }
+
+    private func sourceInputs(
+        from inputs: ToriiOfflineSourceLineagePublicInputs,
+        transferId: String? = nil,
+        sourceReceiptHash: String? = nil,
+        senderLineageId: String? = nil,
+        recipientLineageId: String? = nil,
+        assetDefinitionId: String? = nil,
+        amount: String? = nil,
+        sourcePreStateHash: String? = nil,
+        sourcePostStateHash: String? = nil,
+        sourceLocalRevision: UInt64? = nil,
+        deviceProofKeyId: String? = nil,
+        deviceProofCounter: UInt64? = nil,
+        sourceNullifier: String? = nil
+    ) throws -> ToriiOfflineSourceLineagePublicInputs {
+        try ToriiOfflineSourceLineagePublicInputs(
+            transferId: transferId ?? inputs.transferId,
+            sourceReceiptHash: sourceReceiptHash ?? inputs.sourceReceiptHash,
+            senderLineageId: senderLineageId ?? inputs.senderLineageId,
+            recipientLineageId: recipientLineageId ?? inputs.recipientLineageId,
+            assetDefinitionId: assetDefinitionId ?? inputs.assetDefinitionId,
+            amount: amount ?? inputs.amount,
+            sourcePreStateHash: sourcePreStateHash ?? inputs.sourcePreStateHash,
+            sourcePostStateHash: sourcePostStateHash ?? inputs.sourcePostStateHash,
+            sourceLocalRevision: sourceLocalRevision ?? inputs.sourceLocalRevision,
+            deviceProofKeyId: deviceProofKeyId ?? inputs.deviceProofKeyId,
+            deviceProofCounter: deviceProofCounter ?? inputs.deviceProofCounter,
+            sourceNullifier: sourceNullifier ?? inputs.sourceNullifier
+        )
+    }
+
+    private func sourceLineageWitnessPayload(
+        anchor: ToriiOfflineCashState,
+        ancestryReceipts: [ToriiOfflineTransferReceipt] = [],
+        receipt: ToriiOfflineTransferReceipt
+    ) throws -> String {
+        var anchorObject = try jsonObject(anchor)
+        var receiptObject = try rustReceiptObject(receipt)
+        let ancestryObjects = try ancestryReceipts.map { try rustReceiptObject($0) }
+        try enrichAuthorization(in: &anchorObject)
+        try enrichAuthorization(in: &receiptObject)
+        let wrapper: [String: Any] = [
+            "version": 1,
+            "anchor": anchorObject,
+            "ancestry_receipts": ancestryObjects,
+            "receipt": receiptObject
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: wrapper,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func rustReceiptData(_ receipt: ToriiOfflineTransferReceipt) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: rustReceiptObject(receipt),
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+    }
+
+    private func rustReceiptObject(_ receipt: ToriiOfflineTransferReceipt) throws -> [String: Any] {
+        var receiptObject = try jsonObject(receipt)
+        try enrichAuthorization(in: &receiptObject)
+        if var deviceProof = receiptObject["device_proof"] as? [String: Any] {
+            let keyId = deviceProof["attestation_key_id"] ?? ""
+            deviceProof["key_id"] = keyId
+            deviceProof.removeValue(forKey: "attestation_key_id")
+            deviceProof.removeValue(forKey: "platform")
+            receiptObject["attestation"] = deviceProof
+            receiptObject.removeValue(forKey: "device_proof")
+        }
+        return receiptObject
+    }
+
+    private func enrichAuthorization(in object: inout [String: Any]) throws {
+        guard var authorization = object["authorization"] as? [String: Any],
+              let binding = authorization["device_binding"] as? [String: Any] else {
+            return
+        }
+        authorization["device_id"] = authorization["device_id"] ?? binding["device_id"]
+        authorization["offline_public_key"] = authorization["offline_public_key"] ?? binding["offline_public_key"]
+        authorization["app_attest_key_id"] = authorization["app_attest_key_id"] ?? binding["attestation_key_id"]
+        object["authorization"] = authorization
+    }
+
+    private func jsonObject<T: Encodable>(_ value: T) throws -> [String: Any] {
+        try XCTUnwrap(
+            JSONSerialization.jsonObject(with: ToriiOfflineCashCodec.canonicalData(value))
+                as? [String: Any]
+        )
+    }
+
+    private func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func attestationChallengeHash(
+        accountId: String,
+        lineageId: String,
+        operation: String,
+        innerPayload: [String: Any]
+    ) throws -> String {
+        let innerData = try JSONSerialization.data(
+            withJSONObject: innerPayload,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        let challengeData = try JSONSerialization.data(
+            withJSONObject: [
+                "account_id": accountId,
+                "lineage_id": lineageId,
+                "operation": operation,
+                "payload_hash": sha256Hex(innerData)
+            ],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return sha256Hex(challengeData)
+    }
+
+    private func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     private func decimalPowerOfTwo(_ exponent: Int) -> String {
