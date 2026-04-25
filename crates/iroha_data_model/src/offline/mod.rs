@@ -3373,6 +3373,58 @@ mod model {
         pub envelope_bytes: Vec<u8>,
     }
 
+    /// Public inputs committed by an offline source-lineage proof.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineSourceLineagePublicInputs {
+        /// Incoming/outgoing transfer identifier bound across sender and receiver receipts.
+        pub transfer_id: String,
+        /// Hash of the sender's signed outgoing receipt.
+        pub source_receipt_hash: String,
+        /// Sender bearer lineage identifier.
+        pub sender_lineage_id: String,
+        /// Recipient bearer lineage identifier.
+        pub recipient_lineage_id: String,
+        /// Asset definition carried by the source lineage.
+        pub asset_definition_id: String,
+        /// Canonical transfer amount.
+        pub amount: String,
+        /// Sender local state hash before the outgoing transfer.
+        pub source_pre_state_hash: String,
+        /// Sender local state hash after the outgoing transfer.
+        pub source_post_state_hash: String,
+        /// Sender local revision after the outgoing transfer.
+        pub source_local_revision: u64,
+        /// Device-proof key identifier observed on the sender receipt.
+        pub device_proof_key_id: String,
+        /// Sender device-proof counter checkpoint.
+        pub device_proof_counter: u64,
+        /// Nullifier consumed once by authoritative sync.
+        pub source_nullifier: String,
+    }
+
+    /// Versioned FastPQ source-lineage proof envelope for incoming offline receipts.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineSourceLineageEnvelope {
+        /// Wire-format version.
+        pub version: i32,
+        /// Circuit identifier, currently `offline-source-lineage-v1`.
+        pub circuit_id: String,
+        /// Public inputs bound to the containing incoming receipt.
+        pub public_inputs: OfflineSourceLineagePublicInputs,
+        /// Canonical outgoing source payload witness validated by Torii.
+        pub witness_payload: String,
+        /// FastPQ/STARK-FRI proof material.
+        pub proof: OfflineTransparentZkProof,
+    }
+
     /// Settlement artifact proving a load or redeem mutation finalized on-ledger.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3467,7 +3519,10 @@ mod model {
         pub authorization: Option<OfflineSpendAuthorization>,
         /// Device attestation snapshot bound to this receipt.
         pub attestation: OfflineDeviceAttestation,
-        /// Optional outgoing payload used to prove source continuity to the receiver.
+        /// Required source-lineage proof for incoming offline-offline receipts.
+        #[norito(default)]
+        pub source_lineage_proof: Option<OfflineSourceLineageEnvelope>,
+        /// Rejected legacy outgoing payload field; first release has no fallback.
         #[norito(default)]
         pub source_payload: Option<String>,
         /// Sender signature over the canonical unsigned receipt payload.
@@ -3531,6 +3586,9 @@ mod model {
         /// Sender-state revisions already folded into the lineage anchor.
         #[norito(default)]
         pub seen_sender_states: BTreeSet<String>,
+        /// Source-lineage nullifiers already credited by this receiver lineage.
+        #[norito(default)]
+        pub seen_source_nullifiers: BTreeSet<String>,
         /// Persisted iOS App Attest binding, when applicable.
         #[norito(default)]
         pub apple_app_attest_binding: Option<OfflineAppleAppAttestBinding>,
