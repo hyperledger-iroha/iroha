@@ -20,18 +20,25 @@ Metal helper:
 ## Encoding Pipeline
 
 1. The Rust helper partitions input into fixed 32 KiB chunks.
-2. `gpuzstd_cuda_count_sequences` copies the input to device memory and launches
-   one deterministic scanner per chunk to count zstd sequences.
+2. `gpuzstd_cuda_count_sequences` stages the input through pinned host memory,
+   copies it to device memory on a non-blocking stream, and launches one
+   deterministic scanner per chunk to count zstd sequences.
 3. The host computes chunk sequence offsets.
 4. `gpuzstd_cuda_write_sequences` launches the same scanner and writes
    `(literal length, match length, offset)` records into a device sequence
-   buffer, then copies them back to the host.
+   buffer, then copies them back to pinned host memory after a bounded event
+   wait.
 5. The shared zstd frame encoder assembles literals, Huffman/FSE data, block
    headers, and the frame header.
 
 The CUDA kernels do not use atomics or scheduling-dependent reductions for
 output bytes. Each chunk owns its hash table and sequence range, so launch order
 does not affect the emitted stream.
+
+Norito's automatic GPU zstd cutoff defaults to 16 MiB. The 2026-04-25 CUDA
+benchmark on an RTX 3080 Laptop GPU under WSL showed the CUDA helper slower than
+CPU zstd through 8 MiB, so the default cutoff stays above that measured range
+until broader data justifies lowering it.
 
 Norito attempts to load the CUDA helper directly and relies on the helper
 self-test to prove CUDA availability; it does not require `nvidia-smi` to be in

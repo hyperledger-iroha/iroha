@@ -3,6 +3,8 @@
 #[cfg(feature = "cuda")]
 mod imp {
     use std::cell::Cell;
+    use std::mem::ManuallyDrop;
+    use std::ops::{Deref, DerefMut};
     use std::sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -14,7 +16,7 @@ mod imp {
 
     use cust::{
         context::CurrentContext,
-        memory::{CopyDestination, DeviceCopy},
+        memory::{AsyncCopyDestination, CopyDestination, DeviceCopy, LockedBuffer},
         prelude::*,
         sys::{cuStreamQuery, cudaError_enum},
     };
@@ -40,6 +42,7 @@ mod imp {
 
     static CUDA_DISABLED: AtomicBool = AtomicBool::new(false);
     static CUDA_FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
+    static CUDA_ABANDON_DEVICE_ALLOCS: AtomicBool = AtomicBool::new(false);
     static CUDA_SELFTEST_OK: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
     static CUDA_LAST_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     thread_local! {
@@ -104,6 +107,12 @@ mod imp {
         }
     }
 
+    fn trace_cuda_selftest(step: &str) {
+        if std::env::var_os("IVM_CUDA_SELFTEST_TRACE").is_some() {
+            eprintln!("ivm cuda selftest: {step}");
+        }
+    }
+
     fn set_cuda_status_message(message: Option<String>) {
         if let Ok(mut guard) = cuda_error_slot().lock() {
             *guard = message;
@@ -121,26 +130,60 @@ mod imp {
 
     const CUDA_STREAM_TIMEOUT: Duration = Duration::from_secs(120);
 
-    fn wait_for_cuda_stream(stream: &Stream, context: &str) -> Option<()> {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum CudaWaitStatus {
+        Ready,
+        TimedOut,
+        Failed(cudaError_enum),
+    }
+
+    fn wait_until_cuda_ready(
+        timeout: Duration,
+        mut query: impl FnMut() -> cudaError_enum,
+    ) -> CudaWaitStatus {
         let started = Instant::now();
         loop {
-            match unsafe { cuStreamQuery(stream.as_inner()) } {
-                cudaError_enum::CUDA_SUCCESS => return Some(()),
+            match query() {
+                cudaError_enum::CUDA_SUCCESS => return CudaWaitStatus::Ready,
                 cudaError_enum::CUDA_ERROR_NOT_READY => {
-                    if started.elapsed() >= CUDA_STREAM_TIMEOUT {
-                        record_cuda_disable(format!(
-                            "{context} CUDA stream timed out after {CUDA_STREAM_TIMEOUT:?}"
-                        ));
-                        return None;
+                    if started.elapsed() >= timeout {
+                        return CudaWaitStatus::TimedOut;
                     }
                     thread::sleep(Duration::from_millis(1));
                 }
-                status => {
-                    record_cuda_disable(format!("{context} CUDA stream query failed: {status:?}"));
-                    return None;
-                }
+                status => return CudaWaitStatus::Failed(status),
             }
         }
+    }
+
+    fn wait_for_cuda_stream(stream: &Stream, context: &str) -> Option<()> {
+        finish_cuda_wait(
+            wait_until_cuda_ready(CUDA_STREAM_TIMEOUT, || unsafe {
+                cuStreamQuery(stream.as_inner())
+            }),
+            context,
+        )
+    }
+
+    fn finish_cuda_wait(status: CudaWaitStatus, context: &str) -> Option<()> {
+        match status {
+            CudaWaitStatus::Ready => Some(()),
+            CudaWaitStatus::TimedOut => {
+                CUDA_ABANDON_DEVICE_ALLOCS.store(true, Ordering::SeqCst);
+                record_cuda_disable(format!(
+                    "{context} CUDA stream timed out after {CUDA_STREAM_TIMEOUT:?}; abandoning device allocations"
+                ));
+                None
+            }
+            CudaWaitStatus::Failed(status) => {
+                record_cuda_disable(format!("{context} CUDA stream query failed: {status:?}"));
+                None
+            }
+        }
+    }
+
+    pub(crate) fn cuda_should_abandon_device_allocations() -> bool {
+        CUDA_ABANDON_DEVICE_ALLOCS.load(Ordering::SeqCst)
     }
 
     #[repr(C)]
@@ -152,8 +195,89 @@ mod imp {
 
     unsafe impl DeviceCopy for KernelStatus {}
 
-    fn device_buffer_uninitialized<T: DeviceCopy>(len: usize) -> Option<DeviceBuffer<T>> {
-        unsafe { DeviceBuffer::<T>::uninitialized(len).ok() }
+    struct CudaDeviceBuffer<T: DeviceCopy> {
+        inner: ManuallyDrop<DeviceBuffer<T>>,
+    }
+
+    impl<T: DeviceCopy> CudaDeviceBuffer<T> {
+        fn new(buffer: DeviceBuffer<T>) -> Self {
+            Self {
+                inner: ManuallyDrop::new(buffer),
+            }
+        }
+    }
+
+    impl<T: DeviceCopy> Deref for CudaDeviceBuffer<T> {
+        type Target = DeviceBuffer<T>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    impl<T: DeviceCopy> DerefMut for CudaDeviceBuffer<T> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.inner
+        }
+    }
+
+    impl<T: DeviceCopy> Drop for CudaDeviceBuffer<T> {
+        fn drop(&mut self) {
+            if !cuda_should_abandon_device_allocations() {
+                unsafe {
+                    ManuallyDrop::drop(&mut self.inner);
+                }
+            }
+        }
+    }
+
+    fn cuda_buffer_from_slice<T: DeviceCopy>(slice: &[T]) -> Option<CudaDeviceBuffer<T>> {
+        DeviceBuffer::from_slice(slice)
+            .ok()
+            .map(CudaDeviceBuffer::new)
+    }
+
+    fn cuda_buffer_from_slice_async<T: DeviceCopy + Clone>(
+        slice: &[T],
+        stream: &Stream,
+        context: &str,
+    ) -> Option<CudaDeviceBuffer<T>> {
+        let mut device = device_buffer_uninitialized::<T>(slice.len())?;
+        let staging = LockedBuffer::from_slice(slice).ok()?;
+        // SAFETY: `staging` is page-locked host memory and stays alive until the
+        // queued copy has completed or the stream timeout path intentionally leaks it.
+        unsafe {
+            device.async_copy_from(&staging, stream).ok()?;
+        }
+        if wait_for_cuda_stream(stream, context).is_none() {
+            std::mem::forget(staging);
+            return None;
+        }
+        Some(device)
+    }
+
+    fn copy_device_to_host_bounded<T: DeviceCopy + Copy>(
+        device: &DeviceBuffer<T>,
+        dest: &mut [T],
+        stream: &Stream,
+        context: &str,
+    ) -> Option<()> {
+        let mut staging = unsafe { LockedBuffer::<T>::uninitialized(dest.len()).ok()? };
+        // SAFETY: `staging` is page-locked host memory and is not read until the
+        // bounded stream wait below reports that the async copy has completed.
+        unsafe {
+            device.async_copy_to(&mut staging, stream).ok()?;
+        }
+        if wait_for_cuda_stream(stream, context).is_none() {
+            std::mem::forget(staging);
+            return None;
+        }
+        dest.copy_from_slice(&staging);
+        Some(())
+    }
+
+    fn device_buffer_uninitialized<T: DeviceCopy>(len: usize) -> Option<CudaDeviceBuffer<T>> {
+        unsafe { DeviceBuffer::<T>::uninitialized(len).ok() }.map(CudaDeviceBuffer::new)
     }
 
     const BN254_LIMBS: usize = 4;
@@ -277,8 +401,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_BITONIC, BITONIC_PTX)?;
                     let function = module.get_function("bitonic_step").ok()?;
-                    let d_hi = DeviceBuffer::from_slice(&hi_pad).ok()?;
-                    let d_lo = DeviceBuffer::from_slice(&lo_pad).ok()?;
+                    let d_hi = cuda_buffer_from_slice(&hi_pad)?;
+                    let d_lo = cuda_buffer_from_slice(&lo_pad)?;
 
                     let threads: u32 = 256;
                     let blocks: u32 = ((pow2 as u32) + threads - 1) / threads;
@@ -371,8 +495,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_BN254, BN254_PTX)?;
                     let function = module.get_function(kernel_name).ok()?;
-                    let d_lhs = DeviceBuffer::from_slice(lhs_words).ok()?;
-                    let d_rhs = DeviceBuffer::from_slice(rhs_words).ok()?;
+                    let d_lhs = cuda_buffer_from_slice(lhs_words)?;
+                    let d_rhs = cuda_buffer_from_slice(rhs_words)?;
                     let d_out = device_buffer_uninitialized::<u64>(word_count)?;
                     let threads: u32 = 128;
                     let grid: u32 = (elem_count as u32).div_ceil(threads);
@@ -498,14 +622,14 @@ mod imp {
     fn sha256_pairs_reduce_device_buffer(
         function: &Function,
         stream: &Stream,
-        initial_digests: &DeviceBuffer<u8>,
+        initial_digests: &CudaDeviceBuffer<u8>,
         digest_count: usize,
     ) -> Option<[u8; 32]> {
         if digest_count == 0 || digest_count > u32::MAX as usize {
             return None;
         }
         let max_len = digest_count.checked_mul(32)?;
-        let scratch = unsafe { DeviceBuffer::<u8>::uninitialized(max_len).ok()? };
+        let scratch = device_buffer_uninitialized::<u8>(max_len)?;
         let mut current_count = digest_count as u32;
         let mut current_is_initial = true;
         while current_count > 1 {
@@ -550,7 +674,7 @@ mod imp {
             return None;
         }
         gpu.with_stream(|stream| {
-            let current = DeviceBuffer::from_slice(flat_digests).ok()?;
+            let current = cuda_buffer_from_slice(flat_digests)?;
             sha256_pairs_reduce_device_buffer(function, stream, &current, digest_count)
         })
     }
@@ -618,9 +742,9 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_SIGNATURE, SIG_PTX)?;
                     let function = module.get_function("signature_kernel").ok()?;
-                    let d_sig = DeviceBuffer::from_slice(sig.as_ref()).ok()?;
-                    let d_pk = DeviceBuffer::from_slice(pk.as_bytes()).ok()?;
-                    let d_hram = DeviceBuffer::from_slice(hram.as_ref()).ok()?;
+                    let d_sig = cuda_buffer_from_slice(sig.as_ref())?;
+                    let d_pk = cuda_buffer_from_slice(pk.as_bytes())?;
+                    let d_hram = cuda_buffer_from_slice(hram.as_ref())?;
                     let d_out = device_buffer_uninitialized::<u8>(1)?;
                     unsafe {
                         launch!(function<<<1, 32, 0, stream>>>(
@@ -666,9 +790,9 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_SIGNATURE, SIG_PTX)?;
                     let function = module.get_function("signature_kernel").ok()?;
-                    let d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
-                    let d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
-                    let d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
+                    let d_sig = cuda_buffer_from_slice(&flat_sigs)?;
+                    let d_pk = cuda_buffer_from_slice(&flat_pks)?;
+                    let d_hram = cuda_buffer_from_slice(&flat_hrams)?;
                     let d_out = device_buffer_uninitialized::<u8>(2)?;
                     unsafe {
                         launch!(function<<<1, 128, 0, stream>>>(
@@ -787,6 +911,7 @@ mod imp {
                 set_cuda_status_message(Some("no CUDA devices detected".to_owned()));
                 return false;
             }
+            trace_cuda_selftest("vadd32");
             // vadd32 parity
             let a = [1u32, 2, 3, 4];
             let b = [4u32, 3, 2, 1];
@@ -799,14 +924,17 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: vadd32");
                 return false;
             }
+            trace_cuda_selftest("vadd64");
             if !vadd64_cuda_selftest() {
                 record_cuda_disable("golden self-test mismatch: vadd64");
                 return false;
             }
+            trace_cuda_selftest("bit_ops");
             if !bit_ops_cuda_selftest() {
                 record_cuda_disable("golden self-test mismatch: vector bit kernels");
                 return false;
             }
+            trace_cuda_selftest("sha256_compress");
             // sha256 parity on single block ("abc")
             let mut st_scalar = [
                 0x6a09e667u32,
@@ -834,8 +962,8 @@ mod imp {
                         gpu.with_stream(|stream| {
                             let module = gpu.cached_module(MODULE_SHA256_BLOCK, SHA_PTX)?;
                             let function = module.get_function("sha256_compress").ok()?;
-                            let d_state = DeviceBuffer::from_slice(&st_cuda).ok()?;
-                            let d_block = DeviceBuffer::from_slice(&block).ok()?;
+                            let d_state = cuda_buffer_from_slice(&st_cuda)?;
+                            let d_block = cuda_buffer_from_slice(&block)?;
                             unsafe {
                                 launch!(function<<<1, 1, 0, stream>>>(
                                     d_state.as_device_ptr(), d_block.as_device_ptr()
@@ -856,14 +984,17 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: sha256");
                 return false;
             }
+            trace_cuda_selftest("sha256_leaves");
             if !sha256_leaves_cuda_selftest() {
                 record_cuda_disable("golden self-test mismatch: sha256 leaves");
                 return false;
             }
+            trace_cuda_selftest("sha256_pairs");
             if !sha256_pairs_reduce_cuda_selftest() {
                 record_cuda_disable("golden self-test mismatch: sha256 pairs");
                 return false;
             }
+            trace_cuda_selftest("keccak");
             // keccak_f1600 parity on a simple patterned state
             let mut k_scalar = [0u64; 25];
             for i in 0..25 {
@@ -878,7 +1009,7 @@ mod imp {
                         gpu.with_stream(|stream| {
                             let module = gpu.cached_module(MODULE_SHA3, SHA3_PTX)?;
                             let function = module.get_function("keccak_f1600_cuda").ok()?;
-                            let d_state = DeviceBuffer::from_slice(&k_cuda).ok()?;
+                            let d_state = cuda_buffer_from_slice(&k_cuda)?;
                             unsafe {
                                 launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr()))
                                     .ok()?;
@@ -897,6 +1028,7 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: keccak");
                 return false;
             }
+            trace_cuda_selftest("aes_round");
             // AES round parity (ENC and DEC) using one block + rk
             let state = [
                 0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
@@ -916,8 +1048,8 @@ mod imp {
                             let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                             // AESENC
                             let enc_fn = module.get_function("aesenc_round").ok()?;
-                            let d_state = DeviceBuffer::from_slice(&state).ok()?;
-                            let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                            let d_state = cuda_buffer_from_slice(&state)?;
+                            let d_rk = cuda_buffer_from_slice(&rk)?;
                             let d_out = device_buffer_uninitialized::<u8>(16)?;
                             unsafe {
                                 launch!(enc_fn<<<1, 1, 0, stream>>>(
@@ -935,7 +1067,7 @@ mod imp {
                             }
                             // AESDEC on the encoded block
                             let dec_fn = module.get_function("aesdec_round").ok()?;
-                            let d_state2 = DeviceBuffer::from_slice(&enc_out).ok()?;
+                            let d_state2 = cuda_buffer_from_slice(&enc_out)?;
                             let d_out2 = device_buffer_uninitialized::<u8>(16)?;
                             unsafe {
                                 launch!(dec_fn<<<1, 1, 0, stream>>>(
@@ -963,10 +1095,12 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: aes round");
                 return false;
             }
+            trace_cuda_selftest("aes_batch");
             if !aes_batch_cuda_selftest() {
                 record_cuda_disable("golden self-test mismatch: aes batch");
                 return false;
             }
+            trace_cuda_selftest("aes_fused");
             // AES fused two-round parity (ENC and DEC) to validate fused kernels
             let state = [
                 0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
@@ -996,14 +1130,14 @@ mod imp {
                             let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                             // Encrypt 2 rounds
                             let enc_fn = module.get_function("aesenc_rounds_batch").ok()?;
-                            let d_states = DeviceBuffer::from_slice(&state).ok()?;
+                            let d_states = cuda_buffer_from_slice(&state)?;
                             let rks: [u8; 32] = {
                                 let mut buf = [0u8; 32];
                                 buf[..16].copy_from_slice(&rk1);
                                 buf[16..].copy_from_slice(&rk2);
                                 buf
                             };
-                            let d_rks = DeviceBuffer::from_slice(&rks).ok()?;
+                            let d_rks = cuda_buffer_from_slice(&rks)?;
                             let d_out = device_buffer_uninitialized::<u8>(16)?;
                             unsafe {
                                 launch!(enc_fn<<<1, 1, 0, stream>>>(
@@ -1023,7 +1157,7 @@ mod imp {
                             }
                             // Decrypt 2 rounds on enc2
                             let dec_fn = module.get_function("aesdec_rounds_batch").ok()?;
-                            let d_states2 = DeviceBuffer::from_slice(&enc2).ok()?;
+                            let d_states2 = cuda_buffer_from_slice(&enc2)?;
                             let d_out2 = device_buffer_uninitialized::<u8>(16)?;
                             unsafe {
                                 launch!(dec_fn<<<1, 1, 0, stream>>>(
@@ -1053,12 +1187,15 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: aes fused-round");
                 return false;
             }
+            trace_cuda_selftest("poseidon");
             if !poseidon_cuda_selftest() {
                 return false;
             }
+            trace_cuda_selftest("ed25519");
             if !ed25519_cuda_selftest() {
                 return false;
             }
+            trace_cuda_selftest("bn254");
             if !bn254_cuda_selftest() {
                 return false;
             }
@@ -1097,6 +1234,7 @@ mod imp {
         CUDA_FORCED_DISABLED.store(!enabled, Ordering::SeqCst);
         if enabled {
             CUDA_DISABLED.store(false, Ordering::SeqCst);
+            CUDA_ABANDON_DEVICE_ALLOCS.store(false, Ordering::SeqCst);
             if let Ok(mut guard) = cuda_selftest_cache().lock() {
                 *guard = None;
             }
@@ -1112,6 +1250,7 @@ mod imp {
     pub fn reset_cuda_backend_for_tests() {
         CUDA_DISABLED.store(false, Ordering::SeqCst);
         CUDA_FORCED_DISABLED.store(false, Ordering::SeqCst);
+        CUDA_ABANDON_DEVICE_ALLOCS.store(false, Ordering::SeqCst);
         if let Ok(mut guard) = cuda_selftest_cache().lock() {
             *guard = None;
         }
@@ -1134,8 +1273,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_VECTOR_SUM, PTX)?;
                     let function = module.get_function("sum").ok()?;
-                    let d_a = DeviceBuffer::from_slice(a).ok()?;
-                    let d_b = DeviceBuffer::from_slice(b).ok()?;
+                    let d_a = cuda_buffer_from_slice(a)?;
+                    let d_b = cuda_buffer_from_slice(b)?;
                     let d_out = device_buffer_uninitialized::<f32>(len)?;
                     unsafe {
                         launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>>(
@@ -1167,8 +1306,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_VECTOR, VEC_PTX)?;
                     let function = module.get_function(name).ok()?;
-                    let d_a = DeviceBuffer::from_slice(a).ok()?;
-                    let d_b = DeviceBuffer::from_slice(b).ok()?;
+                    let d_a = cuda_buffer_from_slice(a)?;
+                    let d_b = cuda_buffer_from_slice(b)?;
                     let d_out = device_buffer_uninitialized::<u32>(len)?;
                     unsafe {
                         launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
@@ -1200,8 +1339,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_VECTOR, VEC_PTX)?;
                     let function = module.get_function(name).ok()?;
-                    let d_a = DeviceBuffer::from_slice(a).ok()?;
-                    let d_b = DeviceBuffer::from_slice(b).ok()?;
+                    let d_a = cuda_buffer_from_slice(a)?;
+                    let d_b = cuda_buffer_from_slice(b)?;
                     let d_out = device_buffer_uninitialized::<u64>(len)?;
                     unsafe {
                         launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
@@ -1320,8 +1459,8 @@ mod imp {
                     gpu.with_stream(|stream| {
                         let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                         let function = module.get_function(function_name).ok()?;
-                        let d_states = DeviceBuffer::from_slice(&flat).ok()?;
-                        let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                        let d_states = cuda_buffer_from_slice(&flat)?;
+                        let d_rk = cuda_buffer_from_slice(&rk)?;
                         let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                         let threads: u32 = 256;
                         let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -1428,13 +1567,13 @@ mod imp {
                         Ok(function) => function,
                         Err(_) => return Some(false),
                     };
-                    let d_state = match DeviceBuffer::from_slice(state) {
-                        Ok(b) => b,
-                        Err(_) => return Some(false),
+                    let d_state = match cuda_buffer_from_slice(state) {
+                        Some(b) => b,
+                        None => return Some(false),
                     };
-                    let d_block = match DeviceBuffer::from_slice(block) {
-                        Ok(b) => b,
-                        Err(_) => return Some(false),
+                    let d_block = match cuda_buffer_from_slice(block) {
+                        Some(b) => b,
+                        None => return Some(false),
                     };
                     unsafe {
                         if launch!(function<<<1, 1, 0, stream>>>(
@@ -1522,7 +1661,7 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_SHA256_LEAVES, SHA_LEAVES_PTX)?;
                     let function = module.get_function("sha256_leaves").ok()?;
-                    let d_blocks = DeviceBuffer::from_slice(&flat).ok()?;
+                    let d_blocks = cuda_buffer_from_slice(&flat)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -1646,7 +1785,7 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_SHA256_LEAVES, SHA_LEAVES_PTX)?;
                     let function = module.get_function("sha256_leaves").ok()?;
-                    let d_blocks = DeviceBuffer::from_slice(&flat).ok()?;
+                    let d_blocks = cuda_buffer_from_slice(&flat)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -1700,7 +1839,7 @@ mod imp {
                     let leaves_function = leaves_module.get_function("sha256_leaves").ok()?;
                     let pairs_module = gpu.cached_module(MODULE_SHA256_PAIRS, SHA_PAIRS_PTX)?;
                     let pairs_function = pairs_module.get_function("sha256_pairs_reduce").ok()?;
-                    let d_blocks = DeviceBuffer::from_slice(&flat_blocks).ok()?;
+                    let d_blocks = cuda_buffer_from_slice(&flat_blocks)?;
                     let d_digests = device_buffer_uninitialized::<u8>(count * 32)?;
                     let threads: u32 = 256;
                     let grid: u32 = (((count as u32) + threads - 1) / threads).max(1);
@@ -1784,53 +1923,75 @@ mod imp {
             let manager = crate::GpuManager::shared()?;
             manager.with_gpu_for_task(0, |gpu| {
                 gpu.with_stream(|stream| {
+                    trace_cuda_selftest("poseidon module");
                     let module = gpu.cached_module(MODULE_POSEIDON, POSEIDON_PTX)?;
                     let function = module.get_function(kernel_name).ok()?;
-                    let d_state = DeviceBuffer::from_slice(state_words).ok()?;
-                    let d_status = DeviceBuffer::from_slice(&status).ok()?;
-                    gpu.with_cached_u64_buffer(rc_key, rc_flat, |d_rc| {
-                        gpu.with_cached_u64_buffer(mds_key, mds_flat, |d_mds| {
-                            let threads: u32 = 32;
-                            let blocks = ((batch_len + threads - 1) / threads).max(1);
-                            let grid = blocks.max(1);
-                            unsafe {
-                                launch!(function<<<grid, threads, 0, stream>>>(
-                                    d_state.as_device_ptr(),
-                                    state_stride_words,
-                                    batch_len,
-                                    0u32,
-                                    d_rc.as_device_ptr(),
-                                    d_mds.as_device_ptr(),
-                                    full_rounds,
-                                    partial_rounds,
-                                    d_status.as_device_ptr()
-                                ))
-                                .ok()?;
-                            }
-                            wait_for_cuda_stream(stream, "cuda kernel")?;
-                            d_state.copy_to(state_words).ok()?;
-                            d_status.copy_to(&mut status).ok()?;
-                            if status[0].code != 0 {
-                                let message = if status[0].code == POSEIDON_STATUS_ERR_ROUNDS {
-                                    format!(
-                                        "{kernel_name} reported invalid round configuration (detail={})",
-                                        status[0].detail
-                                    )
-                                } else {
-                                    format!(
-                                        "{kernel_name} reported error code {} (detail={})",
-                                        status[0].code, status[0].detail
-                                    )
-                                };
-                                if disable_on_error {
-                                    record_cuda_disable(message);
-                                } else {
-                                    set_cuda_status_message(Some(message));
-                                }
-                            }
-                            Some(())
-                        })
-                    })
+                    trace_cuda_selftest("poseidon state buffers");
+                    let d_state =
+                        cuda_buffer_from_slice_async(state_words, stream, "poseidon state upload")?;
+                    let d_status =
+                        cuda_buffer_from_slice_async(&status, stream, "poseidon status upload")?;
+                    trace_cuda_selftest("poseidon round constants");
+                    let d_rc =
+                        cuda_buffer_from_slice_async(rc_flat, stream, "poseidon constants upload")?;
+                    let _ = rc_key;
+                    trace_cuda_selftest("poseidon mds constants");
+                    let d_mds =
+                        cuda_buffer_from_slice_async(mds_flat, stream, "poseidon mds upload")?;
+                    let _ = mds_key;
+                    let threads: u32 = 32;
+                    let blocks = ((batch_len + threads - 1) / threads).max(1);
+                    let grid = blocks.max(1);
+                    trace_cuda_selftest("poseidon launch");
+                    unsafe {
+                        launch!(function<<<grid, threads, 0, stream>>>(
+                            d_state.as_device_ptr(),
+                            state_stride_words,
+                            batch_len,
+                            0u32,
+                            d_rc.as_device_ptr(),
+                            d_mds.as_device_ptr(),
+                            full_rounds,
+                            partial_rounds,
+                            d_status.as_device_ptr()
+                        ))
+                        .ok()?;
+                    }
+                    trace_cuda_selftest("poseidon wait");
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
+                    trace_cuda_selftest("poseidon copy state");
+                    copy_device_to_host_bounded(
+                        &d_state,
+                        state_words,
+                        stream,
+                        "poseidon state download",
+                    )?;
+                    trace_cuda_selftest("poseidon copy status");
+                    copy_device_to_host_bounded(
+                        &d_status,
+                        &mut status,
+                        stream,
+                        "poseidon status download",
+                    )?;
+                    if status[0].code != 0 {
+                        let message = if status[0].code == POSEIDON_STATUS_ERR_ROUNDS {
+                            format!(
+                                "{kernel_name} reported invalid round configuration (detail={})",
+                                status[0].detail
+                            )
+                        } else {
+                            format!(
+                                "{kernel_name} reported error code {} (detail={})",
+                                status[0].code, status[0].detail
+                            )
+                        };
+                        if disable_on_error {
+                            record_cuda_disable(message);
+                        } else {
+                            set_cuda_status_message(Some(message));
+                        }
+                    }
+                    Some(())
                 })
             })?;
             Some(())
@@ -2030,9 +2191,9 @@ mod imp {
                         Ok(function) => function,
                         Err(_) => return Some(false),
                     };
-                    let d_state = match DeviceBuffer::from_slice(state) {
-                        Ok(b) => b,
-                        Err(_) => return Some(false),
+                    let d_state = match cuda_buffer_from_slice(state) {
+                        Some(b) => b,
+                        None => return Some(false),
                     };
                     unsafe {
                         if launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr())).is_err()
@@ -2104,8 +2265,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                     let function = module.get_function("aesenc_round_batch").ok()?;
-                    let d_states = DeviceBuffer::from_slice(&flat).ok()?;
-                    let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                    let d_states = cuda_buffer_from_slice(&flat)?;
+                    let d_rk = cuda_buffer_from_slice(&rk)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -2157,8 +2318,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                     let function = module.get_function("aesdec_round_batch").ok()?;
-                    let d_states = DeviceBuffer::from_slice(&flat).ok()?;
-                    let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                    let d_states = cuda_buffer_from_slice(&flat)?;
+                    let d_rk = cuda_buffer_from_slice(&rk)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -2223,8 +2384,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                     let function = module.get_function("aesenc_rounds_batch").ok()?;
-                    let d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
-                    let d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
+                    let d_states = cuda_buffer_from_slice(&flat_states)?;
+                    let d_rks = cuda_buffer_from_slice(&flat_rks)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -2290,8 +2451,8 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_AES, AES_PTX)?;
                     let function = module.get_function("aesdec_rounds_batch").ok()?;
-                    let d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
-                    let d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
+                    let d_states = cuda_buffer_from_slice(&flat_states)?;
+                    let d_rks = cuda_buffer_from_slice(&flat_rks)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -2472,9 +2633,9 @@ mod imp {
                 gpu.with_stream(|stream| {
                     let module = gpu.cached_module(MODULE_SIGNATURE, SIG_PTX)?;
                     let function = module.get_function("signature_kernel").ok()?;
-                    let d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
-                    let d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
-                    let d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
+                    let d_sig = cuda_buffer_from_slice(&flat_sigs)?;
+                    let d_pk = cuda_buffer_from_slice(&flat_pks)?;
+                    let d_hram = cuda_buffer_from_slice(&flat_hrams)?;
                     let d_out = device_buffer_uninitialized::<u8>(count)?;
                     let threads: u32 = 128;
                     let blocks: u32 = ((count as u32) + threads - 1) / threads;
@@ -2577,6 +2738,131 @@ mod imp {
                     "nested poseidon probe should fail closed during self-test",
                 );
             });
+        }
+
+        #[test]
+        fn cuda_wait_timeout_fails_closed_and_abandons_device_allocations() {
+            reset_cuda_backend_for_tests();
+            let status = wait_until_cuda_ready(std::time::Duration::from_millis(1), || {
+                cudaError_enum::CUDA_ERROR_NOT_READY
+            });
+            assert_eq!(status, CudaWaitStatus::TimedOut);
+            assert_eq!(
+                finish_cuda_wait(status, "test timeout path"),
+                None,
+                "timeout waits must fail closed"
+            );
+            assert!(
+                CUDA_DISABLED.load(Ordering::SeqCst),
+                "timeout waits should disable the CUDA backend"
+            );
+            assert!(
+                cuda_should_abandon_device_allocations(),
+                "timeout waits should abandon DeviceBuffer drops instead of calling cuMemFree"
+            );
+            reset_cuda_backend_for_tests();
+        }
+
+        #[test]
+        fn cuda_wait_ready_after_retries_preserves_backend_flags() {
+            reset_cuda_backend_for_tests();
+            let polls = std::cell::Cell::new(0);
+            let status = wait_until_cuda_ready(std::time::Duration::from_millis(50), || {
+                let previous = polls.get();
+                polls.set(previous + 1);
+                if previous < 2 {
+                    cudaError_enum::CUDA_ERROR_NOT_READY
+                } else {
+                    cudaError_enum::CUDA_SUCCESS
+                }
+            });
+
+            assert_eq!(status, CudaWaitStatus::Ready);
+            assert_eq!(polls.get(), 3);
+            assert_eq!(finish_cuda_wait(status, "test ready path"), Some(()));
+            assert!(
+                !CUDA_DISABLED.load(Ordering::SeqCst),
+                "ready waits should not disable CUDA"
+            );
+            assert!(
+                !cuda_should_abandon_device_allocations(),
+                "ready waits should not abandon device allocations"
+            );
+            reset_cuda_backend_for_tests();
+        }
+
+        #[test]
+        fn cuda_wait_query_failure_disables_without_abandoning_allocations() {
+            reset_cuda_backend_for_tests();
+            let status = wait_until_cuda_ready(std::time::Duration::from_millis(50), || {
+                cudaError_enum::CUDA_ERROR_INVALID_VALUE
+            });
+
+            assert_eq!(
+                status,
+                CudaWaitStatus::Failed(cudaError_enum::CUDA_ERROR_INVALID_VALUE)
+            );
+            assert_eq!(finish_cuda_wait(status, "test failure path"), None);
+            assert!(
+                CUDA_DISABLED.load(Ordering::SeqCst),
+                "query failures should disable CUDA"
+            );
+            assert!(
+                !cuda_should_abandon_device_allocations(),
+                "only timeouts should abandon device allocations"
+            );
+            reset_cuda_backend_for_tests();
+        }
+
+        #[test]
+        fn cuda_enable_disable_and_reset_update_status_flags() {
+            reset_cuda_backend_for_tests();
+
+            set_cuda_enabled(false);
+            assert!(cuda_disabled());
+            assert_eq!(
+                cuda_last_error_message().as_deref(),
+                Some("disabled by configuration")
+            );
+            assert!(!cuda_should_abandon_device_allocations());
+
+            set_cuda_enabled(true);
+            assert!(!cuda_disabled());
+            assert_eq!(cuda_last_error_message(), None);
+            assert!(!cuda_should_abandon_device_allocations());
+
+            let timeout = wait_until_cuda_ready(std::time::Duration::from_millis(1), || {
+                cudaError_enum::CUDA_ERROR_NOT_READY
+            });
+            assert_eq!(finish_cuda_wait(timeout, "reset coverage timeout"), None);
+            assert!(cuda_disabled());
+            assert!(cuda_should_abandon_device_allocations());
+            assert!(cuda_last_error_message().is_some());
+
+            reset_cuda_backend_for_tests();
+            assert!(!cuda_disabled());
+            assert_eq!(cuda_last_error_message(), None);
+            assert!(!cuda_should_abandon_device_allocations());
+        }
+
+        #[test]
+        fn explicit_cuda_disable_records_message_and_reset_clears_it() {
+            reset_cuda_backend_for_tests();
+
+            record_cuda_disable("coverage explicit disable");
+            assert!(cuda_disabled());
+            assert_eq!(
+                cuda_last_error_message().as_deref(),
+                Some("coverage explicit disable")
+            );
+            assert!(
+                !cuda_should_abandon_device_allocations(),
+                "explicit non-timeout disable should not abandon allocations"
+            );
+
+            reset_cuda_backend_for_tests();
+            assert!(!cuda_disabled());
+            assert_eq!(cuda_last_error_message(), None);
         }
 
         #[test]
@@ -3358,6 +3644,123 @@ mod imp {
             let batch = ed25519_verify_batch_cuda(&[sig], &[pk_bytes], &[hram])
                 .and_then(|mut out| out.pop());
             assert_eq!(single, batch);
+        }
+
+        #[test]
+        fn cuda_public_helpers_are_repeat_deterministic_against_cpu() {
+            use ed25519_dalek::{Signature, Signer, SigningKey};
+
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping repeated determinism fixture");
+                return;
+            }
+
+            let a32 = [0x0102_0304u32, 0xffff_ffff, 0x1357_9bdf, 0x2468_ace0];
+            let b32 = [0xf0e0_d0c0u32, 1, 0xaaaa_5555, 0x1111_2222];
+            let expected_add32: Vec<u32> = a32
+                .iter()
+                .zip(b32.iter())
+                .map(|(&lhs, &rhs)| lhs.wrapping_add(rhs))
+                .collect();
+
+            let mut block = [0u8; 64];
+            block[..11].copy_from_slice(b"determinism");
+            block[11] = 0x80;
+            block[63] = 88;
+            let initial_sha = [
+                0x6a09e667u32,
+                0xbb67ae85,
+                0x3c6ef372,
+                0xa54ff53a,
+                0x510e527f,
+                0x9b05688c,
+                0x1f83d9ab,
+                0x5be0cd19,
+            ];
+            let mut expected_sha = initial_sha;
+            sha256_scalar_ref(&mut expected_sha, &block);
+
+            let mut keccak_expected = [0u64; 25];
+            for (index, lane) in keccak_expected.iter_mut().enumerate() {
+                *lane = (index as u64).wrapping_mul(0x0101_0101_0101_0101);
+            }
+            crate::sha3::keccak_f1600(&mut keccak_expected);
+
+            let state = [
+                0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                0xdd, 0xee, 0xff,
+            ];
+            let rk = [
+                0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f,
+                0x67, 0x98,
+            ];
+            let expected_aes = crate::aes::aesenc_impl(state, rk);
+
+            let bn_lhs = crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708);
+            let bn_rhs = crate::bn254_vec::FieldElem::from_u64(0x1112_1314_1516_1718);
+            let expected_bn = crate::bn254_vec::mul_scalar(bn_lhs, bn_rhs).0;
+
+            let signing_key = SigningKey::from_bytes(&[0x5a; 32]);
+            let msg = b"cuda repeated determinism";
+            let sig = signing_key.sign(msg).to_bytes();
+            let pk = signing_key.verifying_key().to_bytes();
+            let expected_sig = signing_key
+                .verifying_key()
+                .verify_strict(msg, &Signature::from_bytes(&sig))
+                .is_ok();
+
+            let mut previous_tuple = None;
+            for iteration in 0..3 {
+                if iteration == 0 {
+                    trace_cuda_selftest("determinism vadd32");
+                }
+                let add32 = vadd32_cuda(&a32, &b32).expect("vadd32 cuda");
+                assert_eq!(add32, expected_add32);
+
+                if iteration == 0 {
+                    trace_cuda_selftest("determinism sha256");
+                }
+                let mut sha_state = initial_sha;
+                assert!(sha256_compress_cuda(&mut sha_state, &block));
+                assert_eq!(sha_state, expected_sha);
+
+                if iteration == 0 {
+                    trace_cuda_selftest("determinism keccak");
+                }
+                let mut keccak_state = [0u64; 25];
+                for (index, lane) in keccak_state.iter_mut().enumerate() {
+                    *lane = (index as u64).wrapping_mul(0x0101_0101_0101_0101);
+                }
+                assert!(keccak_f1600_cuda(&mut keccak_state));
+                assert_eq!(keccak_state, keccak_expected);
+
+                if iteration == 0 {
+                    trace_cuda_selftest("determinism aes");
+                }
+                let aes = aesenc_cuda(state, rk).expect("aes cuda");
+                assert_eq!(aes, expected_aes);
+
+                if iteration == 0 {
+                    trace_cuda_selftest("determinism bn254");
+                }
+                let bn = bn254_mul_cuda(bn_lhs.0, bn_rhs.0).expect("bn254 cuda");
+                assert_eq!(bn, expected_bn);
+
+                if iteration == 0 {
+                    trace_cuda_selftest("determinism ed25519");
+                }
+                let sig_ok = ed25519_verify_cuda(msg, &sig, &pk).expect("ed25519 cuda");
+                assert_eq!(sig_ok, expected_sig);
+
+                let current_tuple = (add32, sha_state, keccak_state, aes, bn, sig_ok);
+                if let Some(previous) = &previous_tuple {
+                    assert_eq!(
+                        &current_tuple, previous,
+                        "repeated CUDA helper runs must be byte-stable"
+                    );
+                }
+                previous_tuple = Some(current_tuple);
+            }
         }
 
         #[test]
