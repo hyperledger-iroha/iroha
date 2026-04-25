@@ -108,6 +108,7 @@ use crate::{
     state::StateTransaction,
 };
 
+const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
 const TRAINING_MAX_RETRIES: u8 = 16;
 const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
 const TRAINING_MAX_REASON_BYTES: usize = 512;
@@ -410,10 +411,25 @@ fn model_host_capability_advert_contradiction_detail(
 }
 
 fn require_soracloud_permission(
-    _authority: &AccountId,
-    _state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    Ok(())
+    let has_permission = state_transaction
+        .world
+        .account_permissions
+        .get(authority)
+        .is_some_and(|permissions| {
+            permissions
+                .iter()
+                .any(|permission| permission.name() == CAN_MANAGE_SORACLOUD_PERMISSION)
+        });
+    if has_permission {
+        Ok(())
+    } else {
+        Err(InstructionExecutionError::InvariantViolation(
+            format!("not permitted: {CAN_MANAGE_SORACLOUD_PERMISSION}").into(),
+        ))
+    }
 }
 
 fn require_active_public_lane_validator(
@@ -11288,6 +11304,42 @@ mod tests {
         state_transaction.apply();
         state_block.commit()?;
         Ok(state)
+    }
+
+    #[test]
+    fn soracloud_permission_allows_granted_authority() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let state_transaction = state_block.transaction();
+
+        require_soracloud_permission(&ALICE_ID, &state_transaction)?;
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_permission_rejects_ungranted_authority() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+
+        let err = require_soracloud_permission(&BOB_ID, &state_transaction)
+            .expect_err("authority without Soracloud permission must be rejected");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.as_ref() == "not permitted: CanManageSoracloud"
+        ));
+        Ok(())
     }
 
     fn insert_active_public_lane_validator(
