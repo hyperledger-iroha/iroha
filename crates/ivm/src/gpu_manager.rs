@@ -20,10 +20,10 @@ use parking_lot::{Mutex, RwLock};
 #[derive(Debug)]
 pub struct GpuContext {
     pub device: Device,
-    pub context: Context,
     modules: RwLock<HashMap<&'static str, Arc<Module>>>,
     u64_buffers: RwLock<HashMap<&'static str, DeviceBuffer<u64>>>,
     stream: Mutex<Stream>,
+    pub context: Context,
 }
 
 #[cfg(feature = "cuda")]
@@ -49,10 +49,10 @@ impl GpuContext {
         let stream = Stream::new(StreamFlags::DEFAULT, None)?;
         Ok(GpuContext {
             device,
-            context,
             modules: RwLock::new(HashMap::new()),
             u64_buffers: RwLock::new(HashMap::new()),
             stream: Mutex::new(stream),
+            context,
         })
     }
 
@@ -95,6 +95,17 @@ impl GpuContext {
         let buffers = self.u64_buffers.read();
         let buffer = buffers.get(key)?;
         func(buffer)
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for GpuContext {
+    fn drop(&mut self) {
+        if crate::cuda::cuda_should_abandon_device_allocations() {
+            let mut buffers = self.u64_buffers.write();
+            let cached = std::mem::take(&mut *buffers);
+            std::mem::forget(cached);
+        }
     }
 }
 

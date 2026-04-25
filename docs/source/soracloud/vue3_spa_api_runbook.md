@@ -182,6 +182,22 @@ The proxy-only host command in the example inventory runs the focused
 `proxy_only_inrou_host` runtime tests instead of a plain compile check, so the
 gate proves that proxy-only nodes fail closed for local Inrou materialization.
 
+For a public release, pass the real operator inventory and the operator
+observability evidence to the readiness runner:
+
+```bash
+scripts/ci/run_soracloud_production_readiness.sh \
+  --profile load \
+  --mixed-host-inventory ./operator-inrou-inventory.toml \
+  --observability-evidence ./operator-soracloud-observability.json
+```
+
+`scripts/ci/check_soracloud_observability_evidence.py` validates that the
+evidence covers the required Soracloud metrics, status fields, alerts, runbooks,
+and dashboards. The sample
+`fixtures/soracloud/production_observability_evidence.example.json` documents
+the expected shape; production runs must use deployment-specific sources.
+
 Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
 `IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional

@@ -15,6 +15,7 @@ WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
+ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
@@ -32,10 +33,15 @@ usage() {
 Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
                             [--skip-local] [--skip-public]
                             [--write-config PATH] [--write-target local|public|URL]
+                            [--gas-asset-id ASSET_DEFINITION_ID]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
                             [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
+For a single public-node devex check, prefer the first-class CLI:
+  iroha taira doctor --public-root https://taira.sora.org --output-format text
+  iroha taira write-canary --public-root https://taira.sora.org --output-format text
+
 The check fails unless:
   - GET /v1/mcp returns HTTP 200 with a capabilities payload
   - POST /v1/mcp initialize returns HTTP 200
@@ -61,9 +67,11 @@ For final public rollout, use a runtime-only canary signer config. When
 automatically, preferring `/run/secrets/taira-canary-client.toml` when that
 directory is writable and otherwise falling back to `${TMPDIR:-/tmp}`. It
 onboards a fresh ordinary account on Taira and attempts an initial faucet claim
-before the signed write canary. The write canary still retries the faucet lane
-on `Failed to find asset` so a saturated queue does not require manual signer
-preparation. Use `--skip-write-canary` only for read-only validation.
+before the signed write canary. The write canary attaches Taira's accepted XOR
+gas asset metadata by default and still retries the faucet lane on
+`Failed to find asset` so a saturated queue does not require manual signer
+preparation. Use `--gas-asset-id ""` only against networks that do not require
+pipeline gas metadata. Use `--skip-write-canary` only for read-only validation.
 
 When `--iroha-bin` is omitted, the script first reuses a repo-local
 `bin/iroha`, `target/debug/iroha`, or `target/release/iroha` if present, and
@@ -151,6 +159,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       WRITE_TARGET="$2"
+      shift 2
+      ;;
+    --gas-asset-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --gas-asset-id" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_GAS_ASSET_ID="$2"
       shift 2
       ;;
     --iroha-bin)
@@ -1017,16 +1033,36 @@ claim_faucet_for_canary() {
     --torii-root "$target_url"
 }
 
+write_canary_metadata_file() {
+  local output_file="$1"
+  local gas_asset_id="$2"
+  python3 - "$output_file" "$gas_asset_id" <<'PY'
+import json
+import sys
+
+path, gas_asset_id = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"gas_asset_id": gas_asset_id}, handle, sort_keys=True)
+    handle.write("\n")
+PY
+}
+
 retry_write_canary() {
   local temp_config="$1"
   local output_file="$2"
   local write_msg="$3"
-  local attempts="${4:-10}"
-  local delay_seconds="${5:-2}"
+  local metadata_file="$4"
+  local attempts="${5:-10}"
+  local delay_seconds="${6:-2}"
   local attempt
+  local metadata_args=()
+
+  if [[ -n "$metadata_file" ]]; then
+    metadata_args=(-m "$metadata_file")
+  fi
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    if "${IROHA_RUNNER[@]}" --machine -c "$temp_config" ledger transaction ping --msg "${write_msg}-retry-${attempt}" \
+    if "${IROHA_RUNNER[@]}" --machine -c "$temp_config" "${metadata_args[@]}" ledger transaction ping --msg "${write_msg}-retry-${attempt}" \
         >"$output_file" 2>&1; then
       return 0
     fi
@@ -1042,25 +1078,34 @@ retry_write_canary() {
 
 run_write_canary() {
   local target_url="$1"
-  local output_file temp_config write_msg
+  local output_file temp_config metadata_file write_msg
 
   ensure_iroha_bin
   [[ -n "$WRITE_CONFIG" ]] || WRITE_CONFIG="$(default_write_config_path)"
   ensure_write_canary_config "$target_url"
 
   temp_config="$(mktemp)"
+  metadata_file="$(mktemp)"
   output_file="$(mktemp)"
-  trap 'rm -f "${temp_config:-}" "${output_file:-}"; cleanup' EXIT
+  trap 'rm -f "${temp_config:-}" "${metadata_file:-}" "${output_file:-}"; cleanup' EXIT
   build_write_canary_config \
     "$WRITE_CONFIG" \
     "$target_url" \
     "$temp_config" \
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
     "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
+  local metadata_args=()
+  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
+    write_canary_metadata_file "$metadata_file" "$ROLLOUT_CANARY_GAS_ASSET_ID"
+    metadata_args=(-m "$metadata_file")
+  else
+    rm -f "$metadata_file"
+    metadata_file=""
+  fi
 
   write_msg="${WRITE_MESSAGE_PREFIX}-$(date -u +%Y%m%dT%H%M%SZ)"
   echo "==> write canary: ${target_url} (message: ${write_msg})"
-  if ! "${IROHA_RUNNER[@]}" --machine -c "$temp_config" ledger transaction ping --msg "$write_msg" \
+  if ! "${IROHA_RUNNER[@]}" --machine -c "$temp_config" "${metadata_args[@]}" ledger transaction ping --msg "$write_msg" \
       >"$output_file" 2>&1; then
     if grep -q 'route_unavailable' "$output_file"; then
       echo "write canary failed: Torii is reachable but no authoritative peers accepted the lane route" >&2
@@ -1077,14 +1122,19 @@ run_write_canary() {
         exit 1
       fi
       echo "==> retrying write canary after faucet bootstrap" >&2
-      if ! retry_write_canary "$temp_config" "$output_file" "$write_msg"; then
+      if ! retry_write_canary "$temp_config" "$output_file" "$write_msg" "$metadata_file"; then
         echo "write canary failed after faucet bootstrap" >&2
         sed -n '1,80p' "$output_file" >&2 || true
         exit 1
       fi
-      rm -f "$temp_config" "$output_file"
+      rm -f "$temp_config" "$metadata_file" "$output_file"
       trap cleanup EXIT
       return 0
+    fi
+    if grep -q 'missing gas_asset_id' "$output_file"; then
+      echo "write canary failed: Taira requires gas_asset_id transaction metadata; pass --gas-asset-id with an accepted asset definition id" >&2
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
     fi
     if grep -q 'Transaction expired' "$output_file"; then
       echo "write canary failed: transaction expired; sampling public status before exiting" >&2
@@ -1107,7 +1157,7 @@ run_write_canary() {
     sed -n '1,80p' "$output_file" >&2 || true
     exit 1
   fi
-  rm -f "$temp_config" "$output_file"
+  rm -f "$temp_config" "$metadata_file" "$output_file"
   trap cleanup EXIT
 }
 

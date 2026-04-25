@@ -301,11 +301,11 @@ use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
 use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode};
 use mv::storage::StorageReadOnly;
-#[cfg(feature = "app_api")]
-use norito::json::Value;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 use norito::json::{self};
 use norito::json::{JsonDeserialize, JsonSerialize};
+#[cfg(feature = "app_api")]
+use norito::json::{Map, Value};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
 use sorafs_manifest::repair::{
@@ -4453,11 +4453,13 @@ async fn handler_accounts_onboard(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::NoritoJson<crate::routing::AccountOnboardingRequestDto>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone())
-            .await;
+        return account_onboarding_response(
+            &headers,
+            routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await,
+        );
     }
 
     let enforce =
@@ -4471,7 +4473,51 @@ async fn handler_accounts_onboard(
     )
     .await?;
 
-    routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await
+    account_onboarding_response(
+        &headers,
+        routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn account_onboarding_response<T: IntoResponse>(
+    headers: &axum::http::HeaderMap,
+    result: Result<T, Error>,
+) -> Result<Response, Error> {
+    match result {
+        Ok(response) => Ok(response.into_response()),
+        Err(Error::AccountOnboardingValidation {
+            code,
+            message,
+            hint,
+        }) if account_onboarding_wants_json_error(headers) => {
+            let mut payload = Map::new();
+            payload.insert("error_code".to_owned(), Value::String(code.to_owned()));
+            payload.insert("message".to_owned(), Value::String(message));
+            if let Some(hint) = hint {
+                payload.insert("hint".to_owned(), Value::String(hint.to_owned()));
+            }
+            let mut response = utils::JsonBody(Value::Object(payload)).into_response();
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            Ok(response)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn account_onboarding_wants_json_error(headers: &axum::http::HeaderMap) -> bool {
+    let Some(accept) = headers.get(axum::http::header::ACCEPT) else {
+        return true;
+    };
+    let Ok(accept) = accept.to_str() else {
+        return true;
+    };
+    let accept = accept.to_ascii_lowercase();
+    if accept.contains("application/x-norito") && !accept.contains("application/json") {
+        return false;
+    }
+    accept.contains("application/json") || accept.contains("*/*")
 }
 
 #[cfg(feature = "app_api")]
@@ -13852,6 +13898,87 @@ fn merged_singleton_response(
 }
 
 #[cfg(feature = "app_api")]
+fn pipeline_status_payload_rank(
+    payload: &PipelineTransactionStatusResponse,
+) -> Result<u8, Response> {
+    match payload.status.kind.as_str() {
+        "Queued" => Ok(0),
+        "Approved" => Ok(1),
+        "Expired" => Ok(2),
+        "Committed" => Ok(3),
+        "Applied" => Ok(4),
+        "Rejected" => Ok(5),
+        other => Err(torii_internal_json_error(format!(
+            "unknown pipeline status kind `{other}` in routed response"
+        ))),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn pipeline_status_payload_tie_break(payload: &PipelineTransactionStatusResponse) -> (u8, u64) {
+    let source_rank = match payload.resolved_from.as_str() {
+        "state" => 3,
+        "cache" => 2,
+        "queue" => 1,
+        _ => 0,
+    };
+    (source_rank, payload.status.block_height.unwrap_or_default())
+}
+
+#[cfg(feature = "app_api")]
+fn decode_pipeline_status_payload(
+    payload: Value,
+) -> Result<PipelineTransactionStatusResponse, Response> {
+    norito::json::from_value(payload).map_err(|error| {
+        torii_internal_json_error(format!(
+            "failed to decode routed pipeline status response: {error}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn merged_pipeline_status_response(
+    payloads: Vec<Value>,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut best: Option<(PipelineTransactionStatusResponse, u8, (u8, u64))> = None;
+
+    for payload in payloads {
+        let payload = decode_pipeline_status_payload(payload)?;
+        let rank = pipeline_status_payload_rank(&payload)?;
+        let tie_break = pipeline_status_payload_tie_break(&payload);
+        match best.as_ref() {
+            None => best = Some((payload, rank, tie_break)),
+            Some((current, current_rank, current_tie_break)) => {
+                if payload.hash != current.hash {
+                    return Err(torii_proxy_error_response(
+                        StatusCode::CONFLICT,
+                        "route_conflict",
+                        "multiple dataspaces returned pipeline statuses for different hashes",
+                    ));
+                }
+                if rank > *current_rank || (rank == *current_rank && tie_break > *current_tie_break)
+                {
+                    best = Some((payload, rank, tie_break));
+                }
+            }
+        }
+    }
+
+    let Some((payload, _, _)) = best else {
+        return Err(torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no dataspace returned a matching result",
+        ));
+    };
+
+    let mut response = crate::utils::respond_with_format(payload, ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
 fn decode_alias_resolve_index_payload(
     payload: Value,
 ) -> Result<routing::AliasResolveIndexResponseDto, Response> {
@@ -16119,6 +16246,37 @@ mod torii_routed_read_tests {
         .expect_err("conflicting singleton payloads should fail");
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn merged_pipeline_status_response_prefers_highest_semantic_status() {
+        let response = merged_pipeline_status_response(
+            vec![
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Committed", "block_height": 7},
+                    "scope": "auto",
+                    "resolved_from": "cache"
+                }),
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Applied", "block_height": 7},
+                    "scope": "auto",
+                    "resolved_from": "state"
+                }),
+            ],
+            "proxy",
+        )
+        .expect("pipeline status fanout should merge semantically compatible statuses");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&body).expect("status payload");
+        assert_eq!(payload.status.kind, "Applied");
+        assert_eq!(payload.resolved_from, "state");
     }
 
     #[cfg(feature = "app_api")]
@@ -18390,7 +18548,17 @@ async fn execute_torii_read_fanout_for_resolved_routes(
                 Err(response) => return response,
             };
             merge_with_torii_fanout_headers(collected.diagnostics, || {
-                merged_singleton_response(collected.payloads, routed_by_for_routes(app, &routes))
+                if matches!(endpoint, ToriiReadEndpointV1::PipelineTransactionStatusGet) {
+                    merged_pipeline_status_response(
+                        collected.payloads,
+                        routed_by_for_routes(app, &routes),
+                    )
+                } else {
+                    merged_singleton_response(
+                        collected.payloads,
+                        routed_by_for_routes(app, &routes),
+                    )
+                }
             })
         }
         ToriiReadFanoutMergeV1::Account => {
@@ -27087,7 +27255,7 @@ fn pipeline_status_from_state(
     None
 }
 
-fn pipeline_status_local_entry(
+fn pipeline_status_terminal_or_state_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Option<(PipelineStatusEntry, &'static str)> {
@@ -27103,6 +27271,17 @@ fn pipeline_status_local_entry(
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Some((entry, "state"));
+    }
+
+    None
+}
+
+fn pipeline_status_local_entry(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Option<(PipelineStatusEntry, &'static str)> {
+    if let Some(entry) = pipeline_status_terminal_or_state_entry(app, hash) {
+        return Some(entry);
     }
 
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
@@ -27168,7 +27347,13 @@ fn execute_pipeline_status_local_read(
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
 
-    if let Some((entry, resolved_from)) = pipeline_status_local_entry(app, &hash) {
+    let local_entry = if matches!(read_scope, PipelineStatusReadScope::Local) {
+        pipeline_status_local_entry(app, &hash)
+    } else {
+        pipeline_status_terminal_or_state_entry(app, &hash)
+    };
+
+    if let Some((entry, resolved_from)) = local_entry {
         return Ok(pipeline_status_response_with_route(
             &hash,
             &entry,
@@ -34634,6 +34819,16 @@ pub enum Error {
         /// Human-readable error message.
         message: String,
     },
+    /// Account onboarding validation failed `{code}`: {message}; hint: {hint:?}
+    #[cfg(feature = "app_api")]
+    AccountOnboardingValidation {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+        /// Optional operator-facing remediation hint.
+        hint: Option<&'static str>,
+    },
     /// Forbidden error for app-facing operation `{code}`: {message}
     AppForbidden {
         /// Stable machine-readable code.
@@ -34845,6 +35040,11 @@ impl IntoResponse for Error {
                 };
                 (status, utils::NoritoBody(payload)).into_response()
             }
+            #[cfg(feature = "app_api")]
+            Self::AccountOnboardingValidation { code, message, .. } => {
+                let payload = ErrorEnvelope::new(code, message);
+                (StatusCode::BAD_REQUEST, utils::NoritoBody(payload)).into_response()
+            }
             Self::AppForbidden { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
                 (StatusCode::FORBIDDEN, utils::NoritoBody(payload)).into_response()
@@ -35046,6 +35246,23 @@ pub(crate) mod tests_runtime_handlers {
             )) => Some(message.as_str()),
             _ => None,
         }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn account_onboarding_json_errors_preserve_explicit_norito_accept() {
+        let mut headers = HeaderMap::new();
+        assert!(super::account_onboarding_wants_json_error(&headers));
+        headers.insert(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static("application/json"),
+        );
+        assert!(super::account_onboarding_wants_json_error(&headers));
+        headers.insert(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        assert!(!super::account_onboarding_wants_json_error(&headers));
     }
 
     pub fn mk_app_state_for_tests() -> SharedAppState {
@@ -40057,7 +40274,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
-                scope: None,
+                scope: Some("local".to_owned()),
             }),
         )
         .await
@@ -40080,7 +40297,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash_as_entrypoint().to_string()),
-                scope: None,
+                scope: Some("local".to_owned()),
             }),
         )
         .await
@@ -40136,7 +40353,7 @@ pub(crate) mod tests_runtime_handlers {
             )),
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
-                scope: None,
+                scope: Some("local".to_owned()),
             }),
         )
         .await
@@ -40155,6 +40372,56 @@ pub(crate) mod tests_runtime_handlers {
             norito::decode_from_bytes(&bytes).expect("typed norito response");
         assert_eq!(payload.status.kind, "Queued");
         assert_eq!(payload.resolved_from, "queue");
+    }
+
+    #[test]
+    fn pipeline_status_auto_read_skips_non_terminal_local_cache() {
+        let app = mk_app_state_for_tests();
+        let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x74; Hash::LENGTH],
+        ));
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+        );
+
+        let err = execute_pipeline_status_local_read(
+            &app,
+            &PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("auto".to_owned()),
+            },
+            ResponseFormat::Json,
+            None,
+        )
+        .expect_err("auto reads must route/fan out before accepting local queued cache");
+
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn pipeline_status_local_read_keeps_non_terminal_local_cache() {
+        let app = mk_app_state_for_tests();
+        let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x75; Hash::LENGTH],
+        ));
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+        );
+
+        let response = execute_pipeline_status_local_read(
+            &app,
+            &PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("local".to_owned()),
+            },
+            ResponseFormat::Json,
+            None,
+        )
+        .expect("local reads should still expose local queued cache");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -50361,6 +50628,10 @@ impl Error {
                 ErrorEnvelope::new("queue_error", "queue request rejected")
             }
             Self::AppQueryValidation { code, message } => ErrorEnvelope::new(code, message),
+            #[cfg(feature = "app_api")]
+            Self::AccountOnboardingValidation { code, message, .. } => {
+                ErrorEnvelope::new(code, message)
+            }
             Self::AppForbidden { code, message } => ErrorEnvelope::new(code, message),
             Self::AppNotFound { code, message } => ErrorEnvelope::new(code, message),
             Self::AppConflict { code, message } => ErrorEnvelope::new(code, message),
@@ -50426,6 +50697,8 @@ impl Error {
             ApiVersion(err) => err.status(),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
+            #[cfg(feature = "app_api")]
+            AccountOnboardingValidation { .. } => StatusCode::BAD_REQUEST,
             AppForbidden { .. } => StatusCode::FORBIDDEN,
             AppNotFound { .. } => StatusCode::NOT_FOUND,
             AppConflict { .. } => StatusCode::CONFLICT,

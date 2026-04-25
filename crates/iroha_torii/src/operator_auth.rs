@@ -463,7 +463,8 @@ pub struct OperatorAuth {
 }
 
 fn rate_per_minute_to_per_sec(rate: NonZeroU32) -> u32 {
-    rate.div_ceil(NonZeroU32::new(60).expect("non-zero")).get()
+    let rate = rate.get();
+    rate.saturating_add(59) / 60
 }
 
 impl OperatorAuth {
