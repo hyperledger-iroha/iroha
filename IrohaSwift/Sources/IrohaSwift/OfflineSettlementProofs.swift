@@ -1236,6 +1236,12 @@ public enum ToriiOfflineSettlementProofs {
                 "Offline cash continuity proof is invalid."
             )
         }
+        guard receipt.direction == ToriiOfflineTransferDirection.incoming.rawValue
+                || receipt.sourceLineageProof == nil else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage proof is only valid for incoming offline receipts."
+            )
+        }
 
         let expectedPostBalance: String
         switch receipt.direction {
@@ -1777,6 +1783,20 @@ public enum ToriiOfflineSettlementProofs {
               air.openings.count == Int(starkQueryCount) else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) AIR binding is invalid.")
         }
+        guard let publicDigest = Data(hexString: expectedDigest) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) AIR binding is invalid.")
+        }
+        let domain = 1 << Int(starkDomainLog2)
+        let airRows = (0..<domain).map { index in
+            starkAirRow(index: index, publicDigest: publicDigest)
+        }
+        let traceLevels = merkleLevelsFromHashes(airRows.map(starkAirTraceLeafHash))
+        let traceRoot = merkleRootFromLevels(traceLevels)
+        guard air.traceRoot == prefixedHex(traceRoot) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline \(context) AIR trace root is invalid."
+            )
+        }
         if includeComposition {
             guard envelope.proof.compValues?.count == Int(starkQueryCount) else {
                 throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) composition binding is invalid.")
@@ -1787,13 +1807,93 @@ public enum ToriiOfflineSettlementProofs {
         guard envelope.proof.queries.count == Int(starkQueryCount) else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query count is invalid.")
         }
-        for chain in envelope.proof.queries {
-            try validateTransparentQueryChain(chain, levels: levels, context: context)
+        let queryRootsData = try expectedRoots.map { root -> Data in
+            guard let data = Data(hexString: root) else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Offline \(context) commitments are invalid."
+                )
+            }
+            return data
+        } + [traceRoot, levels[Int(starkDomainLog2)], publicDigest]
+        let expectedCompositionValue = try ToriiOfflineStarkCompositionValueV1(
+            leaf: offlineStarkBindingCompositionLeaf(
+                domainTag: expectedDomainTag,
+                transcriptLabel: transcriptLabel
+            ),
+            constant: starkBindingConstant,
+            zCoeff: starkBindingZCoefficient,
+            auxTerms: offlineStarkBindingTerms(
+                domainTag: expectedDomainTag,
+                transcriptLabel: transcriptLabel
+            ),
+            path: merklePathFromLevels(
+                index: 0,
+                levels: merkleLevelsFromValues([
+                    offlineStarkBindingCompositionLeaf(
+                        domainTag: expectedDomainTag,
+                        transcriptLabel: transcriptLabel
+                    )
+                ])
+            )
+        )
+        for (queryIndex, chain) in envelope.proof.queries.enumerated() {
+            let baseIndex = deriveQueryIndex(
+                transcriptLabel: transcriptLabel,
+                params: envelope.params,
+                roots: queryRootsData,
+                queryIndex: queryIndex
+            )
+            try validateStarkAirOpening(
+                air.openings[queryIndex],
+                baseIndex: baseIndex,
+                airRows: airRows,
+                traceLevels: traceLevels,
+                compositionLevels: levels,
+                context: context
+            )
+            try validateTransparentQueryChain(
+                chain,
+                baseIndex: baseIndex,
+                levels: levels,
+                context: context
+            )
+            if includeComposition, envelope.proof.compValues?[queryIndex] != expectedCompositionValue {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Offline \(context) composition binding is invalid."
+                )
+            }
+        }
+    }
+
+    private static func validateStarkAirOpening(
+        _ opening: ToriiOfflineStarkAirOpeningV1,
+        baseIndex: Int,
+        airRows: [[UInt64]],
+        traceLevels: [[Data]],
+        compositionLevels: [Data],
+        context: String
+    ) throws {
+        let nextIndex = (baseIndex + 1) % airRows.count
+        guard opening.index == UInt32(baseIndex),
+              opening.row == airRows[baseIndex],
+              opening.nextRow == airRows[nextIndex],
+              opening.rowPath == (try merklePathFromLevels(index: baseIndex, levels: traceLevels)),
+              opening.nextRowPath == (try merklePathFromLevels(index: nextIndex, levels: traceLevels)),
+              opening.compositionValue == 0,
+              opening.compositionPath == (try zeroMerklePath(
+                  index: baseIndex,
+                  depth: Int(starkDomainLog2),
+                  levelHashes: compositionLevels
+              )) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline \(context) AIR opening is invalid."
+            )
         }
     }
 
     private static func validateTransparentQueryChain(
         _ chain: [ToriiOfflineFoldDecommitV1],
+        baseIndex: Int,
         levels: [Data],
         context: String
     ) throws {
@@ -1801,31 +1901,29 @@ public enum ToriiOfflineSettlementProofs {
         guard chain.count == requiredLayers else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query depth is invalid.")
         }
-        var previousJ: UInt32?
+        var indexAtLayer = baseIndex
         for (layer, decommit) in chain.enumerated() {
             let depthCurrent = Int(starkDomainLog2) - layer
             let depthNext = depthCurrent - 1
             let maxJ = 1 << (depthCurrent - 1)
-            guard Int(decommit.j) < maxJ else {
+            let expectedJ = indexAtLayer / 2
+            guard Int(decommit.j) < maxJ, decommit.j == UInt32(expectedJ) else {
                 throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query index is invalid.")
-            }
-            if let previousJ, decommit.j != previousJ / 2 {
-                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) fold chain is invalid.")
             }
             guard decommit.y0 == 0, decommit.y1 == 0, decommit.z == 0 else {
                 throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) fold values are invalid.")
             }
-            let y0Index = Int(decommit.j) * 2
+            let y0Index = expectedJ * 2
             let y1Index = y0Index + 1
             guard decommit.pathY0 == (try zeroMerklePath(index: y0Index, depth: depthCurrent, levelHashes: levels)),
                   decommit.pathY1 == (try zeroMerklePath(index: y1Index, depth: depthCurrent, levelHashes: levels)),
-                  decommit.pathZ == (try zeroMerklePath(index: Int(decommit.j), depth: depthNext, levelHashes: levels))
+                  decommit.pathZ == (try zeroMerklePath(index: expectedJ, depth: depthNext, levelHashes: levels))
             else {
                 throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) Merkle paths are invalid.")
             }
-            previousJ = decommit.j
+            indexAtLayer = expectedJ
         }
-        guard previousJ == 0 else {
+        guard indexAtLayer == 0 else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) final fold is invalid.")
         }
     }

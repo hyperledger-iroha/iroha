@@ -10,6 +10,15 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use ed25519_dalek::{Signature as DalekSignature, VerifyingKey};
+#[cfg(all(test, feature = "zk-stark"))]
+use fastpq_prover::Prover as FastpqProver;
+#[cfg(feature = "zk-stark")]
+use fastpq_prover::{
+    Proof as FastpqProof, VerifyLimits as FastpqVerifyLimits,
+    batch_manifest_sha256 as fastpq_batch_manifest_sha256,
+    build_batch_from_binding as build_fastpq_batch_from_binding,
+    verify_with_limits as verify_fastpq_with_limits,
+};
 use iroha_config::parameters::actual::Offline as OfflineSettlementConfig;
 #[cfg(feature = "zk-stark")]
 use iroha_core::zk_stark::{
@@ -38,6 +47,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
+    nexus::AxtFastpqBinding,
     offline::{
         OfflineAppleAppAttestBinding as SharedOfflineAppleAppAttestBinding,
         OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
@@ -304,6 +314,14 @@ const OFFLINE_SETTLEMENT_CIRCUIT_ID: &str = "offline-bearer-settlement-v1";
 const OFFLINE_REDEEM_REQUEST_CIRCUIT_ID: &str = "offline-bearer-redeem-request-v1";
 const OFFLINE_SOURCE_LINEAGE_CIRCUIT_ID: &str = "offline-source-lineage-v1";
 const OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_BACKED: bool = true;
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER: &str = "fastpq-lane-balanced";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DSID: u64 = 0;
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DATASPACE: &str = "offline";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_CLAIM_TYPE: &str = "value_conservation";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_EFFECT_TYPE: &str = "offline-source-lineage-v1";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_CORRIDOR: &str = "offline-offline";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_ID: &str = "torii-offline-source-lineage";
+const OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_VERSION: &str = "v1";
 const OFFLINE_SOURCE_LINEAGE_MAX_RECURSION_DEPTH: usize = 8;
 const OFFLINE_SOURCE_LINEAGE_MAX_WITNESS_PAYLOAD_BYTES: usize = 256 * 1024;
 const OFFLINE_SOURCE_LINEAGE_MAX_ANCESTRY_RECEIPTS: usize = 256;
@@ -507,11 +525,29 @@ pub struct OfflineSourceLineagePublicInputs {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+pub struct OfflineSourceLineageFastpqProof {
+    pub parameter: String,
+    pub proof_bytes_base64: String,
+    pub proof_sha256: String,
+    pub batch_manifest_sha256: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub struct OfflineSourceLineageEnvelope {
     pub version: i32,
     pub circuit_id: String,
     pub public_inputs: OfflineSourceLineagePublicInputs,
     pub witness_payload: String,
+    pub fastpq_proof: OfflineSourceLineageFastpqProof,
     pub proof: OfflineTransparentZkProof,
 }
 
@@ -2888,7 +2924,8 @@ fn apply_receipts(
                 ));
             }
         }
-        let expected_post_balance = validate_local_continuity(
+        let mut receipt_source_nullifiers = BTreeSet::new();
+        let expected_post_balance = validate_local_continuity_with_source_context(
             &receipt,
             &lineage.lineage_id,
             &lineage.offline_public_key,
@@ -2899,19 +2936,19 @@ fn apply_receipts(
             current_revision,
             &issuer_public_key,
             &revoked_verdict_ids,
+            &mut receipt_source_nullifiers,
+            0,
         )?;
         if receipt.direction == "incoming" {
-            let source_nullifier = receipt
-                .source_lineage_proof
-                .as_ref()
-                .map(|proof| proof.public_inputs.source_nullifier.clone())
-                .ok_or_else(|| {
-                    conversion_error("incoming receipt is missing source_lineage_proof".to_owned())
-                })?;
-            if !lineage.seen_source_nullifiers.insert(source_nullifier) {
-                return Err(conversion_error(
-                    "duplicate source lineage nullifier in offline cash sync".to_owned(),
-                ));
+            for source_nullifier in &receipt_source_nullifiers {
+                if lineage.seen_source_nullifiers.contains(source_nullifier) {
+                    return Err(conversion_error(
+                        "duplicate source lineage nullifier in offline cash sync".to_owned(),
+                    ));
+                }
+            }
+            for source_nullifier in receipt_source_nullifiers {
+                lineage.seen_source_nullifiers.insert(source_nullifier);
             }
         }
         if !lineage
@@ -3005,6 +3042,11 @@ fn validate_local_continuity_with_source_context(
     if receipt.source_payload.is_some() {
         return Err(conversion_error(
             "legacy source_payload is not supported for offline-offline receipts".to_owned(),
+        ));
+    }
+    if receipt.direction != "incoming" && receipt.source_lineage_proof.is_some() {
+        return Err(conversion_error(
+            "source_lineage_proof is only valid for incoming offline receipts".to_owned(),
         ));
     }
 
@@ -3212,6 +3254,7 @@ fn verify_source_lineage_stark_binding(
     expected_commitment: &str,
 ) -> Result<(), Error> {
     ensure_offline_source_lineage_fastpq_ready()?;
+    verify_source_lineage_fastpq_artifact(envelope, expected_commitment)?;
     if envelope.proof.backend != OFFLINE_SETTLEMENT_PROOF_BACKEND {
         return Err(conversion_error(
             "source lineage proof backend is not supported".to_owned(),
@@ -3267,6 +3310,82 @@ fn verify_source_lineage_stark_binding(
     Ok(())
 }
 
+#[cfg(feature = "zk-stark")]
+fn verify_source_lineage_fastpq_artifact(
+    envelope: &OfflineSourceLineageEnvelope,
+    expected_commitment: &str,
+) -> Result<(), Error> {
+    let proof = &envelope.fastpq_proof;
+    if proof.parameter != OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER {
+        return Err(conversion_error(
+            "source lineage FastPQ parameter is not supported".to_owned(),
+        ));
+    }
+    ensure_non_empty(
+        &proof.proof_bytes_base64,
+        "source_lineage_proof.fastpq_proof.proof_bytes_base64",
+    )?;
+    ensure_non_empty(
+        &proof.proof_sha256,
+        "source_lineage_proof.fastpq_proof.proof_sha256",
+    )?;
+    ensure_non_empty(
+        &proof.batch_manifest_sha256,
+        "source_lineage_proof.fastpq_proof.batch_manifest_sha256",
+    )?;
+    let binding = source_lineage_fastpq_binding(
+        &envelope.public_inputs,
+        expected_commitment,
+        &envelope.witness_payload,
+    );
+    let expected_manifest = fastpq_batch_manifest_sha256(&binding).map_err(|err| {
+        conversion_error(format!(
+            "failed to build source lineage FastPQ manifest: {err}"
+        ))
+    })?;
+    if proof.batch_manifest_sha256 != expected_manifest {
+        return Err(conversion_error(
+            "source lineage FastPQ batch manifest does not match the witness".to_owned(),
+        ));
+    }
+    let proof_bytes = BASE64_STANDARD
+        .decode(proof.proof_bytes_base64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid source lineage FastPQ proof: {err}")))?;
+    if sha256_hex(&proof_bytes) != proof.proof_sha256 {
+        return Err(conversion_error(
+            "source lineage FastPQ proof digest does not match proof bytes".to_owned(),
+        ));
+    }
+    let decoded: FastpqProof = norito::decode_from_bytes(&proof_bytes).map_err(|err| {
+        conversion_error(format!(
+            "failed to decode source lineage FastPQ proof: {err}"
+        ))
+    })?;
+    if decoded.parameter != proof.parameter {
+        return Err(conversion_error(
+            "source lineage FastPQ proof parameter does not match metadata".to_owned(),
+        ));
+    }
+    let batch = build_fastpq_batch_from_binding(&binding).map_err(|err| {
+        conversion_error(format!(
+            "failed to build source lineage FastPQ batch: {err}"
+        ))
+    })?;
+    verify_fastpq_with_limits(&batch, &decoded, FastpqVerifyLimits::default()).map_err(|err| {
+        conversion_error(format!("source lineage FastPQ verification failed: {err}"))
+    })
+}
+
+#[cfg(not(feature = "zk-stark"))]
+fn verify_source_lineage_fastpq_artifact(
+    _envelope: &OfflineSourceLineageEnvelope,
+    _expected_commitment: &str,
+) -> Result<(), Error> {
+    Err(conversion_error(
+        "offline source-lineage FastPQ proofs are unavailable".to_owned(),
+    ))
+}
+
 fn hex_digest_32(value: &str, label: &str) -> Result<[u8; 32], Error> {
     let bytes = hex::decode(value.trim())
         .map_err(|err| conversion_error(format!("{label} must be hex: {err}")))?;
@@ -3287,6 +3406,30 @@ fn source_lineage_public_inputs_commitment_hex(
             witness_payload_hash: &witness_payload_hash,
         },
     )?))
+}
+
+fn source_lineage_fastpq_binding(
+    inputs: &OfflineSourceLineagePublicInputs,
+    public_inputs_commitment_hex: &str,
+    witness_payload: &str,
+) -> AxtFastpqBinding {
+    AxtFastpqBinding {
+        parameter: OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER.to_owned(),
+        source_dsid: OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DSID,
+        source_dataspace: OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DATASPACE.to_owned(),
+        source_receipt_id: inputs.transfer_id.clone(),
+        source_tx_commitment: inputs.source_receipt_hash.clone(),
+        claim_type: OFFLINE_SOURCE_LINEAGE_FASTPQ_CLAIM_TYPE.to_owned(),
+        claim_digest: public_inputs_commitment_hex.to_owned(),
+        witness_commitment: sha256_hex(witness_payload.trim().as_bytes()),
+        policy_commitment: inputs.source_nullifier.clone(),
+        verified_effect_type: OFFLINE_SOURCE_LINEAGE_FASTPQ_EFFECT_TYPE.to_owned(),
+        corridor: OFFLINE_SOURCE_LINEAGE_FASTPQ_CORRIDOR.to_owned(),
+        verifier_id: OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_ID.to_owned(),
+        verifier_version: OFFLINE_SOURCE_LINEAGE_FASTPQ_VERIFIER_VERSION.to_owned(),
+        target_dsids: vec![OFFLINE_SOURCE_LINEAGE_FASTPQ_SOURCE_DSID],
+        effect_binding: None,
+    }
 }
 
 fn source_lineage_nullifier_hex(
@@ -5838,6 +5981,317 @@ mod tests {
     }
 
     #[test]
+    fn local_continuity_rejects_source_lineage_proof_on_outgoing_receipt() {
+        let (source_lineage_proof, issuer_public_key) =
+            valid_source_lineage_fixture("source-transfer");
+        let source_payload =
+            decode_transfer_payload(&source_lineage_proof.witness_payload).expect("source payload");
+        let mut receipt = source_payload.receipt.clone();
+        receipt.source_lineage_proof = Some(source_lineage_proof);
+
+        let err = validate_local_continuity(
+            &receipt,
+            &source_payload.anchor.lineage_id,
+            &source_payload.anchor.offline_public_key,
+            &source_payload.anchor.asset_definition_id,
+            &receipt.pre_balance,
+            &receipt.pre_locked_balance,
+            &receipt.pre_state_hash,
+            receipt.local_revision.saturating_sub(1),
+            &issuer_public_key,
+            &BTreeSet::new(),
+        )
+        .expect_err("outgoing receipts must not carry source lineage proofs");
+
+        let error = format!("{err:?}");
+        assert!(
+            error.contains("source_lineage_proof is only valid"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn apply_receipts_persists_nested_source_nullifiers() {
+        let app = mk_app_state_for_tests();
+        let issuer = issuer_for_source_lineage_test();
+        let nested_source_lineage_proof = source_lineage_fixture_with_issuer(
+            &issuer,
+            "nested-transfer",
+            "sender-lineage",
+            "receiver-lineage",
+            "10",
+            7,
+        );
+        let nested_source_payload =
+            decode_transfer_payload(&nested_source_lineage_proof.witness_payload)
+                .expect("nested source payload");
+        let receiver_signing_key = SigningKey::from_slice(&[8u8; 32]).expect("p256 signing key");
+        let receiver_public_key = p256_public_key_base64(&receiver_signing_key);
+        let receiver_key_id = "receiver-key";
+        let receiver_device_id = "receiver-device";
+        let receiver_authorization = signed_authorization(
+            &issuer,
+            AuthorizationDraft {
+                lineage_id: "receiver-lineage".to_owned(),
+                account_id: TEST_ACCOUNT_I105.to_owned(),
+                device_id: receiver_device_id.to_owned(),
+                offline_public_key: receiver_public_key.clone(),
+                verdict_id: "receiver-verdict".to_owned(),
+                device_binding: Some(ios_binding_for_test(
+                    receiver_device_id,
+                    &receiver_public_key,
+                    receiver_key_id,
+                )),
+                app_attest_key_id: receiver_key_id.to_owned(),
+                issued_at_ms: 1,
+            },
+        )
+        .expect("receiver authorization");
+        let mut receiver_anchor = OfflineLineageState {
+            lineage_id: "receiver-lineage".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            device_id: receiver_device_id.to_owned(),
+            offline_public_key: receiver_public_key.clone(),
+            asset_definition_id: TEST_ASSET_DEFINITION_ID.to_owned(),
+            balance: "25".to_owned(),
+            locked_balance: "0".to_owned(),
+            server_revision: 1,
+            server_state_hash: "receiver-anchor-hash".to_owned(),
+            pending_local_revision: 0,
+            authorization: receiver_authorization.clone(),
+            issuer_signature_base64: String::new(),
+        };
+        receiver_anchor.issuer_signature_base64 = sign_base64(
+            &issuer,
+            &lineage_state_unsigned_payload(&receiver_anchor).expect("receiver anchor payload"),
+        );
+
+        let receiver_incoming_post_balance = "35";
+        let receiver_incoming_post_hash = next_local_state_hash(
+            &receiver_anchor.lineage_id,
+            &receiver_anchor.server_state_hash,
+            "nested-transfer",
+            "incoming",
+            &nested_source_payload.receipt.lineage_id,
+            "10",
+            1,
+            receiver_incoming_post_balance,
+            "0",
+        )
+        .expect("receiver incoming post hash");
+        let mut receiver_incoming = OfflineTransferReceipt {
+            version: 1,
+            transfer_id: "nested-transfer".to_owned(),
+            direction: "incoming".to_owned(),
+            lineage_id: receiver_anchor.lineage_id.clone(),
+            account_id: receiver_anchor.account_id.clone(),
+            device_id: receiver_anchor.device_id.clone(),
+            offline_public_key: receiver_public_key.clone(),
+            pre_balance: receiver_anchor.balance.clone(),
+            post_balance: receiver_incoming_post_balance.to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
+            pre_state_hash: receiver_anchor.server_state_hash.clone(),
+            post_state_hash: receiver_incoming_post_hash.clone(),
+            local_revision: 1,
+            counterparty_lineage_id: nested_source_payload.receipt.lineage_id.clone(),
+            counterparty_account_id: nested_source_payload.receipt.account_id.clone(),
+            counterparty_device_id: nested_source_payload.receipt.device_id.clone(),
+            counterparty_offline_public_key: nested_source_payload
+                .receipt
+                .offline_public_key
+                .clone(),
+            amount: "10".to_owned(),
+            authorization: Some(receiver_authorization.clone()),
+            attestation: OfflineDeviceAttestation {
+                key_id: receiver_key_id.to_owned(),
+                counter: 1,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: String::new(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_lineage_proof: Some(nested_source_lineage_proof.clone()),
+            source_payload: None,
+            sender_signature_base64: String::new(),
+            created_at_ms: 1_100,
+        };
+        sign_receipt_for_test(&mut receiver_incoming, &receiver_signing_key);
+
+        let receiver_outgoing_transfer_id = "source-transfer";
+        let receiver_outgoing_post_balance = "25";
+        let receiver_outgoing_post_hash = next_local_state_hash(
+            &receiver_anchor.lineage_id,
+            &receiver_incoming_post_hash,
+            receiver_outgoing_transfer_id,
+            "outgoing",
+            "final-recipient-lineage",
+            "10",
+            2,
+            receiver_outgoing_post_balance,
+            "0",
+        )
+        .expect("receiver outgoing post hash");
+        let mut receiver_outgoing = OfflineTransferReceipt {
+            version: 1,
+            transfer_id: receiver_outgoing_transfer_id.to_owned(),
+            direction: "outgoing".to_owned(),
+            lineage_id: receiver_anchor.lineage_id.clone(),
+            account_id: receiver_anchor.account_id.clone(),
+            device_id: receiver_anchor.device_id.clone(),
+            offline_public_key: receiver_public_key.clone(),
+            pre_balance: receiver_incoming_post_balance.to_owned(),
+            post_balance: receiver_outgoing_post_balance.to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
+            pre_state_hash: receiver_incoming_post_hash,
+            post_state_hash: receiver_outgoing_post_hash,
+            local_revision: 2,
+            counterparty_lineage_id: "final-recipient-lineage".to_owned(),
+            counterparty_account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+            counterparty_device_id: "final-recipient-device".to_owned(),
+            counterparty_offline_public_key: BASE64_STANDARD.encode([9u8; 32]),
+            amount: "10".to_owned(),
+            authorization: Some(receiver_authorization.clone()),
+            attestation: OfflineDeviceAttestation {
+                key_id: receiver_key_id.to_owned(),
+                counter: 2,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: String::new(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_lineage_proof: None,
+            source_payload: None,
+            sender_signature_base64: String::new(),
+            created_at_ms: 1_200,
+        };
+        sign_receipt_for_test(&mut receiver_outgoing, &receiver_signing_key);
+
+        let source_lineage_proof = source_lineage_envelope_from_payload_for_test(
+            OfflineOutgoingTransferPayload {
+                version: 1,
+                anchor: receiver_anchor,
+                ancestry_receipts: vec![receiver_incoming],
+                receipt: receiver_outgoing,
+            },
+            "final-recipient-lineage",
+            "10",
+        );
+
+        let final_signing_key = SigningKey::from_slice(&[9u8; 32]).expect("p256 signing key");
+        let final_public_key = p256_public_key_base64(&final_signing_key);
+        let final_key_id = "final-recipient-key";
+        let final_device_id = "final-recipient-device";
+        let final_authorization = signed_authorization(
+            &issuer,
+            AuthorizationDraft {
+                lineage_id: "final-recipient-lineage".to_owned(),
+                account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+                device_id: final_device_id.to_owned(),
+                offline_public_key: final_public_key.clone(),
+                verdict_id: "final-recipient-verdict".to_owned(),
+                device_binding: Some(ios_binding_for_test(
+                    final_device_id,
+                    &final_public_key,
+                    final_key_id,
+                )),
+                app_attest_key_id: final_key_id.to_owned(),
+                issued_at_ms: 1,
+            },
+        )
+        .expect("final recipient authorization");
+        let final_pre_hash = "final-recipient-anchor-hash";
+        let final_post_hash = next_local_state_hash(
+            "final-recipient-lineage",
+            final_pre_hash,
+            receiver_outgoing_transfer_id,
+            "incoming",
+            "receiver-lineage",
+            "10",
+            1,
+            "10",
+            "0",
+        )
+        .expect("final recipient post hash");
+        let mut final_receipt = OfflineTransferReceipt {
+            version: 1,
+            transfer_id: receiver_outgoing_transfer_id.to_owned(),
+            direction: "incoming".to_owned(),
+            lineage_id: "final-recipient-lineage".to_owned(),
+            account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+            device_id: final_device_id.to_owned(),
+            offline_public_key: final_public_key.clone(),
+            pre_balance: "0".to_owned(),
+            post_balance: "10".to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
+            pre_state_hash: final_pre_hash.to_owned(),
+            post_state_hash: final_post_hash,
+            local_revision: 1,
+            counterparty_lineage_id: "receiver-lineage".to_owned(),
+            counterparty_account_id: TEST_ACCOUNT_I105.to_owned(),
+            counterparty_device_id: receiver_device_id.to_owned(),
+            counterparty_offline_public_key: receiver_public_key,
+            amount: "10".to_owned(),
+            authorization: Some(final_authorization.clone()),
+            attestation: OfflineDeviceAttestation {
+                key_id: final_key_id.to_owned(),
+                counter: 1,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: String::new(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_lineage_proof: Some(source_lineage_proof.clone()),
+            source_payload: None,
+            sender_signature_base64: String::new(),
+            created_at_ms: 1_300,
+        };
+        sign_receipt_for_test(&mut final_receipt, &final_signing_key);
+
+        let mut final_lineage = StoredLineage {
+            lineage_id: "final-recipient-lineage".to_owned(),
+            account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+            device_id: final_device_id.to_owned(),
+            offline_public_key: final_public_key,
+            asset_definition_id: TEST_ASSET_DEFINITION_ID.to_owned(),
+            balance: Numeric::zero(),
+            locked_balance: Numeric::zero(),
+            server_revision: 1,
+            server_state_hash: final_pre_hash.to_owned(),
+            pending_local_revision: 0,
+            authorization: final_authorization,
+            app_attest_key_id: final_key_id.to_owned(),
+            counter_book: BTreeMap::new(),
+            seen_transfer_ids: BTreeSet::new(),
+            seen_sender_states: BTreeSet::new(),
+            seen_source_nullifiers: BTreeSet::new(),
+            apple_app_attest_binding: None,
+        };
+
+        apply_receipts(&app, &issuer, &mut final_lineage, &[final_receipt])
+            .expect("forwarded source lineage receipt should apply");
+
+        assert!(
+            final_lineage
+                .seen_source_nullifiers
+                .contains(&source_lineage_proof.public_inputs.source_nullifier)
+        );
+        assert!(
+            final_lineage
+                .seen_source_nullifiers
+                .contains(&nested_source_lineage_proof.public_inputs.source_nullifier)
+        );
+    }
+
+    #[test]
     fn source_lineage_proof_rejects_public_input_asset_mismatched_from_witness_anchor() {
         let (mut source_lineage_proof, issuer_public_key) =
             valid_source_lineage_fixture("source-transfer");
@@ -5931,6 +6385,44 @@ mod tests {
         let error = format!("{err:?}");
         assert!(
             error.contains("AIR circuit_id"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn source_lineage_proof_rejects_tampered_fastpq_proof_artifact() {
+        let (mut source_lineage_proof, issuer_public_key) =
+            valid_source_lineage_fixture("source-transfer");
+        let proof_bytes = BASE64_STANDARD
+            .decode(
+                source_lineage_proof
+                    .fastpq_proof
+                    .proof_bytes_base64
+                    .as_bytes(),
+            )
+            .expect("valid proof base64");
+        let mut proof: FastpqProof =
+            norito::decode_from_bytes(&proof_bytes).expect("valid source lineage FastPQ proof");
+        proof.public_io.slot ^= 1;
+        let tampered_bytes = norito::to_bytes(&proof).expect("encode tampered FastPQ proof");
+        source_lineage_proof.fastpq_proof.proof_sha256 = sha256_hex(&tampered_bytes);
+        source_lineage_proof.fastpq_proof.proof_bytes_base64 =
+            BASE64_STANDARD.encode(tampered_bytes);
+
+        let err = validate_source_lineage_proof(
+            &source_lineage_proof,
+            "source-transfer",
+            "receiver-lineage",
+            "10",
+            TEST_ASSET_DEFINITION_ID,
+            &issuer_public_key,
+            &BTreeSet::new(),
+        )
+        .expect_err("tampered FastPQ proof must fail");
+
+        let error = format!("{err:?}");
+        assert!(
+            error.contains("source lineage FastPQ verification failed"),
             "unexpected error: {err:?}"
         );
     }
@@ -6083,13 +6575,75 @@ mod tests {
             envelope: prove_source_lineage_stark_envelope(public_inputs_hex)
                 .expect("source lineage proof"),
         };
+        let fastpq_proof = prove_source_lineage_fastpq_artifact_for_test(&inputs, &witness_payload)
+            .expect("source lineage FastPQ proof");
         OfflineSourceLineageEnvelope {
             version: 1,
             circuit_id: OFFLINE_SOURCE_LINEAGE_CIRCUIT_ID.to_owned(),
             public_inputs: inputs,
             witness_payload,
+            fastpq_proof,
             proof,
         }
+    }
+
+    fn prove_source_lineage_fastpq_artifact_for_test(
+        inputs: &OfflineSourceLineagePublicInputs,
+        witness_payload: &str,
+    ) -> Result<OfflineSourceLineageFastpqProof, Error> {
+        let public_inputs_hex =
+            source_lineage_public_inputs_commitment_hex(inputs, witness_payload)?;
+        let binding = source_lineage_fastpq_binding(inputs, &public_inputs_hex, witness_payload);
+        let batch = build_fastpq_batch_from_binding(&binding).map_err(|err| {
+            conversion_error(format!(
+                "failed to build source lineage FastPQ test batch: {err}"
+            ))
+        })?;
+        let proof = FastpqProver::canonical(OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER)
+            .map_err(|err| conversion_error(format!("failed to create FastPQ prover: {err}")))?
+            .prove(&batch)
+            .map_err(|err| {
+                conversion_error(format!("failed to prove source lineage FastPQ: {err}"))
+            })?;
+        verify_fastpq_with_limits(&batch, &proof, FastpqVerifyLimits::default()).map_err(
+            |err| {
+                conversion_error(format!(
+                    "failed to verify source lineage FastPQ test proof: {err}"
+                ))
+            },
+        )?;
+        let proof_bytes = norito::to_bytes(&proof).map_err(|err| {
+            conversion_error(format!(
+                "failed to encode source lineage FastPQ proof: {err}"
+            ))
+        })?;
+        let batch_manifest_sha256 = fastpq_batch_manifest_sha256(&binding).map_err(|err| {
+            conversion_error(format!(
+                "failed to build source lineage FastPQ test manifest: {err}"
+            ))
+        })?;
+        Ok(OfflineSourceLineageFastpqProof {
+            parameter: OFFLINE_SOURCE_LINEAGE_FASTPQ_PARAMETER.to_owned(),
+            proof_sha256: sha256_hex(&proof_bytes),
+            proof_bytes_base64: BASE64_STANDARD.encode(proof_bytes),
+            batch_manifest_sha256,
+        })
+    }
+
+    fn p256_public_key_base64(signing_key: &SigningKey) -> String {
+        BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        )
+    }
+
+    fn sign_receipt_for_test(receipt: &mut OfflineTransferReceipt, signing_key: &SigningKey) {
+        receipt.attestation.challenge_hash_hex = cash_attestation_challenge_hash_for_test(receipt);
+        let signature: P256Signature = signing_key
+            .sign(&cash_transfer_receipt_unsigned_payload(receipt).expect("receipt payload"));
+        receipt.sender_signature_base64 = BASE64_STANDARD.encode(signature.to_der().as_bytes());
     }
 
     fn issuer_for_source_lineage_test() -> OfflineIssuerSigner {
@@ -6139,56 +6693,55 @@ mod tests {
         )
     }
 
-    fn valid_source_lineage_fixture(transfer_id: &str) -> (OfflineSourceLineageEnvelope, String) {
-        let issuer = issuer_for_source_lineage_test();
-        let issuer_public_key = issuer_public_key_base64(&issuer);
-        let signing_key = SigningKey::from_slice(&[7u8; 32]).expect("p256 signing key");
-        let sender_public_key = BASE64_STANDARD.encode(
-            signing_key
-                .verifying_key()
-                .to_encoded_point(false)
-                .as_bytes(),
-        );
-        let sender_device_id = "sender-device";
-        let sender_key_id = "sender-key";
-        let recipient_lineage_id = "receiver-lineage";
-        let amount = "10";
+    fn source_lineage_fixture_with_issuer(
+        issuer: &OfflineIssuerSigner,
+        transfer_id: &str,
+        source_lineage_id: &str,
+        recipient_lineage_id: &str,
+        amount: &str,
+        signing_seed_byte: u8,
+    ) -> OfflineSourceLineageEnvelope {
+        let signing_key =
+            SigningKey::from_slice(&[signing_seed_byte; 32]).expect("p256 signing key");
+        let sender_public_key = p256_public_key_base64(&signing_key);
+        let sender_device_id = format!("{source_lineage_id}-device");
+        let sender_key_id = format!("{source_lineage_id}-key");
         let created_at_ms = 1_000;
 
         let authorization = signed_authorization(
-            &issuer,
+            issuer,
             AuthorizationDraft {
-                lineage_id: "sender-lineage".to_owned(),
+                lineage_id: source_lineage_id.to_owned(),
                 account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
-                device_id: sender_device_id.to_owned(),
+                device_id: sender_device_id.clone(),
                 offline_public_key: sender_public_key.clone(),
-                verdict_id: "sender-verdict".to_owned(),
+                verdict_id: format!("{source_lineage_id}-verdict"),
                 device_binding: Some(ios_binding_for_test(
-                    sender_device_id,
+                    &sender_device_id,
                     &sender_public_key,
-                    sender_key_id,
+                    &sender_key_id,
                 )),
-                app_attest_key_id: sender_key_id.to_owned(),
+                app_attest_key_id: sender_key_id.clone(),
                 issued_at_ms: 1,
             },
         )
         .expect("signed authorization");
         let mut anchor = OfflineLineageState {
-            lineage_id: "sender-lineage".to_owned(),
+            lineage_id: source_lineage_id.to_owned(),
             account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
-            device_id: sender_device_id.to_owned(),
+            device_id: sender_device_id.clone(),
             offline_public_key: sender_public_key.clone(),
             asset_definition_id: TEST_ASSET_DEFINITION_ID.to_owned(),
             balance: "25".to_owned(),
             locked_balance: "0".to_owned(),
             server_revision: 1,
-            server_state_hash: "source-anchor-hash".to_owned(),
+            server_state_hash: format!("{source_lineage_id}-anchor-hash"),
             pending_local_revision: 0,
             authorization: authorization.clone(),
             issuer_signature_base64: String::new(),
         };
         anchor.issuer_signature_base64 = sign_base64(
-            &issuer,
+            issuer,
             &lineage_state_unsigned_payload(&anchor).expect("anchor payload"),
         );
         let post_balance = subtract_amounts(&anchor.balance, amount).expect("post balance");
@@ -6214,7 +6767,7 @@ mod tests {
             lineage_id: anchor.lineage_id.clone(),
             account_id: anchor.account_id.clone(),
             device_id: anchor.device_id.clone(),
-            offline_public_key: sender_public_key.clone(),
+            offline_public_key: sender_public_key,
             pre_balance: anchor.balance.clone(),
             post_balance,
             pre_locked_balance: "0".to_owned(),
@@ -6229,7 +6782,7 @@ mod tests {
             amount: amount.to_owned(),
             authorization: Some(authorization),
             attestation: OfflineDeviceAttestation {
-                key_id: sender_key_id.to_owned(),
+                key_id: sender_key_id,
                 counter: 1,
                 assertion_base64: BASE64_STANDARD.encode(b"assertion"),
                 challenge_hash_hex: String::new(),
@@ -6243,18 +6796,31 @@ mod tests {
             sender_signature_base64: String::new(),
             created_at_ms,
         };
-        receipt.attestation.challenge_hash_hex = cash_attestation_challenge_hash_for_test(&receipt);
-        let signature: P256Signature = signing_key
-            .sign(&cash_transfer_receipt_unsigned_payload(&receipt).expect("receipt payload"));
-        receipt.sender_signature_base64 = BASE64_STANDARD.encode(signature.to_der().as_bytes());
-        let payload = OfflineOutgoingTransferPayload {
-            version: 1,
-            anchor,
-            ancestry_receipts: Vec::new(),
-            receipt,
-        };
+        sign_receipt_for_test(&mut receipt, &signing_key);
+        source_lineage_envelope_from_payload_for_test(
+            OfflineOutgoingTransferPayload {
+                version: 1,
+                anchor,
+                ancestry_receipts: Vec::new(),
+                receipt,
+            },
+            recipient_lineage_id,
+            amount,
+        )
+    }
+
+    fn valid_source_lineage_fixture(transfer_id: &str) -> (OfflineSourceLineageEnvelope, String) {
+        let issuer = issuer_for_source_lineage_test();
+        let issuer_public_key = issuer_public_key_base64(&issuer);
         (
-            source_lineage_envelope_from_payload_for_test(payload, recipient_lineage_id, amount),
+            source_lineage_fixture_with_issuer(
+                &issuer,
+                transfer_id,
+                "sender-lineage",
+                "receiver-lineage",
+                "10",
+                7,
+            ),
             issuer_public_key,
         )
     }

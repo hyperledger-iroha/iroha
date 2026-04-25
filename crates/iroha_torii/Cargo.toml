@@ -80,6 +80,7 @@ halo2-dev-tests = ["iroha_core/halo2-dev-tests"]
 bench = []
 [dependencies]
 norito = { workspace = true }
+fastpq_prover = { workspace = true }
 iroha_core = { workspace = true, features = ["app_api", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 iroha_config = { workspace = true }
 iroha_primitives = { workspace = true, features = ["simd-accel"] }
