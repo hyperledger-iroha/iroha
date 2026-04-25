@@ -28551,6 +28551,8 @@ pub(crate) mod deserialize {
         let replication_orders = take_optional_default(&mut map, "replication_orders")?;
         let content_bundles = take_optional_default(&mut map, "content_bundles")?;
         let content_chunks = take_optional_default(&mut map, "content_chunks")?;
+        let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
+        let anonymous_asset_escrows = take_optional_default(&mut map, "anonymous_asset_escrows")?;
         let merge_hint_roots: Cell<Vec<Hash>> =
             take_optional_default(&mut map, "merge_hint_roots")?;
         let merge_global_state_root: Cell<Option<Hash>> =
@@ -28603,8 +28605,8 @@ pub(crate) mod deserialize {
             viral_binding_claims: Storage::default(),
             viral_escrows: Storage::default(),
             viral_bonus_paid: Storage::default(),
-            asset_escrows: Storage::default(),
-            anonymous_asset_escrows: Storage::default(),
+            asset_escrows,
+            anonymous_asset_escrows,
             uaid_dataspaces: Storage::default(),
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),
@@ -29855,6 +29857,96 @@ mod tests {
                 .alias()
                 .as_ref(),
             Some(&alias)
+        );
+    }
+
+    #[test]
+    fn escrow_records_roundtrip_through_state_json() {
+        let mut world = World::default();
+        let seller = AccountId::new(KeyPair::random().public_key().clone());
+        let buyer = AccountId::new(KeyPair::random().public_key().clone());
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("escrowsnapshot", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+
+        let public_id = iroha_data_model::escrow::EscrowId::new(Hash::new("public-escrow"));
+        let public_record = iroha_data_model::escrow::AssetEscrowRecord {
+            id: public_id,
+            seller: seller.clone(),
+            buyer: Some(buyer.clone()),
+            asset_definition: asset_definition.clone(),
+            amount: Numeric::new(42_u32, 0),
+            custody: seller.clone(),
+            status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
+            evidence_hashes: vec![Hash::new("public-evidence")],
+            created_at_ms: 1,
+            accepted_at_ms: Some(2),
+            payment_sent_at_ms: Some(3),
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+
+        let anonymous_id = iroha_data_model::escrow::EscrowId::new(Hash::new("anonymous-escrow"));
+        let proof_record = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
+            nullifiers: vec![[0x11; 32]],
+            output_commitments: vec![[0x22; 32]],
+            proof_hash: [0x33; 32],
+            envelope_hash: Some([0x44; 32]),
+            root_hint: Some([0x55; 32]),
+            recorded_at_ms: 4,
+        };
+        let anonymous_record = iroha_data_model::escrow::AnonymousAssetEscrowRecord {
+            id: anonymous_id,
+            seller: seller.clone(),
+            buyer: Some(buyer),
+            asset_definition,
+            escrow_commitment: [0x22; 32],
+            status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
+            evidence_hashes: vec![Hash::new("anonymous-evidence")],
+            opening: proof_record,
+            release: None,
+            cancellation: None,
+            created_at_ms: 4,
+            accepted_at_ms: Some(5),
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+
+        world.asset_escrows.insert(public_id, public_record.clone());
+        world
+            .anonymous_asset_escrows
+            .insert(anonymous_id, anonymous_record.clone());
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.asset_escrows().get(&public_id).expect("public escrow"),
+            &public_record
+        );
+        assert_eq!(
+            view.anonymous_asset_escrows()
+                .get(&anonymous_id)
+                .expect("anonymous escrow"),
+            &anonymous_record
         );
     }
 
