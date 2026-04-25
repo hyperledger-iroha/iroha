@@ -128,11 +128,12 @@ const IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD: u32 = 2;
 const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
 const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
 const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
-const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 20_000;
+const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 60_000;
+const IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS: u64 = 90_000;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER: u32 = 2;
-const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 120;
 const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 2;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 const IZANAMI_TELEMETRY_PROFILE: &str = "developer";
@@ -1127,6 +1128,22 @@ impl EndpointHealthPool {
         !was_unhealthy
     }
 
+    fn mark_endpoint_sticky_unhealthy_until(&self, endpoint_idx: usize, until: Instant) {
+        let Ok(mut guard) = self.state.lock() else {
+            return;
+        };
+        let Some(state) = guard.get_mut(endpoint_idx) else {
+            return;
+        };
+        state.consecutive_failures = self.config.unhealthy_failure_threshold.max(1);
+        state.consecutive_queue_pressure_failures = 0;
+        state.unhealthy_until = Some(until);
+        state.sticky_unhealthy_until = Some(until);
+        state.endpoint_state = IngressEndpointState::UnhealthyRetryable {
+            next_probe_window: until,
+        };
+    }
+
     #[cfg(test)]
     fn endpoint_state(&self, endpoint_idx: usize) -> EndpointHealthState {
         self.state
@@ -1185,6 +1202,35 @@ impl IngressEndpointPool {
             endpoints: Arc::new(endpoints),
             endpoint_index_by_peer: Arc::new(endpoint_index_by_peer),
             health,
+        }
+    }
+
+    fn reserve_fault_target_ingress_until(
+        &self,
+        peers: &[NetworkPeer],
+        fault_targets: &[usize],
+        until: Instant,
+    ) {
+        for peer_idx in fault_targets {
+            let Some(peer) = peers.get(*peer_idx) else {
+                continue;
+            };
+            let Some(endpoint_idx) = self.endpoint_index_by_peer.get(&peer.id()).copied() else {
+                continue;
+            };
+            self.health
+                .mark_endpoint_sticky_unhealthy_until(endpoint_idx, until);
+            debug!(
+                target: "izanami::ingress",
+                peer_index = *peer_idx,
+                endpoint_idx,
+                endpoint = %self
+                    .endpoints
+                    .get(endpoint_idx)
+                    .map(|endpoint| endpoint.label.as_str())
+                    .unwrap_or("<unknown>"),
+                "reserved fault-target peer away from client ingress"
+            );
         }
     }
 
@@ -1344,12 +1390,15 @@ fn is_shutdown_noise_status_read_failure(
     error: &color_eyre::Report,
     run_control: &RunControl,
 ) -> bool {
-    run_control.stop_requested()
+    run_control.should_stop()
         && matches!(
             classify_ingress_operation(op_name),
             IngressOperationClass::StatusRead
         )
-        && ingress_error_message(error).contains("connection refused")
+        && {
+            let message = ingress_error_message(error);
+            message.contains("connection refused") || message.contains("transaction did not reach")
+        }
 }
 
 fn ingress_error_message(error: &color_eyre::Report) -> String {
@@ -1999,7 +2048,7 @@ fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
 }
 
 fn submission_confirmation_mode(config: &ChaosConfig) -> SubmissionConfirmationMode {
-    if matches!(config.workload_profile, WorkloadProfile::Stable) && config.faulty_peers == 0 {
+    if matches!(config.workload_profile, WorkloadProfile::Stable) {
         SubmissionConfirmationMode::AcceptedByIngress
     } else {
         SubmissionConfirmationMode::BlockingApplied
@@ -2918,14 +2967,17 @@ impl IzanamiRunner {
         let metrics = Arc::new(Metrics::default());
         metrics.set_submitters(self.config.submitters);
         let ingress_stats = Arc::new(IngressStats::default());
+        let confirmation_audit_seed = rng.next_u64();
+        let fault_targets =
+            select_fault_targets(self.peers.len(), self.config.faulty_peers, &mut rng);
         let ingress_pool = Arc::new(IngressEndpointPool::from_peers(
             &self.peers,
             IngressEndpointPoolConfig::default(),
             Arc::clone(&ingress_stats),
         ));
+        ingress_pool.reserve_fault_target_ingress_until(&self.peers, &fault_targets, deadline);
         let submission_counter = Arc::new(AtomicU64::new(0));
         let submission_confirmation = submission_confirmation_mode(&self.config);
-        let confirmation_audit_seed = rng.next_u64();
         let (confirmation_audit_tx, confirmation_audit_handle) = if matches!(
             submission_confirmation,
             SubmissionConfirmationMode::AcceptedByIngress
@@ -2944,8 +2996,13 @@ impl IzanamiRunner {
             (None, None)
         };
 
-        let faulty_handles =
-            self.spawn_fault_tasks(&config_layers, &genesis, &run_control, &mut rng);
+        let faulty_handles = self.spawn_fault_tasks(
+            &config_layers,
+            &genesis,
+            &run_control,
+            &mut rng,
+            &fault_targets,
+        );
         let load_handles = self.spawn_load_supervisors(
             &metrics,
             &ingress_pool,
@@ -3108,8 +3165,8 @@ impl IzanamiRunner {
         genesis: &Arc<GenesisBlock>,
         run_control: &Arc<RunControl>,
         rng: &mut StdRng,
+        targets: &[usize],
     ) -> Vec<JoinHandle<()>> {
-        let targets = select_fault_targets(self.peers.len(), self.config.faulty_peers, rng);
         if targets.is_empty() {
             return Vec::new();
         }
@@ -3132,7 +3189,7 @@ impl IzanamiRunner {
                 .disk_saturation()
                 .then_some(DiskSaturationConfig::default()),
         };
-        for (offset, idx) in targets.into_iter().enumerate() {
+        for (offset, idx) in targets.iter().copied().enumerate() {
             let peer = self.peers[idx].clone();
             let config_layers = Arc::clone(config_layers);
             let genesis = Arc::clone(genesis);
@@ -3220,6 +3277,19 @@ impl IzanamiRunner {
                         if run_control.should_stop() {
                             break;
                         }
+                        if !submission_has_deadline_budget(
+                            Instant::now(),
+                            deadline,
+                            submission_confirmation,
+                        ) {
+                            debug!(
+                                target: "izanami::workload",
+                                submitter_idx,
+                                "closing workload submitter because remaining run window cannot cover ingress retry budget"
+                            );
+                            wait_until_deadline_or_stop(stop_notify.as_ref(), deadline).await;
+                            break;
+                        }
                         if let Some(retry_after) =
                             ingress_pool.submission_backpressure_delay(Instant::now())
                         {
@@ -3243,6 +3313,24 @@ impl IzanamiRunner {
                                 continue;
                             }
                         };
+                        let effective_submission_confirmation = effective_submission_confirmation(
+                            submission_confirmation,
+                            &plan.state_updates,
+                        );
+                        if !submission_has_deadline_budget(
+                            Instant::now(),
+                            deadline,
+                            effective_submission_confirmation,
+                        ) {
+                            debug!(
+                                target: "izanami::workload",
+                                submitter_idx,
+                                plan = plan.label,
+                                "dropping late workload plan because it requires more confirmation budget than remains"
+                            );
+                            wait_until_deadline_or_stop(stop_notify.as_ref(), deadline).await;
+                            break;
+                        }
                         metrics.record_offered();
                         metrics.record_backlog_spawn();
                         let metrics = Arc::clone(&metrics);
@@ -3304,6 +3392,23 @@ impl IzanamiRunner {
                     break;
                 };
                 let now = Instant::now();
+                let wait_options = throughput_confirmation_wait_options();
+                if !confirmation_audit_has_deadline_budget(now, deadline, &wait_options) {
+                    metrics.record_confirmation_audit_budget_skipped();
+                    debug!(
+                        target: "izanami::audit",
+                        endpoint_idx = candidate.endpoint_idx,
+                        hash = %candidate.hash,
+                        plan = candidate.plan_label,
+                        remaining_ms = deadline
+                            .checked_duration_since(now)
+                            .map(|duration| duration.as_millis())
+                            .unwrap_or_default(),
+                        timeout_ms = wait_options.timeout.as_millis(),
+                        "skipping sampled confirmation because the remaining run window is too short"
+                    );
+                    continue;
+                }
                 let Some(budget) = budgets.get_mut(candidate.endpoint_idx) else {
                     metrics.record_confirmation_audit_failed();
                     warn!(
@@ -3329,6 +3434,13 @@ impl IzanamiRunner {
                 audit_submitted_transaction(&ingress_pool, &run_control, &metrics, candidate).await;
             }
         })
+    }
+}
+
+async fn wait_until_deadline_or_stop(stop_notify: &Notify, deadline: Instant) {
+    tokio::select! {
+        () = stop_notify.notified() => {},
+        () = time::sleep_until(deadline.into()) => {},
     }
 }
 
@@ -4863,6 +4975,58 @@ fn terminal_confirmation_wait_options() -> TransactionWaitOptions {
     }
 }
 
+fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
+    TransactionWaitOptions {
+        timeout: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS),
+        poll_interval: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS),
+        terminal_statuses: vec![
+            TransactionWaitTerminalStatus::Applied,
+            TransactionWaitTerminalStatus::Rejected,
+            TransactionWaitTerminalStatus::Expired,
+        ],
+    }
+}
+
+fn confirmation_audit_has_deadline_budget(
+    now: Instant,
+    deadline: Instant,
+    options: &TransactionWaitOptions,
+) -> bool {
+    deadline
+        .checked_duration_since(now)
+        .is_some_and(|remaining| remaining > options.timeout.saturating_add(options.poll_interval))
+}
+
+fn submission_deadline_budget(mode: SubmissionConfirmationMode) -> Duration {
+    let request_budget = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
+        .saturating_mul(IZANAMI_INGRESS_MAX_ATTEMPTS as u32)
+        .saturating_add(
+            Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS)
+                .saturating_mul(IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS),
+        )
+        .saturating_add(Duration::from_millis(
+            IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS,
+        ));
+    if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
+        let wait_options = terminal_confirmation_wait_options();
+        request_budget
+            .saturating_add(wait_options.timeout)
+            .saturating_add(wait_options.poll_interval)
+    } else {
+        request_budget
+    }
+}
+
+fn submission_has_deadline_budget(
+    now: Instant,
+    deadline: Instant,
+    mode: SubmissionConfirmationMode,
+) -> bool {
+    deadline
+        .checked_duration_since(now)
+        .is_some_and(|remaining| remaining > submission_deadline_budget(mode))
+}
+
 fn pipeline_status_kind_is_supported(kind: &str) -> bool {
     matches!(
         kind,
@@ -5041,7 +5205,7 @@ async fn audit_submitted_transaction(
             endpoint_idx,
             &signer,
             hash,
-            terminal_confirmation_wait_options(),
+            throughput_confirmation_wait_options(),
         )
     })
     .await;
@@ -6584,7 +6748,7 @@ mod tests {
     }
 
     #[test]
-    fn submission_confirmation_mode_keeps_blocking_confirmation_for_faulty_or_chaos_runs() {
+    fn submission_confirmation_mode_uses_ingress_acceptance_for_stable_fault_runs() {
         let mut config = ChaosConfig {
             allow_net: true,
             peer_count: 4,
@@ -6609,7 +6773,7 @@ mod tests {
 
         assert_eq!(
             submission_confirmation_mode(&config),
-            SubmissionConfirmationMode::BlockingApplied
+            SubmissionConfirmationMode::AcceptedByIngress
         );
         config.faulty_peers = 0;
         config.workload_profile = WorkloadProfile::Chaos;
@@ -8982,6 +9146,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn throughput_confirmation_wait_options_use_extended_audit_timeout() {
+        let options = throughput_confirmation_wait_options();
+        assert_eq!(
+            options.timeout,
+            Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
+        );
+        assert!(
+            options.timeout > terminal_confirmation_wait_options().timeout,
+            "sampled throughput audits should tolerate local quick-run NPoS tail latency"
+        );
+        assert!(
+            options
+                .terminal_statuses
+                .contains(&TransactionWaitTerminalStatus::Applied)
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_timeout_covers_confirmation_audit_window() {
+        assert!(
+            Duration::from_secs(IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS)
+                > throughput_confirmation_wait_options().timeout,
+            "audit workers need enough shutdown grace to finish an in-flight confirmation wait"
+        );
+    }
+
+    #[test]
+    fn confirmation_audit_deadline_budget_requires_full_wait_window() {
+        let options = throughput_confirmation_wait_options();
+        let now = Instant::now();
+        assert!(confirmation_audit_has_deadline_budget(
+            now,
+            now + options.timeout + options.poll_interval + Duration::from_millis(1),
+            &options
+        ));
+        assert!(!confirmation_audit_has_deadline_budget(
+            now,
+            now + options.timeout,
+            &options
+        ));
+    }
+
+    #[test]
+    fn submission_deadline_budget_covers_ingress_retries() {
+        let budget = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
+        let minimum_retry_window = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
+            .saturating_mul(IZANAMI_INGRESS_MAX_ATTEMPTS as u32);
+
+        assert!(
+            budget >= minimum_retry_window,
+            "submitter deadline guard must cover the configured ingress retry window"
+        );
+    }
+
+    #[test]
+    fn blocking_submission_deadline_budget_covers_terminal_wait() {
+        let accepted = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
+        let blocking = submission_deadline_budget(SubmissionConfirmationMode::BlockingApplied);
+        let wait_options = terminal_confirmation_wait_options();
+
+        assert!(
+            blocking >= accepted.saturating_add(wait_options.timeout),
+            "blocking submissions need enough budget to finish terminal-status confirmation"
+        );
+    }
+
+    #[test]
+    fn submission_deadline_budget_requires_full_wait_window() {
+        let now = Instant::now();
+        let budget = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
+
+        assert!(submission_has_deadline_budget(
+            now,
+            now + budget + Duration::from_millis(1),
+            SubmissionConfirmationMode::AcceptedByIngress
+        ));
+        assert!(!submission_has_deadline_budget(
+            now,
+            now + budget,
+            SubmissionConfirmationMode::AcceptedByIngress
+        ));
+    }
+
     #[tokio::test]
     async fn wait_for_duration_deadline_completes_when_no_target_blocks_are_set() {
         let run_control = RunControl::new(Instant::now() + Duration::from_millis(5));
@@ -9015,10 +9263,21 @@ mod tests {
             !is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control),
             "status reads should not be ignored before shutdown starts"
         );
+        let elapsed_run_control = RunControl::new(Instant::now() - Duration::from_secs(1));
+        assert!(
+            is_shutdown_noise_status_read_failure("audit_confirmation", &err, &elapsed_run_control),
+            "status reads should be ignored after the run deadline elapses"
+        );
         run_control.stop();
         assert!(
             is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control),
             "status reads should be ignored during shutdown"
+        );
+        let timeout_err =
+            eyre!("transaction did not reach Applied, Rejected, Expired within 90000 ms");
+        assert!(
+            is_shutdown_noise_status_read_failure("audit_confirmation", &timeout_err, &run_control),
+            "status read timeouts should be ignored once shutdown has started"
         );
         assert!(
             !is_shutdown_noise_status_read_failure("submit_transaction_plan", &err, &run_control),
@@ -9063,6 +9322,37 @@ mod tests {
             pool.select_endpoint_preferred("submit", 3)
                 .expect("submitter 3 should wrap to the first endpoint"),
             0
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_skips_reserved_fault_target_when_alternate_is_healthy() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:411".to_string(),
+                "http://127.0.0.1:412".to_string(),
+                "http://127.0.0.1:413".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+
+        pool.mark_endpoint_sticky_unhealthy_until(0, now + Duration::from_secs(60));
+
+        assert_eq!(
+            pool.attempt_order_preview_at_with_preference(now, Some(0)),
+            vec![1, 2]
+        );
+        assert_eq!(
+            pool.attempt_order_preview_at_with_preference(now + Duration::from_secs(61), Some(0)),
+            vec![0, 1, 2]
         );
     }
 

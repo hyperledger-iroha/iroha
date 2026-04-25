@@ -55154,9 +55154,84 @@ impl crate::utils::extractors::SupportsNoritoDecode for AccountAliasAutoRenewReq
 #[cfg(feature = "app_api")]
 fn onboarding_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.onboard", reason, "UAID onboarding request rejected");
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        QueryExecutionFail::InvalidSingularParameters,
-    ))
+    let (code, hint) = onboarding_error_metadata(reason);
+    Error::AccountOnboardingValidation {
+        code,
+        message: reason.to_owned(),
+        hint,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str>) {
+    let normalized = reason.to_ascii_lowercase();
+    if normalized.contains("disabled") {
+        (
+            "onboarding_disabled",
+            Some(
+                "Enable Torii account onboarding in node configuration before exposing this route.",
+            ),
+        )
+    } else if normalized.contains("alias must not be empty")
+        || normalized.contains("account alias")
+        || normalized.contains("invalid account alias")
+    {
+        (
+            "invalid_alias",
+            Some(
+                "Use a dataspace alias such as `alice@universal` or another registered dataspace.",
+            ),
+        )
+    } else if normalized.contains("lacks account-alias manage permission") {
+        (
+            "onboarding_authority_lacks_alias_permission",
+            Some("Grant the configured onboarding authority permission to manage account aliases."),
+        )
+    } else if normalized.contains("dataspace is not registered") {
+        (
+            "alias_dataspace_not_registered",
+            Some("Register the alias dataspace before accepting public onboarding requests."),
+        )
+    } else if normalized.contains("public key hex") {
+        (
+            "invalid_public_key_hex",
+            Some("Provide raw 32-byte Ed25519 public key bytes as lowercase or uppercase hex."),
+        )
+    } else if normalized.contains("account id literal") {
+        (
+            "invalid_account_id",
+            Some("Provide a canonical I105 account id or omit it and use `public_key_hex`."),
+        )
+    } else if normalized.contains("either account_id or public_key_hex") {
+        (
+            "missing_account_material",
+            Some("Provide either `account_id` or raw Ed25519 `public_key_hex`."),
+        )
+    } else if normalized.contains("account already exists") {
+        (
+            "account_already_exists",
+            Some(
+                "Resolve the alias/account first or use the existing account instead of onboarding.",
+            ),
+        )
+    } else if normalized.contains("requested permission is not allowed") {
+        (
+            "requested_permission_not_allowed",
+            Some("Request only permissions listed in the onboarding allowlist."),
+        )
+    } else if normalized.contains("auto-renew") || normalized.contains("subscription domain") {
+        (
+            "alias_auto_renew_misconfigured",
+            Some("Fix the onboarding alias auto-renew subscription-domain configuration."),
+        )
+    } else if normalized.contains("quote") || normalized.contains("lease") {
+        (
+            "alias_quote_failed",
+            Some("Check alias lease policy, payment asset availability, and registrar state."),
+        )
+    } else {
+        ("onboarding_invalid_request", None)
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -55481,6 +55556,25 @@ mod faucet_pow_tests {
         assert_eq!(adaptive_faucet_pow_extra_bits(999, 4, 6), 6);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 0, 6), 0);
         assert_eq!(adaptive_faucet_pow_extra_bits(10, 4, 0), 0);
+    }
+
+    #[test]
+    fn onboarding_error_metadata_classifies_public_key_hex() {
+        let (code, hint) = super::onboarding_error_metadata("invalid public key hex");
+        assert_eq!(code, "invalid_public_key_hex");
+        assert!(hint.is_some());
+    }
+
+    #[test]
+    fn onboarding_invalid_request_preserves_structured_code() {
+        let err = super::onboarding_invalid_request("account already exists");
+        match err {
+            crate::Error::AccountOnboardingValidation { code, hint, .. } => {
+                assert_eq!(code, "account_already_exists");
+                assert!(hint.is_some());
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 }
 
@@ -55944,9 +56038,7 @@ pub async fn handle_v1_accounts_onboard(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let Some(signer) = app.uaid_onboarding.as_ref() else {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted("UAID onboarding disabled".into()),
-        ));
+        return Err(onboarding_invalid_request("UAID onboarding disabled"));
     };
 
     let AccountOnboardingRequestDto {

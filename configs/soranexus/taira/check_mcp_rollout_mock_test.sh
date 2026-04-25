@@ -132,7 +132,7 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   status="202"
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
-  body='{"result":{"tools":[{"name":"iroha.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.time.now","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+  body='{"result":{"tools":[{"name":"iroha.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.time.now","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
   if [[ $after_ping -eq 1 && "$scenario" == "public_502" ]]; then
     status="502"
@@ -162,6 +162,10 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public_
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/contracts/state" ]]; then
   status="400"
   body='{"error":"missing selectors"}'
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/musubi/packages?query=&limit=1" ]]; then
+  body='{"items":[]}'
+elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/yank-release" ]]; then
+  body='{"instructions":[]}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/contracts/deploy" ]]; then
   status="400"
   body='{"error":"empty deploy body"}'

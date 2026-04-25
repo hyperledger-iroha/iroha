@@ -30,6 +30,16 @@ def test_build_challenge_matches_known_digest() -> None:
     assert challenge.hex() == "fc7d21d12e97804f7266be24199d25f4b4c6260779540e43fd2c13eb5f8118e3"
 
 
+def test_scrypt_digest_matches_rfc_vector() -> None:
+    digest = MODULE.scrypt_digest(b"", salt=b"", n=16, r=1, p=1, dklen=64)
+    assert digest.hex() == (
+        "77d6576238657b203b19ca42c18a0497"
+        "f16b4844e3074ae8dfdffa3fede21442"
+        "fcd0069ded0948f8326a753a0fc81f17"
+        "e8d3e0fb2e0d3628cf35e20c38d18906"
+    )
+
+
 def test_solve_puzzle_returns_expected_nonce_for_easy_case() -> None:
     puzzle = {
         "difficulty_bits": 8,
