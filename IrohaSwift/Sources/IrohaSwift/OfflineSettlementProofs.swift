@@ -550,6 +550,7 @@ public enum ToriiOfflineSettlementProofs {
     public static let settlementCircuitId = "offline-bearer-settlement-v1"
     public static let redeemRequestCircuitId = "offline-bearer-redeem-request-v1"
     public static let sourceLineageCircuitId = "offline-source-lineage-v1"
+    public static let sourceLineageFastpqParameter = "fastpq-lane-balanced"
 
     private static let sourceLineageTransferPayloadPrefix = "wallet-offline-transfer:"
     private static let starkVersion: UInt16 = 1
@@ -660,9 +661,15 @@ public enum ToriiOfflineSettlementProofs {
             publicInputs,
             witnessPayload: normalizedWitness
         )
+        let fastpqProof = try buildSourceLineageFastpqProof(
+            publicInputs: publicInputs,
+            witnessPayload: normalizedWitness,
+            publicInputsCommitmentHex: commitment
+        )
         return try ToriiOfflineSourceLineageEnvelope(
             publicInputs: publicInputs,
             witnessPayload: normalizedWitness,
+            fastpqProof: fastpqProof,
             proof: ToriiOfflineTransparentZkProof(
                 backend: settlementBackend,
                 circuitId: sourceLineageCircuitId,
@@ -757,6 +764,12 @@ public enum ToriiOfflineSettlementProofs {
         let commitment = try sourceLineagePublicInputsCommitmentHex(
             envelope.publicInputs,
             witnessPayload: witnessPayload
+        )
+        try verifySourceLineageFastpqProof(
+            envelope.fastpqProof,
+            publicInputs: envelope.publicInputs,
+            witnessPayload: witnessPayload,
+            publicInputsCommitmentHex: commitment
         )
         let normalizedActual = try normalizeProof(envelope.proof)
         guard normalizedActual.backend == settlementBackend,
@@ -983,6 +996,84 @@ public enum ToriiOfflineSettlementProofs {
             publicInputs: publicInputs,
             witnessPayloadHash: witnessPayloadHash
         )))
+    }
+
+    private static func buildSourceLineageFastpqProof(
+        publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String,
+        publicInputsCommitmentHex: String
+    ) throws -> ToriiOfflineSourceLineageFastpqProof {
+        let requestJson = try sourceLineageFastpqProofRequestJson(
+            publicInputs: publicInputs,
+            witnessPayload: witnessPayload,
+            publicInputsCommitmentHex: publicInputsCommitmentHex
+        )
+        guard let artifactJson = try NoritoNativeBridge.shared.sourceLineageFastpqProof(requestJson: requestJson),
+              !artifactJson.isEmpty else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage FastPQ prover is unavailable."
+            )
+        }
+        let proof = try JSONDecoder().decode(ToriiOfflineSourceLineageFastpqProof.self, from: artifactJson)
+        guard proof.parameter == sourceLineageFastpqParameter,
+              !proof.proofBytesBase64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !proof.proofSha256.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !proof.batchManifestSha256.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage FastPQ proof metadata is invalid."
+            )
+        }
+        return proof
+    }
+
+    private static func verifySourceLineageFastpqProof(
+        _ proof: ToriiOfflineSourceLineageFastpqProof,
+        publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String,
+        publicInputsCommitmentHex: String
+    ) throws {
+        guard proof.parameter == sourceLineageFastpqParameter,
+              !proof.proofBytesBase64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !proof.proofSha256.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !proof.batchManifestSha256.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage FastPQ proof metadata is invalid."
+            )
+        }
+        guard let proofBytes = Data(base64Encoded: proof.proofBytesBase64),
+              sha256Hex(proofBytes) == proof.proofSha256 else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage FastPQ proof digest is invalid."
+            )
+        }
+        let requestJson = try sourceLineageFastpqProofRequestJson(
+            publicInputs: publicInputs,
+            witnessPayload: witnessPayload,
+            publicInputsCommitmentHex: publicInputsCommitmentHex
+        )
+        let artifactJson = try JSONEncoder().encode(proof)
+        guard try NoritoNativeBridge.shared.verifySourceLineageFastpqProof(
+            requestJson: requestJson,
+            artifactJson: artifactJson
+        ) == true else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage FastPQ verifier is unavailable."
+            )
+        }
+    }
+
+    private static func sourceLineageFastpqProofRequestJson(
+        publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String,
+        publicInputsCommitmentHex: String
+    ) throws -> Data {
+        try JSONEncoder().encode(SourceLineageFastpqProofRequest(
+            transferId: publicInputs.transferId,
+            sourceReceiptHash: publicInputs.sourceReceiptHash,
+            sourceNullifier: publicInputs.sourceNullifier,
+            publicInputsCommitmentHex: publicInputsCommitmentHex,
+            witnessPayload: witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
     }
 
     public static func sourceLineageNullifierHex(
@@ -2739,6 +2830,22 @@ public enum ToriiOfflineSettlementProofs {
             case circuitId = "circuit_id"
             case publicInputs = "public_inputs"
             case witnessPayloadHash = "witness_payload_hash"
+        }
+    }
+
+    private struct SourceLineageFastpqProofRequest: Encodable {
+        let transferId: String
+        let sourceReceiptHash: String
+        let sourceNullifier: String
+        let publicInputsCommitmentHex: String
+        let witnessPayload: String
+
+        private enum CodingKeys: String, CodingKey {
+            case transferId = "transfer_id"
+            case sourceReceiptHash = "source_receipt_hash"
+            case sourceNullifier = "source_nullifier"
+            case publicInputsCommitmentHex = "public_inputs_commitment_hex"
+            case witnessPayload = "witness_payload"
         }
     }
 

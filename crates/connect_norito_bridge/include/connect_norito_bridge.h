@@ -120,6 +120,18 @@ int32_t connect_norito_offline_balance_proof(
     uint8_t** out_proof_ptr,
     unsigned long* out_proof_len);
 
+int32_t connect_norito_source_lineage_fastpq_proof(
+    const uint8_t* request_ptr,
+    unsigned long request_len,
+    uint8_t** out_proof_ptr,
+    unsigned long* out_proof_len);
+
+int32_t connect_norito_source_lineage_fastpq_verify(
+    const uint8_t* request_ptr,
+    unsigned long request_len,
+    const uint8_t* artifact_ptr,
+    unsigned long artifact_len);
+
 // ---------------- Ciphertext frame ----------------
 int32_t connect_norito_encode_ciphertext_frame(
     const uint8_t* sid, uint8_t dir, uint64_t seq,
