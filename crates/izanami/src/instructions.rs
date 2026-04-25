@@ -292,7 +292,8 @@ pub fn prepare_state(
     workload_profile: WorkloadProfile,
     allow_contract_deploy_in_stable: bool,
 ) -> Result<PreparedChaos> {
-    let effective_accounts = account_count.max(3);
+    const MIN_WORKLOAD_USER_ACCOUNTS: usize = 64;
+    let effective_accounts = account_count.max(MIN_WORKLOAD_USER_ACCOUNTS);
     let base_domain =
         DomainId::try_new("chaosnet", "universal").map_err(|_| eyre!("invalid base domain"))?;
     let treasury_key = KeyPair::random();
@@ -954,6 +955,7 @@ pub(crate) enum RepeatableTriggerState {
 struct ChaosCounters {
     account: u64,
     uaid: u64,
+    transfer: u64,
     trigger: u64,
     role: u64,
     asset_definition: u64,
@@ -1284,11 +1286,14 @@ impl ChaosState {
     }
 
     fn plan_transfer_asset(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let sender = self
-            .users
-            .choose(rng)
-            .cloned()
-            .unwrap_or_else(|| self.treasury.clone());
+        let sender = if self.users.is_empty() {
+            self.treasury.clone()
+        } else {
+            let idx =
+                usize::try_from(self.counters.transfer).unwrap_or(usize::MAX) % self.users.len();
+            self.counters.transfer = self.counters.transfer.saturating_add(1);
+            self.users[idx].clone()
+        };
         let receiver = self.random_user_except(rng, &sender.id)?;
         let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
         let source_asset = AssetId::new(self.asset_numeric.clone(), sender.id.clone());

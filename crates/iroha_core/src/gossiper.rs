@@ -404,6 +404,10 @@ impl TransactionGossiper {
         self.gossip_deferred[index].extend(hashes);
     }
 
+    fn retry_public_broadcast_hashes(&mut self, hashes: Vec<HashOf<SignedTransaction>>) {
+        self.defer_gossip_hashes(hashes);
+    }
+
     fn advance_gossip_tick(&mut self) {
         self.gossip_tick = self.gossip_tick.wrapping_add(1);
     }
@@ -796,6 +800,9 @@ impl TransactionGossiper {
                 None,
             );
             self.remember_peer_recent_sends(&targets, &sent_hashes);
+            // Broadcast is best-effort during startup and under targeted ingress load. Keep
+            // pending transactions on the resend ring until consensus removes them from the queue.
+            self.retry_public_broadcast_hashes(sent_hashes);
         }
     }
 
@@ -3042,6 +3049,43 @@ mod tests {
         gossiper.release_deferred_gossip();
         let batch = queue.gossip_batch(1, &state.view());
         assert_eq!(batch.len(), 1);
+    }
+
+    #[test]
+    fn public_broadcast_retry_hashes_return_to_gossip_backlog() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+
+        let (_signed, accepted) = build_transaction("public-broadcast-retry");
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+        let first_batch = gossiper.queue.gossip_batch(1, &gossiper.state.view());
+        assert_eq!(first_batch.len(), 1);
+        let hash = first_batch[0].tx.as_ref().hash();
+        assert!(
+            gossiper
+                .queue
+                .gossip_batch(1, &gossiper.state.view())
+                .is_empty()
+        );
+
+        gossiper.retry_public_broadcast_hashes(vec![hash]);
+        gossiper.advance_gossip_tick();
+        gossiper.release_deferred_gossip();
+        assert!(
+            gossiper
+                .queue
+                .gossip_batch(1, &gossiper.state.view())
+                .is_empty(),
+            "retry should wait until the configured resend tick"
+        );
+
+        gossiper.advance_gossip_tick();
+        gossiper.release_deferred_gossip();
+        let retried_batch = gossiper.queue.gossip_batch(1, &gossiper.state.view());
+        assert_eq!(retried_batch.len(), 1);
     }
 
     #[test]
