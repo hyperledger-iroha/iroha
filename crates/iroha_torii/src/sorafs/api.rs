@@ -10224,9 +10224,23 @@ mod advert_tests {
         token_test_context_with_payload(b"stream token payload fixture".to_vec())
     }
 
+    #[cfg(feature = "telemetry")]
+    fn isolated_test_telemetry() -> crate::routing::MaybeTelemetry {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = iroha_core::telemetry::Telemetry::new(metrics, true);
+        crate::routing::MaybeTelemetry::from_profile(
+            Some(telemetry),
+            iroha_config::parameters::actual::TelemetryProfile::Full,
+        )
+    }
+
     fn token_test_context_with_payload(payload: Vec<u8>) -> TokenTestContext {
         let mut app = Arc::try_unwrap(mk_app_state_for_tests())
             .unwrap_or_else(|_| panic!("exclusive app state required"));
+        #[cfg(feature = "telemetry")]
+        {
+            app.telemetry = isolated_test_telemetry();
+        }
         let (node, storage_dir) = sorafs_node_with_temp_storage();
 
         let manifest = manifest_for_payload(0x42, &payload);

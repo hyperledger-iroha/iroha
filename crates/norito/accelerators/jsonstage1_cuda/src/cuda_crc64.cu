@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 #include <thread>
 
 enum {
@@ -166,8 +167,23 @@ static cudaError_t wait_until_cuda_ready(QueryFn query) {
     }
 }
 
-static cudaError_t wait_for_default_stream() {
-    return wait_until_cuda_ready([]() { return cudaStreamQuery(nullptr); });
+static cudaError_t wait_for_event(cudaEvent_t event) {
+    return wait_until_cuda_ready([event]() { return cudaEventQuery(event); });
+}
+
+template <typename T>
+static cudaError_t alloc_pinned(T** ptr, size_t count) {
+    if (ptr == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    *ptr = nullptr;
+    if (count == 0) {
+        return cudaSuccess;
+    }
+    if (count > SIZE_MAX / sizeof(T)) {
+        return cudaErrorInvalidValue;
+    }
+    return cudaHostAlloc(reinterpret_cast<void**>(ptr), count * sizeof(T), cudaHostAllocDefault);
 }
 
 static int finalize_tape_from_masks(const uint32_t* structural,
@@ -260,20 +276,31 @@ extern "C" int json_stage1_build_tape_cuda_impl(const uint8_t* input_ptr,
     uint32_t* d_structural = nullptr;
     uint32_t* d_quote = nullptr;
     uint32_t* d_backslash = nullptr;
+    uint8_t* h_input = nullptr;
     uint32_t* h_structural = nullptr;
     uint32_t* h_quote = nullptr;
     uint32_t* h_backslash = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t event = nullptr;
     int ret = RC_OK;
     bool free_device_buffers = true;
+    bool free_host_buffers = true;
+    bool destroy_stream_resources = true;
     cudaError_t wait_status = cudaSuccess;
+    dim3 block(256);
+    dim3 grid(1);
 
-    h_structural = static_cast<uint32_t*>(malloc(blocks * sizeof(uint32_t)));
-    h_quote = static_cast<uint32_t*>(malloc(blocks * sizeof(uint32_t)));
-    h_backslash = static_cast<uint32_t*>(malloc(blocks * sizeof(uint32_t)));
-    if (h_structural == nullptr || h_quote == nullptr || h_backslash == nullptr) {
+    if (alloc_pinned(&h_input, input_len) != cudaSuccess) {
         ret = RC_CUDA;
         goto cleanup;
     }
+    if (alloc_pinned(&h_structural, blocks) != cudaSuccess
+        || alloc_pinned(&h_quote, blocks) != cudaSuccess
+        || alloc_pinned(&h_backslash, blocks) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    memcpy(h_input, input_ptr, input_len);
 
     if (cudaMalloc(reinterpret_cast<void**>(&d_input), input_len) != cudaSuccess) {
         ret = RC_CUDA;
@@ -294,47 +321,64 @@ extern "C" int json_stage1_build_tape_cuda_impl(const uint8_t* input_ptr,
         ret = RC_CUDA;
         goto cleanup;
     }
-    if (cudaMemcpy(d_input, input_ptr, input_len, cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(d_input, h_input, input_len, cudaMemcpyHostToDevice, stream)
+        != cudaSuccess) {
         ret = RC_CUDA;
         goto cleanup;
     }
 
-    dim3 block(256);
-    dim3 grid(static_cast<unsigned int>((blocks + block.x - 1ULL) / block.x));
-    classify_json_kernel<<<grid, block>>>(d_input,
-                                          d_structural,
-                                          d_quote,
-                                          d_backslash,
-                                          static_cast<uint32_t>(input_len));
+    grid = dim3(static_cast<unsigned int>((blocks + block.x - 1ULL) / block.x));
+    classify_json_kernel<<<grid, block, 0, stream>>>(d_input,
+                                                     d_structural,
+                                                     d_quote,
+                                                     d_backslash,
+                                                     static_cast<uint32_t>(input_len));
     if (cudaGetLastError() != cudaSuccess) {
         ret = RC_CUDA;
         goto cleanup;
     }
-    wait_status = wait_for_default_stream();
+    if (cudaMemcpyAsync(h_structural,
+                        d_structural,
+                        blocks * sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(h_quote,
+                        d_quote,
+                        blocks * sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    if (cudaMemcpyAsync(h_backslash,
+                        d_backslash,
+                        blocks * sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    if (cudaEventRecord(event, stream) != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    wait_status = wait_for_event(event);
     if (wait_status != cudaSuccess) {
         ret = RC_CUDA;
         free_device_buffers = wait_status != cudaErrorLaunchTimeout;
-        goto cleanup;
-    }
-    if (cudaMemcpy(h_structural,
-                   d_structural,
-                   blocks * sizeof(uint32_t),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-        ret = RC_CUDA;
-        goto cleanup;
-    }
-    if (cudaMemcpy(h_quote,
-                   d_quote,
-                   blocks * sizeof(uint32_t),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-        ret = RC_CUDA;
-        goto cleanup;
-    }
-    if (cudaMemcpy(h_backslash,
-                   d_backslash,
-                   blocks * sizeof(uint32_t),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
-        ret = RC_CUDA;
+        free_host_buffers = wait_status != cudaErrorLaunchTimeout;
+        destroy_stream_resources = wait_status != cudaErrorLaunchTimeout;
         goto cleanup;
     }
 
@@ -348,6 +392,12 @@ extern "C" int json_stage1_build_tape_cuda_impl(const uint8_t* input_ptr,
                                    out_len);
 
 cleanup:
+    if (destroy_stream_resources && event != nullptr) {
+        cudaEventDestroy(event);
+    }
+    if (destroy_stream_resources && stream != nullptr) {
+        cudaStreamDestroy(stream);
+    }
     if (free_device_buffers && d_input) {
         cudaFree(d_input);
     }
@@ -360,9 +410,18 @@ cleanup:
     if (free_device_buffers && d_backslash) {
         cudaFree(d_backslash);
     }
-    free(h_structural);
-    free(h_quote);
-    free(h_backslash);
+    if (free_host_buffers && h_input) {
+        cudaFreeHost(h_input);
+    }
+    if (free_host_buffers && h_structural) {
+        cudaFreeHost(h_structural);
+    }
+    if (free_host_buffers && h_quote) {
+        cudaFreeHost(h_quote);
+    }
+    if (free_host_buffers && h_backslash) {
+        cudaFreeHost(h_backslash);
+    }
     return ret;
 }
 
@@ -383,17 +442,26 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
     }
 
     size_t chunk_count = (input_len + CRC64_CHUNK_SIZE - 1ULL) / CRC64_CHUNK_SIZE;
-    uint64_t* host_chunks = static_cast<uint64_t*>(
-        malloc(chunk_count * sizeof(uint64_t)));
-    if (host_chunks == nullptr) {
+    uint8_t* h_input = nullptr;
+    uint64_t* host_chunks = nullptr;
+    if (alloc_pinned(&h_input, input_len) != cudaSuccess) {
         return RC_CUDA;
     }
+    if (alloc_pinned(&host_chunks, chunk_count) != cudaSuccess) {
+        cudaFreeHost(h_input);
+        return RC_CUDA;
+    }
+    memcpy(h_input, input_ptr, input_len);
 
     uint8_t* d_input = nullptr;
     uint64_t* d_chunks = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaEvent_t event = nullptr;
     cudaError_t err;
     int ret = 0;
     bool free_device_buffers = true;
+    bool free_host_buffers = true;
+    bool destroy_stream_resources = true;
     dim3 block(256);
     dim3 grid(1);
     uint64_t crc = CRC64_INIT;
@@ -410,32 +478,49 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
         goto cleanup;
     }
 
-    err = cudaMemcpy(d_input, input_ptr, input_len, cudaMemcpyHostToDevice);
+    err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    err = cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    err = cudaMemcpyAsync(d_input, h_input, input_len, cudaMemcpyHostToDevice, stream);
     if (err != cudaSuccess) {
         ret = RC_CUDA;
         goto cleanup;
     }
 
     grid = dim3(static_cast<unsigned int>((chunk_count + block.x - 1) / block.x));
-    crc64_chunks_kernel<<<grid, block>>>(d_input, input_len, d_chunks);
+    crc64_chunks_kernel<<<grid, block, 0, stream>>>(d_input, input_len, d_chunks);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
         ret = RC_CUDA;
         goto cleanup;
     }
-    err = wait_for_default_stream();
+    err = cudaMemcpyAsync(host_chunks,
+                          d_chunks,
+                          chunk_count * sizeof(uint64_t),
+                          cudaMemcpyDeviceToHost,
+                          stream);
+    if (err != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    err = cudaEventRecord(event, stream);
+    if (err != cudaSuccess) {
+        ret = RC_CUDA;
+        goto cleanup;
+    }
+    err = wait_for_event(event);
     if (err != cudaSuccess) {
         ret = RC_CUDA;
         free_device_buffers = err != cudaErrorLaunchTimeout;
-        goto cleanup;
-    }
-
-    err = cudaMemcpy(host_chunks,
-                     d_chunks,
-                     chunk_count * sizeof(uint64_t),
-                     cudaMemcpyDeviceToHost);
-    if (err != cudaSuccess) {
-        ret = RC_CUDA;
+        free_host_buffers = err != cudaErrorLaunchTimeout;
+        destroy_stream_resources = err != cudaErrorLaunchTimeout;
         goto cleanup;
     }
 
@@ -449,12 +534,23 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
     *out_crc = crc ^ CRC64_XOR_OUT;
 
 cleanup:
+    if (destroy_stream_resources && event != nullptr) {
+        cudaEventDestroy(event);
+    }
+    if (destroy_stream_resources && stream != nullptr) {
+        cudaStreamDestroy(stream);
+    }
     if (free_device_buffers && d_input) {
         cudaFree(d_input);
     }
     if (free_device_buffers && d_chunks) {
         cudaFree(d_chunks);
     }
-    free(host_chunks);
+    if (free_host_buffers && h_input) {
+        cudaFreeHost(h_input);
+    }
+    if (free_host_buffers && host_chunks) {
+        cudaFreeHost(host_chunks);
+    }
     return ret;
 }

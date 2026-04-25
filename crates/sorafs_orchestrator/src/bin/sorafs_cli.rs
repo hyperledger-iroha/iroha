@@ -1845,7 +1845,7 @@ fn usage() -> String {
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--gas-asset-id=ASSET_ID] [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
@@ -4509,6 +4509,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut authority_network_prefix: Option<u16> = None;
     let mut private_key_inline: Option<String> = None;
     let mut private_key_path: Option<PathBuf> = None;
+    let mut gas_asset_id: Option<String> = None;
     let mut alias_namespace: Option<String> = None;
     let mut alias_name: Option<String> = None;
     let mut alias_proof_path: Option<PathBuf> = None;
@@ -4563,6 +4564,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
                 }
                 private_key_path = Some(PathBuf::from(value));
             }
+            "--gas-asset-id" => gas_asset_id = Some(value.to_string()),
             "--alias-namespace" => alias_namespace = Some(value.to_string()),
             "--alias-name" => alias_name = Some(value.to_string()),
             "--alias-proof" => alias_proof_path = Some(PathBuf::from(value)),
@@ -4720,24 +4722,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
 
     let body_bytes =
         to_vec(&payload).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
-
-    let response = client
-        .post(torii_endpoint.as_str())
-        .header(CONTENT_TYPE, "application/json")
-        .body(body_bytes)
-        .send()
-        .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
-
-    let status = response.status();
-    let api_version_hint = response
-        .headers()
-        .get("x-iroha-api-version")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let response_bytes = response
-        .bytes()
-        .map_err(|err| format!("failed to read Torii response: {err}"))?;
-    let response_vec = response_bytes.to_vec();
     let requested_endpoint = torii_endpoint.as_str().to_string();
     let (
         response_status,
@@ -4748,52 +4732,104 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         fallback_reason,
         chain_id_hint,
         failure_message,
-    ) = if status.is_success() {
-        (
-            status,
-            response_vec.clone(),
-            decode_response_value_or_text(&response_vec),
-            requested_endpoint.clone(),
-            "pin_register_http",
-            None,
-            None,
-            None,
-        )
-    } else if should_fallback_manifest_submit_status(status) {
+    ) = if gas_asset_id
+        .as_ref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
         let fallback = submit_manifest_via_transaction_endpoint(
             &ManifestSubmitRequest {
                 client: &client,
                 torii_base_url: &torii_base_url,
                 authority: &authority,
                 private_key: &private_key,
+                gas_asset_id: gas_asset_id.as_deref(),
                 alias_inputs: alias_inputs.as_ref(),
-                api_version_hint: api_version_hint.as_deref(),
+                api_version_hint: None,
             },
             &manifest,
             chunk_digest,
             submitted_epoch,
             successor_digest,
         )
-        .map_err(|err| {
-            format!(
-                "Torii pin-register endpoint returned {status}; generic /transaction fallback failed: {err}"
-            )
-        })?;
+        .map_err(|err| format!("direct /transaction manifest submit failed: {err}"))?;
         (
             fallback.status,
             fallback.response_bytes,
             fallback.response_value,
             fallback.endpoint,
-            "transaction_fallback",
-            Some(format!("pin register route returned {status}")),
+            "transaction_direct",
+            Some("gas_asset_id requested; bypassed pin-register route".to_string()),
             Some(fallback.chain_id),
             fallback.failure_message,
         )
     } else {
-        let body_text = String::from_utf8_lossy(&response_vec);
-        return Err(format!(
-            "Torii returned {status} when submitting manifest: {body_text}"
-        ));
+        let response = client
+            .post(torii_endpoint.as_str())
+            .header(CONTENT_TYPE, "application/json")
+            .body(body_bytes)
+            .send()
+            .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
+
+        let status = response.status();
+        let api_version_hint = response
+            .headers()
+            .get("x-iroha-api-version")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let response_bytes = response
+            .bytes()
+            .map_err(|err| format!("failed to read Torii response: {err}"))?;
+        let response_vec = response_bytes.to_vec();
+
+        if status.is_success() {
+            (
+                status,
+                response_vec.clone(),
+                decode_response_value_or_text(&response_vec),
+                requested_endpoint.clone(),
+                "pin_register_http",
+                None,
+                None,
+                None,
+            )
+        } else if should_fallback_manifest_submit_status(status) {
+            let fallback = submit_manifest_via_transaction_endpoint(
+                &ManifestSubmitRequest {
+                    client: &client,
+                    torii_base_url: &torii_base_url,
+                    authority: &authority,
+                    private_key: &private_key,
+                    gas_asset_id: gas_asset_id.as_deref(),
+                    alias_inputs: alias_inputs.as_ref(),
+                    api_version_hint: api_version_hint.as_deref(),
+                },
+                &manifest,
+                chunk_digest,
+                submitted_epoch,
+                successor_digest,
+            )
+            .map_err(|err| {
+                format!(
+                    "Torii pin-register endpoint returned {status}; generic /transaction fallback failed: {err}"
+                )
+            })?;
+            (
+                fallback.status,
+                fallback.response_bytes,
+                fallback.response_value,
+                fallback.endpoint,
+                "transaction_fallback",
+                Some(format!("pin register route returned {status}")),
+                Some(fallback.chain_id),
+                fallback.failure_message,
+            )
+        } else {
+            let body_text = String::from_utf8_lossy(&response_vec);
+            return Err(format!(
+                "Torii returned {status} when submitting manifest: {body_text}"
+            ));
+        }
     };
 
     if let Some(path) = response_out {
@@ -4819,6 +4855,13 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     summary.insert("authority".into(), Value::from(authority_literal));
     summary.insert("submission_mode".into(), Value::from(submission_mode));
+    if let Some(asset_id) = gas_asset_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        summary.insert("gas_asset_id".into(), Value::from(asset_id));
+    }
     summary.insert(
         "manifest_path".into(),
         Value::from(manifest_path.display().to_string()),
@@ -5254,6 +5297,7 @@ struct ManifestSubmitRequest<'a> {
     torii_base_url: &'a Url,
     authority: &'a AccountId,
     private_key: &'a PrivateKey,
+    gas_asset_id: Option<&'a str>,
     alias_inputs: Option<&'a AliasInputs>,
     api_version_hint: Option<&'a str>,
 }
@@ -5267,7 +5311,8 @@ fn submit_manifest_via_transaction_endpoint(
 ) -> Result<ManifestSubmitFallback, String> {
     use iroha_data_model::{
         ChainId,
-        prelude::{InstructionBox, TransactionBuilder},
+        metadata::Metadata,
+        prelude::{InstructionBox, Json, TransactionBuilder},
         sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     };
 
@@ -5292,9 +5337,20 @@ fn submit_manifest_via_transaction_endpoint(
         alias,
         successor_of,
     };
+    let mut tx_metadata = Metadata::default();
+    if let Some(asset_id) = request
+        .gas_asset_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        tx_metadata.insert(gas_asset_key, Json::new(asset_id.to_owned()));
+    }
     let transaction =
         TransactionBuilder::new(ChainId::from(chain_id.clone()), request.authority.clone())
             .with_instructions([InstructionBox::from(instruction)])
+            .with_metadata(tx_metadata)
             .sign(request.private_key);
     let tx_hash_hex = hex_encode(transaction.hash().as_ref());
     let tx_endpoint = request
