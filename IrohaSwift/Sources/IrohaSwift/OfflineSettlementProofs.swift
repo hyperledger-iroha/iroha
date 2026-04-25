@@ -217,15 +217,29 @@ public struct ToriiOfflineStarkProofV1: Codable, Sendable, Equatable {
     public let version: UInt16
     public let commits: ToriiOfflineStarkCommitmentsV1
     public let queries: [[ToriiOfflineFoldDecommitV1]]
+    public let compValues: [ToriiOfflineStarkCompositionValueV1]?
+    public let air: ToriiOfflineStarkAirProofV1?
 
     public init(
         version: UInt16,
         commits: ToriiOfflineStarkCommitmentsV1,
-        queries: [[ToriiOfflineFoldDecommitV1]]
+        queries: [[ToriiOfflineFoldDecommitV1]],
+        compValues: [ToriiOfflineStarkCompositionValueV1]? = nil,
+        air: ToriiOfflineStarkAirProofV1? = nil
     ) {
         self.version = version
         self.commits = commits
         self.queries = queries
+        self.compValues = compValues
+        self.air = air
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case commits
+        case queries
+        case compValues = "comp_values"
+        case air
     }
 }
 
@@ -295,6 +309,152 @@ public struct ToriiOfflineFoldDecommitV1: Codable, Sendable, Equatable {
         case pathY1 = "path_y1"
         case z
         case pathZ = "path_z"
+    }
+}
+
+public struct ToriiOfflineStarkCompositionTermV1: Codable, Sendable, Equatable {
+    public let wireIndex: UInt32
+    public let value: UInt64
+    public let coeff: UInt64
+
+    public init(wireIndex: UInt32, value: UInt64, coeff: UInt64) {
+        self.wireIndex = wireIndex
+        self.value = value
+        self.coeff = coeff
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wireIndex = "wire_index"
+        case value
+        case coeff
+    }
+}
+
+public struct ToriiOfflineStarkCompositionValueV1: Codable, Sendable, Equatable {
+    public let leaf: UInt64
+    public let constant: UInt64
+    public let zCoeff: UInt64
+    public let auxTerms: [ToriiOfflineStarkCompositionTermV1]
+    public let path: ToriiOfflineMerklePath
+
+    public init(
+        leaf: UInt64,
+        constant: UInt64,
+        zCoeff: UInt64,
+        auxTerms: [ToriiOfflineStarkCompositionTermV1],
+        path: ToriiOfflineMerklePath
+    ) {
+        self.leaf = leaf
+        self.constant = constant
+        self.zCoeff = zCoeff
+        self.auxTerms = auxTerms
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case leaf
+        case constant
+        case zCoeff = "z_coeff"
+        case auxTerms = "aux_terms"
+        case path
+    }
+}
+
+public struct ToriiOfflineStarkAirOpeningV1: Codable, Sendable, Equatable {
+    public let index: UInt32
+    public let row: [UInt64]
+    public let nextRow: [UInt64]
+    public let rowPath: ToriiOfflineMerklePath
+    public let nextRowPath: ToriiOfflineMerklePath
+    public let compositionValue: UInt64
+    public let compositionPath: ToriiOfflineMerklePath
+
+    public init(
+        index: UInt32,
+        row: [UInt64],
+        nextRow: [UInt64],
+        rowPath: ToriiOfflineMerklePath,
+        nextRowPath: ToriiOfflineMerklePath,
+        compositionValue: UInt64,
+        compositionPath: ToriiOfflineMerklePath
+    ) {
+        self.index = index
+        self.row = row
+        self.nextRow = nextRow
+        self.rowPath = rowPath
+        self.nextRowPath = nextRowPath
+        self.compositionValue = compositionValue
+        self.compositionPath = compositionPath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case row
+        case nextRow = "next_row"
+        case rowPath = "row_path"
+        case nextRowPath = "next_row_path"
+        case compositionValue = "composition_value"
+        case compositionPath = "composition_path"
+    }
+}
+
+public struct ToriiOfflineStarkAirProofV1: Codable, Sendable, Equatable {
+    public let version: UInt16
+    public let circuitId: String
+    public let publicDigest: String
+    public let traceRoot: String
+    public let compositionRoot: String
+    public let traceWidth: UInt16
+    public let openings: [ToriiOfflineStarkAirOpeningV1]
+
+    public init(
+        version: UInt16,
+        circuitId: String,
+        publicDigest: String,
+        traceRoot: String,
+        compositionRoot: String,
+        traceWidth: UInt16,
+        openings: [ToriiOfflineStarkAirOpeningV1]
+    ) throws {
+        self.version = version
+        self.circuitId = OfflineSettlementFieldCanonicalizer.trimmed(circuitId)
+        self.publicDigest = try OfflineSettlementFieldCanonicalizer.plainHex(
+            publicDigest,
+            label: "STARK AIR public digest"
+        )
+        self.traceRoot = try OfflineSettlementFieldCanonicalizer.plainHex(
+            traceRoot,
+            label: "STARK AIR trace root"
+        )
+        self.compositionRoot = try OfflineSettlementFieldCanonicalizer.plainHex(
+            compositionRoot,
+            label: "STARK AIR composition root"
+        )
+        self.traceWidth = traceWidth
+        self.openings = openings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            version: container.decode(UInt16.self, forKey: .version),
+            circuitId: container.decode(String.self, forKey: .circuitId),
+            publicDigest: container.decode(String.self, forKey: .publicDigest),
+            traceRoot: container.decode(String.self, forKey: .traceRoot),
+            compositionRoot: container.decode(String.self, forKey: .compositionRoot),
+            traceWidth: container.decode(UInt16.self, forKey: .traceWidth),
+            openings: container.decode([ToriiOfflineStarkAirOpeningV1].self, forKey: .openings)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case circuitId = "circuit_id"
+        case publicDigest = "public_digest"
+        case traceRoot = "trace_root"
+        case compositionRoot = "composition_root"
+        case traceWidth = "trace_width"
+        case openings
     }
 }
 
@@ -389,7 +549,9 @@ public enum ToriiOfflineSettlementProofs {
     public static let settlementBackend = "stark/fri/sha256-goldilocks"
     public static let settlementCircuitId = "offline-bearer-settlement-v1"
     public static let redeemRequestCircuitId = "offline-bearer-redeem-request-v1"
+    public static let sourceLineageCircuitId = "offline-source-lineage-v1"
 
+    private static let sourceLineageTransferPayloadPrefix = "wallet-offline-transfer:"
     private static let starkVersion: UInt16 = 1
     private static let starkHashSHA256V1: UInt8 = 1
     private static let starkDomainLog2: UInt8 = 4
@@ -397,6 +559,9 @@ public enum ToriiOfflineSettlementProofs {
     private static let starkQueryCount: UInt16 = 8
     private static let starkBindingConstant: UInt64 = 23
     private static let starkBindingZCoefficient: UInt64 = 29
+    private static let sourceLineageMaxRecursionDepth = 8
+    private static let sourceLineageMaxWitnessBytes = 256 * 1024
+    private static let sourceLineageMaxAncestryReceipts = 256
     private static let goldilocksModulus: UInt64 = 18_446_744_069_414_584_321
     private static let zeroFieldElement = Data(repeating: 0, count: 8)
 
@@ -480,6 +645,140 @@ public enum ToriiOfflineSettlementProofs {
             expectedDomainTag: expectedCommitment,
             transcriptLabel: redeemRequestCircuitId,
             context: "redeem proof"
+        )
+    }
+
+    public static func buildSourceLineageEnvelope(
+        publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String
+    ) throws -> ToriiOfflineSourceLineageEnvelope {
+        let normalizedWitness = witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedWitness.utf8.count <= sourceLineageMaxWitnessBytes else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof witness exceeds supported limit.")
+        }
+        let commitment = try sourceLineagePublicInputsCommitmentHex(
+            publicInputs,
+            witnessPayload: normalizedWitness
+        )
+        return try ToriiOfflineSourceLineageEnvelope(
+            publicInputs: publicInputs,
+            witnessPayload: normalizedWitness,
+            proof: ToriiOfflineTransparentZkProof(
+                backend: settlementBackend,
+                circuitId: sourceLineageCircuitId,
+                recursionDepth: 1,
+                publicInputsHex: commitment,
+                envelope: try synthesizeEnvelope(
+                    domainTag: commitment,
+                    transcriptLabel: sourceLineageCircuitId,
+                    airCircuitId: sourceLineageCircuitId,
+                    airPublicDigest: Data(hexString: commitment),
+                    includeComposition: false
+                )
+            )
+        )
+    }
+
+    public static func verifySourceLineageEnvelope(
+        _ envelope: ToriiOfflineSourceLineageEnvelope,
+        expectedTransferId: String,
+        recipientLineageId: String,
+        assetDefinitionId: String,
+        amount: String,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String> = []
+    ) throws {
+        var sourceLineageNullifiers = Set<String>()
+        try verifySourceLineageEnvelopeWithContext(
+            envelope,
+            expectedTransferId: expectedTransferId,
+            recipientLineageId: recipientLineageId,
+            assetDefinitionId: assetDefinitionId,
+            amount: amount,
+            issuerPublicKeyBase64: issuerPublicKeyBase64,
+            revokedVerdictIds: revokedVerdictIds,
+            sourceLineageNullifiers: &sourceLineageNullifiers,
+            sourceDepth: 0
+        )
+    }
+
+    private static func verifySourceLineageEnvelopeWithContext(
+        _ envelope: ToriiOfflineSourceLineageEnvelope,
+        expectedTransferId: String,
+        recipientLineageId: String,
+        assetDefinitionId: String,
+        amount: String,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String>,
+        sourceLineageNullifiers: inout Set<String>,
+        sourceDepth: Int
+    ) throws {
+        let witnessPayload = envelope.witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sourceDepth < sourceLineageMaxRecursionDepth,
+              witnessPayload.utf8.count <= sourceLineageMaxWitnessBytes,
+              sourceLineageNullifiers.insert(envelope.publicInputs.sourceNullifier).inserted else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof witness exceeds supported limit.")
+        }
+        try validateCanonicalAssetDefinitionIdLiteral(
+            assetDefinitionId,
+            fieldName: "source_lineage_proof.expected_asset_definition_id"
+        )
+        try validateCanonicalAssetDefinitionIdLiteral(
+            envelope.publicInputs.assetDefinitionId,
+            fieldName: "source_lineage_proof.public_inputs.asset_definition_id"
+        )
+        let sourcePayload = try decodeSourceLineageWitnessPayload(witnessPayload)
+        guard envelope.version == 1,
+              envelope.circuitId == sourceLineageCircuitId,
+              !witnessPayload.isEmpty,
+              envelope.publicInputs.transferId == expectedTransferId,
+              envelope.publicInputs.recipientLineageId == recipientLineageId,
+              envelope.publicInputs.assetDefinitionId == assetDefinitionId,
+              try ToriiOfflineCashCodec.compareAmounts(envelope.publicInputs.amount, amount) == .orderedSame,
+              envelope.publicInputs.deviceProofCounter > 0 else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof does not match the receipt.")
+        }
+        try validateSourceLineageWitnessBindings(
+            sourcePayload,
+            publicInputs: envelope.publicInputs,
+            expectedTransferId: expectedTransferId,
+            recipientLineageId: recipientLineageId,
+            assetDefinitionId: assetDefinitionId,
+            amount: amount,
+            issuerPublicKeyBase64: issuerPublicKeyBase64,
+            revokedVerdictIds: revokedVerdictIds,
+            sourceLineageNullifiers: &sourceLineageNullifiers,
+            sourceDepth: sourceDepth + 1
+        )
+        let expectedNullifier = try sourceLineageNullifierHex(envelope.publicInputs)
+        guard envelope.publicInputs.sourceNullifier == expectedNullifier else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof nullifier is invalid.")
+        }
+        let commitment = try sourceLineagePublicInputsCommitmentHex(
+            envelope.publicInputs,
+            witnessPayload: witnessPayload
+        )
+        let normalizedActual = try normalizeProof(envelope.proof)
+        guard normalizedActual.backend == settlementBackend,
+              normalizedActual.circuitId == sourceLineageCircuitId,
+              normalizedActual.recursionDepth == 1,
+              normalizedActual.publicInputsHex == commitment,
+              normalizedActual.envelope.params.domainTag == commitment else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof is invalid.")
+        }
+        guard let air = normalizedActual.envelope.proof.air,
+              air.circuitId == sourceLineageCircuitId,
+              air.publicDigest == commitment else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof AIR binding is invalid.")
+        }
+        try validateTransparentEnvelope(
+            normalizedActual.envelope,
+            expectedDomainTag: commitment,
+            transcriptLabel: sourceLineageCircuitId,
+            expectedAirCircuitId: sourceLineageCircuitId,
+            expectedAirPublicDigest: commitment,
+            includeComposition: false,
+            context: "source lineage proof"
         )
     }
 
@@ -674,9 +973,621 @@ public enum ToriiOfflineSettlementProofs {
         )))
     }
 
+    public static func sourceLineagePublicInputsCommitmentHex(
+        _ publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String
+    ) throws -> String {
+        let witnessPayloadHash = sha256Hex(Data(witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines).utf8))
+        return try sha256Hex(canonicalJSONData(SourceLineageProofCommitmentPayload(
+            circuitId: sourceLineageCircuitId,
+            publicInputs: publicInputs,
+            witnessPayloadHash: witnessPayloadHash
+        )))
+    }
+
+    public static func sourceLineageNullifierHex(
+        _ publicInputs: ToriiOfflineSourceLineagePublicInputs
+    ) throws -> String {
+        try sha256Hex(canonicalJSONData(SourceLineageNullifierPayload(
+            circuitId: sourceLineageCircuitId,
+            transferId: publicInputs.transferId,
+            sourceReceiptHash: publicInputs.sourceReceiptHash,
+            senderLineageId: publicInputs.senderLineageId,
+            recipientLineageId: publicInputs.recipientLineageId,
+            assetDefinitionId: publicInputs.assetDefinitionId,
+            amount: try ToriiOfflineCashCodec.canonicalAmountString(publicInputs.amount),
+            sourceLocalRevision: publicInputs.sourceLocalRevision
+        )))
+    }
+
+    private static func decodeSourceLineageWitnessPayload(
+        _ rawPayload: String
+    ) throws -> SourceLineageWitnessPayload {
+        let trimmed = rawPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+        let encoded: String
+        if trimmed.hasPrefix(sourceLineageTransferPayloadPrefix) {
+            encoded = String(trimmed.dropFirst(sourceLineageTransferPayloadPrefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            encoded = trimmed
+        }
+
+        if let decoded = try? decodeBase64URL(encoded),
+           let payload = try? JSONDecoder().decode(SourceLineageWitnessPayload.self, from: decoded) {
+            return payload
+        }
+
+        do {
+            return try JSONDecoder().decode(
+                SourceLineageWitnessPayload.self,
+                from: Data(encoded.utf8)
+            )
+        } catch {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage proof witness payload is invalid."
+            )
+        }
+    }
+
+    private static func validateSourceLineageWitnessBindings(
+        _ sourcePayload: SourceLineageWitnessPayload,
+        publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        expectedTransferId: String,
+        recipientLineageId: String,
+        assetDefinitionId: String,
+        amount: String,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String>,
+        sourceLineageNullifiers: inout Set<String>,
+        sourceDepth: Int
+    ) throws {
+        let receipt = sourcePayload.receipt
+        let sourceReceiptHash = try sha256Hex(canonicalJSONData(receipt))
+        try validateSourceLineageWitnessPayload(
+            sourcePayload,
+            issuerPublicKeyBase64: issuerPublicKeyBase64,
+            revokedVerdictIds: revokedVerdictIds,
+            sourceLineageNullifiers: &sourceLineageNullifiers,
+            sourceDepth: sourceDepth
+        )
+        guard sourcePayload.version == 1,
+              sourcePayload.anchor.lineageId == receipt.lineageId,
+              sourcePayload.anchor.accountId == receipt.accountId,
+              sourcePayload.anchor.deviceId == receipt.deviceId,
+              sourcePayload.anchor.offlinePublicKey == receipt.offlinePublicKey,
+              receipt.direction == ToriiOfflineTransferDirection.outgoing.rawValue,
+              receipt.transferId == expectedTransferId,
+              receipt.counterpartyLineageId == recipientLineageId,
+              try ToriiOfflineCashCodec.compareAmounts(receipt.amount, amount) == .orderedSame,
+              publicInputs.transferId == receipt.transferId,
+              publicInputs.sourceReceiptHash == sourceReceiptHash,
+              publicInputs.senderLineageId == receipt.lineageId,
+              publicInputs.recipientLineageId == receipt.counterpartyLineageId,
+              publicInputs.assetDefinitionId == assetDefinitionId,
+              publicInputs.assetDefinitionId == sourcePayload.anchor.assetDefinitionId,
+              publicInputs.sourcePreStateHash == receipt.preStateHash,
+              publicInputs.sourcePostStateHash == receipt.postStateHash,
+              publicInputs.sourceLocalRevision == receipt.localRevision,
+              publicInputs.deviceProofKeyId == receipt.attestation.keyId,
+              publicInputs.deviceProofCounter == receipt.attestation.counter else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage proof does not match the receipt."
+            )
+        }
+
+        do {
+            try ToriiOfflineCashCodec.verifyReceiptSignature(try receipt.cashReceipt())
+        } catch {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage proof witness signature is invalid."
+            )
+        }
+    }
+
+    private static func validateSourceLineageWitnessPayload(
+        _ sourcePayload: SourceLineageWitnessPayload,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String>,
+        sourceLineageNullifiers: inout Set<String>,
+        sourceDepth: Int
+    ) throws {
+        guard sourcePayload.ancestryReceipts.count <= sourceLineageMaxAncestryReceipts else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage proof witness ancestry exceeds supported limit."
+            )
+        }
+        try validateCanonicalLineageStateIdentifiers(
+            sourcePayload.anchor,
+            fieldName: "source_payload.anchor"
+        )
+        try ToriiOfflineCashCodec.verifyIssuerSignature(
+            authorization: sourcePayload.anchor.authorization,
+            issuerPublicKeyBase64: issuerPublicKeyBase64
+        )
+        try ToriiOfflineCashCodec.verifyIssuerSignature(
+            lineageState: sourcePayload.anchor,
+            issuerPublicKeyBase64: issuerPublicKeyBase64
+        )
+
+        var currentBalance = sourcePayload.anchor.balance
+        var currentParked = try minimumRequiredLockedBalance(
+            totalBalance: currentBalance,
+            authorization: sourcePayload.anchor.authorization,
+            nowMs: sourcePayload.ancestryReceipts.first?.createdAtMs
+                ?? sourcePayload.receipt.createdAtMs
+        )
+        var currentHash = sourcePayload.anchor.serverStateHash
+        var currentRevision = sourcePayload.anchor.pendingLocalRevision
+        var counterBook: [String: UInt64] = [:]
+        var seenSenderStates = Set<String>()
+
+        for receipt in sourcePayload.ancestryReceipts.sorted(by: { $0.localRevision < $1.localRevision }) {
+            try validateCanonicalTransferReceiptIdentifiers(
+                receipt,
+                fieldName: "source_payload.ancestry_receipts"
+            )
+            try validateSourceLineageReceipt(
+                receipt,
+                expectedLineageId: sourcePayload.anchor.lineageId,
+                expectedOfflinePublicKey: sourcePayload.anchor.offlinePublicKey,
+                expectedAssetDefinitionId: sourcePayload.anchor.assetDefinitionId,
+                currentBalance: &currentBalance,
+                currentParked: &currentParked,
+                currentHash: &currentHash,
+                currentRevision: &currentRevision,
+                counterBook: &counterBook,
+                seenSenderStates: &seenSenderStates,
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
+                revokedVerdictIds: revokedVerdictIds,
+                sourceLineageNullifiers: &sourceLineageNullifiers,
+                sourceDepth: sourceDepth,
+                duplicateMessage: "duplicate sender state in ancestry receipts"
+            )
+        }
+
+        try validateCanonicalTransferReceiptIdentifiers(
+            sourcePayload.receipt,
+            fieldName: "source_payload.receipt"
+        )
+        try validateSourceLineageReceipt(
+            sourcePayload.receipt,
+            expectedLineageId: sourcePayload.anchor.lineageId,
+            expectedOfflinePublicKey: sourcePayload.anchor.offlinePublicKey,
+            expectedAssetDefinitionId: sourcePayload.anchor.assetDefinitionId,
+            currentBalance: &currentBalance,
+            currentParked: &currentParked,
+            currentHash: &currentHash,
+            currentRevision: &currentRevision,
+            counterBook: &counterBook,
+            seenSenderStates: &seenSenderStates,
+            issuerPublicKeyBase64: issuerPublicKeyBase64,
+            revokedVerdictIds: revokedVerdictIds,
+            sourceLineageNullifiers: &sourceLineageNullifiers,
+            sourceDepth: sourceDepth,
+            duplicateMessage: "duplicate sender state in outgoing payload"
+        )
+    }
+
+    private static func validateSourceLineageReceipt(
+        _ receipt: SourceLineageWitnessReceipt,
+        expectedLineageId: String,
+        expectedOfflinePublicKey: String,
+        expectedAssetDefinitionId: String,
+        currentBalance: inout String,
+        currentParked: inout String,
+        currentHash: inout String,
+        currentRevision: inout UInt64,
+        counterBook: inout [String: UInt64],
+        seenSenderStates: inout Set<String>,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String>,
+        sourceLineageNullifiers: inout Set<String>,
+        sourceDepth: Int,
+        duplicateMessage: String
+    ) throws {
+        let stateKey = "\(receipt.lineageId):\(receipt.localRevision)"
+        guard seenSenderStates.insert(stateKey).inserted else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(duplicateMessage)
+        }
+        try ToriiOfflineCashCodec.verifyReceiptSignature(try receipt.cashReceipt())
+        try validateAttestationHash(receipt)
+        try validateCounter(receipt.attestation, counterBook: &counterBook)
+        currentBalance = try validateLocalContinuity(
+            receipt,
+            expectedLineageId: expectedLineageId,
+            expectedOfflinePublicKey: expectedOfflinePublicKey,
+            expectedAssetDefinitionId: expectedAssetDefinitionId,
+            currentBalance: currentBalance,
+            currentParked: currentParked,
+            currentHash: currentHash,
+            currentRevision: currentRevision,
+            issuerPublicKeyBase64: issuerPublicKeyBase64,
+            revokedVerdictIds: revokedVerdictIds,
+            sourceLineageNullifiers: &sourceLineageNullifiers,
+            sourceDepth: sourceDepth
+        )
+        currentParked = receipt.postLockedBalance
+        currentHash = receipt.postStateHash
+        currentRevision = receipt.localRevision
+    }
+
+    private static func validateLocalContinuity(
+        _ receipt: SourceLineageWitnessReceipt,
+        expectedLineageId: String,
+        expectedOfflinePublicKey: String,
+        expectedAssetDefinitionId: String,
+        currentBalance: String,
+        currentParked: String,
+        currentHash: String,
+        currentRevision: UInt64,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String>,
+        sourceLineageNullifiers: inout Set<String>,
+        sourceDepth: Int
+    ) throws -> String {
+        guard receipt.lineageId == expectedLineageId,
+              receipt.offlinePublicKey == expectedOfflinePublicKey,
+              receipt.localRevision == currentRevision + 1,
+              receipt.preBalance == currentBalance,
+              receipt.preLockedBalance == currentParked,
+              receipt.preStateHash == currentHash,
+              receipt.sourcePayload == nil else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline cash continuity proof is invalid."
+            )
+        }
+
+        let expectedPostBalance: String
+        switch receipt.direction {
+        case ToriiOfflineTransferDirection.outgoing.rawValue:
+            try validateReceiptAuthorization(
+                receipt,
+                requiresActiveAuthorization: true,
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
+                revokedVerdictIds: revokedVerdictIds
+            )
+            let spendable = try ToriiOfflineCashCodec.subtractAmounts(currentBalance, currentParked)
+            guard try ToriiOfflineCashCodec.compareAmounts(receipt.amount, spendable) != .orderedDescending else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Offline outgoing receipt exceeds sender spendable balance."
+                )
+            }
+            expectedPostBalance = try ToriiOfflineCashCodec.subtractAmounts(currentBalance, receipt.amount)
+        case ToriiOfflineTransferDirection.incoming.rawValue:
+            try validateReceiptAuthorization(
+                receipt,
+                requiresActiveAuthorization: false,
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
+                revokedVerdictIds: revokedVerdictIds
+            )
+            guard let sourceLineageProof = receipt.sourceLineageProof else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Incoming receipt is missing source lineage proof."
+                )
+            }
+            try verifySourceLineageEnvelopeWithContext(
+                sourceLineageProof,
+                expectedTransferId: receipt.transferId,
+                recipientLineageId: receipt.lineageId,
+                assetDefinitionId: expectedAssetDefinitionId,
+                amount: receipt.amount,
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
+                revokedVerdictIds: revokedVerdictIds,
+                sourceLineageNullifiers: &sourceLineageNullifiers,
+                sourceDepth: sourceDepth
+            )
+            expectedPostBalance = try ToriiOfflineCashCodec.addAmounts(currentBalance, receipt.amount)
+        default:
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline receipt direction must be incoming or outgoing."
+            )
+        }
+
+        try validateParkedContinuity(receipt, expectedPostBalance: expectedPostBalance)
+        guard let direction = ToriiOfflineTransferDirection(rawValue: receipt.direction) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline receipt direction must be incoming or outgoing."
+            )
+        }
+        let expectedPostHash = try ToriiOfflineCashCodec.nextLocalStateHash(
+            lineageId: receipt.lineageId,
+            previousStateHash: currentHash,
+            transferId: receipt.transferId,
+            direction: direction,
+            counterpartyLineageId: receipt.counterpartyLineageId,
+            amount: receipt.amount,
+            localRevision: receipt.localRevision,
+            postBalance: expectedPostBalance,
+            postLockedBalance: receipt.postLockedBalance
+        )
+        guard receipt.postBalance == expectedPostBalance,
+              receipt.postStateHash == expectedPostHash else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline cash continuity proof is invalid."
+            )
+        }
+        return expectedPostBalance
+    }
+
+    private static func validateReceiptAuthorization(
+        _ receipt: SourceLineageWitnessReceipt,
+        requiresActiveAuthorization: Bool,
+        issuerPublicKeyBase64: String,
+        revokedVerdictIds: Set<String>
+    ) throws {
+        guard let authorization = receipt.authorization else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer receipt is missing an authorization snapshot."
+            )
+        }
+        try ToriiOfflineCashCodec.verifyIssuerSignature(
+            authorization: authorization.cashAuthorization(),
+            issuerPublicKeyBase64: issuerPublicKeyBase64
+        )
+        guard authorization.lineageId == receipt.lineageId,
+              authorization.accountId == receipt.accountId,
+              authorization.deviceId == receipt.deviceId,
+              authorization.offlinePublicKey == receipt.offlinePublicKey,
+              authorization.appAttestKeyId == receipt.attestation.keyId else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer authorization does not match the sender offline cash lineage."
+            )
+        }
+        let revoked = Set(revokedVerdictIds.map { $0.lowercased() })
+        guard !revoked.contains(authorization.verdictId.lowercased()) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer authorization has been revoked."
+            )
+        }
+        guard !requiresActiveAuthorization ||
+                (receipt.createdAtMs >= authorization.issuedAtMs &&
+                 receipt.createdAtMs <= authorization.expiresAtMs) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer authorization is expired."
+            )
+        }
+        if requiresActiveAuthorization,
+           try ToriiOfflineCashCodec.compareAmounts(
+            receipt.amount,
+            authorization.maxTxValue
+           ) == .orderedDescending {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer exceeds the sender authorization policy."
+            )
+        }
+    }
+
+    private static func validateAttestationHash(_ receipt: SourceLineageWitnessReceipt) throws {
+        let operation: String
+        let transferPayload: Data
+        switch receipt.direction {
+        case ToriiOfflineTransferDirection.incoming.rawValue:
+            operation = "receive"
+            transferPayload = try canonicalJSONData(SourceLineageAttestationReceivePayload(
+                lineageId: receipt.lineageId,
+                transferId: receipt.transferId,
+                amount: receipt.amount,
+                senderLineageId: receipt.counterpartyLineageId
+            ))
+        case ToriiOfflineTransferDirection.outgoing.rawValue:
+            operation = "send"
+            transferPayload = try canonicalJSONData(SourceLineageAttestationSendPayload(
+                lineageId: receipt.lineageId,
+                transferId: receipt.transferId,
+                amount: receipt.amount,
+                receiverLineageId: receipt.counterpartyLineageId
+            ))
+        default:
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline receipt direction must be incoming or outgoing."
+            )
+        }
+        let expected = try sha256Hex(canonicalJSONData(SourceLineageAttestationChallengePayload(
+            accountId: receipt.accountId,
+            lineageId: receipt.lineageId,
+            operation: operation,
+            payloadHash: sha256Hex(transferPayload)
+        )))
+        guard receipt.attestation.challengeHashHex == expected else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer attestation challenge hash is invalid."
+            )
+        }
+    }
+
+    private static func validateCounter(
+        _ attestation: SourceLineageWitnessAttestation,
+        counterBook: inout [String: UInt64]
+    ) throws {
+        let previous = counterBook[attestation.keyId] ?? 0
+        guard attestation.counter > previous else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer counter replay detected."
+            )
+        }
+        counterBook[attestation.keyId] = attestation.counter
+    }
+
+    private static func minimumRequiredLockedBalance(
+        totalBalance: String,
+        authorization: ToriiOfflineSpendAuthorization?,
+        nowMs: UInt64
+    ) throws -> String {
+        let canonicalTotal = try ToriiOfflineCashCodec.canonicalAmountString(totalBalance)
+        guard let authorization else {
+            return canonicalTotal
+        }
+        if nowMs < authorization.issuedAtMs || nowMs > authorization.expiresAtMs {
+            return canonicalTotal
+        }
+        if try ToriiOfflineCashCodec.compareAmounts(
+            canonicalTotal,
+            authorization.policyMaxBalance
+        ) != .orderedDescending {
+            return "0"
+        }
+        return try ToriiOfflineCashCodec.subtractAmounts(canonicalTotal, authorization.policyMaxBalance)
+    }
+
+    private static func validateParkedContinuity(
+        _ receipt: SourceLineageWitnessReceipt,
+        expectedPostBalance: String
+    ) throws {
+        guard let authorization = try receipt.authorization?.cashAuthorization() else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline transfer receipt is missing an authorization snapshot."
+            )
+        }
+        let minimumPreParked = try minimumRequiredLockedBalance(
+            totalBalance: receipt.preBalance,
+            authorization: authorization,
+            nowMs: receipt.createdAtMs
+        )
+        let minimumPostParked = try minimumRequiredLockedBalance(
+            totalBalance: expectedPostBalance,
+            authorization: authorization,
+            nowMs: receipt.createdAtMs
+        )
+        switch receipt.direction {
+        case ToriiOfflineTransferDirection.outgoing.rawValue:
+            guard receipt.preLockedBalance == minimumPreParked,
+                  receipt.postLockedBalance == minimumPostParked else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Offline cash locked-balance continuity is invalid."
+                )
+            }
+        case ToriiOfflineTransferDirection.incoming.rawValue:
+            guard try ToriiOfflineCashCodec.compareAmounts(
+                receipt.preLockedBalance,
+                minimumPreParked
+            ) != .orderedAscending,
+                  try ToriiOfflineCashCodec.compareAmounts(
+                    receipt.postLockedBalance,
+                    minimumPostParked
+                  ) != .orderedAscending,
+                  try ToriiOfflineCashCodec.compareAmounts(
+                    receipt.preLockedBalance,
+                    receipt.preBalance
+                  ) != .orderedDescending,
+                  try ToriiOfflineCashCodec.compareAmounts(
+                    receipt.postLockedBalance,
+                    expectedPostBalance
+                  ) != .orderedDescending else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Offline cash locked-balance continuity is invalid."
+                )
+            }
+        default:
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Offline receipt direction must be incoming or outgoing."
+            )
+        }
+    }
+
+    private static func validateCanonicalAccountIdLiteral(
+        _ value: String,
+        fieldName: String
+    ) throws {
+        do {
+            _ = try AccountAddress.parseEncoded(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        } catch {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "\(fieldName) must be a canonical I105 account id."
+            )
+        }
+    }
+
+    private static func validateCanonicalAssetDefinitionIdLiteral(
+        _ value: String,
+        fieldName: String
+    ) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard AssetDefinitionAddress.decode(trimmed) != nil else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "\(fieldName) must be a canonical Base58 asset definition id."
+            )
+        }
+    }
+
+    private static func validateCanonicalAuthorizationIdentifiers(
+        _ authorization: SourceLineageWitnessAuthorization,
+        fieldName: String
+    ) throws {
+        try validateCanonicalAccountIdLiteral(
+            authorization.accountId,
+            fieldName: "\(fieldName).account_id"
+        )
+    }
+
+    private static func validateCanonicalAuthorizationIdentifiers(
+        _ authorization: ToriiOfflineSpendAuthorization,
+        fieldName: String
+    ) throws {
+        try validateCanonicalAccountIdLiteral(
+            authorization.accountId,
+            fieldName: "\(fieldName).account_id"
+        )
+    }
+
+    private static func validateCanonicalLineageStateIdentifiers(
+        _ state: ToriiOfflineCashState,
+        fieldName: String
+    ) throws {
+        try validateCanonicalAccountIdLiteral(
+            state.accountId,
+            fieldName: "\(fieldName).account_id"
+        )
+        try validateCanonicalAssetDefinitionIdLiteral(
+            state.assetDefinitionId,
+            fieldName: "\(fieldName).asset_definition_id"
+        )
+        try validateCanonicalAuthorizationIdentifiers(
+            state.authorization,
+            fieldName: "\(fieldName).authorization"
+        )
+    }
+
+    private static func validateCanonicalTransferReceiptIdentifiers(
+        _ receipt: SourceLineageWitnessReceipt,
+        fieldName: String
+    ) throws {
+        try validateCanonicalAccountIdLiteral(
+            receipt.accountId,
+            fieldName: "\(fieldName).account_id"
+        )
+        try validateCanonicalAccountIdLiteral(
+            receipt.counterpartyAccountId,
+            fieldName: "\(fieldName).counterparty_account_id"
+        )
+        if let authorization = receipt.authorization {
+            try validateCanonicalAuthorizationIdentifiers(
+                authorization,
+                fieldName: "\(fieldName).authorization"
+            )
+        }
+    }
+
+    private static func decodeBase64URL(_ raw: String) throws -> Data {
+        var normalized = raw
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while normalized.count % 4 != 0 {
+            normalized.append("=")
+        }
+        guard let decoded = Data(base64Encoded: normalized) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement(
+                "Source lineage proof witness payload is invalid."
+            )
+        }
+        return decoded
+    }
+
     private static func synthesizeEnvelope(
         domainTag: String,
-        transcriptLabel: String
+        transcriptLabel: String,
+        airCircuitId: String = "composition-v1",
+        airPublicDigest: Data? = nil,
+        includeComposition: Bool = true
     ) throws -> ToriiOfflineStarkVerifyEnvelopeV1 {
         let params = try ToriiOfflineStarkFriParamsV1(
             version: starkVersion,
@@ -688,23 +1599,63 @@ public enum ToriiOfflineSettlementProofs {
             hashFn: starkHashSHA256V1,
             domainTag: domainTag
         )
+        let publicDigest = airPublicDigest ?? starkAirPublicDigestFromComposition(
+            domainTag: domainTag,
+            transcriptLabel: transcriptLabel
+        )
+        let domain = 1 << Int(starkDomainLog2)
+        let airRows = (0..<domain).map { index in
+            starkAirRow(index: index, publicDigest: publicDigest)
+        }
+        let traceLevels = merkleLevelsFromHashes(airRows.map(starkAirTraceLeafHash))
+        let traceRoot = merkleRootFromLevels(traceLevels)
         let levels = zeroMerkleLevelHashes(maxDepth: Int(starkDomainLog2))
         let requiredLayers = Int(starkDomainLog2)
+        let compositionRoot = levels[Int(starkDomainLog2)]
         let roots = (0...requiredLayers).map { layer in
             prefixedHex(levels[Int(starkDomainLog2) - layer])
         }
-        let rootData = roots.compactMap { hex in
-            Data(hexString: hex)
-        }
+        let rootData = roots.compactMap { hex in Data(hexString: hex) }
+        let queryRoots = rootData + [traceRoot, compositionRoot, publicDigest]
         let queries = try (0..<Int(starkQueryCount)).map { queryIndex in
             try synthesizeQueryChain(
                 queryIndex: queryIndex,
                 params: params,
                 transcriptLabel: transcriptLabel,
-                roots: rootData,
+                roots: queryRoots,
                 levelHashes: levels
             )
         }
+        let airOpenings = try (0..<Int(starkQueryCount)).map { queryIndex in
+            let index = deriveQueryIndex(
+                transcriptLabel: transcriptLabel,
+                params: params,
+                roots: queryRoots,
+                queryIndex: queryIndex
+            )
+            let nextIndex = (index + 1) % domain
+            return try ToriiOfflineStarkAirOpeningV1(
+                index: UInt32(index),
+                row: airRows[index],
+                nextRow: airRows[nextIndex],
+                rowPath: merklePathFromLevels(index: index, levels: traceLevels),
+                nextRowPath: merklePathFromLevels(index: nextIndex, levels: traceLevels),
+                compositionValue: 0,
+                compositionPath: zeroMerklePath(index: index, depth: Int(starkDomainLog2), levelHashes: levels)
+            )
+        }
+        let compositionLeaf = offlineStarkBindingCompositionLeaf(
+            domainTag: domainTag,
+            transcriptLabel: transcriptLabel
+        )
+        let compositionLevels = merkleLevelsFromValues([compositionLeaf])
+        let compositionValue = try ToriiOfflineStarkCompositionValueV1(
+            leaf: compositionLeaf,
+            constant: starkBindingConstant,
+            zCoeff: starkBindingZCoefficient,
+            auxTerms: offlineStarkBindingTerms(domainTag: domainTag, transcriptLabel: transcriptLabel),
+            path: merklePathFromLevels(index: 0, levels: compositionLevels)
+        )
         return ToriiOfflineStarkVerifyEnvelopeV1(
             params: params,
             proof: ToriiOfflineStarkProofV1(
@@ -712,12 +1663,19 @@ public enum ToriiOfflineSettlementProofs {
                 commits: try ToriiOfflineStarkCommitmentsV1(
                     version: starkVersion,
                     roots: roots,
-                    compRoot: prefixedHex(offlineStarkBindingCompositionRoot(
-                        domainTag: domainTag,
-                        transcriptLabel: transcriptLabel
-                    ))
+                    compRoot: includeComposition ? prefixedHex(merkleRootFromLevels(compositionLevels)) : nil
                 ),
-                queries: queries
+                queries: queries,
+                compValues: includeComposition ? Array(repeating: compositionValue, count: queries.count) : nil,
+                air: try ToriiOfflineStarkAirProofV1(
+                    version: starkVersion,
+                    circuitId: airCircuitId,
+                    publicDigest: prefixedHex(publicDigest),
+                    traceRoot: prefixedHex(traceRoot),
+                    compositionRoot: prefixedHex(compositionRoot),
+                    traceWidth: 6,
+                    openings: airOpenings
+                )
             ),
             transcriptLabel: transcriptLabel
         )
@@ -768,6 +1726,9 @@ public enum ToriiOfflineSettlementProofs {
         _ envelope: ToriiOfflineStarkVerifyEnvelopeV1,
         expectedDomainTag: String,
         transcriptLabel: String,
+        expectedAirCircuitId: String? = nil,
+        expectedAirPublicDigest: String? = nil,
+        includeComposition: Bool = true,
         context: String
     ) throws {
         guard envelope.transcriptLabel == transcriptLabel else {
@@ -793,15 +1754,35 @@ public enum ToriiOfflineSettlementProofs {
         let expectedRoots = (0...requiredLayers).map { layer in
             prefixedHex(levels[Int(starkDomainLog2) - layer])
         }
-        let expectedCompositionRoot = prefixedHex(offlineStarkBindingCompositionRoot(
+        let expectedCompositionRoot = prefixedHex(fieldLeafHash(offlineStarkBindingCompositionLeaf(
+            domainTag: expectedDomainTag,
+            transcriptLabel: transcriptLabel
+        )))
+        guard envelope.proof.commits.version == starkVersion,
+              envelope.proof.commits.roots == expectedRoots,
+              envelope.proof.commits.compRoot == (includeComposition ? expectedCompositionRoot : nil)
+        else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) commitments are invalid.")
+        }
+        let expectedDigest = expectedAirPublicDigest ?? prefixedHex(starkAirPublicDigestFromComposition(
             domainTag: expectedDomainTag,
             transcriptLabel: transcriptLabel
         ))
-        guard envelope.proof.commits.version == starkVersion,
-              envelope.proof.commits.roots == expectedRoots,
-              envelope.proof.commits.compRoot == expectedCompositionRoot
-        else {
-            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) commitments are invalid.")
+        guard let air = envelope.proof.air,
+              air.version == starkVersion,
+              air.circuitId == (expectedAirCircuitId ?? "composition-v1"),
+              air.publicDigest == expectedDigest,
+              air.compositionRoot == prefixedHex(levels[Int(starkDomainLog2)]),
+              air.traceWidth == 6,
+              air.openings.count == Int(starkQueryCount) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) AIR binding is invalid.")
+        }
+        if includeComposition {
+            guard envelope.proof.compValues?.count == Int(starkQueryCount) else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) composition binding is invalid.")
+            }
+        } else if envelope.proof.compValues != nil {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) composition binding is invalid.")
         }
         guard envelope.proof.queries.count == Int(starkQueryCount) else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query count is invalid.")
@@ -892,6 +1873,61 @@ public enum ToriiOfflineSettlementProofs {
         return levels
     }
 
+    private static func merkleLevelsFromValues(_ values: [UInt64]) -> [[Data]] {
+        merkleLevelsFromHashes(values.map { fieldLeafHash($0) })
+    }
+
+    private static func merkleLevelsFromHashes(_ leaves: [Data]) -> [[Data]] {
+        precondition(!leaves.isEmpty)
+        var current = leaves
+        var levels: [[Data]] = []
+        while true {
+            levels.append(current)
+            if current.count == 1 {
+                break
+            }
+            if current.count % 2 == 1 {
+                current.append(current[current.count - 1])
+            }
+            var next: [Data] = []
+            next.reserveCapacity(current.count / 2)
+            for index in stride(from: 0, to: current.count, by: 2) {
+                next.append(nodeHash(current[index], current[index + 1]))
+            }
+            current = next
+        }
+        return levels
+    }
+
+    private static func merkleRootFromLevels(_ levels: [[Data]]) -> Data {
+        levels.last?.first ?? Data()
+    }
+
+    private static func merklePathFromLevels(index: Int, levels: [[Data]]) throws -> ToriiOfflineMerklePath {
+        precondition(!levels.isEmpty)
+        precondition(index >= 0 && index < levels[0].count)
+        let depth = levels.count - 1
+        var dirs = Data(repeating: 0, count: (depth + 7) / 8)
+        var siblings: [String] = []
+        siblings.reserveCapacity(depth)
+        var currentIndex = index
+        if depth > 0 {
+            for levelIndex in 0..<depth {
+                let level = levels[levelIndex]
+                let siblingIndex: Int
+                if currentIndex % 2 == 0 {
+                    siblingIndex = min(currentIndex + 1, level.count - 1)
+                } else {
+                    dirs[levelIndex / 8] |= UInt8(1 << (levelIndex % 8))
+                    siblingIndex = currentIndex - 1
+                }
+                siblings.append(prefixedHex(level[siblingIndex]))
+                currentIndex /= 2
+            }
+        }
+        return try ToriiOfflineMerklePath(dirs: dirs.base64EncodedString(), siblings: siblings)
+    }
+
     private static func zeroMerklePath(
         index: Int,
         depth: Int,
@@ -959,7 +1995,9 @@ public enum ToriiOfflineSettlementProofs {
                             pathZ: try normalizeMerklePath(decommit.pathZ)
                         )
                     }
-                }
+                },
+                compValues: envelope.proof.compValues,
+                air: envelope.proof.air
             ),
             transcriptLabel: envelope.transcriptLabel
         )
@@ -994,10 +2032,28 @@ public enum ToriiOfflineSettlementProofs {
         return Data(digest.finalize())
     }
 
-    private static func offlineStarkBindingCompositionRoot(
+    private static func starkAirPublicDigestFromComposition(
         domainTag: String,
         transcriptLabel: String
     ) -> Data {
+        var digest = SHA256()
+        digest.update(data: Data("iroha:zk:stark:air-public-digest:v1".utf8))
+        digest.update(data: littleEndianData(starkBindingConstant))
+        digest.update(data: littleEndianData(starkBindingZCoefficient))
+        let terms = offlineStarkBindingTerms(domainTag: domainTag, transcriptLabel: transcriptLabel)
+        digest.update(data: littleEndianData(UInt64(terms.count)))
+        for term in terms {
+            digest.update(data: littleEndianData(term.wireIndex))
+            digest.update(data: littleEndianData(term.value))
+            digest.update(data: littleEndianData(term.coeff))
+        }
+        return Data(digest.finalize())
+    }
+
+    private static func offlineStarkBindingTerms(
+        domainTag: String,
+        transcriptLabel: String
+    ) -> [ToriiOfflineStarkCompositionTermV1] {
         var preimage = Data("iroha:offline:stark-binding-air:v1".utf8)
         preimage.append(littleEndianData(UInt64(domainTag.utf8.count)))
         preimage.append(Data(domainTag.utf8))
@@ -1005,19 +2061,65 @@ public enum ToriiOfflineSettlementProofs {
         preimage.append(Data(transcriptLabel.utf8))
 
         let digest = Data(SHA256.hash(data: preimage))
-        var expected = starkBindingConstant
-        for index in 0..<4 {
+        return (0..<4).map { index in
             let offset = index * 8
             var word: UInt64 = 0
             for byteOffset in 0..<8 {
                 word |= UInt64(digest[offset + byteOffset]) << (byteOffset * 8)
             }
             let value = word >= goldilocksModulus ? word &- goldilocksModulus : word
-            let term = multiplyGoldilocks(UInt64(index + 31), value)
-            expected = addGoldilocks(expected, term)
+            return ToriiOfflineStarkCompositionTermV1(
+                wireIndex: UInt32(index),
+                value: value,
+                coeff: UInt64(index + 31)
+            )
+        }
+    }
+
+    private static func offlineStarkBindingCompositionLeaf(
+        domainTag: String,
+        transcriptLabel: String
+    ) -> UInt64 {
+        var expected = starkBindingConstant
+        for term in offlineStarkBindingTerms(domainTag: domainTag, transcriptLabel: transcriptLabel) {
+            expected = addGoldilocks(expected, multiplyGoldilocks(term.coeff, term.value))
         }
         expected = addGoldilocks(expected, multiplyGoldilocks(starkBindingZCoefficient, 0))
-        return fieldLeafHash(expected)
+        return expected
+    }
+
+    private static func starkAirDigestLimbs(_ publicDigest: Data) -> [UInt64] {
+        precondition(publicDigest.count == 32)
+        return (0..<4).map { index in
+            let offset = index * 8
+            var word: UInt64 = 0
+            for byteOffset in 0..<8 {
+                word |= UInt64(publicDigest[offset + byteOffset]) << (byteOffset * 8)
+            }
+            return word >= goldilocksModulus ? word &- goldilocksModulus : word
+        }
+    }
+
+    private static func starkAirRow(index: Int, publicDigest: Data) -> [UInt64] {
+        let limbs = starkAirDigestLimbs(publicDigest)
+        return [
+            UInt64(index) % goldilocksModulus,
+            limbs[0],
+            limbs[1],
+            limbs[2],
+            limbs[3],
+            6
+        ]
+    }
+
+    private static func starkAirTraceLeafHash(_ row: [UInt64]) -> Data {
+        var digest = SHA256()
+        digest.update(data: Data("STARK:AIR:TRACE:ROW:V1".utf8))
+        digest.update(data: littleEndianData(UInt64(row.count)))
+        for value in row {
+            digest.update(data: littleEndianData(value))
+        }
+        return Data(digest.finalize())
     }
 
     private static func fieldLeafHash(_ value: UInt64) -> Data {
@@ -1156,6 +2258,411 @@ public enum ToriiOfflineSettlementProofs {
             case authorizationId = "authorization_id"
             case preStateHash = "pre_state_hash"
             case receiptKeys = "receipt_keys"
+        }
+    }
+
+    private struct SourceLineageWitnessPayload: Codable {
+        let version: Int
+        let anchor: ToriiOfflineCashState
+        let ancestryReceipts: [SourceLineageWitnessReceipt]
+        let receipt: SourceLineageWitnessReceipt
+
+        private enum CodingKeys: String, CodingKey {
+            case version
+            case anchor
+            case ancestryReceipts = "ancestry_receipts"
+            case receipt
+        }
+    }
+
+    private struct SourceLineageWitnessReceipt: Codable {
+        let version: Int
+        let transferId: String
+        let direction: String
+        let lineageId: String
+        let accountId: String
+        let deviceId: String
+        let offlinePublicKey: String
+        let preBalance: String
+        let postBalance: String
+        let preLockedBalance: String
+        let postLockedBalance: String
+        let preStateHash: String
+        let postStateHash: String
+        let localRevision: UInt64
+        let counterpartyLineageId: String
+        let counterpartyAccountId: String
+        let counterpartyDeviceId: String
+        let counterpartyOfflinePublicKey: String
+        let amount: String
+        let authorization: SourceLineageWitnessAuthorization?
+        let attestation: SourceLineageWitnessAttestation
+        let sourceLineageProof: ToriiOfflineSourceLineageEnvelope?
+        let sourcePayload: String?
+        let senderSignatureBase64: String
+        let createdAtMs: UInt64
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(Int.self, forKey: .version)
+            transferId = try container.decode(String.self, forKey: .transferId)
+            direction = try container.decode(String.self, forKey: .direction)
+            lineageId = try container.decode(String.self, forKey: .lineageId)
+            accountId = try container.decode(String.self, forKey: .accountId)
+            deviceId = try container.decode(String.self, forKey: .deviceId)
+            offlinePublicKey = try container.decode(String.self, forKey: .offlinePublicKey)
+            preBalance = try container.decode(String.self, forKey: .preBalance)
+            postBalance = try container.decode(String.self, forKey: .postBalance)
+            preLockedBalance = try container.decode(String.self, forKey: .preLockedBalance)
+            postLockedBalance = try container.decode(String.self, forKey: .postLockedBalance)
+            preStateHash = try container.decode(String.self, forKey: .preStateHash)
+            postStateHash = try container.decode(String.self, forKey: .postStateHash)
+            localRevision = try container.decode(UInt64.self, forKey: .localRevision)
+            counterpartyLineageId = try container.decode(String.self, forKey: .counterpartyLineageId)
+            counterpartyAccountId = try container.decode(String.self, forKey: .counterpartyAccountId)
+            counterpartyDeviceId = try container.decode(String.self, forKey: .counterpartyDeviceId)
+            counterpartyOfflinePublicKey = try container.decode(
+                String.self,
+                forKey: .counterpartyOfflinePublicKey
+            )
+            amount = try container.decode(String.self, forKey: .amount)
+            authorization = try container.decodeIfPresent(
+                SourceLineageWitnessAuthorization.self,
+                forKey: .authorization
+            )
+            attestation = try container.decodeIfPresent(
+                SourceLineageWitnessAttestation.self,
+                forKey: .attestation
+            ) ?? container.decode(SourceLineageWitnessAttestation.self, forKey: .deviceProof)
+            sourceLineageProof = try container.decodeIfPresent(
+                ToriiOfflineSourceLineageEnvelope.self,
+                forKey: .sourceLineageProof
+            )
+            sourcePayload = try container.decodeIfPresent(String.self, forKey: .sourcePayload)
+            senderSignatureBase64 = try container.decode(String.self, forKey: .senderSignatureBase64)
+            createdAtMs = try container.decode(UInt64.self, forKey: .createdAtMs)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(version, forKey: .version)
+            try container.encode(transferId, forKey: .transferId)
+            try container.encode(direction, forKey: .direction)
+            try container.encode(lineageId, forKey: .lineageId)
+            try container.encode(accountId, forKey: .accountId)
+            try container.encode(deviceId, forKey: .deviceId)
+            try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
+            try container.encode(preBalance, forKey: .preBalance)
+            try container.encode(postBalance, forKey: .postBalance)
+            try container.encode(preLockedBalance, forKey: .preLockedBalance)
+            try container.encode(postLockedBalance, forKey: .postLockedBalance)
+            try container.encode(preStateHash, forKey: .preStateHash)
+            try container.encode(postStateHash, forKey: .postStateHash)
+            try container.encode(localRevision, forKey: .localRevision)
+            try container.encode(counterpartyLineageId, forKey: .counterpartyLineageId)
+            try container.encode(counterpartyAccountId, forKey: .counterpartyAccountId)
+            try container.encode(counterpartyDeviceId, forKey: .counterpartyDeviceId)
+            try container.encode(counterpartyOfflinePublicKey, forKey: .counterpartyOfflinePublicKey)
+            try container.encode(amount, forKey: .amount)
+            try container.encodeIfPresent(authorization, forKey: .authorization)
+            try container.encode(attestation, forKey: .attestation)
+            try container.encodeIfPresent(sourceLineageProof, forKey: .sourceLineageProof)
+            try container.encodeIfPresent(sourcePayload, forKey: .sourcePayload)
+            try container.encode(senderSignatureBase64, forKey: .senderSignatureBase64)
+            try container.encode(createdAtMs, forKey: .createdAtMs)
+        }
+
+        func cashReceipt() throws -> ToriiOfflineTransferReceipt {
+            guard let receiptDirection = ToriiOfflineTransferDirection(rawValue: direction) else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Source lineage proof does not match the receipt."
+                )
+            }
+            guard let authorization else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Source lineage proof witness signature is invalid."
+                )
+            }
+            let cashAuthorization = try authorization.cashAuthorization()
+            return try ToriiOfflineTransferReceipt(
+                version: version,
+                transferId: transferId,
+                direction: receiptDirection,
+                lineageId: lineageId,
+                accountId: accountId,
+                deviceId: deviceId,
+                offlinePublicKey: offlinePublicKey,
+                preBalance: preBalance,
+                postBalance: postBalance,
+                preLockedBalance: preLockedBalance,
+                postLockedBalance: postLockedBalance,
+                preStateHash: preStateHash,
+                postStateHash: postStateHash,
+                localRevision: localRevision,
+                counterpartyLineageId: counterpartyLineageId,
+                counterpartyAccountId: counterpartyAccountId,
+                counterpartyDeviceId: counterpartyDeviceId,
+                counterpartyOfflinePublicKey: counterpartyOfflinePublicKey,
+                amount: amount,
+                authorization: cashAuthorization,
+                deviceProof: ToriiOfflineDeviceProof(
+                    platform: cashAuthorization.deviceBinding.platform,
+                    attestationKeyId: attestation.keyId,
+                    challengeHashHex: attestation.challengeHashHex,
+                    assertionBase64: attestation.assertionBase64,
+                    counter: attestation.counter
+                ),
+                sourceLineageProof: sourceLineageProof,
+                sourcePayload: sourcePayload,
+                senderSignatureBase64: senderSignatureBase64,
+                createdAtMs: createdAtMs
+            )
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case version
+            case transferId = "transfer_id"
+            case direction
+            case lineageId = "lineage_id"
+            case accountId = "account_id"
+            case deviceId = "device_id"
+            case offlinePublicKey = "offline_public_key"
+            case preBalance = "pre_balance"
+            case postBalance = "post_balance"
+            case preLockedBalance = "pre_locked_balance"
+            case postLockedBalance = "post_locked_balance"
+            case preStateHash = "pre_state_hash"
+            case postStateHash = "post_state_hash"
+            case localRevision = "local_revision"
+            case counterpartyLineageId = "counterparty_lineage_id"
+            case counterpartyAccountId = "counterparty_account_id"
+            case counterpartyDeviceId = "counterparty_device_id"
+            case counterpartyOfflinePublicKey = "counterparty_offline_public_key"
+            case amount
+            case authorization
+            case attestation
+            case deviceProof = "device_proof"
+            case sourceLineageProof = "source_lineage_proof"
+            case sourcePayload = "source_payload"
+            case senderSignatureBase64 = "sender_signature_base64"
+            case createdAtMs = "created_at_ms"
+        }
+    }
+
+    private struct SourceLineageWitnessAuthorization: Codable {
+        let authorizationId: String
+        let lineageId: String
+        let accountId: String
+        let deviceId: String
+        let offlinePublicKey: String
+        let verdictId: String
+        let maxBalance: String
+        let maxTxValue: String
+        let issuedAtMs: UInt64
+        let refreshAtMs: UInt64
+        let expiresAtMs: UInt64
+        let deviceBinding: ToriiOfflineDeviceBinding?
+        let appAttestKeyId: String
+        let issuerSignatureBase64: String
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            authorizationId = try container.decode(String.self, forKey: .authorizationId)
+            lineageId = try container.decode(String.self, forKey: .lineageId)
+            accountId = try container.decode(String.self, forKey: .accountId)
+            verdictId = try container.decode(String.self, forKey: .verdictId)
+            maxBalance = try container.decode(String.self, forKey: .maxBalance)
+            maxTxValue = try container.decode(String.self, forKey: .maxTxValue)
+            issuedAtMs = try container.decode(UInt64.self, forKey: .issuedAtMs)
+            refreshAtMs = try container.decode(UInt64.self, forKey: .refreshAtMs)
+            expiresAtMs = try container.decode(UInt64.self, forKey: .expiresAtMs)
+            deviceBinding = try container.decodeIfPresent(
+                ToriiOfflineDeviceBinding.self,
+                forKey: .deviceBinding
+            )
+            guard let resolvedDeviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
+                    ?? deviceBinding?.deviceId,
+                  let resolvedOfflinePublicKey = try container.decodeIfPresent(
+                    String.self,
+                    forKey: .offlinePublicKey
+                  ) ?? deviceBinding?.offlinePublicKey,
+                  let resolvedAppAttestKeyId = try container.decodeIfPresent(
+                    String.self,
+                    forKey: .appAttestKeyId
+                  ) ?? deviceBinding?.attestationKeyId else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Source lineage proof witness payload is invalid."
+                )
+            }
+            deviceId = resolvedDeviceId
+            offlinePublicKey = resolvedOfflinePublicKey
+            appAttestKeyId = resolvedAppAttestKeyId
+            issuerSignatureBase64 = try container.decode(String.self, forKey: .issuerSignatureBase64)
+        }
+
+        func cashAuthorization() throws -> ToriiOfflineSpendAuthorization {
+            guard let deviceBinding else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement(
+                    "Source lineage proof witness signature is invalid."
+                )
+            }
+            return try ToriiOfflineSpendAuthorization(
+                authorizationId: authorizationId,
+                lineageId: lineageId,
+                accountId: accountId,
+                verdictId: verdictId,
+                policyMaxBalance: maxBalance,
+                policyMaxTxValue: maxTxValue,
+                issuedAtMs: issuedAtMs,
+                refreshAtMs: refreshAtMs,
+                expiresAtMs: expiresAtMs,
+                deviceBinding: deviceBinding,
+                issuerSignatureBase64: issuerSignatureBase64
+            )
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case authorizationId = "authorization_id"
+            case lineageId = "lineage_id"
+            case accountId = "account_id"
+            case deviceId = "device_id"
+            case offlinePublicKey = "offline_public_key"
+            case verdictId = "verdict_id"
+            case maxBalance = "max_balance"
+            case maxTxValue = "max_tx_value"
+            case issuedAtMs = "issued_at_ms"
+            case refreshAtMs = "refresh_at_ms"
+            case expiresAtMs = "expires_at_ms"
+            case deviceBinding = "device_binding"
+            case appAttestKeyId = "app_attest_key_id"
+            case issuerSignatureBase64 = "issuer_signature_base64"
+        }
+    }
+
+    private struct SourceLineageWitnessAttestation: Codable {
+        let keyId: String
+        let counter: UInt64
+        let assertionBase64: String
+        let challengeHashHex: String
+        let attestationReportBase64: String?
+        let iosTeamId: String?
+        let iosBundleId: String?
+        let iosEnvironment: String?
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            keyId = try container.decodeIfPresent(String.self, forKey: .keyId)
+                ?? container.decode(String.self, forKey: .attestationKeyId)
+            counter = try container.decodeIfPresent(UInt64.self, forKey: .counter) ?? 0
+            assertionBase64 = try container.decode(String.self, forKey: .assertionBase64)
+            challengeHashHex = try container.decode(String.self, forKey: .challengeHashHex)
+            attestationReportBase64 = try container.decodeIfPresent(
+                String.self,
+                forKey: .attestationReportBase64
+            )
+            iosTeamId = try container.decodeIfPresent(String.self, forKey: .iosTeamId)
+            iosBundleId = try container.decodeIfPresent(String.self, forKey: .iosBundleId)
+            iosEnvironment = try container.decodeIfPresent(String.self, forKey: .iosEnvironment)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(keyId, forKey: .keyId)
+            try container.encode(counter, forKey: .counter)
+            try container.encode(assertionBase64, forKey: .assertionBase64)
+            try container.encode(challengeHashHex, forKey: .challengeHashHex)
+            try container.encodeIfPresent(attestationReportBase64, forKey: .attestationReportBase64)
+            try container.encodeIfPresent(iosTeamId, forKey: .iosTeamId)
+            try container.encodeIfPresent(iosBundleId, forKey: .iosBundleId)
+            try container.encodeIfPresent(iosEnvironment, forKey: .iosEnvironment)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case keyId = "key_id"
+            case attestationKeyId = "attestation_key_id"
+            case counter
+            case assertionBase64 = "assertion_base64"
+            case challengeHashHex = "challenge_hash_hex"
+            case attestationReportBase64 = "attestation_report_base64"
+            case iosTeamId = "ios_team_id"
+            case iosBundleId = "ios_bundle_id"
+            case iosEnvironment = "ios_environment"
+        }
+    }
+
+    private struct SourceLineageAttestationSendPayload: Encodable {
+        let lineageId: String
+        let transferId: String
+        let amount: String
+        let receiverLineageId: String
+
+        private enum CodingKeys: String, CodingKey {
+            case lineageId = "lineage_id"
+            case transferId = "transfer_id"
+            case amount
+            case receiverLineageId = "receiver_lineage_id"
+        }
+    }
+
+    private struct SourceLineageAttestationReceivePayload: Encodable {
+        let lineageId: String
+        let transferId: String
+        let amount: String
+        let senderLineageId: String
+
+        private enum CodingKeys: String, CodingKey {
+            case lineageId = "lineage_id"
+            case transferId = "transfer_id"
+            case amount
+            case senderLineageId = "sender_lineage_id"
+        }
+    }
+
+    private struct SourceLineageAttestationChallengePayload: Encodable {
+        let accountId: String
+        let lineageId: String
+        let operation: String
+        let payloadHash: String
+
+        private enum CodingKeys: String, CodingKey {
+            case accountId = "account_id"
+            case lineageId = "lineage_id"
+            case operation
+            case payloadHash = "payload_hash"
+        }
+    }
+
+    private struct SourceLineageProofCommitmentPayload: Encodable {
+        let circuitId: String
+        let publicInputs: ToriiOfflineSourceLineagePublicInputs
+        let witnessPayloadHash: String
+
+        private enum CodingKeys: String, CodingKey {
+            case circuitId = "circuit_id"
+            case publicInputs = "public_inputs"
+            case witnessPayloadHash = "witness_payload_hash"
+        }
+    }
+
+    private struct SourceLineageNullifierPayload: Encodable {
+        let circuitId: String
+        let transferId: String
+        let sourceReceiptHash: String
+        let senderLineageId: String
+        let recipientLineageId: String
+        let assetDefinitionId: String
+        let amount: String
+        let sourceLocalRevision: UInt64
+
+        private enum CodingKeys: String, CodingKey {
+            case circuitId = "circuit_id"
+            case transferId = "transfer_id"
+            case sourceReceiptHash = "source_receipt_hash"
+            case senderLineageId = "sender_lineage_id"
+            case recipientLineageId = "recipient_lineage_id"
+            case assetDefinitionId = "asset_definition_id"
+            case amount
+            case sourceLocalRevision = "source_local_revision"
         }
     }
 }

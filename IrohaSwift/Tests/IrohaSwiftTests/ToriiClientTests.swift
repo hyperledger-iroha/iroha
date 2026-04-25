@@ -3610,6 +3610,170 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetContractActivityEncodesQueryAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/activity")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["limit"], "20")
+            XCTAssertEqual(query["offset"], "40")
+            XCTAssertEqual(query["authority"], "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            XCTAssertEqual(query["contract_alias"], "benefits::sbp")
+            XCTAssertEqual(query["contract_entrypoint"], "claim")
+            XCTAssertEqual(query["since_timestamp_ms"], "1000")
+            XCTAssertEqual(query["until_timestamp_ms"], "2000")
+            XCTAssertEqual(query["result_ok"], "true")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "items": [
+                    {
+                        "authority": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                        "timestamp_ms": 1234,
+                        "entrypoint_hash": "0xabc",
+                        "result_ok": true,
+                        "contract_address": "cntr:deadbeef",
+                        "contract_alias": "benefits::sbp",
+                        "contract_entrypoint": "claim",
+                        "contract_payload": {"amount": 500},
+                        "gas_asset_id": "gas#sbp",
+                        "fee_sponsor": "sponsor@sbp",
+                        "gas_limit": 50000
+                    }
+                ],
+                "total": 1
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let params = ToriiContractActivityParams(
+            limit: 20,
+            offset: 40,
+            authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            contractAlias: "benefits::sbp",
+            contractEntrypoint: "claim",
+            sinceTimestampMs: 1000,
+            untilTimestampMs: 2000,
+            resultOk: true
+        )
+        let list = try await makeClient().getContractActivity(params: params)
+        XCTAssertEqual(list.total, 1)
+        XCTAssertEqual(list.items.first?.contractAlias, "benefits::sbp")
+        XCTAssertEqual(list.items.first?.contractEntrypoint, "claim")
+        XCTAssertEqual(list.items.first?.timestampMs, 1234)
+        guard case let .object(payload)? = list.items.first?.contractPayload,
+              case let .number(amount)? = payload["amount"] else {
+            return XCTFail("Expected numeric contract payload.")
+        }
+        XCTAssertEqual(amount, 500)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetContractEventsEncodesQueryAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/events")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["limit"], "10")
+            XCTAssertEqual(query["offset"], "5")
+            XCTAssertEqual(query["contract_alias"], "benefits::sbp")
+            XCTAssertEqual(query["module"], "benefits")
+            XCTAssertEqual(query["event_kind"], "spend")
+            XCTAssertEqual(query["participant"], "merchant@sbp")
+            XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+            XCTAssertEqual(query["provenance"], "derived")
+            XCTAssertEqual(query["result_ok"], "false")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "items": [
+                    {
+                        "event_id": "0xabc:0",
+                        "schema_version": 1,
+                        "provenance": "derived",
+                        "authority": "beneficiary@sbp",
+                        "timestamp_ms": 1234,
+                        "tx_hash_hex": "0xabc",
+                        "block_height": 7,
+                        "block_hash_hex": "0xblock",
+                        "result_ok": false,
+                        "contract_address": "cntr:deadbeef",
+                        "contract_alias": "benefits::sbp",
+                        "module": "benefits",
+                        "event_kind": "spend",
+                        "participants": ["beneficiary@sbp", "merchant@sbp"],
+                        "asset_ids": ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
+                        "numeric_fields": {"amount": 125},
+                        "payload": {"amount": 125, "merchant_account": "merchant@sbp"},
+                        "gas_asset_id": "gas#sbp",
+                        "fee_sponsor": "sponsor@sbp",
+                        "gas_limit": 70000
+                    }
+                ],
+                "total": 1
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let params = ToriiContractEventParams(
+            limit: 10,
+            offset: 5,
+            contractAlias: "benefits::sbp",
+            module: "benefits",
+            eventKind: "spend",
+            participant: "merchant@sbp",
+            assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            provenance: "derived",
+            resultOk: false
+        )
+        let list = try await makeClient().getContractEvents(params: params)
+        XCTAssertEqual(list.total, 1)
+        XCTAssertEqual(list.items.first?.eventId, "0xabc:0")
+        XCTAssertEqual(list.items.first?.participants ?? [], ["beneficiary@sbp", "merchant@sbp"])
+        XCTAssertEqual(list.items.first?.assetIds ?? [], ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"])
+        guard case let .number(amount)? = list.items.first?.numericFields?["amount"] else {
+            return XCTFail("Expected numeric field.")
+        }
+        XCTAssertEqual(amount, 125)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetContractEventsCompletion() {
+        let expectation = expectation(description: "contract-events")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/events")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = #"{"items":[],"total":0}"#.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getContractEvents { result in
+            switch result {
+            case .success(let list):
+                XCTAssertEqual(list.items.count, 0)
+                XCTAssertEqual(list.total, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerTransactionDetailEncodesQueryAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/explorer/transactions/deadbeef")
