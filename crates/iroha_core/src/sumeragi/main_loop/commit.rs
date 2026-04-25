@@ -4717,7 +4717,7 @@ impl Actor {
             .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
-            let parallel = self.config.collectors.parallel_topology_fanout;
+            let parallel = self.effective_parallel_topology_fanout();
             if parallel > 0 {
                 let mut parallel_targets: Vec<_> = signature_topology
                     .topology_fanout_from_tail(parallel)
@@ -5090,7 +5090,7 @@ impl Actor {
             .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
-            let parallel = self.config.collectors.parallel_topology_fanout;
+            let parallel = self.effective_parallel_topology_fanout();
             if parallel > 0 {
                 let mut parallel_targets: Vec<_> = signature_topology
                     .topology_fanout_from_tail(parallel)
@@ -5256,20 +5256,32 @@ impl Actor {
             return;
         };
         let (collectors_k, redundant_r) = self.collector_plan_params_for_mode(consensus_mode);
+        let routing_collectors_k = self.effective_collector_k_for_routing(
+            consensus_mode,
+            &signature_topology,
+            collectors_k,
+        );
         let mut collector_targets = if collectors_k == 0 {
             Vec::new()
         } else {
             super::collectors::deterministic_collectors(
                 &signature_topology,
                 consensus_mode,
-                collectors_k,
+                routing_collectors_k,
                 prf_seed,
                 height,
                 view,
             )
         };
         if !collector_targets.is_empty() {
-            let redundant_limit = signature_topology.redundant_send_r_floor(redundant_r);
+            let redundant_limit = if self.config.resilience.enabled
+                && self.subsystems.propose.adaptive_state.applied()
+            {
+                signature_topology
+                    .redundant_send_r_floor(self.subsystems.propose.collector_redundant_limit)
+            } else {
+                signature_topology.redundant_send_r_floor(redundant_r)
+            };
             let limit = usize::from(redundant_limit.max(1));
             collector_targets.truncate(limit);
         }

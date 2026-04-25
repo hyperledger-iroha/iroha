@@ -7,11 +7,16 @@ mod imp {
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     };
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
 
     use cust::{
         context::CurrentContext,
         memory::{CopyDestination, DeviceCopy},
         prelude::*,
+        sys::{cuStreamQuery, cudaError_enum},
     };
 
     use crate::bn254_vec::FieldElem;
@@ -112,6 +117,30 @@ mod imp {
             *guard = Some(message.clone());
         }
         eprintln!("ivm: cuda backend disabled: {message}");
+    }
+
+    const CUDA_STREAM_TIMEOUT: Duration = Duration::from_secs(120);
+
+    fn wait_for_cuda_stream(stream: &Stream, context: &str) -> Option<()> {
+        let started = Instant::now();
+        loop {
+            match unsafe { cuStreamQuery(stream.as_inner()) } {
+                cudaError_enum::CUDA_SUCCESS => return Some(()),
+                cudaError_enum::CUDA_ERROR_NOT_READY => {
+                    if started.elapsed() >= CUDA_STREAM_TIMEOUT {
+                        record_cuda_disable(format!(
+                            "{context} CUDA stream timed out after {CUDA_STREAM_TIMEOUT:?}"
+                        ));
+                        return None;
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                status => {
+                    record_cuda_disable(format!("{context} CUDA stream query failed: {status:?}"));
+                    return None;
+                }
+            }
+        }
     }
 
     #[repr(C)]
@@ -273,7 +302,7 @@ mod imp {
                         k <<= 1;
                     }
 
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut hi_out = vec![0u64; pow2];
                     let mut lo_out = vec![0u64; pow2];
                     d_hi.copy_to(&mut hi_out).ok()?;
@@ -362,8 +391,7 @@ mod imp {
                         ));
                         return None;
                     }
-                    if stream.synchronize().is_err() {
-                        record_cuda_disable(format!("stream sync failed for {kernel_name}"));
+                    if wait_for_cuda_stream(stream, kernel_name).is_none() {
                         return None;
                     }
                     if d_out.copy_to(out_words).is_err() {
@@ -501,7 +529,7 @@ mod imp {
             current_is_initial = !current_is_initial;
         }
 
-        stream.synchronize().ok()?;
+        wait_for_cuda_stream(stream, "cuda kernel")?;
         let final_buf = if current_is_initial {
             initial_digests
         } else {
@@ -604,7 +632,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut out = [0u8; 1];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out[0] == 1)
@@ -652,7 +680,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut out = [0u8; 2];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out == [1u8, 0u8])
@@ -814,7 +842,7 @@ mod imp {
                                 ))
                                 .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             d_state.copy_to(&mut st_cuda).ok()?;
                             Some(())
                         })
@@ -855,7 +883,7 @@ mod imp {
                                 launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr()))
                                     .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             d_state.copy_to(&mut k_cuda).ok()?;
                             Some(())
                         })
@@ -899,7 +927,7 @@ mod imp {
                                 ))
                                 .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             let mut enc_out = [0u8; 16];
                             d_out.copy_to(&mut enc_out).ok()?;
                             if enc_out != cpu_enc {
@@ -917,7 +945,7 @@ mod imp {
                                 ))
                                 .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             let mut dec_out = [0u8; 16];
                             d_out2.copy_to(&mut dec_out).ok()?;
                             if dec_out != cpu_dec {
@@ -987,7 +1015,7 @@ mod imp {
                                 ))
                                 .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             let mut enc2 = [0u8; 16];
                             d_out.copy_to(&mut enc2).ok()?;
                             if enc2 != cpu_enc2 {
@@ -1007,7 +1035,7 @@ mod imp {
                                 ))
                                 .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             let mut dec2 = [0u8; 16];
                             d_out2.copy_to(&mut dec2).ok()?;
                             if dec2 != cpu_dec2 {
@@ -1118,7 +1146,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut out = vec![0f32; len];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out)
@@ -1151,7 +1179,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut out = vec![0u32; len];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out)
@@ -1184,7 +1212,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut out = vec![0u64; len];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out)
@@ -1306,7 +1334,7 @@ mod imp {
                             ))
                             .ok()?;
                         }
-                        stream.synchronize().ok()?;
+                        wait_for_cuda_stream(stream, "cuda kernel")?;
                         d_out.copy_to(&mut out).ok()?;
                         Some(())
                     })
@@ -1418,7 +1446,7 @@ mod imp {
                             return Some(false);
                         }
                     }
-                    if stream.synchronize().is_err() {
+                    if wait_for_cuda_stream(stream, "sha256_compress").is_none() {
                         return Some(false);
                     }
                     if d_state.copy_to(state).is_err() {
@@ -1506,7 +1534,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     d_out.copy_to(&mut out).ok()?;
                     Some(())
                 })
@@ -1630,7 +1658,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     d_out.copy_to(&mut out).ok()?;
                     Some(())
                 })
@@ -1779,7 +1807,7 @@ mod imp {
                                 ))
                                 .ok()?;
                             }
-                            stream.synchronize().ok()?;
+                            wait_for_cuda_stream(stream, "cuda kernel")?;
                             d_state.copy_to(state_words).ok()?;
                             d_status.copy_to(&mut status).ok()?;
                             if status[0].code != 0 {
@@ -2012,7 +2040,7 @@ mod imp {
                             return Some(false);
                         }
                     }
-                    if stream.synchronize().is_err() {
+                    if wait_for_cuda_stream(stream, "keccak_f1600_cuda").is_none() {
                         return Some(false);
                     }
                     if d_state.copy_to(state).is_err() {
@@ -2090,7 +2118,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     d_out.copy_to(&mut out).ok()?;
                     Some(())
                 })
@@ -2143,7 +2171,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     d_out.copy_to(&mut out).ok()?;
                     Some(())
                 })
@@ -2210,7 +2238,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     d_out.copy_to(&mut out).ok()?;
                     Some(())
                 })
@@ -2277,7 +2305,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     d_out.copy_to(&mut out).ok()?;
                     Some(())
                 })
@@ -2460,7 +2488,7 @@ mod imp {
                         ))
                         .ok()?;
                     }
-                    stream.synchronize().ok()?;
+                    wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut out = vec![0u8; count];
                     d_out.copy_to(&mut out).ok()?;
                     Some(out.into_iter().map(|b| b != 0).collect())

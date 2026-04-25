@@ -1,0 +1,47 @@
+// Native asset escrow sample for off-chain fiat settlement flows.
+// Custody is held by the ledger-managed escrow ISIs, not by a contract account.
+seiyaku NativeEscrowAitai {
+  meta { abi_version: 1; }
+
+  kotoage fn main() {}
+
+  #[access(read="*", write="*")]
+  kotoage fn open_offer(offer: Name,
+                         asset_definition: AssetDefinitionId,
+                         amount: int) permission(Admin) {
+    assert(amount > 0, "amount must be positive");
+    escrow_open_offer(offer, asset_definition, amount);
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn accept(offer: Name) permission(Admin) {
+    escrow_accept(offer);
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn mark_payment_sent(offer: Name) permission(Admin) {
+    escrow_mark_payment_sent(offer);
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn release(offer: Name) permission(Admin) {
+    escrow_release(offer);
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn cancel(offer: Name) permission(Admin) {
+    escrow_cancel(offer);
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn dispute(offer: Name) permission(Admin) {
+    escrow_open_dispute(offer);
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn resolve_dispute(offer: Name,
+                             buyer_amount: int,
+                             seller_amount: int) permission(Admin) {
+    escrow_resolve_dispute(offer, buyer_amount, seller_amount);
+  }
+}

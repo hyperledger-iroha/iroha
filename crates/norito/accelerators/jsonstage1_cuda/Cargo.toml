@@ -8,7 +8,7 @@ build = "build.rs"
 crate-type = ["cdylib"]
 
 [features]
-default = []
+default = ["cuda-kernel"]
 cuda-kernel = []
 
 [dependencies]

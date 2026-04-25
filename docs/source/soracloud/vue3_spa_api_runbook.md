@@ -183,6 +183,9 @@ Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional
 `IROHA_INROU_PORTABLE_ACCEL=auto|tcg|kvm|hvf|whpx`. Firecracker smoke uses the
 corresponding `IROHA_INROU_LINUX_KVM_*` environment variables.
+For local PortableVm validation, prepare verified Debian genericcloud assets
+with `eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"`
+before running `cargo xtask soracloud-inrou-smoke portable`.
 
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,

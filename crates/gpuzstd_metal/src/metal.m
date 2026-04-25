@@ -910,6 +910,24 @@ static BOOL build_fse_pipelines(id<MTLDevice> device,
     return YES;
 }
 
+static BOOL wait_for_command_buffer(id<MTLCommandBuffer> command) {
+    static const NSTimeInterval kGpuCommandTimeoutSeconds = 10.0;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:kGpuCommandTimeoutSeconds];
+    while (true) {
+        MTLCommandBufferStatus status = [command status];
+        if (status == MTLCommandBufferStatusCompleted) {
+            return [command error] == nil;
+        }
+        if (status == MTLCommandBufferStatusError) {
+            return NO;
+        }
+        if ([deadline timeIntervalSinceNow] <= 0.0) {
+            return NO;
+        }
+        [NSThread sleepForTimeInterval:0.001];
+    }
+}
+
 __attribute__((visibility("default")))
 int gpuzstd_metal_count_sequences(const uint8_t *input,
                                   size_t len,
@@ -985,8 +1003,7 @@ int gpuzstd_metal_count_sequences(const uint8_t *input,
         [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
         [encoder endEncoding];
         [command commit];
-        [command waitUntilCompleted];
-        if (command.error != nil) {
+        if (!wait_for_command_buffer(command)) {
             return RC_GPU_UNAVAILABLE;
         }
         memcpy(out_counts, out_buf.contents, chunk_count * sizeof(uint32_t));
@@ -1073,8 +1090,7 @@ int gpuzstd_metal_write_sequences(const uint8_t *input,
         [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
         [encoder endEncoding];
         [command commit];
-        [command waitUntilCompleted];
-        if (command.error != nil) {
+        if (!wait_for_command_buffer(command)) {
             return RC_GPU_UNAVAILABLE;
         }
         memcpy(out_seqs, out_buf.contents, seq_capacity * sizeof(GpuZstdSequence));
@@ -1154,8 +1170,7 @@ int gpuzstd_metal_huff_encode(const uint8_t *input,
         [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
         [encoder endEncoding];
         [command commit];
-        [command waitUntilCompleted];
-        if (command.error != nil) {
+        if (!wait_for_command_buffer(command)) {
             return RC_GPU_UNAVAILABLE;
         }
         uint32_t status = *(uint32_t *)status_buf.contents;
@@ -1244,8 +1259,7 @@ int gpuzstd_metal_huff_decode(const uint8_t *encoded,
         [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
         [encoder endEncoding];
         [command commit];
-        [command waitUntilCompleted];
-        if (command.error != nil) {
+        if (!wait_for_command_buffer(command)) {
             return RC_GPU_UNAVAILABLE;
         }
         uint32_t status = *(uint32_t *)status_buf.contents;
@@ -1347,8 +1361,7 @@ int gpuzstd_metal_fse_encode(const uint16_t *symbols,
         [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
         [encoder endEncoding];
         [command commit];
-        [command waitUntilCompleted];
-        if (command.error != nil) {
+        if (!wait_for_command_buffer(command)) {
             return RC_GPU_UNAVAILABLE;
         }
         uint32_t status = *(uint32_t *)status_buf.contents;
@@ -1451,8 +1464,7 @@ int gpuzstd_metal_fse_decode(const uint8_t *encoded,
         [encoder dispatchThreads:grid threadsPerThreadgroup:threads_per_group];
         [encoder endEncoding];
         [command commit];
-        [command waitUntilCompleted];
-        if (command.error != nil) {
+        if (!wait_for_command_buffer(command)) {
             return RC_GPU_UNAVAILABLE;
         }
         uint32_t status = *(uint32_t *)status_buf.contents;

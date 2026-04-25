@@ -269,6 +269,7 @@ mod tests {
             SingularQueryBox::FindAbiVersion(_) => {}
             SingularQueryBox::FindAssetById(_) => {}
             SingularQueryBox::FindAssetDefinitionById(_) => {}
+            SingularQueryBox::FindAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}

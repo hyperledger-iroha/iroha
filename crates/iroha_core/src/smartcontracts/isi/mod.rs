@@ -8,6 +8,8 @@ pub mod block;
 /// Content lane instruction handlers.
 pub mod content;
 pub mod domain;
+/// Native asset escrow instruction handlers.
+pub mod escrow;
 pub mod identifier;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
@@ -183,6 +185,13 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::OpenAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::AcceptAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::MarkEscrowPaymentSent>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::ReleaseAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::CancelAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::OpenEscrowDispute>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::ResolveEscrowDispute>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudService>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudService>,

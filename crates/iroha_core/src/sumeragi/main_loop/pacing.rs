@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use iroha_config::parameters::actual::AdaptiveObservability;
+use iroha_config::parameters::actual::{AdaptiveObservability, SumeragiResilience};
 use tokio::sync::watch;
 
 use super::{
@@ -394,6 +394,7 @@ pub(super) enum AdaptiveAction {
 pub(super) struct AdaptiveObservabilityMetrics {
     pub(super) missing_local_data_total: u64,
     pub(super) max_qc_latency_ms: u64,
+    pub(super) queue_saturated: bool,
 }
 
 impl AdaptiveObservabilityMetrics {
@@ -406,6 +407,7 @@ impl AdaptiveObservabilityMetrics {
         Self {
             missing_local_data_total: status::da_gate_missing_local_data_total(),
             max_qc_latency_ms,
+            queue_saturated: false,
         }
     }
 }
@@ -444,10 +446,15 @@ impl AdaptiveObservabilityState {
         self.base_collector_limit = limit.max(1);
     }
 
+    pub(super) fn applied(&self) -> bool {
+        self.applied
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn evaluate(
         &mut self,
         cfg: AdaptiveObservability,
+        resilience: SumeragiResilience,
         metrics: AdaptiveObservabilityMetrics,
         pacemaker: &mut Pacemaker,
         collector_redundant_limit: &mut u8,
@@ -458,20 +465,27 @@ impl AdaptiveObservabilityState {
             .saturating_sub(self.last_missing_local_data_total);
         self.last_missing_local_data_total = metrics.missing_local_data_total;
 
-        if !cfg.enabled {
+        let enabled = cfg.enabled || resilience.enabled;
+        if !enabled {
             return self.reset(pacemaker, collector_redundant_limit, now);
         }
 
         let qc_alert = metrics.max_qc_latency_ms >= cfg.qc_latency_alert_ms;
         let missing_data_alert = missing_delta >= cfg.da_reschedule_burst;
+        let queue_alert = metrics.queue_saturated;
         let cooldown = Duration::from_millis(cfg.cooldown_ms);
         let past_cooldown = self
             .last_trigger
             .is_none_or(|last| now.saturating_duration_since(last) >= cooldown);
 
-        if (qc_alert || missing_data_alert) && past_cooldown {
-            *collector_redundant_limit = (*collector_redundant_limit)
-                .max(cfg.collector_redundant_r.max(self.base_collector_limit));
+        if (qc_alert || missing_data_alert || queue_alert) && past_cooldown {
+            let adaptive_limit = cfg.collector_redundant_r.max(self.base_collector_limit);
+            let resilience_limit = if resilience.enabled {
+                resilience.max_redundant_send_r.max(adaptive_limit)
+            } else {
+                adaptive_limit
+            };
+            *collector_redundant_limit = (*collector_redundant_limit).max(resilience_limit);
             let boosted = self
                 .base_propose_interval
                 .saturating_add(Duration::from_millis(cfg.pacemaker_extra_ms));
@@ -481,7 +495,7 @@ impl AdaptiveObservabilityState {
             return AdaptiveAction::Applied;
         }
 
-        if self.applied && past_cooldown && !qc_alert && missing_delta == 0 {
+        if self.applied && past_cooldown && !qc_alert && missing_delta == 0 && !queue_alert {
             pacemaker.set_interval(self.base_propose_interval, now);
             *collector_redundant_limit = self.base_collector_limit;
             self.applied = false;

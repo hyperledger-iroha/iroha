@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    env,
     error::Error,
     fs,
     path::{Path, PathBuf},
@@ -47,6 +48,7 @@ pub fn run(mode: CommandMode) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_portable_local() -> Result<(), Box<dyn Error>> {
+    require_portable_guest_asset_env()?;
     run_cargo_smoke_command(
         &[
             "test",
@@ -99,6 +101,44 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
         &[("IROHA_RUN_IGNORED", "1"), ("IROHA_INROU_PORTABLE", "1")],
     )?;
     Ok(())
+}
+
+fn require_portable_guest_asset_env() -> Result<(), Box<dyn Error>> {
+    for name in [
+        "IROHA_INROU_PORTABLE_KERNEL_IMAGE",
+        "IROHA_INROU_PORTABLE_ROOTFS_IMAGE",
+    ] {
+        let value = env::var(name).map_err(|_| portable_guest_asset_hint(name))?;
+        if !Path::new(&value).is_file() {
+            return Err(format!(
+                "{name} must point to an existing file, got {value}. {}",
+                portable_guest_asset_prepare_hint()
+            )
+            .into());
+        }
+    }
+    if let Ok(value) = env::var("IROHA_INROU_PORTABLE_INITRD_IMAGE")
+        && !value.trim().is_empty()
+        && !Path::new(&value).is_file()
+    {
+        return Err(format!(
+            "IROHA_INROU_PORTABLE_INITRD_IMAGE must point to an existing file, got {value}. {}",
+            portable_guest_asset_prepare_hint()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn portable_guest_asset_hint(name: &str) -> String {
+    format!(
+        "{name} must point to an existing file. {}",
+        portable_guest_asset_prepare_hint()
+    )
+}
+
+fn portable_guest_asset_prepare_hint() -> &'static str {
+    "Prepare Debian genericcloud guest assets with `eval \"$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)\"`."
 }
 
 fn run_local_script(script_name: &str) -> Result<(), Box<dyn Error>> {

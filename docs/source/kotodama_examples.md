@@ -47,6 +47,52 @@ seiyaku TransferDemo {
 Mapping (pointer‑ABI):
 - `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
 
+## Native Asset Escrow
+
+Source: `crates/kotodama_lang/src/samples/native_escrow.ko`
+
+```
+seiyaku NativeEscrowAitai {
+  meta { abi_version: 1; }
+
+  kotoage fn open_offer(offer: Name,
+                         asset_definition: AssetDefinitionId,
+                         amount: int) permission(Admin) {
+    assert(amount > 0, "amount must be positive");
+    escrow_open_offer(offer, asset_definition, amount);
+  }
+
+  kotoage fn accept(offer: Name) permission(Admin) {
+    escrow_accept(offer);
+  }
+
+  kotoage fn mark_payment_sent(offer: Name) permission(Admin) {
+    escrow_mark_payment_sent(offer);
+  }
+
+  kotoage fn release(offer: Name) permission(Admin) {
+    escrow_release(offer);
+  }
+}
+```
+
+This sample models the Aitai-style fiat settlement corridor with the native
+ledger escrow ISIs. `open_offer` locks the seller's numeric asset into a
+deterministic protocol custody account. `accept`, `mark_payment_sent`, and
+`release` move the lifecycle forward without giving any contract account or role
+generic authority to debit custody. Dispute entrypoints can call
+`escrow_open_dispute` and `escrow_resolve_dispute`; the latter still requires a
+ledger permission token named `CanResolveEscrowDispute`.
+
+Mapping (pointer‑ABI):
+- `escrow_open_offer(offer, def, amt)` → `r10=&Name`, `r11=&AssetDefinitionId`, `r12=amount`, optional `r13=&NoritoBytes` evidence, then `SCALL 0xB8`
+- `escrow_accept(offer)` → `r10=&Name`, then `SCALL 0xB9`
+- `escrow_mark_payment_sent(offer)` → `r10=&Name`, then `SCALL 0xBA`
+- `escrow_release(offer)` → `r10=&Name`, then `SCALL 0xBB`
+- `escrow_cancel(offer)` → `r10=&Name`, then `SCALL 0xBC`
+- `escrow_open_dispute(offer)` → `r10=&Name`, optional `r11=&NoritoBytes` evidence, then `SCALL 0xBD`
+- `escrow_resolve_dispute(offer, buyer, seller)` → `r10=&Name`, `r11=buyer`, `r12=seller`, optional `r13=&NoritoBytes` evidence, then `SCALL 0xBE`
+
 ## Threshold Escrow
 
 Source: `crates/kotodama_lang/src/samples/threshold_escrow.ko`
@@ -83,7 +129,9 @@ seiyaku ThresholdEscrow {
 }
 ```
 
-This sample models one escrow per deployed contract instance. `open_escrow`
+This legacy sample models one escrow per deployed contract instance. New
+numeric-asset custody flows should prefer the native escrow ISIs above because
+they do not require a contract-controlled escrow account. `open_escrow`
 binds the payer to `authority()`, stores the payer/recipient/escrow/asset
 configuration in durable state, and opens the escrow with an exact target
 amount. `deposit` only accepts positive payer top-ups and rejects deposits that

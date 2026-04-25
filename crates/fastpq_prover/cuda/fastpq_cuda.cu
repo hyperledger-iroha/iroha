@@ -6,15 +6,19 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <chrono>
 #include <mutex>
 #include <new>
 #include <string.h>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #ifndef FASTPQ_CUDA_ARCH_MIN
 #define FASTPQ_CUDA_ARCH_MIN 800
 #endif
+
+static constexpr auto FASTPQ_CUDA_COMMAND_TIMEOUT = std::chrono::seconds(120);
 
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < FASTPQ_CUDA_ARCH_MIN)
 #error "fastpq_cuda requires SM80+ (compute capability 8.0 or newer)."
@@ -259,6 +263,85 @@ static cudaError_t ensure_async_dispatch_stream(AsyncDispatchBuffers* buffers) {
     return status;
 }
 
+template <typename QueryFn>
+static cudaError_t wait_until_cuda_ready(QueryFn query) {
+    const auto deadline = std::chrono::steady_clock::now() + FASTPQ_CUDA_COMMAND_TIMEOUT;
+    for (;;) {
+        cudaError_t status = query();
+        if (status == cudaSuccess) {
+            return cudaSuccess;
+        }
+        if (status != cudaErrorNotReady) {
+            return status;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return cudaErrorLaunchTimeout;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+static cudaError_t wait_for_event(cudaEvent_t event) {
+    if (event == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    return wait_until_cuda_ready([event]() { return cudaEventQuery(event); });
+}
+
+static cudaError_t wait_for_stream(cudaStream_t stream) {
+    return wait_until_cuda_ready([stream]() { return cudaStreamQuery(stream); });
+}
+
+static cudaError_t wait_for_default_stream() {
+    return wait_for_stream(nullptr);
+}
+
+static void abandon_transform_workspace(TransformWorkspace* workspace) {
+    if (workspace == nullptr) {
+        return;
+    }
+    workspace->dense = nullptr;
+    workspace->coeffs = nullptr;
+    workspace->evals = nullptr;
+    workspace->bn254_twiddles = nullptr;
+    workspace->bn254_coset = nullptr;
+    workspace->dense_capacity_bytes = 0;
+    workspace->coeff_capacity_bytes = 0;
+    workspace->eval_capacity_bytes = 0;
+    workspace->bn254_twiddle_capacity_bytes = 0;
+    workspace->bn254_coset_capacity_bytes = 0;
+}
+
+static void abandon_poseidon_workspace(PoseidonWorkspace* workspace) {
+    if (workspace == nullptr) {
+        return;
+    }
+    workspace->payloads = nullptr;
+    workspace->slices = nullptr;
+    workspace->states = nullptr;
+    workspace->hashes = nullptr;
+    workspace->payload_capacity_bytes = 0;
+    workspace->slice_capacity_bytes = 0;
+    workspace->state_capacity_bytes = 0;
+    workspace->hash_capacity_bytes = 0;
+}
+
+static cudaError_t wait_for_default_stream_after_launch(TransformWorkspace* workspace) {
+    cudaError_t status = wait_for_default_stream();
+    if (status == cudaErrorLaunchTimeout) {
+        abandon_transform_workspace(workspace);
+    }
+    return status;
+}
+
+static cudaError_t wait_for_default_stream_after_launch(PoseidonWorkspace* workspace) {
+    cudaError_t status = wait_for_default_stream();
+    if (status == cudaErrorLaunchTimeout) {
+        abandon_poseidon_workspace(workspace);
+    }
+    return status;
+}
+
 static cudaError_t dense_buffer_bytes(size_t column_count, uint64_t column_len, size_t* byte_len) {
     if (byte_len == nullptr) {
         return cudaErrorInvalidValue;
@@ -327,19 +410,30 @@ static void release_async_dispatch_buffers(AsyncDispatchBuffers* buffers) {
     async_dispatch_pools()[buffers->device].push_back(buffers);
 }
 
-static void destroy_pending_transform(PendingTransform* pending) {
+static cudaError_t destroy_pending_transform(PendingTransform* pending) {
     if (pending == nullptr) {
-        return;
+        return cudaSuccess;
     }
     (void)cudaSetDevice(pending->device);
+    cudaError_t status = cudaSuccess;
+    bool release_buffers = true;
     if (pending->buffers != nullptr && pending->buffers->stream_ready) {
-        (void)cudaStreamSynchronize(pending->buffers->stream);
+        status = wait_for_stream(pending->buffers->stream);
+        if (status == cudaErrorLaunchTimeout) {
+            release_buffers = false;
+        }
     }
-    if (pending->event != nullptr) {
-        (void)cudaEventDestroy(pending->event);
+    if (pending->event != nullptr && status != cudaErrorLaunchTimeout) {
+        cudaError_t destroy_status = cudaEventDestroy(pending->event);
+        if (status == cudaSuccess) {
+            status = destroy_status;
+        }
     }
-    release_async_dispatch_buffers(pending->buffers);
+    if (release_buffers) {
+        release_async_dispatch_buffers(pending->buffers);
+    }
     delete pending;
+    return status;
 }
 
 static cudaError_t create_pending_transform(
@@ -1134,11 +1228,11 @@ extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
 
     cudaError_t status = cudaSetDevice(pending->device);
     if (status != cudaSuccess) {
-        destroy_pending_transform(pending);
+        (void)destroy_pending_transform(pending);
         return status;
     }
 
-    status = cudaEventSynchronize(pending->event);
+    status = wait_for_event(pending->event);
     if (status == cudaSuccess) {
         if (pending->staging_output == nullptr || pending->host_output == nullptr) {
             status = cudaErrorInvalidValue;
@@ -1146,7 +1240,10 @@ extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
             memcpy(pending->host_output, pending->staging_output, pending->output_byte_len);
         }
     }
-    destroy_pending_transform(pending);
+    cudaError_t destroy_status = destroy_pending_transform(pending);
+    if (status == cudaSuccess) {
+        status = destroy_status;
+    }
     return status;
 }
 
@@ -1587,6 +1684,10 @@ extern "C" cudaError_t fastpq_fft_cuda(
     if (status != cudaSuccess) {
         return status;
     }
+    status = wait_for_default_stream_after_launch(workspace);
+    if (status != cudaSuccess) {
+        return status;
+    }
     status = cudaMemcpy(elements, workspace->dense, byte_len, cudaMemcpyDeviceToHost);
     if (status != cudaSuccess) {
         return status;
@@ -1642,6 +1743,10 @@ extern "C" cudaError_t fastpq_ifft_cuda(
         root
     );
     status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = wait_for_default_stream_after_launch(workspace);
     if (status != cudaSuccess) {
         return status;
     }
@@ -1714,6 +1819,10 @@ extern "C" cudaError_t fastpq_lde_cuda(
         coset
     );
     status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = wait_for_default_stream_after_launch(workspace);
     if (status != cudaSuccess) {
         return status;
     }
@@ -1791,6 +1900,10 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
         workspace->bn254_twiddles
     );
     status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = wait_for_default_stream_after_launch(workspace);
     if (status != cudaSuccess) {
         return status;
     }
@@ -1911,6 +2024,10 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
     if (status != cudaSuccess) {
         return status;
     }
+    status = wait_for_default_stream_after_launch(workspace);
+    if (status != cudaSuccess) {
+        return status;
+    }
     status = cudaMemcpy(out, workspace->evals, eval_byte_len, cudaMemcpyDeviceToHost);
     if (status != cudaSuccess) {
         return status;
@@ -1960,6 +2077,9 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
         state_count
     );
     status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        status = wait_for_default_stream_after_launch(workspace);
+    }
     if (status == cudaSuccess) {
         status = cudaMemcpy(states, device_states, byte_len, cudaMemcpyDeviceToHost);
     }
@@ -2051,6 +2171,9 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         device_states
     );
     status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        status = wait_for_default_stream_after_launch(workspace);
+    }
     if (status == cudaSuccess) {
         status = cudaMemcpy(out_states, device_states, state_bytes, cudaMemcpyDeviceToHost);
     }
@@ -2183,6 +2306,10 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
         device_hashes + column_count
     );
     status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        goto fused_cleanup;
+    }
+    status = wait_for_default_stream_after_launch(workspace);
     if (status != cudaSuccess) {
         goto fused_cleanup;
     }

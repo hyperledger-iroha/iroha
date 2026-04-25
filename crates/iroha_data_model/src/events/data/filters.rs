@@ -60,6 +60,8 @@ mod model {
         Sorafs(SorafsGatewayEventFilter),
         /// Matches Space Directory manifest lifecycle events
         SpaceDirectory(SpaceDirectoryEventFilter),
+        /// Matches native asset escrow lifecycle events
+        Escrow(EscrowEventFilter),
         /// Matches offline settlement lifecycle events
         Offline(OfflineTransferEventFilter),
         /// Matches oracle feed lifecycle events
@@ -159,6 +161,22 @@ mod model {
         pub(super) uaid_matcher: Option<crate::nexus::UniversalAccountId>,
         /// Matches only events from this set.
         pub(super) event_set: super::space_directory::SpaceDirectoryEventSet,
+    }
+
+    /// Filter for native asset escrow lifecycle events.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct EscrowEventFilter {
+        /// If specified, matches only events for this escrow identifier.
+        pub(super) escrow_matcher: Option<crate::escrow::EscrowId>,
+        /// If specified, matches only events for escrows opened by this seller.
+        pub(super) seller_matcher: Option<crate::account::AccountId>,
+        /// If specified, matches only events for escrows accepted by this buyer.
+        pub(super) buyer_matcher: Option<crate::account::AccountId>,
+        /// If specified, matches only events whose carried record has this status.
+        pub(super) status_matcher: Option<crate::escrow::AssetEscrowStatus>,
+        /// Matches only events from this set.
+        pub(super) event_set: super::escrow::EscrowEventSet,
     }
 
     #[cfg(feature = "governance")]
@@ -301,6 +319,7 @@ impl_json_via_norito_bytes!(
     RoleEventFilter,
     ConfigurationEventFilter,
     ExecutorEventFilter,
+    EscrowEventFilter,
 );
 
 #[cfg(all(feature = "json", feature = "governance"))]
@@ -553,6 +572,54 @@ impl SpaceDirectoryEventFilter {
     }
 }
 
+impl EscrowEventFilter {
+    /// Creates a new [`EscrowEventFilter`] accepting all escrow events.
+    pub const fn new() -> Self {
+        Self {
+            escrow_matcher: None,
+            seller_matcher: None,
+            buyer_matcher: None,
+            status_matcher: None,
+            event_set: super::escrow::EscrowEventSet::all(),
+        }
+    }
+
+    /// Restricts matches to a specific escrow identifier.
+    #[must_use]
+    pub const fn for_escrow(mut self, escrow_id: crate::escrow::EscrowId) -> Self {
+        self.escrow_matcher = Some(escrow_id);
+        self
+    }
+
+    /// Restricts matches to escrows opened by the provided seller.
+    #[must_use]
+    pub fn for_seller(mut self, seller: crate::account::AccountId) -> Self {
+        self.seller_matcher = Some(seller);
+        self
+    }
+
+    /// Restricts matches to escrows accepted by the provided buyer.
+    #[must_use]
+    pub fn for_buyer(mut self, buyer: crate::account::AccountId) -> Self {
+        self.buyer_matcher = Some(buyer);
+        self
+    }
+
+    /// Restricts matches to records in the provided escrow status.
+    #[must_use]
+    pub const fn for_status(mut self, status: crate::escrow::AssetEscrowStatus) -> Self {
+        self.status_matcher = Some(status);
+        self
+    }
+
+    /// Restricts matches to the provided event-set.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: super::escrow::EscrowEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
 impl Default for RuntimeUpgradeEventFilter {
     fn default() -> Self {
         Self::new()
@@ -590,6 +657,12 @@ impl Default for SoradnsDirectoryEventFilter {
 }
 
 impl Default for SpaceDirectoryEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for EscrowEventFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -970,6 +1043,45 @@ impl super::EventFilter for SpaceDirectoryEventFilter {
 
         if let Some(expected) = self.uaid_matcher
             && uaid != expected
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl super::EventFilter for EscrowEventFilter {
+    type Event = super::escrow::EscrowEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        if !self.event_set.matches(event) {
+            return false;
+        }
+
+        let escrow = event.escrow();
+
+        if let Some(expected) = self.escrow_matcher
+            && escrow.id != expected
+        {
+            return false;
+        }
+
+        if let Some(expected) = self.seller_matcher.as_ref()
+            && &escrow.seller != expected
+        {
+            return false;
+        }
+
+        if let Some(expected) = self.buyer_matcher.as_ref()
+            && escrow.buyer.as_ref() != Some(expected)
+        {
+            return false;
+        }
+
+        if let Some(expected) = self.status_matcher
+            && escrow.status != expected
         {
             return false;
         }
@@ -1596,6 +1708,9 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
             }
+            (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
+                filter.matches(escrow_event)
+            }
             (DataEventFilter::Offline(filter), DataEvent::Offline(offline_event)) => {
                 filter.matches(offline_event)
             }
@@ -1667,10 +1782,10 @@ pub mod prelude {
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        ExecutorEventFilter, NftEventFilter, OfflineTransferEventFilter, OracleEventFilter,
-        PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
-        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
-        VerifyingKeyEventFilter,
+        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OfflineTransferEventFilter,
+        OracleEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter,
+        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
+        TriggerEventFilter, VerifyingKeyEventFilter,
     };
 }
 #[cfg(test)]
@@ -1844,6 +1959,52 @@ mod tests {
         let filter = AssetEventFilter::new().for_events(AssetEventSet::Added);
         assert!(filter.matches(&added));
         assert!(!filter.matches(&created));
+    }
+
+    #[test]
+    fn escrow_filter_matches_by_scope_status_and_event_kind() {
+        let seller = AccountId::new(KeyPair::random().into_parts().0);
+        let buyer = AccountId::new(KeyPair::random().into_parts().0);
+        let asset_definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let escrow_id = crate::escrow::EscrowId::new(Hash::new("escrow-filter"));
+        let record = crate::escrow::AssetEscrowRecord {
+            id: escrow_id,
+            seller: seller.clone(),
+            buyer: Some(buyer.clone()),
+            asset_definition,
+            amount: Numeric::new(7, 0),
+            custody: AccountId::new(KeyPair::random().into_parts().0),
+            status: crate::escrow::AssetEscrowStatus::PaymentSent,
+            evidence_hashes: vec![Hash::new("paid")],
+            created_at_ms: 1,
+            accepted_at_ms: Some(2),
+            payment_sent_at_ms: Some(3),
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+        let event = DataEvent::Escrow(crate::events::data::escrow::EscrowEvent::PaymentSent(
+            record,
+        ));
+
+        let filter = DataEventFilter::Escrow(
+            EscrowEventFilter::new()
+                .for_escrow(escrow_id)
+                .for_seller(seller)
+                .for_buyer(buyer)
+                .for_status(crate::escrow::AssetEscrowStatus::PaymentSent)
+                .for_events(crate::events::data::escrow::EscrowEventSet::PaymentSent),
+        );
+        assert!(filter.matches(&event));
+
+        let wrong_kind = DataEventFilter::Escrow(
+            EscrowEventFilter::new()
+                .for_events(crate::events::data::escrow::EscrowEventSet::Released),
+        );
+        assert!(!wrong_kind.matches(&event));
     }
 
     #[test]

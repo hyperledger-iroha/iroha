@@ -471,6 +471,45 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*asset);
             f(*amount);
         }
+        EscrowOpenOffer {
+            escrow,
+            asset,
+            amount,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            f(*asset);
+            f(*amount);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
+        EscrowResolveDispute {
+            escrow,
+            buyer_amount,
+            seller_amount,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            f(*buyer_amount);
+            f(*seller_amount);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
+        EscrowAccept { escrow }
+        | EscrowMarkPaymentSent { escrow }
+        | EscrowRelease { escrow }
+        | EscrowCancel { escrow } => f(*escrow),
+        EscrowOpenDispute {
+            escrow,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
         MintAsset {
             account,
             asset,
@@ -883,6 +922,13 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::RegisterAsset { .. }
         | Instr::CreateNewAsset { .. }
         | Instr::TransferAsset { .. }
+        | Instr::EscrowOpenOffer { .. }
+        | Instr::EscrowAccept { .. }
+        | Instr::EscrowMarkPaymentSent { .. }
+        | Instr::EscrowRelease { .. }
+        | Instr::EscrowCancel { .. }
+        | Instr::EscrowOpenDispute { .. }
+        | Instr::EscrowResolveDispute { .. }
         | Instr::MintAsset { .. }
         | Instr::BurnAsset { .. }
         | Instr::CreateNft { .. }

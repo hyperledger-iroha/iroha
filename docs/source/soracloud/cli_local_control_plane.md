@@ -340,6 +340,18 @@ Portable smoke expects:
 - optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
 - optional `IROHA_INROU_PORTABLE_ACCEL` (`auto`, `tcg`, `kvm`, `hvf`, `whpx`)
 
+Prepare a local Debian genericcloud asset set with:
+
+```bash
+eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
+cargo xtask soracloud-inrou-smoke portable
+```
+
+The helper verifies Debian `SHA512SUMS`, extracts the root ext4 partition,
+relabels it for the native PortableVm guest profile, removes cloud-image fstab
+entries for unattached partitions, and exports the matching kernel/initrd paths.
+Use `--force` to refresh an existing cache.
+
 Firecracker smoke expects:
 
 - `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`

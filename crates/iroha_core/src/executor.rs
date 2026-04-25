@@ -4514,6 +4514,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanUnregisterSorafsProviderOwner",
     "CanSetMusubiShortAlias",
     "CanIngestSoranetPrivacy",
+    "CanResolveEscrowDispute",
 ];
 
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
@@ -4819,7 +4820,7 @@ pub mod executor_norito {
 mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
         isi::Grant,
@@ -5208,6 +5209,72 @@ mod tests {
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny registering asset definition without permission"
         );
+    }
+
+    #[test]
+    fn initial_executor_allows_native_escrow_open_without_transfer_permission() {
+        let seller = ALICE_ID.clone();
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let domain = Domain::new(asset_definition_id.domain().clone()).build(&seller);
+        let seller_account = Account::new(seller.clone()).build(&seller);
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("XOR".to_owned())
+            .build(&seller);
+        let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
+        let seller_asset = Asset::new(seller_asset_id.clone(), Numeric::from(100_u64));
+        let world = World::with_assets(
+            [domain],
+            [seller_account],
+            [asset_definition],
+            [seller_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let escrow_id = EscrowId::new(Hash::new("executor-native-escrow-open"));
+        let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
+            escrow_id,
+            asset_definition_id.clone(),
+            Numeric::from(40_u64),
+        );
+        let res = super::Executor::Initial.execute_instruction(
+            &mut stx,
+            &seller,
+            InstructionBox::from(instruction),
+        );
+        assert!(
+            res.is_ok(),
+            "native escrow opening should not require generic CanTransferAsset permission: {res:?}"
+        );
+
+        let record = stx
+            .world
+            .asset_escrows
+            .get(&escrow_id)
+            .expect("escrow record");
+        let custody_asset_id = AssetId::of(asset_definition_id, record.custody.clone());
+        let seller_balance = stx
+            .world
+            .assets
+            .get(&seller_asset_id)
+            .map(|value| value.as_ref().clone())
+            .expect("seller balance");
+        let custody_balance = stx
+            .world
+            .assets
+            .get(&custody_asset_id)
+            .map(|value| value.as_ref().clone())
+            .expect("custody balance");
+        assert_eq!(seller_balance, Numeric::from(60_u64));
+        assert_eq!(custody_balance, Numeric::from(40_u64));
     }
 
     #[test]

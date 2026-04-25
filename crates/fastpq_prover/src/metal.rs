@@ -85,6 +85,7 @@ const BN254_LIMBS: usize = 4;
 const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
+const METAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn debug_env_var(name: &str) -> Option<String> {
     overrides::guard_env_override(|| overrides::debug_env_string(name))
@@ -3607,8 +3608,28 @@ fn clamp_u128_to_u64(value: u128) -> u64 {
 fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
     let trace_label = ticket.trace_label.clone();
     let timing_start = ticket.timing_start;
-    ticket.command.wait_until_completed();
-    let status = ticket.command.status();
+    let wait_start = Instant::now();
+    let status = loop {
+        let status = ticket.command.status();
+        if matches!(
+            status,
+            MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
+        ) {
+            break status;
+        }
+        if wait_start.elapsed() >= METAL_COMMAND_TIMEOUT {
+            let duration = timing_start.map(|start| start.elapsed());
+            if let Some(label) = trace_label {
+                trace_dispatch_end_label(Some(label), duration.unwrap_or_default(), false);
+            }
+            ticket.permit.complete();
+            return Err(GpuError::Execution {
+                backend: GpuBackend::Metal,
+                message: format!("command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"),
+            });
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
     let duration = timing_start.map(|start| start.elapsed());
     if let Some(label) = trace_label {
         trace_dispatch_end_label(

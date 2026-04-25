@@ -122,6 +122,8 @@ const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 /// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SoracloudRuntimeManagerConfig {
+    /// Whether runtime production posture checks are enabled.
+    pub production_mode: bool,
     /// Root directory for local runtime materialization state.
     pub state_dir: PathBuf,
     /// Reconciliation cadence against authoritative state.
@@ -539,7 +541,9 @@ impl SoracloudRuntimeManagerConfig {
     pub fn from_runtime_config(
         config: &iroha_config::parameters::actual::SoracloudRuntime,
     ) -> Self {
+        config.assert_production_posture();
         Self {
+            production_mode: config.production_mode,
             state_dir: config.state_dir.clone(),
             reconcile_interval: config.reconcile_interval,
             hydration_concurrency: config.hydration_concurrency,
@@ -2273,6 +2277,7 @@ struct HostedHttpWorker {
 }
 
 enum HostedHttpWorkerAttachment {
+    #[allow(dead_code)]
     FirecrackerKvm(InrouTapNetworkAttachment),
     PortableVm(PortableVmAttachment),
 }
@@ -10808,6 +10813,7 @@ struct InrouSharedFilesystemMount {
 }
 
 enum InrouSharedFilesystemMountKind {
+    #[allow(dead_code)]
     Nfs {
         guest_mount_source: String,
         mount_options: String,
@@ -10819,6 +10825,7 @@ enum InrouSharedFilesystemMountKind {
     },
 }
 
+#[allow(dead_code)]
 struct InrouLeaseFsExport {
     mount_path: String,
     host_path: PathBuf,
@@ -10902,6 +10909,7 @@ impl InrouTapNetworkAttachment {
     }
 }
 
+#[allow(dead_code)]
 fn resolve_inrou_mke2fs_executable() -> Option<PathBuf> {
     resolve_executable_candidates(&["mke2fs", "mkfs.ext4"]).or_else(|| {
         known_host_executable_paths("mkfs.ext4")
@@ -10924,10 +10932,12 @@ fn resolve_inrou_rpc_nfsd_executable() -> Option<PathBuf> {
     resolve_executable_on_path("rpc.nfsd")
 }
 
+#[allow(dead_code)]
 fn resolve_inrou_mount_executable() -> Option<PathBuf> {
     resolve_executable_on_path("mount")
 }
 
+#[allow(dead_code)]
 fn resolve_inrou_chown_executable() -> Option<PathBuf> {
     resolve_executable_on_path("chown")
 }
@@ -11136,6 +11146,7 @@ fn ensure_inrou_shared_filesystem_mounts(
     Ok(mounts)
 }
 
+#[allow(dead_code)]
 fn ensure_inrou_leasefs_exports(
     plan: &SoracloudRuntimeServicePlan,
 ) -> eyre::Result<Vec<InrouLeaseFsExport>> {
@@ -11510,6 +11521,7 @@ fn build_inrou_bootstrap_seed(
     )
 }
 
+#[allow(dead_code)]
 fn build_inrou_bootstrap_seed_from_documents(
     mke2fs: &Path,
     materialization_dir: &Path,
@@ -11699,6 +11711,7 @@ fn install_inrou_iptables_rule(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn run_host_command_strings(program: &Path, args: &[String]) -> eyre::Result<()> {
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
     run_host_command(program, &borrowed)
@@ -11954,6 +11967,7 @@ fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
     );
 }
 
+#[allow(dead_code)]
 fn create_populated_ext4_image(
     mke2fs: &Path,
     image_path: &Path,
@@ -12024,7 +12038,9 @@ fn build_inrou_portable_network_config() -> String {
     String::from(concat!(
         "version: 2\n",
         "ethernets:\n",
-        "  eth0:\n",
+        "  inrou0:\n",
+        "    match:\n",
+        "      name: \"e*\"\n",
         "    dhcp4: true\n",
         "    dhcp6: false\n"
     ))
@@ -12459,6 +12475,7 @@ fn known_host_executable_directories() -> Vec<PathBuf> {
     directories
 }
 
+#[allow(dead_code)]
 fn known_host_executable_paths(program: &str) -> Vec<PathBuf> {
     known_host_executable_directories()
         .into_iter()
@@ -12486,6 +12503,7 @@ fn is_resolved_executable(candidate: &Path) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn append_ro_bind_try(command: &mut Command, host_path: &str) {
     if Path::new(host_path).exists() {
         command.arg("--ro-bind");
@@ -14416,6 +14434,7 @@ mod tests {
     }
 
     impl RecordingRuntimeMutationSink {
+        #[allow(dead_code)]
         fn submitted_runtime_states(
             &self,
         ) -> Vec<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState> {
@@ -14431,6 +14450,7 @@ mod tests {
                 .collect()
         }
 
+        #[allow(dead_code)]
         fn submitted_inrou_host_capabilities(
             &self,
         ) -> Vec<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost> {
@@ -14461,6 +14481,7 @@ mod tests {
                 .collect()
         }
 
+        #[allow(dead_code)]
         fn submitted_cleared_inrou_replica_runtime_states(
             &self,
         ) -> Vec<iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> {
@@ -14537,6 +14558,7 @@ mod tests {
                 .count()
         }
 
+        #[allow(dead_code)]
         fn submitted_inrou_placement_reconciles(&self) -> usize {
             self.instructions
                 .lock()
@@ -14993,6 +15015,7 @@ mod tests {
     #[test]
     fn manager_config_uses_explicit_soracloud_runtime_settings() {
         let runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            production_mode: true,
             state_dir: PathBuf::from("/tmp/iroha-soracloud-runtime-config"),
             reconcile_interval: Duration::from_secs(17),
             hydration_concurrency: std::num::NonZeroUsize::new(9)
@@ -15012,7 +15035,7 @@ mod tests {
                 proxy_only: false,
             },
             egress: iroha_config::parameters::actual::SoracloudRuntimeEgress {
-                default_allow: true,
+                default_allow: false,
                 allowed_hosts: vec!["cdn.sora.test".to_string()],
                 rate_per_minute: std::num::NonZeroU32::new(120),
                 max_bytes_per_minute: std::num::NonZeroU64::new(262_144),
@@ -15037,12 +15060,27 @@ mod tests {
 
         let manager = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
         assert_eq!(manager.state_dir, runtime.state_dir);
+        assert_eq!(manager.production_mode, runtime.production_mode);
         assert_eq!(manager.reconcile_interval, runtime.reconcile_interval);
         assert_eq!(manager.hydration_concurrency, runtime.hydration_concurrency);
         assert_eq!(manager.cache_budgets, runtime.cache_budgets);
         assert_eq!(manager.inrou, runtime.inrou);
         assert_eq!(manager.egress, runtime.egress);
         assert_eq!(manager.hf, runtime.hf);
+    }
+
+    #[test]
+    #[should_panic(expected = "egress.default_allow = false")]
+    fn manager_config_rejects_unsafe_direct_actual_production_posture() {
+        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            production_mode: true,
+            ..Default::default()
+        };
+        runtime.egress.default_allow = true;
+        runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
+        runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);
+
+        let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
     }
 
     #[test]
@@ -20209,6 +20247,14 @@ mod tests {
     fn portable_vm_accel_rejects_unknown_override() {
         let result = portable_vm_accel_from(Some("nope"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_inrou_portable_network_config_matches_predictable_interface_names() {
+        let network_config = build_inrou_portable_network_config();
+        assert!(network_config.contains("match:\n      name: \"e*\""));
+        assert!(network_config.contains("dhcp4: true"));
+        assert!(!network_config.contains("  eth0:\n"));
     }
 
     #[test]

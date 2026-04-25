@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BitstreamError {
+pub enum BitstreamError {
     InvalidBits,
     ValueOverflow,
     NoSpace,

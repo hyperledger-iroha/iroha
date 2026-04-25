@@ -801,6 +801,8 @@ mod model {
         OfflineAllowanceRecord(Vec<crate::offline::OfflineAllowanceRecord>),
         /// Batch of offline-to-online transfer records.
         OfflineToOnlineTransfer(Vec<crate::offline::OfflineTransferRecord>),
+        /// Batch of native asset escrow records.
+        AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
         /// Batch of offline counter summaries.
         OfflineCounterSummary(Vec<crate::offline::OfflineCounterSummary>),
         /// Batch of offline verdict revocations.
@@ -849,6 +851,8 @@ mod model {
         FindAssetById(asset::prelude::FindAssetById),
         /// Fetch an asset definition by identifier.
         FindAssetDefinitionById(asset::prelude::FindAssetDefinitionById),
+        /// Fetch a native asset escrow by identifier.
+        FindAssetEscrowById(escrow::prelude::FindAssetEscrowById),
         /// Fetch a trigger by identifier.
         FindTriggerById(trigger::prelude::FindTriggerById),
         /// Fetch a Twitter binding record by hash.
@@ -927,6 +931,8 @@ mod model {
         Asset(crate::asset::value::Asset),
         /// Asset definition payload.
         AssetDefinition(crate::asset::definition::AssetDefinition),
+        /// Native asset escrow payload.
+        AssetEscrowRecord(crate::escrow::AssetEscrowRecord),
         /// Trigger payload.
         Trigger(crate::trigger::Trigger),
         /// Twitter binding payload.
@@ -1088,6 +1094,7 @@ mod model {
                     crate::offline::OfflineTransferRecord,
                     OfflineToOnlineTransfer
                 );
+                try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
 
                 // Fallback: if unknown, leave everything empty/default and rely on server-side validation
                 Self {
@@ -1183,6 +1190,8 @@ mod model {
         OfflineAllowanceRecord,
         /// Offline-to-online transfer records.
         OfflineToOnlineTransfer,
+        /// Native asset escrow records.
+        AssetEscrowRecord,
         /// Offline counter summary records.
         OfflineCounterSummary,
         /// Offline verdict revocation records.
@@ -1322,6 +1331,12 @@ mod model {
     impl ItemKindTag for crate::offline::OfflineTransferRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::OfflineToOnlineTransfer
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::escrow::AssetEscrowRecord {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AssetEscrowRecord
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -1906,6 +1921,7 @@ impl QueryOutputBatchBox {
             (Self::RepoAgreement(v1), Self::RepoAgreement(v2)) => v1.extend(v2),
             (Self::OfflineAllowanceRecord(v1), Self::OfflineAllowanceRecord(v2)) => v1.extend(v2),
             (Self::OfflineToOnlineTransfer(v1), Self::OfflineToOnlineTransfer(v2)) => v1.extend(v2),
+            (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
             (Self::OfflineCounterSummary(v1), Self::OfflineCounterSummary(v2)) => v1.extend(v2),
             (Self::OfflineVerdictRevocation(v1), Self::OfflineVerdictRevocation(v2)) => {
                 v1.extend(v2)
@@ -1956,6 +1972,7 @@ impl QueryOutputBatchBox {
             Self::RepoAgreement(v) => v.len(),
             Self::OfflineAllowanceRecord(v) => v.len(),
             Self::OfflineToOnlineTransfer(v) => v.len(),
+            Self::AssetEscrowRecord(v) => v.len(),
             Self::OfflineCounterSummary(v) => v.len(),
             Self::OfflineVerdictRevocation(v) => v.len(),
         }
@@ -2652,6 +2669,10 @@ impl_iter_queries! {
     offline::FindOfflineToOnlineTransfersByPolicy => crate::offline::OfflineTransferRecord,
     offline::FindOfflineToOnlineTransferById => crate::offline::OfflineTransferRecord,
     offline::FindOfflineVerdictRevocations => crate::offline::OfflineVerdictRevocation,
+    escrow::FindAssetEscrows => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsBySeller => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsByBuyer => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsByStatus => crate::escrow::AssetEscrowRecord,
     FindTransactions => CommittedTransaction,
     FindAccountsWithAsset => crate::account::Account,
     FindBlockHeaders => crate::block::BlockHeader,
@@ -2673,6 +2694,7 @@ impl_singular_queries! {
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
     asset::prelude::FindAssetById => crate::asset::value::Asset,
     asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
+    escrow::prelude::FindAssetEscrowById => crate::escrow::AssetEscrowRecord,
     trigger::prelude::FindTriggerById => crate::trigger::Trigger,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
@@ -3320,6 +3342,69 @@ pub mod offline {
             FindOfflineToOnlineTransfers, FindOfflineToOnlineTransfersByController,
             FindOfflineToOnlineTransfersByPolicy, FindOfflineToOnlineTransfersByReceiver,
             FindOfflineToOnlineTransfersByStatus, FindOfflineVerdictRevocations,
+        };
+    }
+}
+
+pub mod escrow {
+    //! Native asset escrow query definitions.
+
+    use derive_more::Display;
+
+    use crate::{
+        account::AccountId,
+        escrow::{AssetEscrowStatus, EscrowId},
+    };
+
+    queries! {
+        /// Find all native asset escrow records.
+        #[derive(Copy, Display)]
+        #[display("Find all asset escrows")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindAssetEscrows;
+
+        /// Find a native asset escrow by identifier.
+        #[derive(Display)]
+        #[display("Find asset escrow `{escrow_id:?}`")]
+        #[repr(transparent)]
+        pub struct FindAssetEscrowById {
+            /// Escrow identifier.
+            pub escrow_id: EscrowId,
+        }
+
+        /// Find native asset escrows opened by a seller.
+        #[derive(Display)]
+        #[display("Find asset escrows by seller `{seller}`")]
+        #[repr(transparent)]
+        pub struct FindAssetEscrowsBySeller {
+            /// Seller account identifier.
+            pub seller: AccountId,
+        }
+
+        /// Find native asset escrows accepted by a buyer.
+        #[derive(Display)]
+        #[display("Find asset escrows by buyer `{buyer}`")]
+        #[repr(transparent)]
+        pub struct FindAssetEscrowsByBuyer {
+            /// Buyer account identifier.
+            pub buyer: AccountId,
+        }
+
+        /// Find native asset escrows by lifecycle status.
+        #[derive(Display)]
+        #[display("Find asset escrows by status `{status:?}`")]
+        #[repr(transparent)]
+        pub struct FindAssetEscrowsByStatus {
+            /// Lifecycle status filter.
+            pub status: AssetEscrowStatus,
+        }
+    }
+
+    pub mod prelude {
+        //! Prelude re-exports for native asset escrow queries.
+        pub use super::{
+            FindAssetEscrowById, FindAssetEscrows, FindAssetEscrowsByBuyer,
+            FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
         };
     }
 }
@@ -4166,6 +4251,8 @@ pub mod error {
             PublicKey(PublicKey),
             /// Failed to find twitter binding for keyed hash `{0:?}`
             TwitterBinding(crate::oracle::KeyedHash),
+            /// Failed to find native asset escrow: `{0:?}`
+            AssetEscrow(crate::escrow::EscrowId),
         }
     }
 }
@@ -4176,10 +4263,10 @@ pub mod prelude {
     pub use super::{
         CommittedTransaction, QueryBox, QueryRequest, SingularQueryBox, account::prelude::*,
         asset::prelude::*, block::prelude::*, builder::prelude::*, da::prelude::*,
-        domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, executor::prelude::*,
-        nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
-        permission::prelude::*, role::prelude::*, rwa::prelude::*, transaction::prelude::*,
-        trigger::prelude::*,
+        domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, escrow::prelude::*,
+        executor::prelude::*, nft::prelude::*, oracle::prelude::*, parameters::prelude::*,
+        peer::prelude::*, permission::prelude::*, role::prelude::*, rwa::prelude::*,
+        transaction::prelude::*, trigger::prelude::*,
     };
 }
 

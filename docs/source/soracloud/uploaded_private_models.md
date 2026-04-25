@@ -80,6 +80,30 @@ HF shared leases remain useful for shared/public source import workflows, but
 the private uploaded-model path stores encrypted compiled bytes on-chain rather
 than leasing model bytes from a shared source pool.
 
+## Production Posture
+
+Soracloud production deployments must enable `soracloud_runtime.production_mode`
+in node configuration and build `irohad` with `embedded-soracloud-runtime`.
+Production mode rejects a config that leaves broad runtime egress open, omits
+egress rate/byte budgets, or enables Hugging Face inference-bridge fallback.
+It also rejects proxy-only Inrou host posture so a node cannot advertise a
+production runtime while refusing local placement work.
+The fallback is disabled by default so a production node cannot silently route
+private-model execution through the hosted bridge path.
+
+Signed Soracloud mutation requests are body-limited before signature
+verification. Use `torii.soracloud_mutation_max_body_bytes` for ordinary
+mutation routes and `torii.soracloud_upload_max_body_bytes` for uploaded-model
+chunk routes. Oversized bodies fail with `413 Payload Too Large` before any
+canonical-request verification work is performed. After signature verification,
+signed Soracloud POST routes are also limited by
+`torii.soracloud_mutation_rate_per_account_origin_per_sec`,
+`torii.soracloud_mutation_burst_per_account_origin`, and
+`torii.soracloud_mutation_max_inflight`; the rate key combines the verified
+account, the request `Origin`, and the Soracloud route group (`mutation`,
+`upload`, `model`, or `hf`). Public runtime routes keep separate remote-IP rate
+and inflight knobs.
+
 ## Layered Model-Plane Design
 
 ### 1. Provenance and registry layer

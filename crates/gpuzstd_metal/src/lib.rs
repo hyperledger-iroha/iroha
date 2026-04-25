@@ -4,14 +4,18 @@
 //! - gpu_zstd_compress(src_ptr, src_len, level, dst_ptr, dst_len)
 //! - gpu_zstd_decompress(src_ptr, src_len, dst_ptr, dst_len)
 
+/// Shared little-endian bitstream helpers for zstd frame coding.
 #[allow(dead_code)]
-mod bitstream;
+pub mod bitstream;
+/// Shared finite-state entropy helpers for zstd sequence coding.
 #[allow(dead_code)]
-mod fse;
+pub mod fse;
+/// Shared Huffman helpers for zstd literal coding.
 #[allow(dead_code)]
-mod huffman;
+pub mod huffman;
+/// Shared deterministic zstd frame encoder/decoder.
 #[allow(dead_code)]
-mod zstd_frame;
+pub mod zstd_frame;
 
 use std::{io::Cursor, ptr, slice};
 
@@ -34,13 +38,18 @@ const MIN_MATCH: u32 = 3;
 )]
 const MAX_MATCH: u32 = 64;
 
+/// Deterministic zstd sequence emitted by GPU match-finding kernels.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub(crate) struct GpuZstdSequence {
-    lit_len: u32,
-    match_len: u32,
-    offset: u32,
-    reserved: u32,
+pub struct GpuZstdSequence {
+    /// Literal bytes preceding the match.
+    pub lit_len: u32,
+    /// Match length in bytes, or zero for the final literal-only tail.
+    pub match_len: u32,
+    /// Backward match offset in bytes.
+    pub offset: u32,
+    /// Reserved for ABI-compatible future extension; must be zero.
+    pub reserved: u32,
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -212,7 +221,7 @@ struct GpuSequences {
 pub unsafe fn compress_ffi(
     src: *const u8,
     src_len: usize,
-    level: i32,
+    _level: i32,
     dst: *mut u8,
     dst_len: *mut usize,
 ) -> i32 {
@@ -234,17 +243,9 @@ pub unsafe fn compress_ffi(
             false,
         ) {
             Ok(bytes) => bytes,
-            Err(_) => match zstd::encode_all(Cursor::new(src_slice), level) {
-                Ok(bytes) => bytes,
-                Err(_) => return RC_ZSTD,
-            },
-        },
-        // Keep the ABI stable: CPU fallback guarantees valid standard zstd frames
-        // when GPU preprocessing does not produce usable sequences.
-        Err(_) => match zstd::encode_all(Cursor::new(src_slice), level) {
-            Ok(bytes) => bytes,
             Err(_) => return RC_ZSTD,
         },
+        Err(rc) => return rc,
     };
     if encoded.len() > capacity {
         return RC_NO_SPACE;
@@ -556,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_compress_does_not_surface_unavailable_rc() {
+    fn gpu_compress_reports_unavailable_when_metal_path_is_unavailable() {
         let payload = b"gpuzstd availability fallback";
         let mut out = vec![0u8; payload.len().saturating_mul(4).saturating_add(512)];
         let mut out_len = out.len();
@@ -569,11 +570,15 @@ mod tests {
                 &mut out_len,
             )
         };
-        assert_ne!(
-            rc, RC_GPU_UNAVAILABLE,
-            "compress should fall back to CPU when Metal is temporarily unavailable"
-        );
-        assert_eq!(rc, RC_OK);
+        if rc == RC_GPU_UNAVAILABLE {
+            eprintln!("gpuzstd_metal unavailable; skipping Metal availability assertion");
+            return;
+        }
+        if cfg!(not(all(target_os = "macos", target_arch = "aarch64"))) {
+            assert_eq!(rc, RC_GPU_UNAVAILABLE);
+        } else {
+            assert_eq!(rc, RC_OK);
+        }
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

@@ -5382,6 +5382,53 @@ pub struct AdaptiveObservability {
     pub cooldown_ms: u64,
 }
 
+/// User-level Sumeragi resilience profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum SumeragiResilienceProfile {
+    /// Balanced adaptive widening for paper-mode fault resilience.
+    #[default]
+    Balanced,
+}
+
+impl json::JsonSerialize for SumeragiResilienceProfile {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+impl json::JsonDeserialize for SumeragiResilienceProfile {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "sumeragi.advanced.resilience.profile".into(),
+            message: err.to_string(),
+        })
+    }
+}
+
+/// User-level configuration for volatile Sumeragi resilience tuning.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiResilience {
+    /// Enable volatile resilience mitigation from local telemetry.
+    #[config(default = "defaults::sumeragi::RESILIENCE_ENABLED")]
+    pub enabled: bool,
+    /// Active resilience profile.
+    #[config(default = "SumeragiResilienceProfile::Balanced")]
+    pub profile: SumeragiResilienceProfile,
+    /// Maximum collector redundancy used while mitigation is active.
+    #[config(default = "defaults::sumeragi::RESILIENCE_MAX_REDUNDANT_SEND_R")]
+    pub max_redundant_send_r: u8,
+    /// Maximum extra topology fan-out used while mitigation is active.
+    #[config(default = "defaults::sumeragi::RESILIENCE_MAX_PARALLEL_TOPOLOGY_FANOUT")]
+    pub max_parallel_topology_fanout: usize,
+    /// Pipeline-status capacity reserved for local status reads under transaction load.
+    #[config(default = "defaults::sumeragi::RESILIENCE_STATUS_QUERY_RESERVED_CAPACITY")]
+    pub status_query_reserved_capacity: usize,
+}
+
 /// User-level configuration for deterministic pacing governor.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiPacingGovernor {
@@ -5515,6 +5562,9 @@ pub struct SumeragiAdvanced {
     /// Deterministic pacing governor overrides.
     #[config(nested)]
     pub pacing_governor: SumeragiPacingGovernor,
+    /// Volatile Sumeragi resilience tuning limits.
+    #[config(nested)]
+    pub resilience: SumeragiResilience,
     /// DA timeout multipliers/floor overrides.
     #[config(nested)]
     pub da: SumeragiDaAdvanced,
@@ -6683,6 +6733,59 @@ impl From<actual::AdaptiveObservability> for AdaptiveObservability {
     }
 }
 
+impl SumeragiResilience {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiResilience> {
+        let Self {
+            enabled,
+            profile,
+            max_redundant_send_r,
+            max_parallel_topology_fanout,
+            status_query_reserved_capacity,
+        } = self;
+
+        let mut ok = true;
+        if enabled && max_redundant_send_r == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.resilience.max_redundant_send_r must be greater than zero",
+            ));
+            ok = false;
+        }
+        if enabled && status_query_reserved_capacity == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.resilience.status_query_reserved_capacity must be greater than zero",
+            ));
+            ok = false;
+        }
+        if !ok {
+            return None;
+        }
+
+        Some(actual::SumeragiResilience {
+            enabled,
+            profile: match profile {
+                SumeragiResilienceProfile::Balanced => actual::SumeragiResilienceProfile::Balanced,
+            },
+            max_redundant_send_r,
+            max_parallel_topology_fanout,
+            status_query_reserved_capacity,
+        })
+    }
+}
+
+impl From<actual::SumeragiResilience> for SumeragiResilience {
+    fn from(value: actual::SumeragiResilience) -> Self {
+        Self {
+            enabled: value.enabled,
+            profile: match value.profile {
+                actual::SumeragiResilienceProfile::Balanced => SumeragiResilienceProfile::Balanced,
+            },
+            max_redundant_send_r: value.max_redundant_send_r,
+            max_parallel_topology_fanout: value.max_parallel_topology_fanout,
+            status_query_reserved_capacity: value.status_query_reserved_capacity,
+        }
+    }
+}
+
 impl SumeragiPacingGovernor {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiPacingGovernor> {
         let Self {
@@ -6815,6 +6918,7 @@ impl Sumeragi {
             worker,
             pacemaker,
             pacing_governor,
+            resilience,
             da: da_advanced,
             rbc,
             npos: npos_advanced,
@@ -7246,6 +7350,7 @@ impl Sumeragi {
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
         let pacing_governor = pacing_governor.parse(emitter)?;
+        let resilience = resilience.parse(emitter)?;
         let npos = npos.parse(npos_advanced.timeouts, emitter)?;
 
         if !(collectors_ok
@@ -7430,6 +7535,7 @@ impl Sumeragi {
                 rbc_backlog_chunk_soft_limit: pacemaker.rbc_backlog_chunk_soft_limit,
             },
             pacing_governor,
+            resilience,
             da: actual::SumeragiDa {
                 enabled: da.enabled,
                 quorum_timeout_multiplier: da_advanced.quorum_timeout_multiplier,
@@ -14071,6 +14177,9 @@ pub struct Snapshot {
 /// User-level configuration container for the embedded Soracloud runtime manager.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SoracloudRuntime {
+    /// Enable fail-closed Soracloud production posture checks.
+    #[config(default = "defaults::soracloud_runtime::PRODUCTION_MODE")]
+    pub production_mode: bool,
     /// Root directory for node-local Soracloud runtime state.
     #[config(default = "PathBuf::from(defaults::soracloud_runtime::STATE_DIR)")]
     pub state_dir: WithOrigin<PathBuf>,
@@ -14098,20 +14207,26 @@ pub struct SoracloudRuntime {
 
 impl SoracloudRuntime {
     fn parse(self) -> actual::SoracloudRuntime {
-        actual::SoracloudRuntime {
+        let egress = self.egress.parse();
+        let hf = self.hf.parse();
+        let actual = actual::SoracloudRuntime {
+            production_mode: self.production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
             reconcile_interval: self.reconcile_interval_ms.get().max(MIN_TIMER_INTERVAL),
             hydration_concurrency: self.hydration_concurrency,
             cache_budgets: self.cache_budgets.parse(),
             inrou: self.inrou.parse(),
-            egress: self.egress.parse(),
-            hf: self.hf.parse(),
-        }
+            egress,
+            hf,
+        };
+        actual.assert_production_posture();
+        actual
     }
 }
 
 #[derive(Default)]
 struct SoracloudRuntimeFields {
+    production_mode: Option<bool>,
     state_dir: Option<WithOrigin<PathBuf>>,
     reconcile_interval_ms: Option<DurationMs>,
     hydration_concurrency: Option<NonZeroUsize>,
@@ -14144,6 +14259,12 @@ impl SoracloudRuntimeFields {
         key: &str,
     ) -> ::core::result::Result<(), json::Error> {
         match key {
+            "production_mode" => Self::set_unique(
+                &mut self.production_mode,
+                "production_mode",
+                parser,
+                <bool as json::JsonDeserialize>::json_deserialize,
+            ),
             "state_dir" => Self::set_unique(
                 &mut self.state_dir,
                 "state_dir",
@@ -14192,6 +14313,9 @@ impl SoracloudRuntimeFields {
 
     fn finish(self) -> SoracloudRuntime {
         SoracloudRuntime {
+            production_mode: self
+                .production_mode
+                .unwrap_or(defaults::soracloud_runtime::PRODUCTION_MODE),
             state_dir: self.state_dir.unwrap_or_else(|| {
                 WithOrigin::inline(PathBuf::from(defaults::soracloud_runtime::STATE_DIR))
             }),
@@ -14671,6 +14795,19 @@ pub struct Torii {
     /// Maximum concurrent public Soracloud local-read executions.
     #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT")]
     pub soracloud_public_max_inflight: NonZeroUsize,
+    /// Signed Soracloud mutation rate per account+origin (tokens/sec). None disables.
+    pub soracloud_mutation_rate_per_account_origin_per_sec: Option<u32>,
+    /// Signed Soracloud mutation burst per account+origin (tokens). None disables.
+    pub soracloud_mutation_burst_per_account_origin: Option<u32>,
+    /// Maximum concurrent signed Soracloud mutation executions.
+    #[config(default = "defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT")]
+    pub soracloud_mutation_max_inflight: NonZeroUsize,
+    /// Maximum signed Soracloud mutation body size before signature verification.
+    #[config(default = "defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES")]
+    pub soracloud_mutation_max_body_bytes: Bytes<u64>,
+    /// Maximum signed Soracloud uploaded-model upload body size before signature verification.
+    #[config(default = "defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES")]
+    pub soracloud_upload_max_body_bytes: Bytes<u64>,
     /// Proof endpoint steady-state rate (requests per minute). None disables.
     pub proof_rate_per_minute: Option<u32>,
     /// Proof endpoint burst tokens (requests).
@@ -15261,6 +15398,17 @@ impl Torii {
                 .or(super::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP)
                 .and_then(std::num::NonZeroU32::new),
             soracloud_public_max_inflight: self.soracloud_public_max_inflight,
+            soracloud_mutation_rate_per_account_origin_per_sec: self
+                .soracloud_mutation_rate_per_account_origin_per_sec
+                .or(super::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC)
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_burst_per_account_origin: self
+                .soracloud_mutation_burst_per_account_origin
+                .or(super::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN)
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_max_inflight: self.soracloud_mutation_max_inflight,
+            soracloud_mutation_max_body_bytes: self.soracloud_mutation_max_body_bytes,
+            soracloud_upload_max_body_bytes: self.soracloud_upload_max_body_bytes,
             proof_api: actual::ProofApi {
                 rate_per_minute: self
                     .proof_rate_per_minute
@@ -19129,6 +19277,10 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
     fn soracloud_runtime_defaults_apply() {
         let actual = load_root(base_table());
         assert_eq!(
+            actual.soracloud_runtime.production_mode,
+            defaults::soracloud_runtime::PRODUCTION_MODE
+        );
+        assert_eq!(
             actual.soracloud_runtime.state_dir,
             defaults::soracloud_runtime::state_dir()
         );
@@ -19180,7 +19332,81 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             actual.soracloud_runtime.hf.import_max_files,
             defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
         );
+        assert_eq!(
+            actual.soracloud_runtime.hf.allow_inference_bridge_fallback,
+            defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK
+        );
         assert!(actual.soracloud_runtime.hf.inference_token.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "egress.rate_per_minute")]
+    fn soracloud_runtime_production_mode_requires_fail_closed_egress_limits() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        runtime.insert("production_mode".into(), Value::Boolean(true));
+
+        let _ = load_root(table);
+    }
+
+    #[test]
+    fn soracloud_runtime_production_mode_accepts_bounded_posture() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        runtime.insert("production_mode".into(), Value::Boolean(true));
+        let mut egress = Table::new();
+        egress.insert("default_allow".into(), Value::Boolean(false));
+        egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
+        egress.insert("rate_per_minute".into(), Value::Integer(60));
+        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
+        runtime.insert("egress".into(), Value::Table(egress));
+
+        let actual = load_root(table);
+        assert!(actual.soracloud_runtime.production_mode);
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .egress
+                .rate_per_minute
+                .expect("rate quota")
+                .get(),
+            60
+        );
+        assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
+    }
+
+    #[test]
+    #[should_panic(expected = "inrou.proxy_only")]
+    fn soracloud_runtime_production_mode_rejects_proxy_only_inrou() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        runtime.insert("production_mode".into(), Value::Boolean(true));
+        let mut egress = Table::new();
+        egress.insert("default_allow".into(), Value::Boolean(false));
+        egress.insert("allowed_hosts".into(), Value::Array(Vec::new()));
+        egress.insert("rate_per_minute".into(), Value::Integer(60));
+        egress.insert("max_bytes_per_minute".into(), Value::Integer(1_048_576));
+        runtime.insert("egress".into(), Value::Table(egress));
+        let mut inrou = Table::new();
+        inrou.insert("max_concurrent_vms".into(), Value::Integer(8));
+        inrou.insert("proxy_only".into(), Value::Boolean(true));
+        inrou.insert("start_grace_ms".into(), Value::Integer(30_000));
+        inrou.insert("stop_grace_ms".into(), Value::Integer(10_000));
+        runtime.insert("inrou".into(), Value::Table(inrou));
+
+        let _ = load_root(table);
     }
 
     #[test]

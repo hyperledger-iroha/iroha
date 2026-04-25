@@ -5166,6 +5166,35 @@ pub mod json {
             assert!(try_build_struct_index_with_helper(input, stage1_helper_invalid_len).is_none());
         }
 
+        #[cfg(feature = "cuda-stage1")]
+        #[test]
+        fn cuda_stage1_backend_matches_scalar_when_required_or_available() {
+            let mut input = String::from("{\"rows\":[");
+            for idx in 0..2048 {
+                if idx != 0 {
+                    input.push(',');
+                }
+                input.push_str("{\"id\":");
+                input.push_str(&idx.to_string());
+                input.push_str(",\"name\":\"row\\\\\\\"");
+                input.push_str(&(idx % 17).to_string());
+                input.push_str("\",\"values\":[1,2,3]}");
+            }
+            input.push_str("]}");
+
+            let got = super::cuda::build_struct_index_cuda(&input);
+            let Some(got) = got else {
+                if std::env::var_os("JSONSTAGE1_CUDA_REQUIRE").is_some() {
+                    panic!(
+                        "JSONSTAGE1_CUDA_REQUIRE requires Norito to load the CUDA Stage-1 helper"
+                    );
+                }
+                eprintln!("jsonstage1_cuda unavailable; skipping Norito CUDA Stage-1 assertion");
+                return;
+            };
+            assert_eq!(got.offsets, build_struct_index_scalar(&input).offsets);
+        }
+
         #[test]
         fn scalar_resume_matches_full_scan_across_mid_string_split() {
             let input = r#"{"s":"abc\\\"def\\\\ghi"}"#;

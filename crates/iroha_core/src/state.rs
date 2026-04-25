@@ -411,6 +411,7 @@ macro_rules! build_world_block {
             viral_binding_claims: $state.viral_binding_claims.$method(),
             viral_escrows: $state.viral_escrows.$method(),
             viral_bonus_paid: $state.viral_bonus_paid.$method(),
+            asset_escrows: $state.asset_escrows.$method(),
             uaid_dataspaces: $state.uaid_dataspaces.$method(),
             space_directory_manifests: $state.space_directory_manifests.$method(),
             axt_policies: $state.axt_policies.$method(),
@@ -601,6 +602,7 @@ macro_rules! build_world_transaction {
             viral_binding_claims: $state.viral_binding_claims.transaction(),
             viral_escrows: $state.viral_escrows.transaction(),
             viral_bonus_paid: $state.viral_bonus_paid.transaction(),
+            asset_escrows: $state.asset_escrows.transaction(),
             uaid_dataspaces: $state.uaid_dataspaces.transaction(),
             space_directory_manifests: $state.space_directory_manifests.transaction(),
             axt_policies: $state.axt_policies.transaction(),
@@ -1581,6 +1583,8 @@ pub struct World {
     pub(crate) viral_escrows: Storage<Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: Storage<Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: Storage<EscrowId, AssetEscrowRecord>,
     /// UAID dataspace bindings maintained by the Space Directory.
     #[norito(skip)]
     pub(crate) uaid_dataspaces: Storage<UniversalAccountId, UaidDataspaceBindings>,
@@ -2017,6 +2021,8 @@ pub struct WorldBlock<'world> {
     pub(crate) viral_escrows: StorageBlock<'world, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: StorageBlock<'world, Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: StorageBlock<'world, EscrowId, AssetEscrowRecord>,
     /// UAID dataspace bindings for this block scope.
     pub(crate) uaid_dataspaces: StorageBlock<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
@@ -2613,6 +2619,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) viral_escrows: StorageTransaction<'block, 'world, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: StorageTransaction<'block, 'world, Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: StorageTransaction<'block, 'world, EscrowId, AssetEscrowRecord>,
     /// UAID dataspace bindings maintained by the Space Directory.
     pub(crate) uaid_dataspaces:
         StorageTransaction<'block, 'world, UniversalAccountId, UaidDataspaceBindings>,
@@ -3384,6 +3392,8 @@ pub struct WorldView<'world> {
     pub(crate) viral_escrows: StorageView<'world, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: StorageView<'world, Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: StorageView<'world, EscrowId, AssetEscrowRecord>,
     /// UAID dataspace bindings derived from the Space Directory.
     pub(crate) uaid_dataspaces: StorageView<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records derived from the Space Directory host.
@@ -11784,6 +11794,7 @@ impl World {
             viral_binding_claims: self.viral_binding_claims.view(),
             viral_escrows: self.viral_escrows.view(),
             viral_bonus_paid: self.viral_bonus_paid.view(),
+            asset_escrows: self.asset_escrows.view(),
             uaid_dataspaces: self.uaid_dataspaces.view(),
             space_directory_manifests: self.space_directory_manifests.view(),
             axt_policies: self.axt_policies.view(),
@@ -12135,6 +12146,8 @@ pub trait WorldReadOnly {
     fn viral_escrows(&self) -> &impl StorageReadOnly<Hash, ViralEscrowRecord>;
     /// Bindings that have already paid a sender bonus.
     fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool>;
+    /// Native asset escrow records keyed by escrow identifier.
+    fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord>;
     /// UAID dataspace bindings managed by the Space Directory.
     fn uaid_dataspaces(&self) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings>;
     /// UAID capability manifests maintained by the Space Directory.
@@ -13235,6 +13248,9 @@ macro_rules! impl_world_ro {
             fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool> {
                 &self.viral_bonus_paid
             }
+            fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord> {
+                &self.asset_escrows
+            }
             fn uaid_dataspaces(
                 &self,
             ) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings> {
@@ -13898,6 +13914,7 @@ impl<'world> WorldBlock<'world> {
             viral_binding_claims,
             viral_escrows,
             viral_bonus_paid,
+            asset_escrows,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -14136,6 +14153,7 @@ impl<'world> WorldBlock<'world> {
         twitter_bindings.commit();
         viral_bonus_paid.commit();
         viral_escrows.commit();
+        asset_escrows.commit();
         viral_binding_claims.commit();
         viral_daily_counters.commit();
         viral_campaign_budget.commit();
@@ -15067,6 +15085,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             viral_binding_claims,
             viral_escrows,
             viral_bonus_paid,
+            asset_escrows,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -15282,6 +15301,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         twitter_bindings.apply();
         viral_bonus_paid.apply();
         viral_escrows.apply();
+        asset_escrows.apply();
         viral_binding_claims.apply();
         viral_daily_counters.apply();
         viral_campaign_budget.apply();
@@ -28555,6 +28575,7 @@ pub(crate) mod deserialize {
             viral_binding_claims: Storage::default(),
             viral_escrows: Storage::default(),
             viral_bonus_paid: Storage::default(),
+            asset_escrows: Storage::default(),
             uaid_dataspaces: Storage::default(),
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),

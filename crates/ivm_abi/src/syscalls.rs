@@ -427,6 +427,21 @@ pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;
 /// Use a capability handle granted by an asset DS inside an AXT.
 pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
 
+/// Open and fund a native asset escrow.
+pub const SYSCALL_ESCROW_OPEN_OFFER: u32 = 0xB8;
+/// Accept an open native asset escrow.
+pub const SYSCALL_ESCROW_ACCEPT: u32 = 0xB9;
+/// Mark accepted escrow off-chain payment as sent.
+pub const SYSCALL_ESCROW_MARK_PAYMENT_SENT: u32 = 0xBA;
+/// Release a paid escrow to the buyer.
+pub const SYSCALL_ESCROW_RELEASE: u32 = 0xBB;
+/// Cancel and refund an escrow before payment is marked.
+pub const SYSCALL_ESCROW_CANCEL: u32 = 0xBC;
+/// Open a dispute for court moderation.
+pub const SYSCALL_ESCROW_OPEN_DISPUTE: u32 = 0xBD;
+/// Resolve a disputed escrow with a buyer/seller split.
+pub const SYSCALL_ESCROW_RESOLVE_DISPUTE: u32 = 0xBE;
+
 /// Soracloud runtime host surface.
 /// Read committed service-state metadata for handler-local execution.
 pub const SYSCALL_SORACLOUD_READ_COMMITTED_STATE: u32 = 0xC0;
@@ -702,6 +717,16 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_VERIFY_DS_PROOF,
             SYSCALL_USE_ASSET_HANDLE,
         ]);
+        // Native asset escrow
+        v.extend_from_slice(&[
+            SYSCALL_ESCROW_OPEN_OFFER,
+            SYSCALL_ESCROW_ACCEPT,
+            SYSCALL_ESCROW_MARK_PAYMENT_SENT,
+            SYSCALL_ESCROW_RELEASE,
+            SYSCALL_ESCROW_CANCEL,
+            SYSCALL_ESCROW_OPEN_DISPUTE,
+            SYSCALL_ESCROW_RESOLVE_DISPUTE,
+        ]);
         // Soracloud runtime host surface
         v.extend_from_slice(&[
             SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
@@ -905,6 +930,13 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_AXT_COMMIT => "AXT_COMMIT",
         SYSCALL_VERIFY_DS_PROOF => "VERIFY_DS_PROOF",
         SYSCALL_USE_ASSET_HANDLE => "USE_ASSET_HANDLE",
+        SYSCALL_ESCROW_OPEN_OFFER => "ESCROW_OPEN_OFFER",
+        SYSCALL_ESCROW_ACCEPT => "ESCROW_ACCEPT",
+        SYSCALL_ESCROW_MARK_PAYMENT_SENT => "ESCROW_MARK_PAYMENT_SENT",
+        SYSCALL_ESCROW_RELEASE => "ESCROW_RELEASE",
+        SYSCALL_ESCROW_CANCEL => "ESCROW_CANCEL",
+        SYSCALL_ESCROW_OPEN_DISPUTE => "ESCROW_OPEN_DISPUTE",
+        SYSCALL_ESCROW_RESOLVE_DISPUTE => "ESCROW_RESOLVE_DISPUTE",
         SYSCALL_SORACLOUD_READ_COMMITTED_STATE => "SORACLOUD_READ_COMMITTED_STATE",
         SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => "SORACLOUD_EMIT_STATE_MUTATION",
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => "SORACLOUD_EMIT_MAILBOX_MESSAGE",

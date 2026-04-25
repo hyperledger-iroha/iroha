@@ -22,12 +22,18 @@ use iroha_data_model::{
     DataSpaceId, ValidationFail,
     account::rekey::AccountAlias,
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
+    escrow::EscrowId,
     events::time::Schedule,
     isi::{
         AddSignatory, Burn, BurnBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
         RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
         TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
-        register::RegisterPeerWithPop, smart_contract_code as scode, zk as DMZk,
+        escrow::{
+            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
+        },
+        register::RegisterPeerWithPop,
+        smart_contract_code as scode, zk as DMZk,
     },
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
@@ -1161,6 +1167,26 @@ const fn nanoseconds_to_millis(ns: u64) -> u32 {
 
 #[allow(clippy::used_underscore_binding)]
 impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
+    fn decode_escrow_id(vm: &IVM, ptr: u64) -> Result<EscrowId, ivm::VMError> {
+        let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+        Ok(Self::escrow_id_from_name(&name))
+    }
+
+    fn decode_optional_evidence_hashes(vm: &IVM, ptr: u64) -> Result<Vec<Hash>, ivm::VMError> {
+        if ptr == 0 {
+            return Ok(Vec::new());
+        }
+
+        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::NoritoBytes)
+            .or_else(|_| Self::decode_pointer_tlv(vm, ptr, PointerType::Blob))?;
+        decode_from_bytes(tlv.payload)
+            .or_else(|_| {
+                let owned = tlv.payload.to_vec();
+                decode_from_bytes(&owned)
+            })
+            .map_err(|_| ivm::VMError::DecodeError)
+    }
+
     /// Create a new host for the given authority.
     pub fn new(authority: AccountId) -> Self {
         let default_crypto = iroha_config::parameters::actual::Crypto::default();
@@ -5721,6 +5747,10 @@ impl<QS> CoreHostImpl<QS> {
             other => parse_numeric(&other),
         }
     }
+
+    fn escrow_id_from_name(name: &Name) -> EscrowId {
+        EscrowId::from_kotodama_name(name)
+    }
 }
 
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
@@ -5903,6 +5933,73 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => self.apply_fastpq_batch_from_tlv(vm),
+            // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
+                let escrow_ptr = vm.register(10);
+                let asset_def_ptr = vm.register(11);
+                let amount_ptr = vm.register(12);
+                let evidence_ptr = vm.register(13);
+                let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
+                let asset_definition: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                let amount: Numeric =
+                    Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
+                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
+                let instr = InstructionBox::from(OpenAssetEscrow {
+                    escrow_id,
+                    asset_definition,
+                    amount,
+                    evidence_hashes,
+                });
+                Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_ESCROW_ACCEPT => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                Ok(self.queue_instruction(InstructionBox::from(AcceptAssetEscrow { escrow_id })))
+            }
+            ivm::syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                Ok(self
+                    .queue_instruction(InstructionBox::from(MarkEscrowPaymentSent { escrow_id })))
+            }
+            ivm::syscalls::SYSCALL_ESCROW_RELEASE => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                Ok(self.queue_instruction(InstructionBox::from(ReleaseAssetEscrow { escrow_id })))
+            }
+            ivm::syscalls::SYSCALL_ESCROW_CANCEL => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                Ok(self.queue_instruction(InstructionBox::from(CancelAssetEscrow { escrow_id })))
+            }
+            ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
+                Ok(
+                    self.queue_instruction(InstructionBox::from(OpenEscrowDispute {
+                        escrow_id,
+                        evidence_hashes,
+                    })),
+                )
+            }
+            ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE => {
+                let escrow_ptr = vm.register(10);
+                let buyer_amount_ptr = vm.register(11);
+                let seller_amount_ptr = vm.register(12);
+                let evidence_ptr = vm.register(13);
+                let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
+                let buyer_amount: Numeric =
+                    Self::decode_tlv_typed(vm, buyer_amount_ptr, PointerType::NoritoBytes)?;
+                let seller_amount: Numeric =
+                    Self::decode_tlv_typed(vm, seller_amount_ptr, PointerType::NoritoBytes)?;
+                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
+                Ok(
+                    self.queue_instruction(InstructionBox::from(ResolveEscrowDispute {
+                        escrow_id,
+                        buyer_amount,
+                        seller_amount,
+                        evidence_hashes,
+                    })),
+                )
+            }
             // Account metadata (SetKeyValue<Account>)
             ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
                 let account_ptr = vm.register(10);
@@ -8849,6 +8946,138 @@ mod pointer_abi_tests {
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn native_escrow_syscalls_queue_expected_instructions() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+
+        let escrow_name = Name::from_str("aitai_offer").expect("fixture escrow name");
+        let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let amount = Numeric::from(42_u64);
+        let buyer_amount = Numeric::from(25_u64);
+        let seller_amount = Numeric::from(17_u64);
+        let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
+
+        let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
+        let asset_ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_definition),
+        );
+        let amount_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&amount));
+        let buyer_amount_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&buyer_amount),
+        );
+        let seller_amount_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&seller_amount),
+        );
+        let evidence_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&evidence_hashes),
+        );
+
+        let assert_queued = |host: &mut CoreHost, res, expected: InstructionBox| {
+            let expected_gas = crate::gas::meter_instruction(&expected);
+            assert_eq!(res, Ok(expected_gas));
+            assert_eq!(host.queued, vec![expected]);
+            host.queued.clear();
+        };
+
+        vm.set_register(10, escrow_ptr);
+        vm.set_register(11, asset_ptr);
+        vm.set_register(12, amount_ptr);
+        vm.set_register(13, evidence_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(OpenAssetEscrow {
+                escrow_id: escrow_id.clone(),
+                asset_definition,
+                amount,
+                evidence_hashes: evidence_hashes.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_ACCEPT, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(AcceptAssetEscrow {
+                escrow_id: escrow_id.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(MarkEscrowPaymentSent {
+                escrow_id: escrow_id.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_RELEASE, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(ReleaseAssetEscrow {
+                escrow_id: escrow_id.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_CANCEL, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(CancelAssetEscrow {
+                escrow_id: escrow_id.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        vm.set_register(11, evidence_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(OpenEscrowDispute {
+                escrow_id: escrow_id.clone(),
+                evidence_hashes: evidence_hashes.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        vm.set_register(11, buyer_amount_ptr);
+        vm.set_register(12, seller_amount_ptr);
+        vm.set_register(13, evidence_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(ResolveEscrowDispute {
+                escrow_id,
+                buyer_amount,
+                seller_amount,
+                evidence_hashes,
+            }),
+        );
     }
 
     #[test]
