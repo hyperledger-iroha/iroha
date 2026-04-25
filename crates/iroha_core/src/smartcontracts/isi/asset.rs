@@ -337,7 +337,8 @@ pub mod isi {
         Ok(store.find(asset_definition_id).cloned())
     }
 
-    fn update_control_record(
+    /// Persist the active outbound transfer-control record for an account.
+    pub(crate) fn update_control_record(
         state_transaction: &mut StateTransaction<'_, '_>,
         account_id: &AccountId,
         record: AssetTransferControlRecord,
@@ -351,7 +352,8 @@ pub mod isi {
         persist_asset_transfer_control_store(state_transaction, account_id, &store)
     }
 
-    fn prepare_outbound_asset_transfer_control_update(
+    /// Validate outbound transfer controls and return the record update to persist on success.
+    pub(crate) fn prepare_outbound_asset_transfer_control_update(
         state_transaction: &StateTransaction<'_, '_>,
         source_id: &AssetId,
         amount: &Numeric,
@@ -694,12 +696,23 @@ pub mod isi {
         }
     }
 
-    fn apply_transfer_delta(
+    /// Source-account guard to apply when validating a transparent numeric transfer.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum NumericAssetTransferSourcePolicy {
+        /// Apply the same source guards as a user-submitted asset transfer.
+        User,
+        /// Permit debiting a recorded native escrow custody balance from escrow instructions.
+        NativeEscrowCustody,
+    }
+
+    /// Validate policy gates for a transparent numeric asset balance movement.
+    pub(crate) fn ensure_numeric_asset_transfer_policies(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
         amount: &Numeric,
-    ) -> Result<TransferDeltaTranscript, Error> {
+        source_policy: NumericAssetTransferSourcePolicy,
+    ) -> Result<(AssetId, AssetId), Error> {
         let source_id = state_transaction
             .world
             .resolve_asset_id_for_current_scope(source_id)?;
@@ -711,6 +724,17 @@ pub mod isi {
         let destination_id = state_transaction
             .world
             .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
+        if source_id.definition() != destination_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "asset transfer source definition {} does not match destination definition {}",
+                    source_id.definition(),
+                    destination_id.definition()
+                )
+                .into(),
+            ));
+        }
+
         let spec = state_transaction
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
@@ -736,8 +760,42 @@ pub mod isi {
             ],
             Some(amount),
         )?;
-        ensure_not_offline_escrow_source(state_transaction, &source_id)?;
-        ensure_not_native_escrow_source(state_transaction, &source_id)?;
+
+        match source_policy {
+            NumericAssetTransferSourcePolicy::User => {
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
+                if !crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
+                    state_transaction,
+                    &source_id,
+                )? {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native escrow settlement source is not a recorded custody asset".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok((source_id, destination_id))
+    }
+
+    /// Apply a validated transparent numeric balance movement and return the transcript delta.
+    pub(crate) fn apply_numeric_asset_transfer_delta(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Numeric,
+        source_policy: NumericAssetTransferSourcePolicy,
+    ) -> Result<(AssetId, AssetId, TransferDeltaTranscript), Error> {
+        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            source_policy,
+        )?;
 
         let remove_source_asset;
         let from_balance_before;
@@ -782,7 +840,7 @@ pub mod isi {
             **dst = to_balance_after.clone();
         }
 
-        Ok(TransferDeltaTranscript {
+        let delta = TransferDeltaTranscript {
             from_account: source_id.account().clone(),
             to_account: destination_id.account().clone(),
             asset_definition: source_id.definition().clone(),
@@ -793,7 +851,8 @@ pub mod isi {
             to_balance_after,
             from_merkle_proof: None,
             to_merkle_proof: None,
-        })
+        };
+        Ok((source_id, destination_id, delta))
     }
 
     impl Execute for Mint<Numeric, Asset> {
@@ -948,8 +1007,13 @@ pub mod isi {
                 Some((destination_id.definition(), &amount)),
                 state_transaction,
             )?;
-            let delta =
-                apply_transfer_delta(state_transaction, &source_id, &destination_id, &amount)?;
+            let (_, _, delta) = apply_numeric_asset_transfer_delta(
+                state_transaction,
+                &source_id,
+                &destination_id,
+                &amount,
+                NumericAssetTransferSourcePolicy::User,
+            )?;
             if let Some(record) = control_update {
                 update_control_record(state_transaction, source_id.account(), record)?;
             }
@@ -1113,8 +1177,13 @@ pub mod isi {
                     Some((destination_id.definition(), &amount)),
                     state_transaction,
                 )?;
-                let delta =
-                    apply_transfer_delta(state_transaction, &source_id, &destination_id, &amount)?;
+                let (_, _, delta) = apply_numeric_asset_transfer_delta(
+                    state_transaction,
+                    &source_id,
+                    &destination_id,
+                    &amount,
+                    NumericAssetTransferSourcePolicy::User,
+                )?;
                 if let Some(record) = control_update {
                     update_control_record(state_transaction, source_id.account(), record)?;
                 }

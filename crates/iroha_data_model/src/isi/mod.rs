@@ -804,6 +804,41 @@ impl From<crate::isi::escrow::ResolveEscrowDispute> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::escrow::OpenAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::AcceptAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::AcceptAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::MarkAnonymousEscrowPaymentSent> for InstructionBox {
+    fn from(i: crate::isi::escrow::MarkAnonymousEscrowPaymentSent) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ReleaseAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::ReleaseAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::CancelAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::CancelAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::OpenAnonymousEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAnonymousEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ResolveAnonymousEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::ResolveAnonymousEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of SoraFS capacity marketplace instructions.
 impl From<crate::isi::sorafs::RegisterCapacityDeclaration> for InstructionBox {
@@ -2980,8 +3015,11 @@ pub mod prelude {
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
         escrow::{
-            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
-            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
+            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
+            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
+            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
+            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
         },
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,

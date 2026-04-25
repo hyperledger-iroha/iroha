@@ -9,6 +9,9 @@ PREPARE_PORTABLE="auto"
 SKIP_PORTABLE=0
 SKIP_INTEGRATION=0
 MIXED_HOST_INVENTORY=""
+STEP_TIMEOUT_SECONDS="${SORACLOUD_READINESS_STEP_TIMEOUT_SECONDS:-7200}"
+CARGO_TARGET_DIR_OVERRIDE="${SORACLOUD_READINESS_CARGO_TARGET_DIR:-}"
+ISOLATE_CARGO_TARGET=0
 
 usage() {
   cat <<'USAGE' >&2
@@ -17,6 +20,9 @@ Usage: scripts/ci/run_soracloud_production_readiness.sh [options]
 Options:
   --profile focused|full|load       focused runs crate-local gates; full adds portable and multi-peer live flows; load runs route + multi-peer load gates
   --out DIR                         report output directory (default: dist/soracloud-production-readiness-<timestamp>)
+  --step-timeout-seconds SECONDS    timeout each gate after SECONDS (default: 7200; use 0 to disable)
+  --cargo-target-dir DIR            run Cargo gates with this CARGO_TARGET_DIR
+  --isolate-cargo-target            run Cargo gates under OUT_DIR/cargo-target to avoid workspace lock contention
   --prepare-portable-assets         prepare verified Debian genericcloud assets when portable env vars are missing
   --no-prepare-portable-assets      require caller-provided IROHA_INROU_PORTABLE_* asset paths
   --skip-portable                   skip PortableVm QEMU smoke even in full profile
@@ -37,6 +43,20 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { echo "ERROR: --out requires a directory" >&2; exit 2; }
       OUT_DIR="$2"
       shift 2
+      ;;
+    --step-timeout-seconds)
+      [ "$#" -ge 2 ] || { echo "ERROR: --step-timeout-seconds requires a value" >&2; exit 2; }
+      STEP_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --cargo-target-dir)
+      [ "$#" -ge 2 ] || { echo "ERROR: --cargo-target-dir requires a directory" >&2; exit 2; }
+      CARGO_TARGET_DIR_OVERRIDE="$2"
+      shift 2
+      ;;
+    --isolate-cargo-target)
+      ISOLATE_CARGO_TARGET=1
+      shift
       ;;
     --prepare-portable-assets)
       PREPARE_PORTABLE=1
@@ -80,7 +100,24 @@ case "$PROFILE" in
     ;;
 esac
 
+case "$STEP_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*)
+    echo "ERROR: --step-timeout-seconds must be a non-negative integer" >&2
+    exit 2
+    ;;
+esac
+
 mkdir -p "$OUT_DIR/logs"
+rm -f "$OUT_DIR"/logs/*.log
+
+if [ "$ISOLATE_CARGO_TARGET" -eq 1 ] && [ -z "$CARGO_TARGET_DIR_OVERRIDE" ]; then
+  CARGO_TARGET_DIR_OVERRIDE="${OUT_DIR}/cargo-target"
+fi
+if [ -n "$CARGO_TARGET_DIR_OVERRIDE" ]; then
+  mkdir -p "$CARGO_TARGET_DIR_OVERRIDE"
+  export CARGO_TARGET_DIR="$CARGO_TARGET_DIR_OVERRIDE"
+fi
+
 REPORT="${OUT_DIR}/soracloud_production_readiness.md"
 TSV="${OUT_DIR}/soracloud_production_readiness.tsv"
 : > "$REPORT"
@@ -92,6 +129,8 @@ cat > "$REPORT" <<EOF
 - Profile: \`${PROFILE}\`
 - Started: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`
 - Workspace: \`${ROOT_DIR}\`
+- Step timeout seconds: \`${STEP_TIMEOUT_SECONDS}\`
+- Cargo target dir: \`${CARGO_TARGET_DIR:-workspace default}\`
 
 EOF
 
@@ -114,10 +153,50 @@ record_step() {
   printf "%s\t%s\t%s\t%s\n" "$label" "$status" "$duration" "$log_path" >> "$TSV"
   {
     printf "## %s\n\n" "$label"
-    printf "- Status: \`%s\`\n" "$status"
-    printf "- Duration: \`%ss\`\n" "$duration"
-    printf "- Log: \`%s\`\n\n" "$log_path"
+    printf '%s\n' "- Status: \`${status}\`"
+    printf '%s\n' "- Duration: \`${duration}s\`"
+    printf '%s\n\n' "- Log: \`${log_path}\`"
   } >> "$REPORT"
+}
+
+run_command_with_timeout() {
+  local timeout_seconds="$1"
+  local command="$2"
+  if [ "$timeout_seconds" -eq 0 ]; then
+    bash -lc "$command"
+    return $?
+  fi
+  python3 - "$timeout_seconds" "$command" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout_seconds = int(sys.argv[1])
+command = sys.argv[2]
+process = subprocess.Popen(["bash", "-lc", command], start_new_session=True)
+
+try:
+    raise SystemExit(process.wait(timeout=timeout_seconds))
+except subprocess.TimeoutExpired:
+    print(
+        f"ERROR: step timed out after {timeout_seconds}s; terminating child process group",
+        file=sys.stderr,
+    )
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    raise SystemExit(124)
+PY
 }
 
 run_step() {
@@ -132,7 +211,7 @@ run_step() {
   {
     printf '+ %s\n' "$command"
     printf '\n'
-    cd "$ROOT_DIR" && bash -lc "$command"
+    cd "$ROOT_DIR" && run_command_with_timeout "$STEP_TIMEOUT_SECONDS" "$command"
   } >"$log_path" 2>&1
   local status=$?
   local end
@@ -216,13 +295,13 @@ run_integration_load_gates() {
     return
   fi
   run_step "multi-peer soracloud status control plane" \
-    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_status_uses_live_torii_control_plane --test iroha_cli -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_status_uses_live_torii_control_plane --test core_api -- --nocapture"
   run_step "multi-peer soracloud mutation rollout" \
-    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_mutations_use_live_torii_control_plane --test iroha_cli -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_mutations_use_live_torii_control_plane --test core_api -- --nocapture"
   run_step "multi-peer soracloud training model lifecycle" \
-    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane --test iroha_cli -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane --test core_api -- --nocapture"
   run_step "multi-peer soracloud hf shared lease proration" \
-    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts --test iroha_cli -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p integration_tests soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts --test core_api -- --nocapture"
 }
 
 run_mixed_host_gate() {

@@ -125,11 +125,129 @@ pub struct AssetEscrowRecord {
     pub resolution: Option<AssetEscrowResolution>,
 }
 
+/// Proof-linked shielded movement recorded by an anonymous asset escrow.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AnonymousAssetEscrowProofRecord {
+    /// Nullifiers consumed by the shielded transfer proof.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::vec")
+    )]
+    pub nullifiers: Vec<[u8; 32]>,
+    /// Output note commitments appended by the shielded transfer proof.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::vec")
+    )]
+    pub output_commitments: Vec<[u8; 32]>,
+    /// Hash of the verified proof bytes for on-chain auditability.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub proof_hash: [u8; 32],
+    /// Optional hash of the pointer-ABI verification envelope.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub envelope_hash: Option<[u8; 32]>,
+    /// Recent shielded Merkle root used during proof construction.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub root_hint: Option<[u8; 32]>,
+    /// Unix timestamp (milliseconds) when the proof-backed movement was recorded.
+    pub recorded_at_ms: u64,
+}
+
+/// Court resolution details for a disputed anonymous asset escrow.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AnonymousAssetEscrowResolution {
+    /// Account that resolved the dispute.
+    pub resolver: AccountId,
+    /// Output commitments labelled for the accepted buyer.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::vec")
+    )]
+    pub buyer_output_commitments: Vec<[u8; 32]>,
+    /// Output commitments labelled for the seller.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::vec")
+    )]
+    pub seller_output_commitments: Vec<[u8; 32]>,
+    /// Proof-linked shielded movement that spent the escrow note.
+    pub proof: AnonymousAssetEscrowProofRecord,
+    /// Evidence or judgement hashes attached to the resolution.
+    pub evidence_hashes: Vec<Hash>,
+    /// Unix timestamp (milliseconds) when the resolution was recorded.
+    pub resolved_at_ms: u64,
+}
+
+/// Ledger-managed anonymous asset escrow backed by shielded nullifiers and commitments.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AnonymousAssetEscrowRecord {
+    /// Escrow identifier.
+    pub id: EscrowId,
+    /// Seller that opened the escrow and supplied the funding proof.
+    pub seller: AccountId,
+    /// Buyer that accepted the offer, if any.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub buyer: Option<AccountId>,
+    /// Shielded asset definition.
+    pub asset_definition: AssetDefinitionId,
+    /// Escrow note commitment appended when the escrow was opened.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub escrow_commitment: [u8; 32],
+    /// Current lifecycle status.
+    pub status: AssetEscrowStatus,
+    /// Evidence hashes attached by the parties.
+    pub evidence_hashes: Vec<Hash>,
+    /// Proof-linked movement that funded the escrow commitment.
+    pub opening: AnonymousAssetEscrowProofRecord,
+    /// Proof-linked movement that released the escrow to the buyer, if closed that way.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub release: Option<AnonymousAssetEscrowProofRecord>,
+    /// Proof-linked movement that cancelled the escrow back to the seller, if closed that way.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub cancellation: Option<AnonymousAssetEscrowProofRecord>,
+    /// Unix timestamp (milliseconds) when the escrow was opened.
+    pub created_at_ms: u64,
+    /// Unix timestamp (milliseconds) when a buyer accepted.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub accepted_at_ms: Option<u64>,
+    /// Unix timestamp (milliseconds) when the buyer marked payment as sent.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub payment_sent_at_ms: Option<u64>,
+    /// Unix timestamp (milliseconds) when a dispute was opened.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub disputed_at_ms: Option<u64>,
+    /// Unix timestamp (milliseconds) when the escrow closed.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub closed_at_ms: Option<u64>,
+    /// Optional court resolution details for resolved disputed escrows.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub resolution: Option<AnonymousAssetEscrowResolution>,
+}
+
 /// Prelude exports for native escrow records.
 pub mod prelude {
     pub use super::{
-        AssetEscrowRecord, AssetEscrowResolution, AssetEscrowStatus, EscrowId,
-        KOTODAMA_ESCROW_ID_PREFIX,
+        AnonymousAssetEscrowProofRecord, AnonymousAssetEscrowRecord,
+        AnonymousAssetEscrowResolution, AssetEscrowRecord, AssetEscrowResolution,
+        AssetEscrowStatus, EscrowId, KOTODAMA_ESCROW_ID_PREFIX,
     };
 }
 
@@ -177,5 +295,47 @@ mod tests {
             EscrowId::from_kotodama_name(&name),
             EscrowId::new(Hash::new("kotodama-native-escrow:aitai_offer"))
         );
+    }
+
+    #[test]
+    fn anonymous_asset_escrow_record_roundtrips_norito() {
+        let seller_keypair = KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519);
+        let buyer_keypair = KeyPair::from_seed(vec![0x62; 32], Algorithm::Ed25519);
+        let seller = AccountId::new(seller_keypair.public_key().clone());
+        let buyer = AccountId::new(buyer_keypair.public_key().clone());
+        let asset_definition: AssetDefinitionId =
+            "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset id");
+        let proof = AnonymousAssetEscrowProofRecord {
+            nullifiers: vec![[0x11; 32]],
+            output_commitments: vec![[0x22; 32]],
+            proof_hash: [0x33; 32],
+            envelope_hash: Some([0x44; 32]),
+            root_hint: Some([0x55; 32]),
+            recorded_at_ms: 10,
+        };
+        let record = AnonymousAssetEscrowRecord {
+            id: EscrowId::new(Hash::new("anon-escrow-roundtrip")),
+            seller,
+            buyer: Some(buyer.clone()),
+            asset_definition,
+            escrow_commitment: [0x22; 32],
+            status: AssetEscrowStatus::PaymentSent,
+            evidence_hashes: vec![Hash::new("anon-evidence")],
+            opening: proof,
+            release: None,
+            cancellation: None,
+            created_at_ms: 10,
+            accepted_at_ms: Some(11),
+            payment_sent_at_ms: Some(12),
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+
+        let bytes = norito::to_bytes(&record).expect("encode");
+        let decoded: AnonymousAssetEscrowRecord =
+            norito::decode_from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded, record);
+        assert_eq!(decoded.buyer, Some(buyer));
     }
 }

@@ -803,6 +803,8 @@ mod model {
         OfflineToOnlineTransfer(Vec<crate::offline::OfflineTransferRecord>),
         /// Batch of native asset escrow records.
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
+        /// Batch of native anonymous asset escrow records.
+        AnonymousAssetEscrowRecord(Vec<crate::escrow::AnonymousAssetEscrowRecord>),
         /// Batch of offline counter summaries.
         OfflineCounterSummary(Vec<crate::offline::OfflineCounterSummary>),
         /// Batch of offline verdict revocations.
@@ -853,6 +855,8 @@ mod model {
         FindAssetDefinitionById(asset::prelude::FindAssetDefinitionById),
         /// Fetch a native asset escrow by identifier.
         FindAssetEscrowById(escrow::prelude::FindAssetEscrowById),
+        /// Fetch a native anonymous asset escrow by identifier.
+        FindAnonymousAssetEscrowById(escrow::prelude::FindAnonymousAssetEscrowById),
         /// Fetch a trigger by identifier.
         FindTriggerById(trigger::prelude::FindTriggerById),
         /// Fetch a Twitter binding record by hash.
@@ -933,6 +937,8 @@ mod model {
         AssetDefinition(crate::asset::definition::AssetDefinition),
         /// Native asset escrow payload.
         AssetEscrowRecord(crate::escrow::AssetEscrowRecord),
+        /// Native anonymous asset escrow payload.
+        AnonymousAssetEscrowRecord(crate::escrow::AnonymousAssetEscrowRecord),
         /// Trigger payload.
         Trigger(crate::trigger::Trigger),
         /// Twitter binding payload.
@@ -1095,6 +1101,10 @@ mod model {
                     OfflineToOnlineTransfer
                 );
                 try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
+                try_build!(
+                    crate::escrow::AnonymousAssetEscrowRecord,
+                    AnonymousAssetEscrowRecord
+                );
 
                 // Fallback: if unknown, leave everything empty/default and rely on server-side validation
                 Self {
@@ -1192,6 +1202,8 @@ mod model {
         OfflineToOnlineTransfer,
         /// Native asset escrow records.
         AssetEscrowRecord,
+        /// Native anonymous asset escrow records.
+        AnonymousAssetEscrowRecord,
         /// Offline counter summary records.
         OfflineCounterSummary,
         /// Offline verdict revocation records.
@@ -1337,6 +1349,12 @@ mod model {
     impl ItemKindTag for crate::escrow::AssetEscrowRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::AssetEscrowRecord
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::escrow::AnonymousAssetEscrowRecord {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AnonymousAssetEscrowRecord
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -1922,6 +1940,9 @@ impl QueryOutputBatchBox {
             (Self::OfflineAllowanceRecord(v1), Self::OfflineAllowanceRecord(v2)) => v1.extend(v2),
             (Self::OfflineToOnlineTransfer(v1), Self::OfflineToOnlineTransfer(v2)) => v1.extend(v2),
             (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
+            (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
+                v1.extend(v2)
+            }
             (Self::OfflineCounterSummary(v1), Self::OfflineCounterSummary(v2)) => v1.extend(v2),
             (Self::OfflineVerdictRevocation(v1), Self::OfflineVerdictRevocation(v2)) => {
                 v1.extend(v2)
@@ -1973,6 +1994,7 @@ impl QueryOutputBatchBox {
             Self::OfflineAllowanceRecord(v) => v.len(),
             Self::OfflineToOnlineTransfer(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
+            Self::AnonymousAssetEscrowRecord(v) => v.len(),
             Self::OfflineCounterSummary(v) => v.len(),
             Self::OfflineVerdictRevocation(v) => v.len(),
         }
@@ -2673,6 +2695,10 @@ impl_iter_queries! {
     escrow::FindAssetEscrowsBySeller => crate::escrow::AssetEscrowRecord,
     escrow::FindAssetEscrowsByBuyer => crate::escrow::AssetEscrowRecord,
     escrow::FindAssetEscrowsByStatus => crate::escrow::AssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrows => crate::escrow::AnonymousAssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrowsBySeller => crate::escrow::AnonymousAssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrowsByBuyer => crate::escrow::AnonymousAssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrowsByStatus => crate::escrow::AnonymousAssetEscrowRecord,
     FindTransactions => CommittedTransaction,
     FindAccountsWithAsset => crate::account::Account,
     FindBlockHeaders => crate::block::BlockHeader,
@@ -2695,6 +2721,7 @@ impl_singular_queries! {
     asset::prelude::FindAssetById => crate::asset::value::Asset,
     asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
     escrow::prelude::FindAssetEscrowById => crate::escrow::AssetEscrowRecord,
+    escrow::prelude::FindAnonymousAssetEscrowById => crate::escrow::AnonymousAssetEscrowRecord,
     trigger::prelude::FindTriggerById => crate::trigger::Trigger,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
@@ -3398,13 +3425,57 @@ pub mod escrow {
             /// Lifecycle status filter.
             pub status: AssetEscrowStatus,
         }
+
+        /// Find all native anonymous asset escrow records.
+        #[derive(Copy, Display)]
+        #[display("Find all anonymous asset escrows")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindAnonymousAssetEscrows;
+
+        /// Find a native anonymous asset escrow by identifier.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrow `{escrow_id:?}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowById {
+            /// Escrow identifier.
+            pub escrow_id: EscrowId,
+        }
+
+        /// Find native anonymous asset escrows opened by a seller.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrows by seller `{seller}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowsBySeller {
+            /// Seller account identifier.
+            pub seller: AccountId,
+        }
+
+        /// Find native anonymous asset escrows accepted by a buyer.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrows by buyer `{buyer}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowsByBuyer {
+            /// Buyer account identifier.
+            pub buyer: AccountId,
+        }
+
+        /// Find native anonymous asset escrows by lifecycle status.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrows by status `{status:?}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowsByStatus {
+            /// Lifecycle status filter.
+            pub status: AssetEscrowStatus,
+        }
     }
 
     pub mod prelude {
         //! Prelude re-exports for native asset escrow queries.
         pub use super::{
-            FindAssetEscrowById, FindAssetEscrows, FindAssetEscrowsByBuyer,
-            FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+            FindAnonymousAssetEscrowById, FindAnonymousAssetEscrows,
+            FindAnonymousAssetEscrowsByBuyer, FindAnonymousAssetEscrowsBySeller,
+            FindAnonymousAssetEscrowsByStatus, FindAssetEscrowById, FindAssetEscrows,
+            FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
         };
     }
 }

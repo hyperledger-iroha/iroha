@@ -7,12 +7,13 @@ Completed history lives in `status.md`. This file should only track unfinished w
 ## Validation corridor
 
 - Carry native asset escrow through the remaining Aitai application corridor.
-  - Wire the Sora Aitai application UI/backend onto the native escrow ISIs and the new Kotlin/Java/Swift helper surfaces, then subscribe through the escrow query/event APIs.
-  - Add end-to-end UI/client smoke coverage once the Sora Aitai application replaces the old contract escrow account path.
-  - Rerun the Kotlin/Java SDK tests once a JDK is available on the host, and rerun the Swift escrow builder tests once `dist/NoritoBridge.xcframework` contains a real bridge artifact.
-  - Keep NFT/RWA/confidential escrow and court fee/payout generalization as separate follow-ups; the v1 primitive intentionally resolves only between the escrow seller and accepted buyer.
-- Carry the Soracloud production posture hardening through the next runtime and load corridor.
-  - Follow with a multi-peer load pass that exercises Soracloud mutation, upload, model/HF, and public runtime route groups under configured rate, inflight, upload, egress, cache, disk, and model-session limits.
+  - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and the new Kotlin/Java/Swift helper surfaces, then subscribe through the numeric escrow query/event APIs.
+  - Add Kotodama/IVM pointer-ABI wrappers, SDK builders, and app-facing lifecycle events for the proof-carrying anonymous escrow ISIs now that the native core/query path is in place.
+  - Add end-to-end UI/client smoke coverage once the Sora Aitai application replaces the old contract escrow account path for both transparent XOR and shielded anonymous-asset offers.
+  - Rerun the full Kotlin, Java Android, and Swift SDK suites after the Aitai app wiring lands.
+  - Keep NFT/RWA escrow and court fee/payout generalization as separate follow-ups; the v1 primitive intentionally resolves only between the escrow seller and accepted buyer.
+- Carry the Soracloud production posture hardening through the operator-host rollout corridor.
+  - Local focused, portable QEMU, and multi-peer load readiness gates are green as of 2026-04-25; before public rollout, run the mixed-host Inrou smoke with the real operator inventory and archive the readiness report.
 - Carry the verified lane relay JSON-state/key change through the next UC6 integration corridor.
   - The focused crate checks are green as of 2026-04-24, but no live UC6 settlement-smoke run or topology reset has been performed from this tree.
   - Before any live deployment, confirm the deploy/Core API smoke path still uses `relay_state_key`, JSON relay state, and the simulation gate against the exact finalization payload.

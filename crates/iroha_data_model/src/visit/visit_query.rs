@@ -270,6 +270,7 @@ mod tests {
             SingularQueryBox::FindAssetById(_) => {}
             SingularQueryBox::FindAssetDefinitionById(_) => {}
             SingularQueryBox::FindAssetEscrowById(_) => {}
+            SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}

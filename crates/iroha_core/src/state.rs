@@ -412,6 +412,7 @@ macro_rules! build_world_block {
             viral_escrows: $state.viral_escrows.$method(),
             viral_bonus_paid: $state.viral_bonus_paid.$method(),
             asset_escrows: $state.asset_escrows.$method(),
+            anonymous_asset_escrows: $state.anonymous_asset_escrows.$method(),
             uaid_dataspaces: $state.uaid_dataspaces.$method(),
             space_directory_manifests: $state.space_directory_manifests.$method(),
             axt_policies: $state.axt_policies.$method(),
@@ -603,6 +604,7 @@ macro_rules! build_world_transaction {
             viral_escrows: $state.viral_escrows.transaction(),
             viral_bonus_paid: $state.viral_bonus_paid.transaction(),
             asset_escrows: $state.asset_escrows.transaction(),
+            anonymous_asset_escrows: $state.anonymous_asset_escrows.transaction(),
             uaid_dataspaces: $state.uaid_dataspaces.transaction(),
             space_directory_manifests: $state.space_directory_manifests.transaction(),
             axt_policies: $state.axt_policies.transaction(),
@@ -1585,6 +1587,8 @@ pub struct World {
     pub(crate) viral_bonus_paid: Storage<Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: Storage<EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows: Storage<EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings maintained by the Space Directory.
     #[norito(skip)]
     pub(crate) uaid_dataspaces: Storage<UniversalAccountId, UaidDataspaceBindings>,
@@ -2023,6 +2027,8 @@ pub struct WorldBlock<'world> {
     pub(crate) viral_bonus_paid: StorageBlock<'world, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageBlock<'world, EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings for this block scope.
     pub(crate) uaid_dataspaces: StorageBlock<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
@@ -2621,6 +2627,9 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) viral_bonus_paid: StorageTransaction<'block, 'world, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageTransaction<'block, 'world, EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows:
+        StorageTransaction<'block, 'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings maintained by the Space Directory.
     pub(crate) uaid_dataspaces:
         StorageTransaction<'block, 'world, UniversalAccountId, UaidDataspaceBindings>,
@@ -3394,6 +3403,8 @@ pub struct WorldView<'world> {
     pub(crate) viral_bonus_paid: StorageView<'world, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
     pub(crate) asset_escrows: StorageView<'world, EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows: StorageView<'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings derived from the Space Directory.
     pub(crate) uaid_dataspaces: StorageView<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records derived from the Space Directory host.
@@ -6534,6 +6545,8 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_nullifiers_in_tx: u32,
     /// Total confidential commitments created so far in this transaction.
     pub zk_commitments_in_tx: u32,
+    /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
+    pub(crate) native_anonymous_escrow_transfer_depth: u32,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -11795,6 +11808,7 @@ impl World {
             viral_escrows: self.viral_escrows.view(),
             viral_bonus_paid: self.viral_bonus_paid.view(),
             asset_escrows: self.asset_escrows.view(),
+            anonymous_asset_escrows: self.anonymous_asset_escrows.view(),
             uaid_dataspaces: self.uaid_dataspaces.view(),
             space_directory_manifests: self.space_directory_manifests.view(),
             axt_policies: self.axt_policies.view(),
@@ -12148,6 +12162,10 @@ pub trait WorldReadOnly {
     fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool>;
     /// Native asset escrow records keyed by escrow identifier.
     fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord>;
+    /// Native anonymous asset escrow records keyed by escrow identifier.
+    fn anonymous_asset_escrows(
+        &self,
+    ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord>;
     /// UAID dataspace bindings managed by the Space Directory.
     fn uaid_dataspaces(&self) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings>;
     /// UAID capability manifests maintained by the Space Directory.
@@ -13251,6 +13269,11 @@ macro_rules! impl_world_ro {
             fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord> {
                 &self.asset_escrows
             }
+            fn anonymous_asset_escrows(
+                &self,
+            ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord> {
+                &self.anonymous_asset_escrows
+            }
             fn uaid_dataspaces(
                 &self,
             ) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings> {
@@ -13915,6 +13938,7 @@ impl<'world> WorldBlock<'world> {
             viral_escrows,
             viral_bonus_paid,
             asset_escrows,
+            anonymous_asset_escrows,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -14154,6 +14178,7 @@ impl<'world> WorldBlock<'world> {
         viral_bonus_paid.commit();
         viral_escrows.commit();
         asset_escrows.commit();
+        anonymous_asset_escrows.commit();
         viral_binding_claims.commit();
         viral_daily_counters.commit();
         viral_campaign_budget.commit();
@@ -15086,6 +15111,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             viral_escrows,
             viral_bonus_paid,
             asset_escrows,
+            anonymous_asset_escrows,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -15302,6 +15328,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         viral_bonus_paid.apply();
         viral_escrows.apply();
         asset_escrows.apply();
+        anonymous_asset_escrows.apply();
         viral_binding_claims.apply();
         viral_daily_counters.apply();
         viral_campaign_budget.apply();
@@ -22184,6 +22211,7 @@ impl<'state> StateBlock<'state> {
             zk_proof_bytes_in_block_so_far: self.zk_proof_bytes_in_block,
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
+            native_anonymous_escrow_transfer_depth: 0,
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,
@@ -28576,6 +28604,7 @@ pub(crate) mod deserialize {
             viral_escrows: Storage::default(),
             viral_bonus_paid: Storage::default(),
             asset_escrows: Storage::default(),
+            anonymous_asset_escrows: Storage::default(),
             uaid_dataspaces: Storage::default(),
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),

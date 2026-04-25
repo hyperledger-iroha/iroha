@@ -1571,6 +1571,10 @@ impl PipelineStatusKind {
             Self::Rejected => 5,
         }
     }
+
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Applied | Self::Rejected | Self::Expired)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -13807,6 +13811,10 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AssetEscrowRecord(right),
         ) => merge_variant!(left, right, AssetEscrowRecord),
         (
+            QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
+            QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
+        ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
+        (
             QueryOutputBatchBox::OfflineCounterSummary(mut left),
             QueryOutputBatchBox::OfflineCounterSummary(right),
         ) => merge_variant!(left, right, OfflineCounterSummary),
@@ -13919,6 +13927,9 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
+        }
+        QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
+            canonicalize_variant!(items, AnonymousAssetEscrowRecord)
         }
         QueryOutputBatchBox::OfflineCounterSummary(items) => {
             canonicalize_variant!(items, OfflineCounterSummary)
@@ -15353,6 +15364,85 @@ mod torii_routed_read_tests {
             panic!("expected string batch");
         };
         assert_eq!(items, vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    fn anonymous_asset_escrow_record_for_batch_test(
+        label: &str,
+        seed: u8,
+    ) -> iroha_data_model::escrow::AnonymousAssetEscrowRecord {
+        let seller_keypair = KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        let asset_definition: AssetDefinitionId =
+            "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset id");
+        let proof = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
+            nullifiers: vec![[seed; 32]],
+            output_commitments: vec![[seed.wrapping_add(1); 32]],
+            proof_hash: [seed.wrapping_add(2); 32],
+            envelope_hash: Some([seed.wrapping_add(3); 32]),
+            root_hint: Some([seed.wrapping_add(4); 32]),
+            recorded_at_ms: u64::from(seed),
+        };
+        iroha_data_model::escrow::AnonymousAssetEscrowRecord {
+            id: iroha_data_model::escrow::EscrowId::new(Hash::new(label)),
+            seller: AccountId::new(seller_keypair.public_key().clone()),
+            buyer: None,
+            asset_definition,
+            escrow_commitment: [seed.wrapping_add(5); 32],
+            status: iroha_data_model::escrow::AssetEscrowStatus::Open,
+            evidence_hashes: Vec::new(),
+            opening: proof,
+            release: None,
+            cancellation: None,
+            created_at_ms: u64::from(seed),
+            accepted_at_ms: None,
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        }
+    }
+
+    #[test]
+    fn merge_query_batch_boxes_accepts_anonymous_asset_escrow_records() {
+        let first = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-first", 0x71);
+        let second = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-second", 0x72);
+
+        let batch = merge_query_batch_boxes(
+            iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(vec![
+                first.clone(),
+            ]),
+            iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(vec![
+                second.clone(),
+            ]),
+        )
+        .expect("anonymous escrow batches should merge");
+
+        let iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) = batch
+        else {
+            panic!("expected anonymous asset escrow batch");
+        };
+        assert_eq!(items, vec![first, second]);
+    }
+
+    #[test]
+    fn canonicalize_query_batch_box_deduplicates_anonymous_asset_escrow_records() {
+        let first = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-first", 0x71);
+        let second = anonymous_asset_escrow_record_for_batch_test("anonymous-escrow-second", 0x72);
+        let batch = canonicalize_query_batch_box(
+            iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(vec![
+                second.clone(),
+                first.clone(),
+                second.clone(),
+            ]),
+            iroha_data_model::query::parameters::Pagination::default(),
+        );
+
+        let iroha_data_model::query::QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) = batch
+        else {
+            panic!("expected anonymous asset escrow batch");
+        };
+        assert_eq!(items.len(), 2);
+        assert!(items.contains(&first));
+        assert!(items.contains(&second));
     }
 
     #[test]
@@ -27860,6 +27950,18 @@ fn pipeline_status_local_entry(
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind.is_terminal() {
+            return Some((entry, "cache"));
+        }
+    }
+
+    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
+        app.pipeline_status_cache
+            .record_entry(hash.clone(), entry.clone());
+        return Some((entry, "state"));
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
         return Some((entry, "cache"));
     }
 
@@ -27868,12 +27970,6 @@ fn pipeline_status_local_entry(
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Some((entry, "queue"));
-    }
-
-    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
-        app.pipeline_status_cache
-            .record_entry(hash.clone(), entry.clone());
-        return Some((entry, "state"));
     }
 
     None
@@ -41328,6 +41424,60 @@ pub(crate) mod tests_runtime_handlers {
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind_entry, Some("Applied"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        store_block(&app, block);
+
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+        );
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload
+                .get("status")
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Applied")
+        );
+        assert_eq!(
+            payload
+                .get("resolved_from")
+                .and_then(norito::json::Value::as_str),
+            Some("state")
+        );
     }
 
     #[tokio::test]
