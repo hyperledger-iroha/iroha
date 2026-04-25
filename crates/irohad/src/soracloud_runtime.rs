@@ -53,6 +53,7 @@ use iroha_data_model::{
     ChainId, Encode,
     account::AccountId,
     isi::{self, InstructionBox},
+    metadata::Metadata,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -90,6 +91,7 @@ use iroha_data_model::{
     transaction::TransactionBuilder,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_primitives::json::Json;
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
     api::StorageManifestResponseDto,
@@ -212,6 +214,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     ) -> eyre::Result<()> {
         let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
             .with_instructions([instruction])
+            .with_metadata(soracloud_runtime_submission_metadata())
             .sign(self.key_pair.private_key());
         let view = self.state.view();
         let params = view.world().parameters();
@@ -287,6 +290,23 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         });
         self.submit_instruction(instruction, "/internal/soracloud/runtime/inrou-host-advert")
     }
+}
+
+fn soracloud_runtime_submission_metadata() -> Metadata {
+    let mut metadata = Metadata::default();
+    let gas_asset_id = std::env::var("IROHA_SORACLOUD_GAS_ASSET_ID")
+        .ok()
+        .or_else(|| std::env::var("IROHA_GAS_ASSET_ID").ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(asset_id) = gas_asset_id {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, Json::new(asset_id));
+    }
+
+    metadata
 }
 
 fn current_host_inrou_guest_isa() -> SoraInrouGuestIsaV1 {
