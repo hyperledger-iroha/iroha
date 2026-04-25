@@ -45,6 +45,7 @@ pub mod isi {
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         da::pin_intent::DaPinIntentWithLocation,
+        escrow::AssetEscrowStatus,
         events::data::{
             confidential::{
                 ConfidentialEvent, ConfidentialShielded, ConfidentialTransferred,
@@ -739,6 +740,71 @@ pub mod isi {
                 "confidential transfer v2 chain tag mismatch".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn protect_anonymous_escrow_commitments_from_generic_transfer(
+        transfer: &zk::ZkTransfer,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        if state_transaction.native_anonymous_escrow_transfer_depth > 0 {
+            return Ok(());
+        }
+
+        let active_commitments = state_transaction
+            .world
+            .anonymous_asset_escrows
+            .iter()
+            .filter_map(|(_, record)| {
+                (record.asset_definition == *transfer.asset()
+                    && matches!(
+                        record.status,
+                        AssetEscrowStatus::Open
+                            | AssetEscrowStatus::Accepted
+                            | AssetEscrowStatus::PaymentSent
+                            | AssetEscrowStatus::Disputed
+                    ))
+                .then_some(record.escrow_commitment)
+            })
+            .collect::<BTreeSet<_>>();
+        if active_commitments.is_empty() {
+            return Ok(());
+        }
+
+        let Some(vk_record) = vk_record else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "anonymous escrow custody requires bound confidential transfer v2 verifier".into(),
+            ));
+        };
+        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "anonymous escrow custody requires confidential transfer v2 public inputs".into(),
+            ));
+        }
+
+        let (input_commitments, _nullifiers, _outputs, _root, _asset_tag, _chain_tag) =
+            crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid confidential transfer v2 public inputs: {err}").into(),
+                    )
+                })?;
+        let zero = [0u8; 32];
+        if input_commitments
+            .iter()
+            .copied()
+            .filter(|commitment| commitment != &zero)
+            .any(|commitment| active_commitments.contains(&commitment))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "anonymous escrow custody can only be spent by native escrow ISIs".into(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -8376,6 +8442,12 @@ pub mod isi {
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
             validate_confidential_transfer_v2_public_inputs(
+                &self,
+                attachment,
+                state_transaction,
+                vk_record.as_ref(),
+            )?;
+            protect_anonymous_escrow_commitments_from_generic_transfer(
                 &self,
                 attachment,
                 state_transaction,

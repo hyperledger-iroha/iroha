@@ -8,7 +8,7 @@ use crate::{
     asset::{AssetDefinitionId, AssetId, definition::AssetDefinition, value::Asset},
     block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
-    escrow::AssetEscrowRecord,
+    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord},
     metadata::Metadata,
     name::Name,
     nft::{Nft, NftId},
@@ -111,6 +111,7 @@ mod single_item {
         OfflineTransferRecord,
         OfflineVerdictRevocation,
         AssetEscrowRecord,
+        AnonymousAssetEscrowRecord,
     );
 }
 

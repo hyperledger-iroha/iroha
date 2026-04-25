@@ -430,23 +430,6 @@ impl EndpointHealthPool {
         )
     }
 
-    fn run_with_failover_from_endpoint<T, F>(
-        &self,
-        op_name: &'static str,
-        preferred_endpoint_idx: usize,
-        operation: F,
-    ) -> Result<T>
-    where
-        F: FnMut(usize, &str) -> Result<T>,
-    {
-        self.run_with_failover_at_with_preference(
-            op_name,
-            Some(preferred_endpoint_idx),
-            Instant::now(),
-            operation,
-        )
-    }
-
     fn run_with_failover_until_some_from_endpoint<T, F>(
         &self,
         op_name: &'static str,
@@ -650,6 +633,26 @@ impl EndpointHealthPool {
         op_name: &'static str,
         preferred_endpoint_idx: Option<usize>,
         now: Instant,
+        operation: F,
+    ) -> Result<Option<(usize, T)>>
+    where
+        F: FnMut(usize, &str) -> Result<Option<T>>,
+    {
+        self.run_with_failover_until_some_at_with_preference_and_limit(
+            op_name,
+            preferred_endpoint_idx,
+            now,
+            self.config.max_attempts,
+            operation,
+        )
+    }
+
+    fn run_with_failover_until_some_at_with_preference_and_limit<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: Option<usize>,
+        now: Instant,
+        max_attempts: usize,
         mut operation: F,
     ) -> Result<Option<(usize, T)>>
     where
@@ -661,7 +664,7 @@ impl EndpointHealthPool {
                 "no ingress endpoints available for operation `{op_name}`"
             ));
         }
-        let max_attempts = self.config.max_attempts.max(1).min(attempt_order.len());
+        let max_attempts = max_attempts.max(1).min(attempt_order.len());
         let mut last_error = None;
         let mut attempted = 0usize;
         let mut observed_empty = false;
@@ -1283,50 +1286,6 @@ impl IngressEndpointPool {
                     .get(endpoint_idx)
                     .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
                 operation(&endpoint.peer).map(|value| (endpoint_idx, value))
-            },
-        )
-    }
-
-    fn run_with_failover_from_endpoint<T, F>(
-        &self,
-        op_name: &'static str,
-        preferred_endpoint_idx: usize,
-        mut operation: F,
-    ) -> Result<(usize, T)>
-    where
-        F: FnMut(&NetworkPeer) -> Result<T>,
-    {
-        let endpoints = Arc::clone(&self.endpoints);
-        self.health.run_with_failover_from_endpoint(
-            op_name,
-            preferred_endpoint_idx,
-            move |endpoint_idx, _label| {
-                let endpoint = endpoints
-                    .get(endpoint_idx)
-                    .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
-                operation(&endpoint.peer).map(|value| (endpoint_idx, value))
-            },
-        )
-    }
-
-    fn run_with_failover_until_some_from_endpoint<T, F>(
-        &self,
-        op_name: &'static str,
-        preferred_endpoint_idx: usize,
-        mut operation: F,
-    ) -> Result<Option<(usize, T)>>
-    where
-        F: FnMut(&NetworkPeer) -> Result<Option<T>>,
-    {
-        let endpoints = Arc::clone(&self.endpoints);
-        self.health.run_with_failover_until_some_from_endpoint(
-            op_name,
-            preferred_endpoint_idx,
-            move |endpoint_idx, _label| {
-                let endpoint = endpoints
-                    .get(endpoint_idx)
-                    .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
-                operation(&endpoint.peer)
             },
         )
     }
@@ -4998,46 +4957,91 @@ fn wait_for_transaction_terminal_status_with_failover(
     let start = Instant::now();
     let mut attempts = 0_u64;
     let mut last_error = None;
+    let mut last_observed_statuses: Vec<String> = Vec::new();
 
     loop {
         attempts = attempts.saturating_add(1);
-        match ingress_pool.run_with_failover_until_some_from_endpoint(
-            op_name,
-            preferred_endpoint_idx,
-            |peer| {
-                let client = tune_ingress_client(
-                    peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
-                    SubmissionConfirmationMode::AcceptedByIngress,
-                );
-                client.get_transaction_status_response_auto(hash.clone())
-            },
-        ) {
+        let mut observed_statuses = Vec::new();
+        let endpoints = Arc::clone(&ingress_pool.endpoints);
+        match ingress_pool
+            .health
+            .run_with_failover_until_some_at_with_preference_and_limit(
+                op_name,
+                Some(preferred_endpoint_idx),
+                Instant::now(),
+                ingress_pool.endpoints.len(),
+                |endpoint_idx, _label| {
+                    let endpoint = endpoints
+                        .get(endpoint_idx)
+                        .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+                    let peer = &endpoint.peer;
+                    let client = tune_ingress_client(
+                        peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                        SubmissionConfirmationMode::AcceptedByIngress,
+                    );
+                    let Some(response) =
+                        client.get_transaction_status_response_auto(hash.clone())?
+                    else {
+                        return Ok(None);
+                    };
+                    let kind = response.status.kind.as_str();
+                    if !pipeline_status_kind_is_supported(kind) {
+                        return Err(eyre!("unsupported pipeline status kind `{kind}`"));
+                    }
+                    if pipeline_status_kind_is_wait_terminal(kind, &stop_statuses) {
+                        return Ok(Some(response));
+                    }
+                    observed_statuses.push(format!(
+                        "endpoint={endpoint_idx},kind={},from={}",
+                        response.status.kind, response.resolved_from
+                    ));
+                    Ok(None)
+                },
+            ) {
             Ok(Some((endpoint_idx, response))) => {
                 let kind = response.status.kind.as_str();
-                if !pipeline_status_kind_is_supported(kind) {
-                    return Err(eyre!("unsupported pipeline status kind `{kind}`"));
-                }
-                if pipeline_status_kind_is_wait_terminal(kind, &stop_statuses) {
-                    return Ok((
-                        endpoint_idx,
-                        TransactionWaitOutcome {
-                            hash: response.hash.clone(),
-                            terminal_kind: kind.to_owned(),
-                            attempts,
-                            elapsed_ms: elapsed_ms_u64(start.elapsed()),
-                            r#final: response,
-                        },
-                    ));
+                return Ok((
+                    endpoint_idx,
+                    TransactionWaitOutcome {
+                        hash: response.hash.clone(),
+                        terminal_kind: kind.to_owned(),
+                        attempts,
+                        elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                        r#final: response,
+                    },
+                ));
+            }
+            Ok(None) => {
+                if !observed_statuses.is_empty() {
+                    if last_observed_statuses.len() != observed_statuses.len()
+                        || last_observed_statuses != observed_statuses
+                    {
+                        debug!(
+                            target: "izanami::audit",
+                            op = op_name,
+                            hash = %hash,
+                            ?observed_statuses,
+                            "transaction status poll observed only non-terminal statuses"
+                        );
+                    }
+                    last_observed_statuses = observed_statuses;
                 }
             }
-            Ok(None) => {}
             Err(err) => last_error = Some(err),
         }
 
         let elapsed = start.elapsed();
         if elapsed >= timeout {
+            let observed = if last_observed_statuses.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; last observed statuses: {}",
+                    last_observed_statuses.join("; ")
+                )
+            };
             let timeout_error = eyre!(
-                "transaction did not reach {target_description} within {} ms",
+                "transaction did not reach {target_description} within {} ms{observed}",
                 timeout.as_millis()
             );
             return if let Some(err) = last_error {
@@ -7577,6 +7581,48 @@ mod tests {
             Some((1, "applied"))
         );
         assert_eq!(attempts, vec![0, 1]);
+    }
+
+    #[test]
+    fn endpoint_pool_status_fanout_can_override_submit_attempt_cap() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:34".to_string(),
+                "http://127.0.0.1:35".to_string(),
+                "http://127.0.0.1:36".to_string(),
+                "http://127.0.0.1:37".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 1,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<Option<(usize, &'static str)>> = pool
+            .run_with_failover_until_some_at_with_preference_and_limit(
+                "audit_confirmation",
+                Some(0),
+                now,
+                4,
+                |idx, _| {
+                    attempts.push(idx);
+                    if idx < 3 {
+                        Ok(None)
+                    } else {
+                        Ok(Some("applied"))
+                    }
+                },
+            );
+        assert_eq!(
+            result.expect("status fanout should honor override"),
+            Some((3, "applied"))
+        );
+        assert_eq!(attempts, vec![0, 1, 2, 3]);
     }
 
     #[test]
