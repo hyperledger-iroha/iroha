@@ -217,15 +217,29 @@ public struct ToriiOfflineStarkProofV1: Codable, Sendable, Equatable {
     public let version: UInt16
     public let commits: ToriiOfflineStarkCommitmentsV1
     public let queries: [[ToriiOfflineFoldDecommitV1]]
+    public let compValues: [ToriiOfflineStarkCompositionValueV1]?
+    public let air: ToriiOfflineStarkAirProofV1?
 
     public init(
         version: UInt16,
         commits: ToriiOfflineStarkCommitmentsV1,
-        queries: [[ToriiOfflineFoldDecommitV1]]
+        queries: [[ToriiOfflineFoldDecommitV1]],
+        compValues: [ToriiOfflineStarkCompositionValueV1]? = nil,
+        air: ToriiOfflineStarkAirProofV1? = nil
     ) {
         self.version = version
         self.commits = commits
         self.queries = queries
+        self.compValues = compValues
+        self.air = air
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case commits
+        case queries
+        case compValues = "comp_values"
+        case air
     }
 }
 
@@ -295,6 +309,152 @@ public struct ToriiOfflineFoldDecommitV1: Codable, Sendable, Equatable {
         case pathY1 = "path_y1"
         case z
         case pathZ = "path_z"
+    }
+}
+
+public struct ToriiOfflineStarkCompositionTermV1: Codable, Sendable, Equatable {
+    public let wireIndex: UInt32
+    public let value: UInt64
+    public let coeff: UInt64
+
+    public init(wireIndex: UInt32, value: UInt64, coeff: UInt64) {
+        self.wireIndex = wireIndex
+        self.value = value
+        self.coeff = coeff
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case wireIndex = "wire_index"
+        case value
+        case coeff
+    }
+}
+
+public struct ToriiOfflineStarkCompositionValueV1: Codable, Sendable, Equatable {
+    public let leaf: UInt64
+    public let constant: UInt64
+    public let zCoeff: UInt64
+    public let auxTerms: [ToriiOfflineStarkCompositionTermV1]
+    public let path: ToriiOfflineMerklePath
+
+    public init(
+        leaf: UInt64,
+        constant: UInt64,
+        zCoeff: UInt64,
+        auxTerms: [ToriiOfflineStarkCompositionTermV1],
+        path: ToriiOfflineMerklePath
+    ) {
+        self.leaf = leaf
+        self.constant = constant
+        self.zCoeff = zCoeff
+        self.auxTerms = auxTerms
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case leaf
+        case constant
+        case zCoeff = "z_coeff"
+        case auxTerms = "aux_terms"
+        case path
+    }
+}
+
+public struct ToriiOfflineStarkAirOpeningV1: Codable, Sendable, Equatable {
+    public let index: UInt32
+    public let row: [UInt64]
+    public let nextRow: [UInt64]
+    public let rowPath: ToriiOfflineMerklePath
+    public let nextRowPath: ToriiOfflineMerklePath
+    public let compositionValue: UInt64
+    public let compositionPath: ToriiOfflineMerklePath
+
+    public init(
+        index: UInt32,
+        row: [UInt64],
+        nextRow: [UInt64],
+        rowPath: ToriiOfflineMerklePath,
+        nextRowPath: ToriiOfflineMerklePath,
+        compositionValue: UInt64,
+        compositionPath: ToriiOfflineMerklePath
+    ) {
+        self.index = index
+        self.row = row
+        self.nextRow = nextRow
+        self.rowPath = rowPath
+        self.nextRowPath = nextRowPath
+        self.compositionValue = compositionValue
+        self.compositionPath = compositionPath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case row
+        case nextRow = "next_row"
+        case rowPath = "row_path"
+        case nextRowPath = "next_row_path"
+        case compositionValue = "composition_value"
+        case compositionPath = "composition_path"
+    }
+}
+
+public struct ToriiOfflineStarkAirProofV1: Codable, Sendable, Equatable {
+    public let version: UInt16
+    public let circuitId: String
+    public let publicDigest: String
+    public let traceRoot: String
+    public let compositionRoot: String
+    public let traceWidth: UInt16
+    public let openings: [ToriiOfflineStarkAirOpeningV1]
+
+    public init(
+        version: UInt16,
+        circuitId: String,
+        publicDigest: String,
+        traceRoot: String,
+        compositionRoot: String,
+        traceWidth: UInt16,
+        openings: [ToriiOfflineStarkAirOpeningV1]
+    ) throws {
+        self.version = version
+        self.circuitId = OfflineSettlementFieldCanonicalizer.trimmed(circuitId)
+        self.publicDigest = try OfflineSettlementFieldCanonicalizer.plainHex(
+            publicDigest,
+            label: "STARK AIR public digest"
+        )
+        self.traceRoot = try OfflineSettlementFieldCanonicalizer.plainHex(
+            traceRoot,
+            label: "STARK AIR trace root"
+        )
+        self.compositionRoot = try OfflineSettlementFieldCanonicalizer.plainHex(
+            compositionRoot,
+            label: "STARK AIR composition root"
+        )
+        self.traceWidth = traceWidth
+        self.openings = openings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            version: container.decode(UInt16.self, forKey: .version),
+            circuitId: container.decode(String.self, forKey: .circuitId),
+            publicDigest: container.decode(String.self, forKey: .publicDigest),
+            traceRoot: container.decode(String.self, forKey: .traceRoot),
+            compositionRoot: container.decode(String.self, forKey: .compositionRoot),
+            traceWidth: container.decode(UInt16.self, forKey: .traceWidth),
+            openings: container.decode([ToriiOfflineStarkAirOpeningV1].self, forKey: .openings)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case circuitId = "circuit_id"
+        case publicDigest = "public_digest"
+        case traceRoot = "trace_root"
+        case compositionRoot = "composition_root"
+        case traceWidth = "trace_width"
+        case openings
     }
 }
 
@@ -389,6 +549,7 @@ public enum ToriiOfflineSettlementProofs {
     public static let settlementBackend = "stark/fri/sha256-goldilocks"
     public static let settlementCircuitId = "offline-bearer-settlement-v1"
     public static let redeemRequestCircuitId = "offline-bearer-redeem-request-v1"
+    public static let sourceLineageCircuitId = "offline-source-lineage-v1"
 
     private static let starkVersion: UInt16 = 1
     private static let starkHashSHA256V1: UInt8 = 1
@@ -480,6 +641,83 @@ public enum ToriiOfflineSettlementProofs {
             expectedDomainTag: expectedCommitment,
             transcriptLabel: redeemRequestCircuitId,
             context: "redeem proof"
+        )
+    }
+
+    public static func buildSourceLineageEnvelope(
+        publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String
+    ) throws -> ToriiOfflineSourceLineageEnvelope {
+        let commitment = try sourceLineagePublicInputsCommitmentHex(
+            publicInputs,
+            witnessPayload: witnessPayload
+        )
+        return try ToriiOfflineSourceLineageEnvelope(
+            publicInputs: publicInputs,
+            witnessPayload: witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines),
+            proof: ToriiOfflineTransparentZkProof(
+                backend: settlementBackend,
+                circuitId: sourceLineageCircuitId,
+                recursionDepth: 1,
+                publicInputsHex: commitment,
+                envelope: try synthesizeEnvelope(
+                    domainTag: commitment,
+                    transcriptLabel: sourceLineageCircuitId,
+                    airCircuitId: sourceLineageCircuitId,
+                    airPublicDigest: Data(hexString: commitment),
+                    includeComposition: false
+                )
+            )
+        )
+    }
+
+    public static func verifySourceLineageEnvelope(
+        _ envelope: ToriiOfflineSourceLineageEnvelope,
+        expectedTransferId: String,
+        recipientLineageId: String,
+        assetDefinitionId: String,
+        amount: String
+    ) throws {
+        let witnessPayload = envelope.witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard envelope.version == 1,
+              envelope.circuitId == sourceLineageCircuitId,
+              !witnessPayload.isEmpty,
+              envelope.publicInputs.transferId == expectedTransferId,
+              envelope.publicInputs.recipientLineageId == recipientLineageId,
+              envelope.publicInputs.assetDefinitionId == assetDefinitionId,
+              try ToriiOfflineCashCodec.compareAmounts(envelope.publicInputs.amount, amount) == .orderedSame,
+              envelope.publicInputs.deviceProofCounter > 0 else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof does not match the receipt.")
+        }
+        let expectedNullifier = try sourceLineageNullifierHex(envelope.publicInputs)
+        guard envelope.publicInputs.sourceNullifier == expectedNullifier else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof nullifier is invalid.")
+        }
+        let commitment = try sourceLineagePublicInputsCommitmentHex(
+            envelope.publicInputs,
+            witnessPayload: witnessPayload
+        )
+        let normalizedActual = try normalizeProof(envelope.proof)
+        guard normalizedActual.backend == settlementBackend,
+              normalizedActual.circuitId == sourceLineageCircuitId,
+              normalizedActual.recursionDepth == 1,
+              normalizedActual.publicInputsHex == commitment,
+              normalizedActual.envelope.params.domainTag == commitment else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof is invalid.")
+        }
+        guard let air = normalizedActual.envelope.proof.air,
+              air.circuitId == sourceLineageCircuitId,
+              air.publicDigest == commitment else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Source lineage proof AIR binding is invalid.")
+        }
+        try validateTransparentEnvelope(
+            normalizedActual.envelope,
+            expectedDomainTag: commitment,
+            transcriptLabel: sourceLineageCircuitId,
+            expectedAirCircuitId: sourceLineageCircuitId,
+            expectedAirPublicDigest: commitment,
+            includeComposition: false,
+            context: "source lineage proof"
         )
     }
 
@@ -674,9 +912,39 @@ public enum ToriiOfflineSettlementProofs {
         )))
     }
 
+    public static func sourceLineagePublicInputsCommitmentHex(
+        _ publicInputs: ToriiOfflineSourceLineagePublicInputs,
+        witnessPayload: String
+    ) throws -> String {
+        let witnessPayloadHash = sha256Hex(Data(witnessPayload.trimmingCharacters(in: .whitespacesAndNewlines).utf8))
+        return try sha256Hex(canonicalJSONData(SourceLineageProofCommitmentPayload(
+            circuitId: sourceLineageCircuitId,
+            publicInputs: publicInputs,
+            witnessPayloadHash: witnessPayloadHash
+        )))
+    }
+
+    public static func sourceLineageNullifierHex(
+        _ publicInputs: ToriiOfflineSourceLineagePublicInputs
+    ) throws -> String {
+        try sha256Hex(canonicalJSONData(SourceLineageNullifierPayload(
+            circuitId: sourceLineageCircuitId,
+            transferId: publicInputs.transferId,
+            sourceReceiptHash: publicInputs.sourceReceiptHash,
+            senderLineageId: publicInputs.senderLineageId,
+            recipientLineageId: publicInputs.recipientLineageId,
+            assetDefinitionId: publicInputs.assetDefinitionId,
+            amount: try ToriiOfflineCashCodec.canonicalAmountString(publicInputs.amount),
+            sourceLocalRevision: publicInputs.sourceLocalRevision
+        )))
+    }
+
     private static func synthesizeEnvelope(
         domainTag: String,
-        transcriptLabel: String
+        transcriptLabel: String,
+        airCircuitId: String = "composition-v1",
+        airPublicDigest: Data? = nil,
+        includeComposition: Bool = true
     ) throws -> ToriiOfflineStarkVerifyEnvelopeV1 {
         let params = try ToriiOfflineStarkFriParamsV1(
             version: starkVersion,
@@ -688,23 +956,63 @@ public enum ToriiOfflineSettlementProofs {
             hashFn: starkHashSHA256V1,
             domainTag: domainTag
         )
+        let publicDigest = airPublicDigest ?? starkAirPublicDigestFromComposition(
+            domainTag: domainTag,
+            transcriptLabel: transcriptLabel
+        )
+        let domain = 1 << Int(starkDomainLog2)
+        let airRows = (0..<domain).map { index in
+            starkAirRow(index: index, publicDigest: publicDigest)
+        }
+        let traceLevels = merkleLevelsFromHashes(airRows.map(starkAirTraceLeafHash))
+        let traceRoot = merkleRootFromLevels(traceLevels)
         let levels = zeroMerkleLevelHashes(maxDepth: Int(starkDomainLog2))
         let requiredLayers = Int(starkDomainLog2)
+        let compositionRoot = levels[Int(starkDomainLog2)]
         let roots = (0...requiredLayers).map { layer in
             prefixedHex(levels[Int(starkDomainLog2) - layer])
         }
-        let rootData = roots.compactMap { hex in
-            Data(hexString: hex)
-        }
+        let rootData = roots.compactMap { hex in Data(hexString: hex) }
+        let queryRoots = rootData + [traceRoot, compositionRoot, publicDigest]
         let queries = try (0..<Int(starkQueryCount)).map { queryIndex in
             try synthesizeQueryChain(
                 queryIndex: queryIndex,
                 params: params,
                 transcriptLabel: transcriptLabel,
-                roots: rootData,
+                roots: queryRoots,
                 levelHashes: levels
             )
         }
+        let airOpenings = try (0..<Int(starkQueryCount)).map { queryIndex in
+            let index = deriveQueryIndex(
+                transcriptLabel: transcriptLabel,
+                params: params,
+                roots: queryRoots,
+                queryIndex: queryIndex
+            )
+            let nextIndex = (index + 1) % domain
+            return try ToriiOfflineStarkAirOpeningV1(
+                index: UInt32(index),
+                row: airRows[index],
+                nextRow: airRows[nextIndex],
+                rowPath: merklePathFromLevels(index: index, levels: traceLevels),
+                nextRowPath: merklePathFromLevels(index: nextIndex, levels: traceLevels),
+                compositionValue: 0,
+                compositionPath: zeroMerklePath(index: index, depth: Int(starkDomainLog2), levelHashes: levels)
+            )
+        }
+        let compositionLeaf = offlineStarkBindingCompositionLeaf(
+            domainTag: domainTag,
+            transcriptLabel: transcriptLabel
+        )
+        let compositionLevels = merkleLevelsFromValues([compositionLeaf])
+        let compositionValue = try ToriiOfflineStarkCompositionValueV1(
+            leaf: compositionLeaf,
+            constant: starkBindingConstant,
+            zCoeff: starkBindingZCoefficient,
+            auxTerms: offlineStarkBindingTerms(domainTag: domainTag, transcriptLabel: transcriptLabel),
+            path: merklePathFromLevels(index: 0, levels: compositionLevels)
+        )
         return ToriiOfflineStarkVerifyEnvelopeV1(
             params: params,
             proof: ToriiOfflineStarkProofV1(
@@ -712,12 +1020,19 @@ public enum ToriiOfflineSettlementProofs {
                 commits: try ToriiOfflineStarkCommitmentsV1(
                     version: starkVersion,
                     roots: roots,
-                    compRoot: prefixedHex(offlineStarkBindingCompositionRoot(
-                        domainTag: domainTag,
-                        transcriptLabel: transcriptLabel
-                    ))
+                    compRoot: includeComposition ? prefixedHex(merkleRootFromLevels(compositionLevels)) : nil
                 ),
-                queries: queries
+                queries: queries,
+                compValues: includeComposition ? Array(repeating: compositionValue, count: queries.count) : nil,
+                air: try ToriiOfflineStarkAirProofV1(
+                    version: starkVersion,
+                    circuitId: airCircuitId,
+                    publicDigest: prefixedHex(publicDigest),
+                    traceRoot: prefixedHex(traceRoot),
+                    compositionRoot: prefixedHex(compositionRoot),
+                    traceWidth: 6,
+                    openings: airOpenings
+                )
             ),
             transcriptLabel: transcriptLabel
         )
@@ -768,6 +1083,9 @@ public enum ToriiOfflineSettlementProofs {
         _ envelope: ToriiOfflineStarkVerifyEnvelopeV1,
         expectedDomainTag: String,
         transcriptLabel: String,
+        expectedAirCircuitId: String? = nil,
+        expectedAirPublicDigest: String? = nil,
+        includeComposition: Bool = true,
         context: String
     ) throws {
         guard envelope.transcriptLabel == transcriptLabel else {
@@ -793,15 +1111,35 @@ public enum ToriiOfflineSettlementProofs {
         let expectedRoots = (0...requiredLayers).map { layer in
             prefixedHex(levels[Int(starkDomainLog2) - layer])
         }
-        let expectedCompositionRoot = prefixedHex(offlineStarkBindingCompositionRoot(
+        let expectedCompositionRoot = prefixedHex(fieldLeafHash(offlineStarkBindingCompositionLeaf(
+            domainTag: expectedDomainTag,
+            transcriptLabel: transcriptLabel
+        )))
+        guard envelope.proof.commits.version == starkVersion,
+              envelope.proof.commits.roots == expectedRoots,
+              envelope.proof.commits.compRoot == (includeComposition ? expectedCompositionRoot : nil)
+        else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) commitments are invalid.")
+        }
+        let expectedDigest = expectedAirPublicDigest ?? prefixedHex(starkAirPublicDigestFromComposition(
             domainTag: expectedDomainTag,
             transcriptLabel: transcriptLabel
         ))
-        guard envelope.proof.commits.version == starkVersion,
-              envelope.proof.commits.roots == expectedRoots,
-              envelope.proof.commits.compRoot == expectedCompositionRoot
-        else {
-            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) commitments are invalid.")
+        guard let air = envelope.proof.air,
+              air.version == starkVersion,
+              air.circuitId == (expectedAirCircuitId ?? "composition-v1"),
+              air.publicDigest == expectedDigest,
+              air.compositionRoot == prefixedHex(levels[Int(starkDomainLog2)]),
+              air.traceWidth == 6,
+              air.openings.count == Int(starkQueryCount) else {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) AIR binding is invalid.")
+        }
+        if includeComposition {
+            guard envelope.proof.compValues?.count == Int(starkQueryCount) else {
+                throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) composition binding is invalid.")
+            }
+        } else if envelope.proof.compValues != nil {
+            throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) composition binding is invalid.")
         }
         guard envelope.proof.queries.count == Int(starkQueryCount) else {
             throw ToriiOfflineSettlementProofError.invalidSettlement("Offline \(context) query count is invalid.")
@@ -892,6 +1230,61 @@ public enum ToriiOfflineSettlementProofs {
         return levels
     }
 
+    private static func merkleLevelsFromValues(_ values: [UInt64]) -> [[Data]] {
+        merkleLevelsFromHashes(values.map { fieldLeafHash($0) })
+    }
+
+    private static func merkleLevelsFromHashes(_ leaves: [Data]) -> [[Data]] {
+        precondition(!leaves.isEmpty)
+        var current = leaves
+        var levels: [[Data]] = []
+        while true {
+            levels.append(current)
+            if current.count == 1 {
+                break
+            }
+            if current.count % 2 == 1 {
+                current.append(current[current.count - 1])
+            }
+            var next: [Data] = []
+            next.reserveCapacity(current.count / 2)
+            for index in stride(from: 0, to: current.count, by: 2) {
+                next.append(nodeHash(current[index], current[index + 1]))
+            }
+            current = next
+        }
+        return levels
+    }
+
+    private static func merkleRootFromLevels(_ levels: [[Data]]) -> Data {
+        levels.last?.first ?? Data()
+    }
+
+    private static func merklePathFromLevels(index: Int, levels: [[Data]]) throws -> ToriiOfflineMerklePath {
+        precondition(!levels.isEmpty)
+        precondition(index >= 0 && index < levels[0].count)
+        let depth = levels.count - 1
+        var dirs = Data(repeating: 0, count: (depth + 7) / 8)
+        var siblings: [String] = []
+        siblings.reserveCapacity(depth)
+        var currentIndex = index
+        if depth > 0 {
+            for levelIndex in 0..<depth {
+                let level = levels[levelIndex]
+                let siblingIndex: Int
+                if currentIndex % 2 == 0 {
+                    siblingIndex = min(currentIndex + 1, level.count - 1)
+                } else {
+                    dirs[levelIndex / 8] |= UInt8(1 << (levelIndex % 8))
+                    siblingIndex = currentIndex - 1
+                }
+                siblings.append(prefixedHex(level[siblingIndex]))
+                currentIndex /= 2
+            }
+        }
+        return try ToriiOfflineMerklePath(dirs: dirs.base64EncodedString(), siblings: siblings)
+    }
+
     private static func zeroMerklePath(
         index: Int,
         depth: Int,
@@ -959,7 +1352,9 @@ public enum ToriiOfflineSettlementProofs {
                             pathZ: try normalizeMerklePath(decommit.pathZ)
                         )
                     }
-                }
+                },
+                compValues: envelope.proof.compValues,
+                air: envelope.proof.air
             ),
             transcriptLabel: envelope.transcriptLabel
         )
@@ -994,10 +1389,28 @@ public enum ToriiOfflineSettlementProofs {
         return Data(digest.finalize())
     }
 
-    private static func offlineStarkBindingCompositionRoot(
+    private static func starkAirPublicDigestFromComposition(
         domainTag: String,
         transcriptLabel: String
     ) -> Data {
+        var digest = SHA256()
+        digest.update(data: Data("iroha:zk:stark:air-public-digest:v1".utf8))
+        digest.update(data: littleEndianData(starkBindingConstant))
+        digest.update(data: littleEndianData(starkBindingZCoefficient))
+        let terms = offlineStarkBindingTerms(domainTag: domainTag, transcriptLabel: transcriptLabel)
+        digest.update(data: littleEndianData(UInt64(terms.count)))
+        for term in terms {
+            digest.update(data: littleEndianData(term.wireIndex))
+            digest.update(data: littleEndianData(term.value))
+            digest.update(data: littleEndianData(term.coeff))
+        }
+        return Data(digest.finalize())
+    }
+
+    private static func offlineStarkBindingTerms(
+        domainTag: String,
+        transcriptLabel: String
+    ) -> [ToriiOfflineStarkCompositionTermV1] {
         var preimage = Data("iroha:offline:stark-binding-air:v1".utf8)
         preimage.append(littleEndianData(UInt64(domainTag.utf8.count)))
         preimage.append(Data(domainTag.utf8))
@@ -1005,19 +1418,65 @@ public enum ToriiOfflineSettlementProofs {
         preimage.append(Data(transcriptLabel.utf8))
 
         let digest = Data(SHA256.hash(data: preimage))
-        var expected = starkBindingConstant
-        for index in 0..<4 {
+        return (0..<4).map { index in
             let offset = index * 8
             var word: UInt64 = 0
             for byteOffset in 0..<8 {
                 word |= UInt64(digest[offset + byteOffset]) << (byteOffset * 8)
             }
             let value = word >= goldilocksModulus ? word &- goldilocksModulus : word
-            let term = multiplyGoldilocks(UInt64(index + 31), value)
-            expected = addGoldilocks(expected, term)
+            return ToriiOfflineStarkCompositionTermV1(
+                wireIndex: UInt32(index),
+                value: value,
+                coeff: UInt64(index + 31)
+            )
+        }
+    }
+
+    private static func offlineStarkBindingCompositionLeaf(
+        domainTag: String,
+        transcriptLabel: String
+    ) -> UInt64 {
+        var expected = starkBindingConstant
+        for term in offlineStarkBindingTerms(domainTag: domainTag, transcriptLabel: transcriptLabel) {
+            expected = addGoldilocks(expected, multiplyGoldilocks(term.coeff, term.value))
         }
         expected = addGoldilocks(expected, multiplyGoldilocks(starkBindingZCoefficient, 0))
-        return fieldLeafHash(expected)
+        return expected
+    }
+
+    private static func starkAirDigestLimbs(_ publicDigest: Data) -> [UInt64] {
+        precondition(publicDigest.count == 32)
+        return (0..<4).map { index in
+            let offset = index * 8
+            var word: UInt64 = 0
+            for byteOffset in 0..<8 {
+                word |= UInt64(publicDigest[offset + byteOffset]) << (byteOffset * 8)
+            }
+            return word >= goldilocksModulus ? word &- goldilocksModulus : word
+        }
+    }
+
+    private static func starkAirRow(index: Int, publicDigest: Data) -> [UInt64] {
+        let limbs = starkAirDigestLimbs(publicDigest)
+        return [
+            UInt64(index) % goldilocksModulus,
+            limbs[0],
+            limbs[1],
+            limbs[2],
+            limbs[3],
+            6
+        ]
+    }
+
+    private static func starkAirTraceLeafHash(_ row: [UInt64]) -> Data {
+        var digest = SHA256()
+        digest.update(data: Data("STARK:AIR:TRACE:ROW:V1".utf8))
+        digest.update(data: littleEndianData(UInt64(row.count)))
+        for value in row {
+            digest.update(data: littleEndianData(value))
+        }
+        return Data(digest.finalize())
     }
 
     private static func fieldLeafHash(_ value: UInt64) -> Data {
@@ -1156,6 +1615,40 @@ public enum ToriiOfflineSettlementProofs {
             case authorizationId = "authorization_id"
             case preStateHash = "pre_state_hash"
             case receiptKeys = "receipt_keys"
+        }
+    }
+
+    private struct SourceLineageProofCommitmentPayload: Encodable {
+        let circuitId: String
+        let publicInputs: ToriiOfflineSourceLineagePublicInputs
+        let witnessPayloadHash: String
+
+        private enum CodingKeys: String, CodingKey {
+            case circuitId = "circuit_id"
+            case publicInputs = "public_inputs"
+            case witnessPayloadHash = "witness_payload_hash"
+        }
+    }
+
+    private struct SourceLineageNullifierPayload: Encodable {
+        let circuitId: String
+        let transferId: String
+        let sourceReceiptHash: String
+        let senderLineageId: String
+        let recipientLineageId: String
+        let assetDefinitionId: String
+        let amount: String
+        let sourceLocalRevision: UInt64
+
+        private enum CodingKeys: String, CodingKey {
+            case circuitId = "circuit_id"
+            case transferId = "transfer_id"
+            case sourceReceiptHash = "source_receipt_hash"
+            case senderLineageId = "sender_lineage_id"
+            case recipientLineageId = "recipient_lineage_id"
+            case assetDefinitionId = "asset_definition_id"
+            case amount
+            case sourceLocalRevision = "source_local_revision"
         }
     }
 }
