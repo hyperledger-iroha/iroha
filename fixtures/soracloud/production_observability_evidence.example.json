@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-04-25T00:00:00Z",
+  "deployment": {
+    "name": "soracloud-production-example",
+    "environment": "production",
+    "operator": "soracloud-ops"
+  },
+  "metrics": {
+    "signed_auth_failures": { "present": true, "source": "prometheus:soracloud_signed_auth_failures_total" },
+    "body_limit_rejections": { "present": true, "source": "prometheus:soracloud_body_limit_rejections_total" },
+    "rate_limited_requests": { "present": true, "source": "prometheus:soracloud_rate_limited_requests_total" },
+    "inflight_limit_rejections": { "present": true, "source": "prometheus:soracloud_inflight_limit_rejections_total" },
+    "runtime_hydration_lag": { "present": true, "source": "prometheus:soracloud_runtime_hydration_lag_seconds" },
+    "inrou_lifecycle": { "present": true, "source": "prometheus:soracloud_inrou_lifecycle_transitions_total" },
+    "lease_volume_pressure": { "present": true, "source": "prometheus:soracloud_lease_volume_pressure_ratio" },
+    "cache_pressure": { "present": true, "source": "prometheus:soracloud_cache_pressure_ratio" },
+    "disk_pressure": { "present": true, "source": "prometheus:soracloud_disk_pressure_ratio" },
+    "egress_usage": { "present": true, "source": "prometheus:soracloud_egress_bytes_total" },
+    "model_host_stale_heartbeats": { "present": true, "source": "prometheus:soracloud_model_host_stale_heartbeats_total" },
+    "hf_fallback_use": { "present": true, "source": "prometheus:soracloud_hf_fallback_requests_total" },
+    "private_session_failures": { "present": true, "source": "prometheus:soracloud_private_session_failures_total" }
+  },
+  "status_fields": {
+    "config_posture": { "present": true, "source": "GET /v1/soracloud/status.config_posture" },
+    "feature_flags": { "present": true, "source": "GET /v1/soracloud/status.feature_flags" },
+    "route_exposure": { "present": true, "source": "GET /v1/soracloud/status.route_exposure" },
+    "runtime_capabilities": { "present": true, "source": "GET /v1/soracloud/status.runtime_capabilities" },
+    "runtime_hydration": { "present": true, "source": "GET /v1/soracloud/status.runtime_hydration" },
+    "inrou_lifecycle": { "present": true, "source": "GET /v1/soracloud/status.inrou_lifecycle" },
+    "lease_volume_pressure": { "present": true, "source": "GET /v1/soracloud/status.lease_volume_pressure" },
+    "cache_pressure": { "present": true, "source": "GET /v1/soracloud/status.cache_pressure" },
+    "disk_pressure": { "present": true, "source": "GET /v1/soracloud/status.disk_pressure" },
+    "egress_usage": { "present": true, "source": "GET /v1/soracloud/status.egress_usage" },
+    "model_host_heartbeats": { "present": true, "source": "GET /v1/soracloud/status.model_host_heartbeats" },
+    "hf_fallback_use": { "present": true, "source": "GET /v1/soracloud/status.hf_fallback_use" },
+    "private_session_failures": { "present": true, "source": "GET /v1/soracloud/status.private_session_failures" }
+  },
+  "alerts": {
+    "signed_auth_failures": { "enabled": true, "severity": "warning", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "body_limit_rejections": { "enabled": true, "severity": "warning", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "rate_limited_requests": { "enabled": true, "severity": "warning", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "inflight_limit_rejections": { "enabled": true, "severity": "warning", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "runtime_hydration_lag": { "enabled": true, "severity": "critical", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "lease_volume_pressure": { "enabled": true, "severity": "critical", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "disk_pressure": { "enabled": true, "severity": "critical", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "egress_usage": { "enabled": true, "severity": "warning", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "model_host_stale_heartbeats": { "enabled": true, "severity": "critical", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "hf_fallback_use": { "enabled": true, "severity": "critical", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" },
+    "private_session_failures": { "enabled": true, "severity": "critical", "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md#production-readiness" }
+  },
+  "dashboards": [
+    {
+      "name": "Soracloud production posture",
+      "url": "https://observability.example.invalid/d/soracloud-production"
+    }
+  ]
+}
