@@ -52,9 +52,7 @@ class TransportSecurityClientTest {
             .build()
 
         assertFailsWith<IllegalArgumentException> {
-            client.listTransfers(
-                org.hyperledger.iroha.sdk.offline.OfflineListParams(limit = 1),
-            )
+            client.getOfflineV2Readiness()
         }
     }
 

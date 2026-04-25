@@ -8,7 +8,7 @@ import java.util.Objects;
 import java.util.Optional;
 import org.hyperledger.iroha.android.client.JsonParser;
 
-/** Immutable view over `/v1/offline/transfers` responses. */
+/** Immutable legacy transfer-list view retained for local fixture parsing. */
 public final class OfflineTransferList {
 
   private final List<OfflineTransferItem> items;

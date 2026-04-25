@@ -45,6 +45,14 @@ repositories {
 
 dependencies {
     api(project(":client-android"))
+    testImplementation(kotlin("test"))
+    testImplementation(libs.junit.params)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
 
 afterEvaluate {

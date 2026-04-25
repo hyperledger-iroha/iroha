@@ -33,16 +33,14 @@ enum NoritoBridgeLoader {
     static let expectedVersion = "0.1.0"
     static let expectedBridgeAbiVersion: UInt32 = 2
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "fcdcb9f488985556ae82f2d2ef48a92f5ebc9ae6739ff9e3cc3b47830c7d1f8f",
-        "ios-arm64": "962ad99cb7ee30946771b302026feb4411ebcf500ff1bf960284e9e7118f8e91",
-        "ios-arm64_x86_64-simulator": "aedfbbf4e4ca3151e40d336a584c1162d1a2ad4b67ed20c21bf7c3c47bb1bb7f"
+        "macos-arm64": "caade76810c121c7d64a4dd856211976c9eb8a15927de6fbd20a88a05d8df4c4",
+        "ios-arm64": "b821b01b0623648adc5d5297a810b8ef16dbc79076f29fb2369aafb4c5180233",
+        "ios-arm64_x86_64-simulator": "52beecfa8859e721ee76e80ac18c841a480a50b449ae42f33b11c6a87ae79fb3"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        "connect_norito_encode_transfer_signed_transaction",
-        "connect_norito_source_lineage_fastpq_proof",
-        "connect_norito_source_lineage_fastpq_verify"
+        "connect_norito_encode_transfer_signed_transaction"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -561,23 +559,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     enum OfflineCommitmentBridgeError: Error {
         case callFailed(Int32)
     }
-    enum OfflineBlindingFromSeedBridgeError: Error {
-        case callFailed(Int32)
-    }
     enum OfflineBalanceProofBridgeError: Error {
         case callFailed(Int32)
     }
-    enum OfflineFastpqProofBridgeError: Error, LocalizedError {
-        case callFailed(Int32)
-
-        var errorDescription: String? {
-            switch self {
-            case .callFailed(let code):
-                return "FASTPQ bridge call failed with status \(code)"
-            }
-        }
-    }
-
     private func throwOnStatus(_ status: Int32) throws {
         if let error = NativeBridgeError.fromStatus(status) {
             throw error
@@ -1309,16 +1293,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt8>?, UInt
     ) -> Int32
 
-    private typealias OfflineFastpqProofFn = @convention(c) (
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
-    ) -> Int32
-
-    private typealias OfflineFastpqVerifyFn = @convention(c) (
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt
-    ) -> Int32
-
     private typealias Sm2DefaultDistidFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
@@ -1648,13 +1622,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
-    private typealias OfflineBlindingFromSeedFn = @convention(c) (
-        UnsafePointer<UInt8>?, UInt,   // initial_blinding
-        UnsafePointer<UInt8>?, UInt,   // certificate_id
-        UInt64,                        // counter
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?
-    ) -> Int32
     private typealias OfflineBalanceProofFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -1749,13 +1716,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var accountAddressRenderFn: AccountAddressRenderFn? = nil
     private var offlineReceiptChallengeFn: OfflineReceiptChallengeFn? = nil
     private var offlineReceiptsRootFn: OfflineReceiptsRootFn? = nil
-    private var offlineProofSumFn: OfflineFastpqProofFn? = nil
-    private var offlineProofCounterFn: OfflineFastpqProofFn? = nil
-    private var offlineProofReplayFn: OfflineFastpqProofFn? = nil
-    private var sourceLineageFastpqProofFn: OfflineFastpqProofFn? = nil
-    private var sourceLineageFastpqVerifyFn: OfflineFastpqVerifyFn? = nil
     private var offlineCommitmentUpdateFn: OfflineCommitmentUpdateFn? = nil
-    private var offlineBlindingFromSeedFn: OfflineBlindingFromSeedFn? = nil
     private var offlineBalanceProofFn: OfflineBalanceProofFn? = nil
     private var publicKeyFromPrivateFn: PublicKeyFromPrivateFn? = nil
     private var keypairFromSeedFn: KeypairFromSeedFn? = nil
@@ -1862,13 +1823,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let accountAddressRenderFn: Any? = nil
     private let offlineReceiptChallengeFn: Any? = nil
     private let offlineReceiptsRootFn: Any? = nil
-    private let offlineProofSumFn: Any? = nil
-    private let offlineProofCounterFn: Any? = nil
-    private let offlineProofReplayFn: Any? = nil
-    private let sourceLineageFastpqProofFn: Any? = nil
-    private let sourceLineageFastpqVerifyFn: Any? = nil
     private let offlineCommitmentUpdateFn: Any? = nil
-    private let offlineBlindingFromSeedFn: Any? = nil
     private let offlineBalanceProofFn: Any? = nil
     private let publicKeyFromPrivateFn: Any? = nil
     private let keypairFromSeedFn: Any? = nil
@@ -2298,44 +2253,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.offlineReceiptsRootFn = nil
             }
-            if let offlineProofSumSymbol = dlsym(handle, "connect_norito_offline_proof_sum") {
-                self.offlineProofSumFn = unsafeBitCast(offlineProofSumSymbol, to: OfflineFastpqProofFn.self)
-            } else {
-                self.offlineProofSumFn = nil
-            }
-            if let offlineProofCounterSymbol = dlsym(handle, "connect_norito_offline_proof_counter") {
-                self.offlineProofCounterFn = unsafeBitCast(offlineProofCounterSymbol, to: OfflineFastpqProofFn.self)
-            } else {
-                self.offlineProofCounterFn = nil
-            }
-            if let offlineProofReplaySymbol = dlsym(handle, "connect_norito_offline_proof_replay") {
-                self.offlineProofReplayFn = unsafeBitCast(offlineProofReplaySymbol, to: OfflineFastpqProofFn.self)
-            } else {
-                self.offlineProofReplayFn = nil
-            }
-            if let sourceLineageFastpqProofSymbol = dlsym(handle, "connect_norito_source_lineage_fastpq_proof") {
-                self.sourceLineageFastpqProofFn = unsafeBitCast(sourceLineageFastpqProofSymbol, to: OfflineFastpqProofFn.self)
-            } else {
-                self.sourceLineageFastpqProofFn = nil
-            }
-            if let sourceLineageFastpqVerifySymbol = dlsym(handle, "connect_norito_source_lineage_fastpq_verify") {
-                self.sourceLineageFastpqVerifyFn = unsafeBitCast(sourceLineageFastpqVerifySymbol, to: OfflineFastpqVerifyFn.self)
-            } else {
-                self.sourceLineageFastpqVerifyFn = nil
-            }
             if let offlineCommitmentSymbol = dlsym(handle, "connect_norito_offline_commitment_update") {
                 self.offlineCommitmentUpdateFn = unsafeBitCast(offlineCommitmentSymbol, to: OfflineCommitmentUpdateFn.self)
             } else {
                 self.offlineCommitmentUpdateFn = nil
-            }
-            if let offlineBlindingSeedSymbol = dlsym(handle, "connect_norito_offline_blinding_from_seed") {
-                self.offlineBlindingFromSeedFn = unsafeBitCast(offlineBlindingSeedSymbol, to: OfflineBlindingFromSeedFn.self)
-            } else {
-                self.offlineBlindingFromSeedFn = nil
-            }
-            // Require the full current offline ABI before enabling the native challenge entrypoint.
-            if self.offlineBlindingFromSeedFn == nil {
-                self.offlineReceiptChallengeFn = nil
             }
             if let offlineProofSymbol = dlsym(handle, "connect_norito_offline_balance_proof") {
                 self.offlineBalanceProofFn = unsafeBitCast(offlineProofSymbol, to: OfflineBalanceProofFn.self)
@@ -2638,13 +2559,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.accountAddressRenderFn = nil
             self.offlineReceiptChallengeFn = nil
             self.offlineReceiptsRootFn = nil
-            self.offlineProofSumFn = nil
-            self.offlineProofCounterFn = nil
-            self.offlineProofReplayFn = nil
-            self.sourceLineageFastpqProofFn = nil
-            self.sourceLineageFastpqVerifyFn = nil
             self.offlineCommitmentUpdateFn = nil
-            self.offlineBlindingFromSeedFn = nil
             self.offlineBalanceProofFn = nil
             self.sm2DefaultDistidFn = nil
             self.sm2KeypairFromSeedFn = nil
@@ -2714,13 +2629,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 setAccelerationConfigFn(UnsafeRawPointer(ptr))
             }
         }
-        NSLog("[NoritoNativeBridge] init done — status=%@, handle=%@, free=%@, commitUpdate=%@, balanceProof=%@, blindingSeed=%@",
+        NSLog("[NoritoNativeBridge] init done — status=%@, handle=%@, free=%@, commitUpdate=%@, balanceProof=%@",
               "\(self.bridgeStatus)",
               self.bridgeHandle == nil ? "nil" : "ok",
               self.freeFn == nil ? "nil" : "ok",
               self.offlineCommitmentUpdateFn == nil ? "nil" : "ok",
-              self.offlineBalanceProofFn == nil ? "nil" : "ok",
-              self.offlineBlindingFromSeedFn == nil ? "nil" : "ok")
+              self.offlineBalanceProofFn == nil ? "nil" : "ok")
         #else
         self.bridgeStatus = .missing(path: "unsupported platform")
         #endif
@@ -2873,6 +2787,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     #if canImport(Darwin)
     private static var shouldDisableBridgeForHostedXCTestApp: Bool {
+        if ProcessInfo.processInfo.environment["IROHA_SWIFT_ENABLE_BRIDGE_IN_HOSTED_XCTEST"] == "1" {
+            return false
+        }
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil else {
             return false
         }
@@ -7202,58 +7119,6 @@ extension NoritoNativeBridge {
         #endif
     }
 
-    /// Derive the resulting blinding for an offline spend commitment.
-    ///
-    /// Computes `resulting_blinding = initial_blinding + HKDF_scalar(certificate_id, counter)`.
-    /// The returned 32-byte scalar must be used as `resultingBlindingHex` in `advanceCommitment`
-    /// so that the sum proof later passes the commitment check.
-    func offlineBlindingFromSeed(
-        initialBlinding: Data,
-        certificateId: Data,
-        counter: UInt64
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard let offlineBlindingFromSeedFn = offlineBlindingFromSeedFn,
-              let freeFn = freeFn else { return nil }
-        guard !initialBlinding.isEmpty, !certificateId.isEmpty else { return nil }
-        var outputPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outputLen: UInt = 0
-        let status = initialBlinding.withUnsafeBytes { initBlindBuffer -> Int32 in
-            guard let initBlindPtr = initBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                return -1
-            }
-            return certificateId.withUnsafeBytes { certBuffer -> Int32 in
-                guard let certPtr = certBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                    return -1
-                }
-                return offlineBlindingFromSeedFn(
-                    initBlindPtr,
-                    UInt(initialBlinding.count),
-                    certPtr,
-                    UInt(certificateId.count),
-                    counter,
-                    &outputPtr,
-                    &outputLen
-                )
-            }
-        }
-        guard status == 0 else {
-            if let pointer = outputPtr {
-                freeFn(pointer)
-            }
-            throw OfflineBlindingFromSeedBridgeError.callFailed(status)
-        }
-        guard let pointer = outputPtr else {
-            return Data()
-        }
-        let data = Data(bytes: pointer, count: Int(outputLen))
-        freeFn(pointer)
-        return data
-        #else
-        return nil
-        #endif
-    }
-
     func offlineBalanceProof(
         chainId: String,
         claimedDelta: String,
@@ -7335,84 +7200,6 @@ extension NoritoNativeBridge {
         #endif
     }
 
-    func offlineFastpqProofSum(requestJson: Data) throws -> Data? {
-        try offlineFastpqProof(requestJson: requestJson, bridgeFn: offlineProofSumFn)
-    }
-
-    func offlineFastpqProofCounter(requestJson: Data) throws -> Data? {
-        try offlineFastpqProof(requestJson: requestJson, bridgeFn: offlineProofCounterFn)
-    }
-
-    func offlineFastpqProofReplay(requestJson: Data) throws -> Data? {
-        try offlineFastpqProof(requestJson: requestJson, bridgeFn: offlineProofReplayFn)
-    }
-
-    func sourceLineageFastpqProof(requestJson: Data) throws -> Data? {
-        try offlineFastpqProof(requestJson: requestJson, bridgeFn: sourceLineageFastpqProofFn)
-    }
-
-    func verifySourceLineageFastpqProof(requestJson: Data, artifactJson: Data) throws -> Bool? {
-        #if canImport(Darwin)
-        guard let verifyFn = sourceLineageFastpqVerifyFn else { return nil }
-        guard !requestJson.isEmpty, !artifactJson.isEmpty else { return false }
-        let status = requestJson.withUnsafeBytes { requestBuffer -> Int32 in
-            artifactJson.withUnsafeBytes { artifactBuffer -> Int32 in
-                guard let requestBase = requestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                      let artifactBase = artifactBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                    return -1
-                }
-                return verifyFn(
-                    requestBase,
-                    UInt(requestJson.count),
-                    artifactBase,
-                    UInt(artifactJson.count)
-                )
-            }
-        }
-        guard status == 0 else {
-            throw OfflineFastpqProofBridgeError.callFailed(status)
-        }
-        return true
-        #else
-        return nil
-        #endif
-    }
-
-    private func offlineFastpqProof(
-        requestJson: Data,
-        bridgeFn: OfflineFastpqProofFn?
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard let bridgeFn = bridgeFn,
-              let freeFn = freeFn else { return nil }
-        guard !requestJson.isEmpty else { return nil }
-        var proofPtr: UnsafeMutablePointer<UInt8>? = nil
-        var proofLen: UInt = 0
-        let status = requestJson.withUnsafeBytes { buffer -> Int32 in
-            guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-            return bridgeFn(
-                base,
-                UInt(requestJson.count),
-                &proofPtr,
-                &proofLen
-            )
-        }
-        guard status == 0 else {
-            if let pointer = proofPtr {
-                freeFn(pointer)
-            }
-            throw OfflineFastpqProofBridgeError.callFailed(status)
-        }
-        guard let pointer = proofPtr else {
-            return Data()
-        }
-        let data = Data(bytes: pointer, count: Int(proofLen))
-        freeFn(pointer)
-        return data
-        #else
-        return nil
-        #endif
-    }
 }
 
 extension NoritoNativeBridge {

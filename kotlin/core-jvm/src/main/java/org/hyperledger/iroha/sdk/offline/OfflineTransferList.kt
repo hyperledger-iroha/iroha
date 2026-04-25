@@ -3,7 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.util.Optional
 import org.hyperledger.iroha.sdk.client.JsonParser
 
-/** Immutable view over `/v1/offline/transfers` responses. */
+/** Immutable legacy transfer-list view retained for local fixture parsing. */
 class OfflineTransferList(
     items: List<OfflineTransferItem>,
     val total: Long,

@@ -58,7 +58,7 @@ These modules have no native dependencies — they build immediately.
 
 ### Step 2: Build native libraries (for `client-android` and offline-wallet consumers)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and by the offline-wallet layer. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and offline-wallet helpers. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 

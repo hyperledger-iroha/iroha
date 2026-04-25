@@ -29,9 +29,6 @@ import org.hyperledger.iroha.android.client.OfflineToriiClient
 import org.hyperledger.iroha.android.norito.NoritoException
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.android.offline.OfflineAuditLogger
-import org.hyperledger.iroha.android.offline.OfflineListParams
-import org.hyperledger.iroha.android.offline.OfflineRevocationList
-import org.hyperledger.iroha.android.offline.OfflineToriiException
 import org.hyperledger.iroha.android.offline.OfflineWallet
 import org.hyperledger.iroha.android.offline.OfflineVerdictException
 import org.hyperledger.iroha.android.offline.OfflineVerdictJournal
@@ -48,7 +45,7 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
     private val builder = TransactionBuilder(NoritoJavaCodecAdapter(), keyManager)
     private val assetExecutor = AssetHttpExecutor(
         application,
-        mapOf("/v1/offline/revocations" to AssetHttpExecutor.Route("offline_revocations.json"))
+        emptyMap()
     )
     private val offlineClient: OfflineToriiClient by lazy {
         OfflineToriiClient.builder()
@@ -71,7 +68,9 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
     private val _address = MutableLiveData(generateAddressDisplay())
     val address: LiveData<AddressDisplay> = _address
 
-    private val _revocations = MutableLiveData<RevocationUiState>(RevocationUiState.Loading)
+    private val _revocations = MutableLiveData<RevocationUiState>(
+        RevocationUiState.Loaded(0, emptyList())
+    )
     val revocations: LiveData<RevocationUiState> = _revocations
     private val _policyStatus = MutableLiveData<PolicyStatus>()
     val policyStatus: LiveData<PolicyStatus> = _policyStatus
@@ -81,9 +80,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
     val manifestStatus: LiveData<ManifestStatus> = _manifestStatus
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            loadRevocations()
-        }
         viewModelScope.launch(Dispatchers.IO) {
             seedVerdictJournalIfMissing()
             refreshPolicySnapshot()
@@ -291,39 +287,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         data object Loading : RevocationUiState
         data class Loaded(val total: Int, val items: List<RevocationDisplay>) : RevocationUiState
         data class Error(val message: String) : RevocationUiState
-    }
-
-    private suspend fun loadRevocations() {
-        _revocations.postValue(RevocationUiState.Loading)
-        try {
-            val params = OfflineListParams.builder()
-                .limit(5L)
-                .build()
-            val response = offlineClient.listRevocations(params).await()
-            val items = response.items().map { it.toDisplay() }
-            _revocations.postValue(
-                RevocationUiState.Loaded(
-                    total = response.total().toInt(),
-                    items = items
-                )
-            )
-        } catch (ex: Exception) {
-            val reason = when (ex) {
-                is OfflineToriiException -> ex.message ?: "offline Torii error"
-                else -> ex.message ?: "unable to load revocations"
-            }
-            _revocations.postValue(RevocationUiState.Error(reason))
-        }
-    }
-
-    private fun OfflineRevocationList.OfflineRevocationItem.toDisplay(): RevocationDisplay {
-        return RevocationDisplay(
-            verdictIdHex = verdictIdHex(),
-            issuerId = issuerDisplay(),
-            reason = reason(),
-            revokedAtMs = revokedAtMs(),
-            note = note()
-        )
     }
 
     private suspend fun <T> CompletableFuture<T>.await(): T =

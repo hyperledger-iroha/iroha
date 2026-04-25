@@ -1023,6 +1023,24 @@ impl From<crate::isi::offline::SubmitOfflineToOnlineTransfer> for InstructionBox
     }
 }
 
+impl From<crate::isi::offline::IssueOfflineNoteV2> for InstructionBox {
+    fn from(i: crate::isi::offline::IssueOfflineNoteV2) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RedeemOfflineNoteV2> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineNoteV2) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::AuditOfflineNoteV2> for InstructionBox {
+    fn from(i: crate::isi::offline::AuditOfflineNoteV2) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::offline::RegisterOfflineVerdictRevocation> for InstructionBox {
     fn from(i: crate::isi::offline::RegisterOfflineVerdictRevocation) -> Self {
         InstructionBox(Box::new(i))
@@ -3068,6 +3086,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use iroha_primitives::const_vec::ConstVec;
+    use iroha_primitives::numeric::Numeric;
 
     use super::*;
     use crate::prelude::*;
@@ -3362,6 +3381,92 @@ mod tests {
         let expected = log.encode();
         let actual = BuiltInInstruction::encode_as_instruction_box(&log);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn offline_note_v2_instructions_are_registered_and_boxable() {
+        use crate::offline::{
+            OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteKeyCertificateV2,
+            OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2,
+        };
+        use iroha_crypto::{Hash, Signature};
+
+        let registry = crate::instruction_registry::default();
+        let account_id = AccountId::new(
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key"),
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let asset_id = AssetId::of(asset_definition_id, account_id.clone());
+        let proof = OfflineNoteRecursiveProofV2 {
+            verifier_key_id: "offline-note-v2-recursive-v1".to_owned(),
+            public_inputs_hash: Hash::new(b"offline-v2-public-inputs"),
+            proof: vec![0xCA, 0xFE],
+        };
+        let key_certificate = OfflineNoteKeyCertificateV2 {
+            version: 2,
+            platform: "ios-appattest".to_owned(),
+            key_id: "one-use-key".to_owned(),
+            device_id: "device-1".to_owned(),
+            account_id: account_id.clone(),
+            public_key: vec![0x01, 0x02, 0x03],
+            one_use: true,
+            issuer_signature: Signature::from_bytes(&[0xAB; 64]),
+        };
+
+        let issue = crate::isi::offline::IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
+            note_commitment: Hash::new(b"note-commitment"),
+            key_certificate,
+            asset: asset_id.clone(),
+            amount: Numeric::new(10, 0),
+        });
+        let redemption = crate::isi::offline::RedeemOfflineNoteV2::new(OfflineNoteRedeemV2 {
+            input_nullifiers: vec![Hash::new(b"input-nullifier")],
+            recipient: account_id,
+            asset: asset_id,
+            amount: Numeric::new(10, 0),
+            recursive_proof: proof.clone(),
+        });
+        let audit = crate::isi::offline::AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
+            token_id: Hash::new(b"token"),
+            input_nullifiers: vec![Hash::new(b"audit-nullifier")],
+            output_commitments: vec![Hash::new(b"output-note")],
+            recursive_proof: proof,
+        });
+
+        let cases: Vec<(&'static str, InstructionBox, Vec<u8>)> = vec![
+            (
+                std::any::type_name::<crate::isi::offline::IssueOfflineNoteV2>(),
+                issue.clone().into(),
+                norito::to_bytes(&issue).expect("encode issue instruction"),
+            ),
+            (
+                std::any::type_name::<crate::isi::offline::RedeemOfflineNoteV2>(),
+                redemption.clone().into(),
+                norito::to_bytes(&redemption).expect("encode redemption instruction"),
+            ),
+            (
+                std::any::type_name::<crate::isi::offline::AuditOfflineNoteV2>(),
+                audit.clone().into(),
+                norito::to_bytes(&audit).expect("encode audit instruction"),
+            ),
+        ];
+
+        for (type_name, instruction, payload) in cases {
+            assert!(
+                registry.contains(type_name),
+                "default registry should contain {type_name}"
+            );
+            let decoded = registry
+                .decode(type_name, &payload)
+                .unwrap_or_else(|| panic!("missing decoder for {type_name}"))
+                .expect("decode instruction through registry");
+            assert_eq!(instruction, decoded);
+        }
     }
 
     #[test]

@@ -11699,7 +11699,12 @@ impl World {
     }
 
     fn rebuild_offline_consumed_build_claim_ids(&mut self) {
-        let mut consumed = BTreeSet::new();
+        let mut consumed = self
+            .offline_consumed_build_claim_ids
+            .view()
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<BTreeSet<_>>();
         for (_, record) in self.offline_to_online_transfers.view().iter() {
             if record.status == OfflineTransferStatus::Rejected {
                 continue;

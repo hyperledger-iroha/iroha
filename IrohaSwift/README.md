@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Device-bound offline cash request/response models for `/v1/offline/cash/*`, plus transfer-history inspection and signed revocation bundle fetch via `/v1/offline/revocations`
+- Offline V2 models and readiness discovery through `/v1/offline/v2/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -543,16 +543,11 @@ operators can archive or inspect them later. When Torii rejects a replayed trans
 SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries untouched so
 apps can decide how to remediate.
 
-### Offline cash APIs
+### Offline V2 APIs
 
-The Swift SDK now exposes the offline cash surface:
-
-- setup, load, refresh, sync, and redeem
-- revocation list and signed revocation bundle
-- read-only offline transfer history via `/v1/offline/transfers*`
-
-Certificate issuance, allowance registration, settlement submission, spend-receipt validation, and
-aggregate-proof helper APIs were removed from the public SDK surface as part of the offline cash cutover.
+Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; the legacy
+offline cash, transfer-history, and revocation HTTP routes are no longer published.
 
 Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
 backoff, retrying 429/5xx responses and transport errors). For example:

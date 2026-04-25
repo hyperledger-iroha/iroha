@@ -1,9 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
-import java.io.UnsupportedEncodingException;
 import java.net.URI;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -13,35 +10,19 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
-import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
-import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueRequest;
-import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
-import org.hyperledger.iroha.android.offline.OfflineListParams;
-import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
-import org.hyperledger.iroha.android.offline.OfflineRevocationList;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
-import org.hyperledger.iroha.android.offline.OfflineTransferList;
+import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
 
 /**
- * Lightweight HTTP client for Torii offline inspection endpoints (`/v1/offline/*`).
+ * Lightweight HTTP client for the maintained Torii Offline V2 endpoint.
  *
- * <p>The client reuses the shared {@link HttpTransportExecutor} abstraction so telemetry hooks and
- * custom HTTP stacks can be injected by SDK consumers. Responses are parsed into immutable model
- * types under {@code org.hyperledger.iroha.android.offline}.
+ * <p>The legacy offline cash, transfer-history, revocation, and build-claim routes have been
+ * removed from Torii. This client exposes only {@code /v1/offline/v2/readiness}.
  */
 public final class OfflineToriiClient {
 
-  private static final String TRANSFERS_PATH = "/v1/offline/transfers";
-  private static final String REVOCATIONS_PATH = "/v1/offline/revocations";
-  private static final String REVOCATIONS_BUNDLE_PATH = "/v1/offline/revocations/bundle";
-  private static final String CASH_SETUP_PATH = "/v1/offline/cash/setup";
-  private static final String CASH_LOAD_PATH = "/v1/offline/cash/load";
-  private static final String CASH_REFRESH_PATH = "/v1/offline/cash/refresh";
-  private static final String CASH_SYNC_PATH = "/v1/offline/cash/sync";
-  private static final String CASH_REDEEM_PATH = "/v1/offline/cash/redeem";
-  private static final String TRANSFERS_QUERY_PATH = "/v1/offline/transfers/query";
-  private static final String BUILD_CLAIM_ISSUE_PATH = "/v1/offline/build-claims/issue";
+  private static final String OFFLINE_V2_READINESS_PATH = "/v1/offline/v2/readiness";
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -62,68 +43,9 @@ public final class OfflineToriiClient {
     return new Builder();
   }
 
-  public CompletableFuture<OfflineTransferList> listTransfers(
-      final OfflineListParams params) {
-    return executeRequest(TRANSFERS_PATH, params, OfflineJsonParser::parseTransfers);
-  }
-
-  public CompletableFuture<OfflineRevocationList> listRevocations(
-      final OfflineListParams params) {
-    return executeRequest(REVOCATIONS_PATH, params, OfflineJsonParser::parseRevocations);
-  }
-
-  public CompletableFuture<OfflineTransferList> queryTransfers(
-      final OfflineQueryEnvelope envelope) {
-    return executeQuery(TRANSFERS_QUERY_PATH, envelope, OfflineJsonParser::parseTransfers);
-  }
-  /** Fetch one offline transfer bundle detail. */
-  public CompletableFuture<OfflineTransferList.OfflineTransferItem> getTransfer(
-      final String bundleIdHex) {
-    Objects.requireNonNull(bundleIdHex, "bundleIdHex");
-    final String path = TRANSFERS_PATH + "/" + urlEncode(bundleIdHex.trim());
-    return executeGet(path, OfflineJsonParser::parseTransferItem);
-  }
-
-  /** Fetch the signed offline revocation bundle as raw JSON. */
-  public CompletableFuture<String> getRevocationBundleJson() {
-    return executeGet(REVOCATIONS_BUNDLE_PATH, OfflineToriiClient::decodeJsonPayload);
-  }
-
-  /** Post a JSON-encoded offline cash setup request and return the raw JSON response. */
-  public CompletableFuture<String> setupCash(final String requestJson) {
-    return executeJsonPost(CASH_SETUP_PATH, requestJson);
-  }
-
-  /** Post a JSON-encoded offline cash load request and return the raw JSON response. */
-  public CompletableFuture<String> loadCash(final String requestJson) {
-    return executeJsonPost(CASH_LOAD_PATH, requestJson);
-  }
-
-  /** Post a JSON-encoded offline cash refresh request and return the raw JSON response. */
-  public CompletableFuture<String> refreshCash(final String requestJson) {
-    return executeJsonPost(CASH_REFRESH_PATH, requestJson);
-  }
-
-  /** Post a JSON-encoded offline cash sync request and return the raw JSON response. */
-  public CompletableFuture<String> syncCash(final String requestJson) {
-    return executeJsonPost(CASH_SYNC_PATH, requestJson);
-  }
-
-  /** Post a JSON-encoded offline cash redeem request and return the raw JSON response. */
-  public CompletableFuture<String> redeemCash(final String requestJson) {
-    return executeJsonPost(CASH_REDEEM_PATH, requestJson);
-  }
-
-  /** Issue an operator-signed build claim for a receipt transaction id. */
-  public CompletableFuture<OfflineBuildClaimIssueResponse> issueBuildClaim(
-      final OfflineBuildClaimIssueRequest requestBody) {
-    Objects.requireNonNull(requestBody, "requestBody");
-    final byte[] body =
-        org.hyperledger.iroha.android.client.JsonEncoder.encode(requestBody.toJsonMap())
-            .getBytes(StandardCharsets.UTF_8);
-    final TransportRequest request = buildPostRequest(BUILD_CLAIM_ISSUE_PATH, body);
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseBuildClaimIssueResponse);
+  /** Fetch Torii's Offline V2 readiness flags. */
+  public CompletableFuture<OfflineV2Readiness> getOfflineV2Readiness() {
+    return executeGet(OFFLINE_V2_READINESS_PATH, OfflineJsonParser::parseOfflineV2Readiness);
   }
 
   /** Exposes the underlying executor so auxiliary clients can share the same HTTP transport. */
@@ -131,39 +53,14 @@ public final class OfflineToriiClient {
     return executor;
   }
 
-  private <T> CompletableFuture<T> executeRequest(
-      final String path, final OfflineListParams params, final ResponseParser<T> parser) {
-    final TransportRequest request = buildGetRequest(path, params);
-    notifyRequest(request);
-    return executeHttpRequest(request, parser);
-  }
-
   private <T> CompletableFuture<T> executeGet(final String path, final ResponseParser<T> parser) {
-    final TransportRequest request = buildGetRequest(path, Map.of());
+    final TransportRequest request = buildGetRequest(path);
     notifyRequest(request);
     return executeHttpRequest(request, parser);
   }
 
-  private CompletableFuture<String> executeJsonPost(
-      final String path, final String requestJson) {
-    Objects.requireNonNull(requestJson, "requestJson");
-    final String trimmed = requestJson.trim();
-    if (trimmed.isEmpty()) {
-      throw new IllegalArgumentException("requestJson must not be blank");
-    }
-    final TransportRequest request =
-        buildPostRequest(path, trimmed.getBytes(StandardCharsets.UTF_8));
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineToriiClient::decodeJsonPayload);
-  }
-
-  private TransportRequest buildGetRequest(final String path, final OfflineListParams params) {
-    final Map<String, String> query = params != null ? params.toQueryParameters() : Map.of();
-    return buildGetRequest(path, query);
-  }
-
-  private TransportRequest buildGetRequest(final String path, final Map<String, String> query) {
-    final URI target = appendQuery(resolvePath(path), query);
+  private TransportRequest buildGetRequest(final String path) {
+    final URI target = resolvePath(path);
     final Map<String, String> headers = mergeHeaders();
     TransportSecurity.requireHttpRequestAllowed(
         "OfflineToriiClient", baseUri, target, headers, null);
@@ -173,36 +70,6 @@ public final class OfflineToriiClient {
             .setMethod("GET")
             .setTimeout(timeout);
     headers.forEach(builder::addHeader);
-    return builder.build();
-  }
-
-  private <T> CompletableFuture<T> executeQuery(
-      final String path, final OfflineQueryEnvelope envelope, final ResponseParser<T> parser) {
-    final TransportRequest request = buildPostRequest(path, envelope);
-    notifyRequest(request);
-    return executeHttpRequest(request, parser);
-  }
-
-  private TransportRequest buildPostRequest(
-      final String path, final OfflineQueryEnvelope envelope) {
-    final OfflineQueryEnvelope resolved =
-        envelope != null ? envelope : OfflineQueryEnvelope.builder().build();
-    return buildPostRequest(path, resolved.toJsonBytes());
-  }
-
-  private TransportRequest buildPostRequest(final String path, final byte[] body) {
-    final URI target = resolvePath(path);
-    final Map<String, String> headers = mergeHeaders();
-    TransportSecurity.requireHttpRequestAllowed(
-        "OfflineToriiClient", baseUri, target, headers, body);
-    final TransportRequest.Builder builder =
-        TransportRequest.builder()
-            .setUri(target)
-            .setMethod("POST")
-            .setTimeout(timeout)
-            .setBody(body);
-    headers.forEach(builder::addHeader);
-    builder.addHeader("Content-Type", "application/json");
     return builder.build();
   }
 
@@ -242,41 +109,6 @@ public final class OfflineToriiClient {
     final String base = baseUri.toString();
     final String joined = base.endsWith("/") ? base + normalized : base + "/" + normalized;
     return URI.create(joined);
-  }
-
-  private static URI appendQuery(final URI target, final Map<String, String> params) {
-    if (params.isEmpty()) {
-      return target;
-    }
-    final StringBuilder builder = new StringBuilder(target.toString());
-    builder.append(target.toString().contains("?") ? "&" : "?");
-    builder.append(encodeQuery(params));
-    return URI.create(builder.toString());
-  }
-
-  private static String encodeQuery(final Map<String, String> params) {
-    final StringBuilder builder = new StringBuilder();
-    boolean first = true;
-    for (final Map.Entry<String, String> entry : params.entrySet()) {
-      if (!first) {
-        builder.append('&');
-      } else {
-        first = false;
-      }
-      builder
-          .append(urlEncode(entry.getKey()))
-          .append('=')
-          .append(urlEncode(entry.getValue()));
-    }
-    return builder.toString();
-  }
-
-  private static String urlEncode(final String value) {
-    try {
-      return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
-    } catch (final UnsupportedEncodingException ex) {
-      throw new IllegalStateException("UTF-8 not supported", ex);
-    }
   }
 
   private void notifyRequest(final TransportRequest request) {
@@ -419,10 +251,6 @@ public final class OfflineToriiClient {
     return message.toString();
   }
 
-  private static String decodeJsonPayload(final byte[] payload) {
-    return new String(payload, StandardCharsets.UTF_8);
-  }
-
   @FunctionalInterface
   private interface ResponseParser<T> {
     T parse(byte[] payload);
@@ -438,12 +266,12 @@ public final class OfflineToriiClient {
     private Builder() {}
 
     public Builder executor(final HttpTransportExecutor executor) {
-      this.executor = executor;
+      this.executor = Objects.requireNonNull(executor, "executor");
       return this;
     }
 
     public Builder baseUri(final URI baseUri) {
-      this.baseUri = baseUri;
+      this.baseUri = Objects.requireNonNull(baseUri, "baseUri");
       return this;
     }
 
@@ -453,27 +281,21 @@ public final class OfflineToriiClient {
     }
 
     public Builder addHeader(final String name, final String value) {
-      if (name != null && value != null) {
-        defaultHeaders.put(name, value);
-      }
+      this.defaultHeaders.put(Objects.requireNonNull(name, "name"), Objects.requireNonNull(value, "value"));
       return this;
     }
 
     public Builder defaultHeaders(final Map<String, String> headers) {
-      defaultHeaders.clear();
+      this.defaultHeaders.clear();
       if (headers != null) {
-        headers.forEach((k, v) -> {
-          if (k != null && v != null) {
-            defaultHeaders.put(k, v);
-          }
-        });
+        headers.forEach(this::addHeader);
       }
       return this;
     }
 
     public Builder addObserver(final ClientObserver observer) {
       if (observer != null) {
-        observers.add(observer);
+        this.observers.add(observer);
       }
       return this;
     }
@@ -487,12 +309,6 @@ public final class OfflineToriiClient {
     }
 
     public OfflineToriiClient build() {
-      if (executor == null) {
-        throw new IllegalStateException("executor is required");
-      }
-      if (baseUri == null) {
-        throw new IllegalStateException("baseUri is required");
-      }
       return new OfflineToriiClient(this);
     }
   }

@@ -7788,18 +7788,13 @@ class ToriiClient(_BaseToriiClient):
         return RepoAgreementListPage.from_payload(payload)
 
     # ------------------------------------------------------------------
-    # Offline allowances, transfers, and summaries
+    # Offline allowances and summaries
     # ------------------------------------------------------------------
 
     def list_offline_allowances(self, **params: Any) -> OfflineAllowanceListPage:
         """List offline allowances (`GET /v1/offline/allowances`)."""
 
         return super().list_offline_allowances(**params)
-
-    def list_offline_transfers(self, **params: Any) -> OfflineTransferListPage:
-        """List offline transfers (`GET /v1/offline/transfers`)."""
-
-        return super().list_offline_transfers(**params)
 
     def list_offline_summaries(self, **params: Any) -> OfflineSummaryListPage:
         """List offline counter summaries (`GET /v1/offline/summaries`)."""

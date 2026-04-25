@@ -7,7 +7,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonParser;
 
 /**
- * Immutable view over `/v1/offline/revocations` responses.
+ * Immutable legacy revocation-list view retained for local fixture parsing.
  *
  * <p>Items surface both the flattened fields (verdict id, issuer, revoked timestamp, etc.) and the
  * raw Norito JSON so POS clients can mirror ledger metadata without reimplementing codecs.

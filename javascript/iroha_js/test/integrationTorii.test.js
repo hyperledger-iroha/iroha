@@ -2505,7 +2505,7 @@ test(
 );
 
 test(
-  "offline transfer endpoints respond (optional)",
+  "offline v2 readiness responds (optional)",
   {
     skip: !!SKIP_REASON,
     timeout: 60_000,
@@ -2520,59 +2520,13 @@ test(
       apiToken: API_TOKEN,
     });
 
-    const transfers = await fetchOfflineListPage(
-      t,
-      "offline transfers list",
-      () =>
-        client.listOfflineTransfers({
-          limit: 5,
-        }),
-    );
-    if (!transfers) {
-      return;
-    }
-    assertOfflineTransferResponse(transfers);
-  },
-);
-
-test(
-  "offline revocation endpoints respond (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    const revocations = await fetchOfflineListPage(
-      t,
-      "offline revocations list",
-      () => client.listOfflineRevocations({ limit: 5 }),
-    );
-    if (!revocations) {
-      return;
-    }
-    assertOfflineRevocationResponse(revocations);
-
-    try {
-      const revocationBundle = await client.getOfflineRevocationBundle();
-      assert.equal(typeof revocationBundle, "object");
-    } catch (error) {
-      if (isOfflineApiUnavailableError(error)) {
-        t.diagnostic(
-          `offline revocation bundle unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        return;
-      }
-      throw error;
-    }
+    const readiness = await client.getOfflineV2Readiness();
+    assert.equal(readiness.offline_note_v2, true);
+    assert.equal(readiness.offline_one_use_keys, true);
+    assert.equal(typeof readiness.offline_recursive_note_proof, "boolean");
+    assert.equal(readiness.offline_fountain_qr_v1, true);
+    assert.equal(readiness.offline_sync_optional, true);
+    assert.equal(readiness.offline_telemetry, true);
   },
 );
 
@@ -6176,19 +6130,6 @@ function assertExplorerAccountQrSnapshot(snapshot, label) {
   assert.equal(typeof snapshot.svg, "string", `${label}.svg must be a string`);
   assert.ok(snapshot.svg.startsWith("<svg"), `${label}.svg must contain an <svg> payload`);
 }
-
-async function fetchOfflineListPage(t, label, fetcher) {
-  try {
-    return await fetcher();
-  } catch (error) {
-    if (isOfflineApiUnavailableError(error)) {
-      t.diagnostic(`${label} unavailable on target node: ${error.message}`);
-      return null;
-    }
-    throw error;
-  }
-}
-
 function assertOfflineAllowanceResponse(page) {
   assertNonNegativeInteger(page.total, "offline allowances total");
   assert.ok(Array.isArray(page.items), "offline allowances must expose items array");
@@ -6268,87 +6209,6 @@ function assertOfflineCounterTotals(totals) {
   assertNonNegativeInteger(totals.android, "summary counter_totals.android");
   assertNonNegativeInteger(totals.policy, "summary counter_totals.policy");
 }
-
-function assertOfflineTransferResponse(page) {
-  assertNonNegativeInteger(page.total, "offline transfers total");
-  assert.ok(Array.isArray(page.items), "offline transfers must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.bundle_id_hex, "string", "transfer bundle_id_hex must be a string");
-  assert.equal(typeof entry.controller_id, "string", "transfer controller_id must be a string");
-  assert.equal(typeof entry.receiver_id, "string", "transfer receiver_id must be a string");
-  assert.ok(typeof entry.total_amount === "string", "transfer total_amount must be a string");
-  assert.equal(typeof entry.status, "string", "transfer status must be a string");
-  assertNonNegativeInteger(entry.recorded_at_ms, "transfer recorded_at_ms");
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(entry, "integrity_metadata"),
-    "transfer entries must expose integrity_metadata",
-  );
-  if (entry.integrity_metadata !== null) {
-    assert.equal(
-      typeof entry.integrity_metadata.policy,
-      "string",
-      "transfer integrity_metadata.policy must be a string",
-    );
-  }
-  assert.ok(
-    Array.isArray(entry.status_transitions),
-    "transfer entries must expose status_transitions",
-  );
-  if (entry.status_transitions.length > 0) {
-    const transition = entry.status_transitions[0];
-    assert.equal(typeof transition.status, "string", "status transition status must be a string");
-    assertNonNegativeInteger(
-      transition.transitioned_at_ms,
-      "status transition transitioned_at_ms",
-    );
-    if (transition.verdict_snapshot !== null) {
-      assert.equal(
-        typeof transition.verdict_snapshot.certificate_id,
-        "string",
-        "status transition verdict_snapshot.certificate_id must be a string",
-      );
-    }
-  }
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(entry, "verdict_snapshot"),
-    "transfer entries must expose verdict_snapshot",
-  );
-  if (entry.verdict_snapshot !== null) {
-    assert.equal(
-      typeof entry.verdict_snapshot.certificate_id,
-      "string",
-      "transfer verdict_snapshot.certificate_id must be a string",
-    );
-  }
-}
-
-function assertOfflineRevocationResponse(page) {
-  assertNonNegativeInteger(page.total, "offline revocations total");
-  assert.ok(Array.isArray(page.items), "offline revocations must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.verdict_id_hex, "string", "revocation verdict_id_hex must be a string");
-  assert.equal(typeof entry.issuer_id, "string", "revocation issuer_id must be a string");
-  assert.equal(typeof entry.issuer_display, "string", "revocation issuer_display must be a string");
-  assertNonNegativeInteger(entry.revoked_at_ms, "revocation revoked_at_ms");
-  assert.equal(typeof entry.reason, "string", "revocation reason must be a string");
-  if (entry.note !== null) {
-    assert.equal(typeof entry.note, "string", "revocation note must be a string when present");
-  }
-  if (entry.metadata !== null) {
-    assert.ok(
-      isPlainObject(entry.metadata),
-      "revocation metadata must be a plain object when present",
-    );
-  }
-  assert.ok(isPlainObject(entry.record), "revocation record must be a plain object");
-}
-
 function assertOfflineRejectionStatsResponse(page) {
   assertNonNegativeInteger(page.total, "offline rejection stats total");
   assert.ok(Array.isArray(page.items), "offline rejection stats must expose items array");

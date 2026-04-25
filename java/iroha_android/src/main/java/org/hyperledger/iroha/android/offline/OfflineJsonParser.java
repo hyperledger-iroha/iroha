@@ -14,6 +14,18 @@ public final class OfflineJsonParser {
 
   private OfflineJsonParser() {}
 
+  public static OfflineV2Readiness parseOfflineV2Readiness(final byte[] payload) {
+    final Object root = parse(payload);
+    final Map<String, Object> object = expectObject(root, "root");
+    return new OfflineV2Readiness(
+        asBoolean(object.get("offline_note_v2"), "offline_note_v2"),
+        asBoolean(object.get("offline_one_use_keys"), "offline_one_use_keys"),
+        asBoolean(object.get("offline_recursive_note_proof"), "offline_recursive_note_proof"),
+        asBoolean(object.get("offline_fountain_qr_v1"), "offline_fountain_qr_v1"),
+        asBoolean(object.get("offline_sync_optional"), "offline_sync_optional"),
+        asBoolean(object.get("offline_telemetry"), "offline_telemetry"));
+  }
+
   public static OfflineAllowanceList parseAllowances(final byte[] payload) {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
@@ -278,6 +290,13 @@ public final class OfflineJsonParser {
       return null;
     }
     return asLong(value, path);
+  }
+
+  private static boolean asBoolean(final Object value, final String path) {
+    if (!(value instanceof Boolean bool)) {
+      throw new IllegalStateException(path + " is not a boolean");
+    }
+    return bool;
   }
 
   private static Boolean asOptionalBoolean(final Object value, final String path) {

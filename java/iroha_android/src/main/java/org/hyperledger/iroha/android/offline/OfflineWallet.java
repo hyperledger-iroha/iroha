@@ -285,64 +285,9 @@ public final class OfflineWallet {
     notifyModeChange();
   }
 
-  public CompletableFuture<OfflineTransferList> fetchTransfers(
-      final OfflineListParams params) {
-    return toriiClient.listTransfers(params);
-  }
-
-  public CompletableFuture<OfflineTransferList> fetchTransfers(
-      final OfflineQueryEnvelope envelope) {
-    return toriiClient.queryTransfers(envelope);
-  }
-
-  public CompletableFuture<OfflineRevocationList> fetchRevocations(
-      final OfflineListParams params) {
-    return toriiClient.listRevocations(params);
-  }
-
-  /**
-   * Fetches offline transfers and records every entry in the audit log (when enabled).
-   *
-   * <p>Useful when reconciling deposits: the returned list is identical to {@link
-   * #fetchTransfers(OfflineListParams)}, but the audit logger captures each bundle for regulator
-   * exports without additional bookkeeping.
-   */
-  public CompletableFuture<OfflineTransferList> fetchTransfersWithAudit(
-      final OfflineListParams params) {
-    return toriiClient
-        .listTransfers(params)
-        .whenComplete(
-            (list, throwable) -> {
-              if (throwable != null || list == null || !auditLogger.isEnabled()) {
-                return;
-              }
-              for (OfflineTransferList.OfflineTransferItem item : list.items()) {
-                try {
-                  recordTransferAudit(item);
-                } catch (IOException e) {
-                  throw new CompletionException(e);
-                }
-              }
-            });
-  }
-
-  public CompletableFuture<OfflineTransferList> fetchTransfersWithAudit(
-      final OfflineQueryEnvelope envelope) {
-    return toriiClient
-        .queryTransfers(envelope)
-        .whenComplete(
-            (list, throwable) -> {
-              if (throwable != null || list == null || !auditLogger.isEnabled()) {
-                return;
-              }
-              for (OfflineTransferList.OfflineTransferItem item : list.items()) {
-                try {
-                  recordTransferAudit(item);
-                } catch (IOException e) {
-                  throw new CompletionException(e);
-                }
-              }
-            });
+  /** Fetch Torii's Offline V2 readiness flags. */
+  public CompletableFuture<OfflineV2Readiness> offlineV2Readiness() {
+    return toriiClient.getOfflineV2Readiness();
   }
 
   public boolean isAuditLoggingEnabled() {
