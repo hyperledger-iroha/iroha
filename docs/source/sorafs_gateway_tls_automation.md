@@ -73,7 +73,7 @@ available on the bastion host.
   ```bash
   cargo xtask soradns-acme-plan \
     --name solswap-indexer.sora \
-    --pretty-suffix mon.taira.sora.org \
+    --pretty-suffix mon.taira.sora.net \
     --json-out fixtures/sorafs_gateway/acme_san/solswap-indexer.sora.mon.san.json
   ```
 

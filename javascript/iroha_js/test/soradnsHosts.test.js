@@ -45,7 +45,7 @@ customSuffixTest("derives Taira Mon gateway hosts", () => {
   });
   assert.equal(
     bindings.prettyHost,
-    "solswap-indexer.sora.mon.taira.sora.org",
+    "solswap-indexer.sora.mon.taira.sora.net",
   );
   assert.equal(bindings.canonicalWildcard, canonicalGatewayWildcard());
   assert.ok(bindings.hostPatterns.includes(bindings.prettyHost));

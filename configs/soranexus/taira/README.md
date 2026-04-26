@@ -393,8 +393,8 @@ alias layer, but they are no longer the primary deployment path. Reserve
 
 Soracloud runtime apps use the SoraDNS/Soracloud alias route instead of SoraFS
 CID hosts. For clients without native SoraDNS resolution, the public browser
-gateway is `<alias>.mon.taira.sora.org`, for example
-`https://solswap-indexer.sora.mon.taira.sora.org/api/indexer/v1/health`. Keep
+gateway is `<alias>.mon.taira.sora.net`, for example
+`https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`. Keep
 `https://taira.sora.org/soradns/<alias>/...` available only as the legacy
 Torii compatibility path.
 
@@ -854,16 +854,16 @@ From `../iroha2-block-explorer-web`:
    - do not fold `/v1/connect/ws` into the generic `location /` or
      `location ^~ /v1/` proxy rules; it must stay an exact-match websocket
      location with `proxy_http_version 1.1`.
-   - ensure `taira.sora.org`, `taira-explorer.sora.org`, `mon.taira.sora.org`,
+   - ensure `taira.sora.org`, `taira-explorer.sora.org`, `mon.taira.sora.net`,
      every published `taira-validator-{1,2,3,4}.sora.org` hostname, and the
-     required `*.sorafs.taira.sora.org` and `*.mon.taira.sora.org` records
+     required `*.sorafs.taira.sora.org` and `*.mon.taira.sora.net` records
      resolve to the shared edge host from `dns_records.json` before relying on
      this nginx configuration.
    - add wildcard edge routing for `*.sorafs.taira.sora.org` and preserve the
      incoming host header when proxying to Torii; the checked-in nginx example
      now includes that wildcard `server_name`.
    - keep Mon gateway routing generic with the regex server block for
-     `<alias>.mon.taira.sora.org`; do not add per-service nginx files such as
+     `<alias>.mon.taira.sora.net`; do not add per-service nginx files such as
      `solswap-indexer.sora.conf`.
 4. Issue/refresh TLS certificates for the public hosts, direct validator names,
    CID-origin wildcard, and Mon gateway exact hosts:
@@ -874,15 +874,15 @@ From `../iroha2-block-explorer-web`:
    - `taira-validator-3.sora.org`
    - `taira-validator-4.sora.org`
    - `*.sorafs.taira.sora.org`
-   - exact Mon hosts such as `solswap-indexer.sora.mon.taira.sora.org`
+   - exact Mon hosts such as `solswap-indexer.sora.mon.taira.sora.net`
    - the convenience, explorer, and direct validator names can share one SAN
      certificate stored under `.../live/taira.sora.org/` if your ACME client
      keeps those names in one lineage.
    - the wildcard requires DNS-01 validation; `certbot --nginx` alone is not
      enough for the `*.sorafs.taira.sora.org` SAN.
    - Mon gateway aliases require exact bind-time certificates. A wildcard cert
-     for `*.mon.taira.sora.org` does not cover multi-label aliases such as
-     `solswap-indexer.sora.mon.taira.sora.org`.
+     for `*.mon.taira.sora.net` does not cover multi-label aliases such as
+     `solswap-indexer.sora.mon.taira.sora.net`.
    - if your ACME client stores all SANs under one lineage, nginx can keep
      pointing at a single certificate bundle for all names served from this
      edge.

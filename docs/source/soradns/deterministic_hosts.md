@@ -56,14 +56,14 @@ Deployments that operate their own browser gateway zone may choose a different
 pretty-host suffix without changing the canonical hash host. Taira uses:
 
 ```
-pretty_host = `${name}.mon.taira.sora.org`
+pretty_host = `${name}.mon.taira.sora.net`
 ```
 
 The pretty zone inherits user-controlled labels, so the normalisation rules
 above are enforced verbatim to keep certificates reproducible and ensure GAR
 policy remains deterministic. Taira issues exact pretty-host certificates at
-alias bind time; wildcard TLS for `*.mon.taira.sora.org` is not sufficient for
-multi-label aliases such as `solswap-indexer.sora.mon.taira.sora.org`.
+alias bind time; wildcard TLS for `*.mon.taira.sora.net` is not sufficient for
+multi-label aliases such as `solswap-indexer.sora.mon.taira.sora.net`.
 
 ### Public DNS delegation (regular internet)
 
@@ -84,7 +84,7 @@ For public DNS records that point at the SoraDNS gateway:
 
 - For subdomains, publish a CNAME from your public name to the derived pretty
   host for the selected gateway profile (for example, `app.sora.example` ->
-  `<fqdn>.gw.sora.name`, or on Taira `<fqdn>.mon.taira.sora.org`).
+  `<fqdn>.gw.sora.name`, or on Taira `<fqdn>.mon.taira.sora.net`).
 - For an apex/TLD (for example, `example` or `example.tld`), use your DNS
   provider's ALIAS/ANAME feature or publish A/AAAA records to the gateway
   anycast IPs. CNAME is not valid at the apex.
@@ -107,7 +107,7 @@ contract:
    it must not require per-release DNS edits.
 3. For clients that cannot resolve SoraDNS aliases directly yet, use the
    selected browser gateway host. On Taira this is
-   `https://<fqdn>.mon.taira.sora.org/...`.
+   `https://<fqdn>.mon.taira.sora.net/...`.
 4. Legacy Torii compatibility gateways may also expose
    `https://<gateway>/soradns/<fqdn>/...`, but this is not the preferred public
    browser URL.
@@ -117,13 +117,13 @@ Example:
 - canonical API origin:
   `https://solswap-indexer.sora/api/indexer/v1/health`
 - Taira public browser gateway:
-  `https://solswap-indexer.sora.mon.taira.sora.org/api/indexer/v1/health`
+  `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`
 - fallback gateway origin:
   `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
 
 The `/soradns/<alias>/...` fallback path is transitional. Tooling, manifests,
 and app configs should continue to prefer the vanity alias host itself, while
-non-SoraDNS browser examples for Taira should use `mon.taira.sora.org`.
+non-SoraDNS browser examples for Taira should use `mon.taira.sora.net`.
 
 ## 5. GAR Requirements
 
@@ -133,7 +133,7 @@ each registered name:
 1. The canonical host (`<hash>.gw.sora.id`).
 2. The canonical wildcard (`*.gw.sora.id`).
 3. The pretty host for the active gateway profile (`<fqdn>.gw.sora.name` by
-   default, or `<fqdn>.mon.taira.sora.org` on Taira).
+   default, or `<fqdn>.mon.taira.sora.net` on Taira).
 
 Clients should reject GAR payloads that omit any of these entries. The Rust
 helper returns the trio in the expected order so verifiers can compare directly
@@ -151,7 +151,7 @@ Two SDK surfaces now expose deterministic host derivation:
 - **TypeScript / JavaScript** (`javascript/iroha_js/src/soradns.js:1`,
   re-exported as `deriveSoradnsGatewayHosts`): the helper invokes the native
   binding for accurate Blake3 hashing, returning an immutable object that mirrors
-  the Rust struct. Pass `{ prettySuffix: "mon.taira.sora.org" }` to derive the
+  the Rust struct. Pass `{ prettySuffix: "mon.taira.sora.net" }` to derive the
   Taira Mon public browser gateway host while keeping the canonical hash host
   unchanged. `hostPatternsCoverDerivedHosts(patterns, derived)` validates GAR
   entries and ships with full TypeScript definitions (`SoradnsGatewayHosts`,
@@ -208,7 +208,7 @@ npm run build:native
 node ./recipes/soradns.mjs docs.sora \
   --gar-patterns app.dao.sora.gw.sora.name,*.gw.sora.id
 node ./recipes/soradns.mjs solswap-indexer.sora \
-  --pretty-suffix mon.taira.sora.org
+  --pretty-suffix mon.taira.sora.net
 ```
 
 Internally the script uses:
@@ -223,7 +223,7 @@ const derived = deriveSoradnsGatewayHosts("docs.sora");
 console.log(derived.canonicalHost);
 
 const tairaDerived = deriveSoradnsGatewayHosts("solswap-indexer.sora", {
-  prettySuffix: "mon.taira.sora.org",
+  prettySuffix: "mon.taira.sora.net",
 });
 console.log(tairaDerived.prettyHost);
 
