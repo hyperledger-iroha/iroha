@@ -32559,6 +32559,35 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+                let remote_higher_new_view_observed =
+                    self.subsystems.propose.new_view_tracker.entries.keys().any(
+                        |(entry_height, entry_view)| {
+                            *entry_height == height && *entry_view > current_view
+                        },
+                    );
+                if !proposal_seen
+                    && frontier_slot_vote_backed_evidence
+                    && remote_higher_new_view_observed
+                {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "routing empty-frontier local vote evidence through unified quorum-timeout recovery after higher-view NEW_VIEW traffic"
+                    );
+                    return matches!(
+                        self.advance_frontier_recovery(
+                            "quorum_timeout",
+                            height,
+                            current_view,
+                            proposal_seen,
+                            false,
+                            false,
+                            now,
+                        ),
+                        FrontierRecoveryAdvance::Rotate
+                    );
+                }
                 if pre_reset_frontier_reanchor_unresolved_in_window
                     && matches!(direct_cause, ViewChangeCause::MissingQc)
                     && !self
