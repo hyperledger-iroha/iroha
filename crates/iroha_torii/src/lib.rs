@@ -44087,7 +44087,7 @@ pub(crate) mod tests_runtime_handlers {
                     .uri("/app/assets?fresh=1")
                     .header(
                         axum::http::header::HOST,
-                        "portal.sora.mon.taira.sora.org:443",
+                        "portal.sora.mon.taira.sora.net:443",
                     )
                     .extension(crate::loopback_connect_info())
                     .body(Body::empty())

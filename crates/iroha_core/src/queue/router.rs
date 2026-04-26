@@ -203,7 +203,8 @@ fn evaluate_policy_with_view(
         Some(&state_view.nexus().dataspace_catalog),
         Some(state_view),
     )
-    .unwrap_or(None);
+    .unwrap_or(None)
+    .or_else(|| authority_dataspace_target(Some(state_view), tx));
     let matched_rule = policy
         .rules
         .iter()
@@ -290,8 +291,18 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
     {
         return Ok(decision);
     }
+    if let Some(account_id) = account_permission_holder_routing_target(tx) {
+        return resolve_query_routing_decision(
+            policy,
+            lane_catalog,
+            dataspace_catalog,
+            account_id,
+            None,
+        );
+    }
     let target_dataspace =
-        transaction_dataspace_routing_target_with_world(tx, Some(dataspace_catalog), world)?;
+        transaction_dataspace_routing_target_with_world(tx, Some(dataspace_catalog), world)?
+            .or_else(|| authority_dataspace_target_with_world(Some(world), tx));
     let matched_rule = policy
         .rules
         .iter()
@@ -1023,7 +1034,10 @@ fn instruction_transaction_dataspace_target(
                 &transfer.source.definition,
                 dataspace_catalog,
                 state_view,
-            ),
+            )
+            .or_else(|| {
+                account_dataspace_target(state_view.map(StateView::world), &transfer.source.account)
+            }),
             TransferBox::Nft(_) => None,
         };
     }
@@ -1144,7 +1158,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 &transfer.source.definition,
                 dataspace_catalog,
                 world,
-            ),
+            )
+            .or_else(|| account_dataspace_target(Some(world), &transfer.source.account)),
             TransferBox::Nft(_) => None,
         };
     }
@@ -1180,6 +1195,22 @@ fn account_dataspace_target<W: WorldReadOnly>(
 ) -> Option<DataSpaceId> {
     let hierarchy = world?.account_scope_hierarchy(account_id).ok()?;
     (hierarchy.len() == 1).then(|| *hierarchy.keys().next().expect("single dataspace"))
+}
+
+fn authority_dataspace_target(
+    state_view: Option<&StateView<'_>>,
+    tx: &AcceptedTransaction<'_>,
+) -> Option<DataSpaceId> {
+    tx.authority_opt()
+        .and_then(|authority| account_dataspace_target(state_view.map(StateView::world), authority))
+}
+
+fn authority_dataspace_target_with_world<W: WorldReadOnly>(
+    world: Option<&W>,
+    tx: &AcceptedTransaction<'_>,
+) -> Option<DataSpaceId> {
+    tx.authority_opt()
+        .and_then(|authority| account_dataspace_target(world, authority))
 }
 
 fn domain_dataspace_target(
@@ -1273,11 +1304,11 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
-        return matches!(
-            transfer,
-            TransferBox::AssetDefinition(transfer)
-                if transfer.object.is_opaque_canonical()
-        );
+        return match transfer {
+            TransferBox::AssetDefinition(transfer) => transfer.object.is_opaque_canonical(),
+            TransferBox::Asset(transfer) => transfer.source.definition.is_opaque_canonical(),
+            TransferBox::Domain(_) | TransferBox::Nft(_) => false,
+        };
     }
 
     false
@@ -2367,7 +2398,8 @@ impl LaneRouter for ConfigLaneRouter {
             tx,
             Some(&nexus.dataspace_catalog),
             Some(state_view),
-        )?;
+        )?
+        .or_else(|| authority_dataspace_target(Some(state_view), tx));
         let matched_rule = self
             .policy
             .rules
@@ -2389,10 +2421,53 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
+            || self.authority_scope_routing_requires_state(tx)?
         {
             return Ok(None);
         }
         self.try_route(tx).map(Some)
+    }
+}
+
+impl ConfigLaneRouter {
+    fn authority_scope_routing_requires_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<bool, RoutingResolveError> {
+        if tx.authority_opt().is_none() || account_permission_holder_routing_target(tx).is_some() {
+            return Ok(false);
+        }
+        if dataspace_scoped_permission_routing_decision(
+            tx,
+            Some(self.lane_catalog.as_ref()),
+            Some(self.dataspace_catalog.as_ref()),
+            None,
+        )?
+        .is_some()
+        {
+            return Ok(false);
+        }
+        if settlement_routing_decision(
+            tx,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+            None,
+        )?
+        .is_some()
+        {
+            return Ok(false);
+        }
+        if transaction_dataspace_routing_target(tx, Some(self.dataspace_catalog.as_ref()), None)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .any(|rule| rule_matches(rule, tx, None));
+        Ok(!matched_rule)
     }
 }
 
@@ -3303,6 +3378,54 @@ mod tests {
     }
 
     #[test]
+    fn untargeted_authority_transaction_routes_to_single_scope_dataspace_with_state() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            catalog.clone(),
+            lane_catalog,
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(RegisterSmartContractBytes {
+                code_hash: Hash::new(&code),
+                code,
+            })],
+        );
+
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(alice_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("untargeted authority transaction should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("authority single-scope route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
     fn matches_set_key_value_rule_without_underscores() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
@@ -3548,6 +3671,128 @@ mod tests {
                 .try_route(&tx)
                 .expect("asset transfer route must resolve"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_transfer_defers_to_state_for_asset_definition_dataspace() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition =
+            AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
+                .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition, sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("pkr".to_owned())
+                    .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset transfer should defer to state"),
+            None
+        );
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("opaque asset transfer route must resolve with state"),
+            RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_transfer_routes_to_sender_single_scope_when_asset_definition_unresolved() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition, sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(
+            &[(sender_id.clone(), scope_entry)],
+            dataspace_catalog,
+        );
+        state.nexus.write().lane_catalog = lane_catalog;
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset transfer should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("opaque asset transfer should fall back to sender account scope"),
+            RoutingDecision::new(lane_id, dataspace_id)
         );
     }
 

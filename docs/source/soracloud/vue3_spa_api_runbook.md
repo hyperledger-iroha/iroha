@@ -28,18 +28,18 @@ Soracloud deploys must behave like IPFS-style publishing for runtime URLs:
 - the registered vanity host stays fixed
 - deploys update Soracloud route bindings, not DNS records on every release
 - direct vanity-host access remains canonical
-- Taira's owned public browser gateway is `mon.taira.sora.org`
+- Taira's owned public browser gateway is `mon.taira.sora.net`
 - `/soradns/<alias>/...` is the legacy Torii compatibility fallback
 
 Examples:
 
 - direct frontend origin: `https://docs.sora/`
-- Taira browser frontend origin: `https://docs.sora.mon.taira.sora.org/`
+- Taira browser frontend origin: `https://docs.sora.mon.taira.sora.net/`
 - legacy fallback frontend origin: `https://taira.sora.org/soradns/docs.sora/`
 - direct API origin:
   `https://solswap-indexer.sora/api/indexer/v1/health`
 - Taira browser API origin:
-  `https://solswap-indexer.sora.mon.taira.sora.org/api/indexer/v1/health`
+  `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`
 - legacy fallback API origin:
   `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
 
@@ -336,7 +336,7 @@ Torii and use it as:
 - the SoraFS CID gateway for intentionally CID-only frontends:
   `https://taira.sora.org/sorafs/cid/<cid>/`
 
-Use `https://<alias>.mon.taira.sora.org/...` as the Taira public browser URL
+Use `https://<alias>.mon.taira.sora.net/...` as the Taira public browser URL
 for Soracloud apps that already have a vanity alias host. Do not treat
 `taira.sora.org` paths as canonical app origins.
 
@@ -533,7 +533,7 @@ the matching hosted-service or app-wide upgrade command.
   wrong API base.
 - Treat `taira.sora.org` as Torii/control-plane first and as the legacy
   `/soradns/<alias>/...` compatibility gateway second.
-- Use `https://<alias>.mon.taira.sora.org/...` for Taira browser examples that
+- Use `https://<alias>.mon.taira.sora.net/...` for Taira browser examples that
   need ordinary public DNS/TLS.
 - Keep the canonical runtime origin on the registered vanity alias host.
 - Use SoraFS CID paths only for apps that intentionally publish CID-only

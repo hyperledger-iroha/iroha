@@ -2,7 +2,7 @@ import { getNativeBinding } from "./native.js";
 
 const CANONICAL_SUFFIX = "gw.sora.id";
 const PRETTY_SUFFIX = "gw.sora.name";
-const TAIRA_MON_PRETTY_SUFFIX = "mon.taira.sora.org";
+const TAIRA_MON_PRETTY_SUFFIX = "mon.taira.sora.net";
 const CANONICAL_WILDCARD = "*.gw.sora.id";
 
 function requireSoradnsNativeBinding() {
