@@ -1474,8 +1474,6 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_chunk_range_overrides: DashMap<[u8; 32], bool>,
     #[cfg(feature = "app_api")]
-    offline_issuer: Option<OfflineIssuerSigner>,
-    #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
@@ -5195,7 +5193,7 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_cash_readiness() -> Result<impl IntoResponse, Error> {
+async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error> {
     json_ok(json_object([
         json_entry("offline_note_v2", true),
         json_entry("offline_one_use_keys", true),
@@ -12989,14 +12987,6 @@ fn merge_query_batch_boxes(
             merge_variant!(left, right, ProofRecord)
         }
         (
-            QueryOutputBatchBox::OfflineAllowanceRecord(mut left),
-            QueryOutputBatchBox::OfflineAllowanceRecord(right),
-        ) => merge_variant!(left, right, OfflineAllowanceRecord),
-        (
-            QueryOutputBatchBox::OfflineToOnlineTransfer(mut left),
-            QueryOutputBatchBox::OfflineToOnlineTransfer(right),
-        ) => merge_variant!(left, right, OfflineToOnlineTransfer),
-        (
             QueryOutputBatchBox::AssetEscrowRecord(mut left),
             QueryOutputBatchBox::AssetEscrowRecord(right),
         ) => merge_variant!(left, right, AssetEscrowRecord),
@@ -13004,14 +12994,6 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
         ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
-        (
-            QueryOutputBatchBox::OfflineCounterSummary(mut left),
-            QueryOutputBatchBox::OfflineCounterSummary(right),
-        ) => merge_variant!(left, right, OfflineCounterSummary),
-        (
-            QueryOutputBatchBox::OfflineVerdictRevocation(mut left),
-            QueryOutputBatchBox::OfflineVerdictRevocation(right),
-        ) => merge_variant!(left, right, OfflineVerdictRevocation),
         (left, right) => Err(torii_proxy_error_response(
             StatusCode::CONFLICT,
             "query_conflict",
@@ -13109,23 +13091,11 @@ fn canonicalize_query_batch_box(
             canonicalize_variant!(items, BlockHeaderHash)
         }
         QueryOutputBatchBox::ProofRecord(items) => canonicalize_variant!(items, ProofRecord),
-        QueryOutputBatchBox::OfflineAllowanceRecord(items) => {
-            canonicalize_variant!(items, OfflineAllowanceRecord)
-        }
-        QueryOutputBatchBox::OfflineToOnlineTransfer(items) => {
-            canonicalize_variant!(items, OfflineToOnlineTransfer)
-        }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
         }
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
             canonicalize_variant!(items, AnonymousAssetEscrowRecord)
-        }
-        QueryOutputBatchBox::OfflineCounterSummary(items) => {
-            canonicalize_variant!(items, OfflineCounterSummary)
-        }
-        QueryOutputBatchBox::OfflineVerdictRevocation(items) => {
-            canonicalize_variant!(items, OfflineVerdictRevocation)
         }
     }
 }
@@ -29721,28 +29691,6 @@ struct AccountOnboardingSigner {
     alias_auto_renew_subscription_domain: Option<DomainId>,
 }
 
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
-struct OfflineIssuerSigner {
-    operator_authority: Option<AccountId>,
-    operator_keypair: KeyPair,
-    legacy_operator_keypairs: Vec<KeyPair>,
-    allowed_controllers: Vec<AccountId>,
-    lineage_policy: iroha_config::parameters::actual::ToriiOfflineLineagePolicy,
-}
-
-#[cfg(feature = "app_api")]
-impl OfflineIssuerSigner {
-    fn keypair_for_operator(&self, operator_key: &iroha_crypto::PublicKey) -> Option<&KeyPair> {
-        if self.operator_keypair.public_key() == operator_key {
-            return Some(&self.operator_keypair);
-        }
-        self.legacy_operator_keypairs
-            .iter()
-            .find(|keypair| keypair.public_key() == operator_key)
-    }
-}
-
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -29878,8 +29826,6 @@ pub struct Torii {
     sorafs_admission: Option<Arc<sorafs::AdmissionRegistry>>,
     #[cfg(feature = "app_api")]
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
-    #[cfg(feature = "app_api")]
-    offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
@@ -31095,7 +31041,10 @@ impl Torii {
                     "/v1/repo/agreements/query",
                     post(handler_repo_agreements_query),
                 )
-                .route("/v1/offline/v2/readiness", get(handler_offline_cash_readiness));
+                .route(
+                    "/v1/offline/v2/readiness",
+                    get(handler_offline_note_v2_readiness),
+                );
             #[cfg(feature = "push")]
             let router = router.route("/v1/notify/devices", post(handler_push_register_device));
             let router = router
@@ -32524,32 +32473,6 @@ impl Torii {
                     .clone(),
             });
         #[cfg(feature = "app_api")]
-        let offline_issuer = config.offline_issuer.as_ref().map(|cfg| {
-            let operator_keypair = KeyPair::from_private_key(cfg.operator_private_key.0.clone())
-                .unwrap_or_else(|err| {
-                    panic!("invalid torii.offline_issuer.operator_private_key: {err}")
-                });
-            let legacy_operator_keypairs = cfg
-                .legacy_operator_private_keys
-                .iter()
-                .enumerate()
-                .map(|(index, key)| {
-                    KeyPair::from_private_key(key.0.clone()).unwrap_or_else(|err| {
-                        panic!(
-                            "invalid torii.offline_issuer.legacy_operator_private_keys[{index}]: {err}"
-                        )
-                    })
-                })
-                .collect();
-            OfflineIssuerSigner {
-                operator_authority: cfg.operator_authority.clone(),
-                operator_keypair,
-                legacy_operator_keypairs,
-                allowed_controllers: cfg.allowed_controllers.clone(),
-                lineage_policy: cfg.lineage_policy.clone(),
-            }
-        });
-        #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
@@ -32712,8 +32635,6 @@ impl Torii {
             sorafs_admission,
             #[cfg(feature = "app_api")]
             stream_token_issuer,
-            #[cfg(feature = "app_api")]
-            offline_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
             #[cfg(feature = "app_api")]
@@ -33046,8 +32967,6 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_chunk_range_overrides: DashMap::new(),
             #[cfg(feature = "app_api")]
-            offline_issuer: self.offline_issuer.clone(),
-            #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
@@ -33105,7 +33024,6 @@ impl Torii {
             &app_state.stream_token_quota,
             &app_state.stream_token_concurrency,
             &app_state.sorafs_chunk_range_overrides,
-            &app_state.offline_issuer,
             &app_state.account_faucet,
             &app_state.uaid_onboarding,
             &app_state.soracloud_runtime,
@@ -36734,8 +36652,6 @@ pub(crate) mod tests_runtime_handlers {
             stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),
             #[cfg(feature = "app_api")]
             sorafs_chunk_range_overrides: DashMap::new(),
-            #[cfg(feature = "app_api")]
-            offline_issuer: None,
             #[cfg(feature = "app_api")]
             account_faucet: None,
             #[cfg(feature = "app_api")]

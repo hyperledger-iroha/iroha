@@ -19,10 +19,6 @@ import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
-import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectAttestation;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -133,62 +129,6 @@ public final class OkHttpClientIntegrationTests {
       assertEquals(2, telemetry.responses.size());
       assertEquals(2, observer.requestCount);
       assertEquals(2, observer.responseCount);
-    }
-  }
-
-  @Test
-  public void okhttpExecutorHandlesSafetyDetectFlow() throws Exception {
-    try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"access_token\":\"token-abc\",\"expires_in\":3600}"));
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"token\":\"attestation-1\"}"));
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"token\":\"attestation-2\"}"));
-      server.start();
-
-      final OkHttpClient client = new OkHttpClient();
-      final HttpTransportExecutor executor = new OkHttpTransportExecutor(client);
-      final SafetyDetectOptions options =
-          SafetyDetectOptions.builder()
-              .setOauthEndpoint(server.url("/oauth").uri())
-              .setAttestationEndpoint(server.url("/attest").uri())
-              .setClientId("client")
-              .setClientSecret("secret")
-              .setPackageName("pkg")
-              .setSigningDigestSha256("abcd")
-              .build();
-      final HttpSafetyDetectService service = new HttpSafetyDetectService(executor, options);
-      final SafetyDetectRequest request =
-          SafetyDetectRequest.builder()
-              .setCertificateIdHex("deadbeef")
-              .setAppId("app")
-              .setNonceHex("00ff")
-              .setPackageName("pkg")
-              .setSigningDigestSha256("abcd")
-              .build();
-
-      final SafetyDetectAttestation first = service.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals("attestation-1", first.token());
-      final SafetyDetectAttestation second = service.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals("attestation-2", second.token());
-
-      final RecordedRequest oauth = server.takeRequest();
-      assertEquals("/oauth", oauth.getPath());
-      assertEquals("POST", oauth.getMethod());
-      final String oauthBody = oauth.getBody().readUtf8();
-      assertTrue(oauthBody.contains("grant_type=client_credentials"));
-      assertTrue(oauthBody.contains("client_id=client"));
-
-      final RecordedRequest attest = server.takeRequest();
-      assertEquals("/attest", attest.getPath());
-      assertEquals("POST", attest.getMethod());
-      assertEquals("Bearer token-abc", attest.getHeader("Authorization"));
-      final String attestBody = attest.getBody().readUtf8();
-      assertTrue(attestBody.contains("\"certificate_id_hex\":\"deadbeef\""));
-      assertTrue(attestBody.contains(Base64.getEncoder().encodeToString(new byte[] {0x00, (byte) 0xFF})));
-
-      final RecordedRequest attestCached = server.takeRequest();
-      assertEquals("/attest", attestCached.getPath());
-      assertEquals("POST", attestCached.getMethod());
-      assertEquals("Bearer token-abc", attestCached.getHeader("Authorization"));
     }
   }
 

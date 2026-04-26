@@ -25,9 +25,9 @@ kod ishlab chiqarish.
 
 | Yo'l | Maqsad | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` dan yaratilgan kanonik surat; GPU qurish uchun haqiqat manbai. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Kanonik suratni aks ettiradi, shuning uchun Swift birligi sinovlari va XCFramework tutun simi Metall yadrolari kutgan konstantalarni yuklaydi. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin moslamalari paritet va serializatsiya testlari uchun bir xil manifestga ega. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` dan yaratilgan kanonik surat; GPU qurish uchun haqiqat manbai. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Kanonik suratni aks ettiradi, shuning uchun Swift birligi sinovlari va XCFramework tutun simi Metall yadrolari kutgan konstantalarni yuklaydi. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin moslamalari paritet va serializatsiya testlari uchun bir xil manifestga ega. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Har bir iste'molchi doimiylarni GPUga ulashdan oldin xeshni tekshirishi kerak
 quvur liniyasi. Manifest o'zgarganda (yangi parametrlar to'plami yoki profil), SHA va
@@ -39,7 +39,7 @@ Manifest Rust manbalaridan `xtask` yordamida yaratilgan.
 yordamchi. Buyruq ham kanonik faylni, ham SDK oynalarini yozadi:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Belgilangan joylarni bekor qilish uchun `--constants <path>`/`--vectors <path>` dan foydalaning yoki

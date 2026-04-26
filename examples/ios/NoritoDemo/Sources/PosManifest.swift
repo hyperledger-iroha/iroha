@@ -128,11 +128,11 @@ struct PosManifestStatus: Identifiable {
 
   private static func computeDualStatus(roots: [BackendRootStatus], manifest: PosProvisionManifest, now: Date) -> DualStatus {
     let activeRoles = Set(roots.filter(\.active).map { $0.role })
-    let required: Set<String> = ["offline_admission_signer", "offline_allowance_witness"]
+    let required: Set<String> = ["offline_note_v2_issuer", "offline_one_use_key_ca"]
     let missing = required.subtracting(activeRoles)
     if missing.isEmpty {
       let remaining = manifest.validUntilMs.date.timeIntervalSince(now)
-      return DualStatus(healthy: true, label: "admission+witness for \(formatDuration(milliseconds: remaining * 1000))")
+      return DualStatus(healthy: true, label: "Offline V2 roots for \(formatDuration(milliseconds: remaining * 1000))")
     }
     return DualStatus(healthy: false, label: "missing \(missing.joined(separator: \", \"))")
   }

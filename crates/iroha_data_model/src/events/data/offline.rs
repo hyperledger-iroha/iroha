@@ -23,7 +23,7 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    pub enum OfflineTransferEvent {
+    pub enum OfflineNoteEvent {
         /// An Offline V2 note was issued and escrow was reserved.
         NoteIssued(OfflineNoteIssued),
         /// An Offline V2 note was redeemed and escrow was credited to the recipient.
@@ -87,7 +87,7 @@ mod model {
 
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
-    OfflineTransferEvent,
+    OfflineNoteEvent,
     OfflineNoteIssued,
     OfflineNoteRedeemed,
     OfflineNoteAuditRecorded
@@ -96,6 +96,6 @@ impl_json_via_norito_bytes!(
 /// Prelude exports for Offline V2 note events.
 pub mod prelude {
     pub use super::{
-        OfflineNoteAuditRecorded, OfflineNoteIssued, OfflineNoteRedeemed, OfflineTransferEvent,
+        OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,
     };
 }

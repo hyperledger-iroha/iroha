@@ -15,6 +15,8 @@ build_torii_shared.log
 build_integration.log
 build_all.log
 artifacts/*
+!artifacts/poseidon/
+!artifacts/poseidon/constants.ron
 fake_home/*
 ./artifacts/nsc/*
 artifacts/nsc/rans_compare/*

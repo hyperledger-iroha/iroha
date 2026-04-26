@@ -87,7 +87,6 @@ tasks.register("generateSampleManifest") {
     inputs.files(
         assetsDir.file("pos_manifest.json"),
         assetsDir.file("security_policy.json"),
-        assetsDir.file("offline_revocations.json"),
         assetsDir.file("pinned_root.pem")
     )
     outputs.file(walletManifestOutput)
@@ -109,7 +108,6 @@ tasks.register("generateSampleManifest") {
             linkedMapOf<String, Any?>()
         val manifestFile = assetsDir.file("pos_manifest.json").asFile
         val policyFile = assetsDir.file("security_policy.json").asFile
-        val revocationsFile = assetsDir.file("offline_revocations.json").asFile
         val pinnedRootFile = assetsDir.file("pinned_root.pem").asFile
         if (manifestFile.exists()) {
             assets["pos_manifest_json"] =
@@ -123,13 +121,6 @@ tasks.register("generateSampleManifest") {
                 linkedMapOf(
                     "path" to policyFile.relativeTo(projectDir).path,
                     "sha256" to sha256Of(policyFile)
-                )
-        }
-        if (revocationsFile.exists()) {
-            assets["offline_revocations_json"] =
-                linkedMapOf(
-                    "path" to revocationsFile.relativeTo(projectDir).path,
-                    "sha256" to sha256Of(revocationsFile)
                 )
         }
         if (pinnedRootFile.exists()) {

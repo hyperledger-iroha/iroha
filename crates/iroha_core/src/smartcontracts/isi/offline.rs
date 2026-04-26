@@ -9,8 +9,8 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     confidential::ConfidentialStatus,
-    events::data::offline::{
-        OfflineNoteAuditRecorded, OfflineNoteIssued, OfflineNoteRedeemed, OfflineTransferEvent,
+    events::data::prelude::{
+        OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,
     },
     isi::{
         error::{InstructionExecutionError, InvalidParameterError, MathError},
@@ -37,7 +37,7 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
 fn resolve_offline_escrow_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
-) -> Result<Option<AccountId>, InstructionExecutionError> {
+) -> Result<Option<AccountId>, Error> {
     if let Some(account) = state_transaction
         .settlement
         .offline
@@ -46,10 +46,7 @@ fn resolve_offline_escrow_account(
     {
         return Ok(Some(account.clone()));
     }
-    let asset_definition = state_transaction
-        .world
-        .asset_definition(definition)
-        .map_err(Error::from)?;
+    let asset_definition = state_transaction.world.asset_definition(definition)?;
     if crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
         asset_definition.metadata(),
     )? {
@@ -68,7 +65,8 @@ fn resolve_offline_escrow_account(
         return Err(labeled_invariant(
             "escrow_missing",
             format!("offline escrow account not configured for asset definition `{definition}`"),
-        ));
+        )
+        .into());
     }
     Ok(None)
 }
@@ -88,8 +86,7 @@ pub(crate) fn is_offline_escrow_source_asset(
 
     let asset_definition = state_transaction
         .world
-        .asset_definition(source_id.definition())
-        .map_err(Error::from)?;
+        .asset_definition(source_id.definition())?;
 
     if !crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
         asset_definition.metadata(),
@@ -650,7 +647,7 @@ pub mod isi {
             let issued_claim_key = offline_note_v2_issued_claim_key(&issued_claim_hash);
             if state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .get(&issue_key)
                 .is_some()
             {
@@ -661,7 +658,7 @@ pub mod isi {
             }
             if state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .get(&certificate_key)
                 .is_some()
             {
@@ -673,24 +670,25 @@ pub mod isi {
             reserve_offline_note_escrow(state_transaction, &issue.asset, &issue.amount)?;
             state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .insert(issue_key, ());
             state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .insert(certificate_key, ());
             state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .insert(issued_claim_key, ());
+            let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
             state_transaction
                 .world
-                .emit_events(Some(OfflineTransferEvent::NoteIssued(OfflineNoteIssued {
+                .emit_events(Some(OfflineNoteEvent::NoteIssued(OfflineNoteIssued {
                     note_commitment: issue.note_commitment,
                     account: issue.key_certificate.account_id,
                     asset: issue.asset,
                     amount: issue.amount,
-                    recorded_at_ms: state_transaction.block_unix_timestamp_ms(),
+                    recorded_at_ms,
                 })));
             Ok(())
         }
@@ -755,7 +753,7 @@ pub mod isi {
             let spent_claim_key = offline_note_v2_spent_claim_key(&issued_claim_hash);
             if state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .get(&issued_claim_key)
                 .is_none()
             {
@@ -766,7 +764,7 @@ pub mod isi {
             }
             if state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .get(&spent_claim_key)
                 .is_some()
             {
@@ -783,7 +781,7 @@ pub mod isi {
             for consumed_key in &consumed_keys {
                 if state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .get(consumed_key)
                     .is_some()
                 {
@@ -807,24 +805,23 @@ pub mod isi {
             for consumed_key in consumed_keys {
                 state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .insert(consumed_key, ());
             }
             state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .insert(spent_claim_key, ());
+            let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
             state_transaction
                 .world
-                .emit_events(Some(OfflineTransferEvent::NoteRedeemed(
-                    OfflineNoteRedeemed {
-                        source_note_commitment: redemption.source_note_commitment,
-                        recipient: redemption.recipient,
-                        asset: redemption.asset,
-                        amount: redemption.amount,
-                        recorded_at_ms: state_transaction.block_unix_timestamp_ms(),
-                    },
-                )));
+                .emit_events(Some(OfflineNoteEvent::NoteRedeemed(OfflineNoteRedeemed {
+                    source_note_commitment: redemption.source_note_commitment,
+                    recipient: redemption.recipient,
+                    asset: redemption.asset,
+                    amount: redemption.amount,
+                    recorded_at_ms,
+                })));
             Ok(())
         }
     }
@@ -872,7 +869,7 @@ pub mod isi {
             let certificate_key = offline_note_v2_key_certificate_key(&certificate_payload_hash);
             if state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .get(&certificate_key)
                 .is_none()
             {
@@ -896,13 +893,13 @@ pub mod isi {
             let audit_record_key = offline_note_v2_audit_record_key(&expected_public_inputs_hash);
             if state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .get(&audit_token_key)
                 .is_some()
             {
                 if state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .get(&audit_record_key)
                     .is_some()
                 {
@@ -926,7 +923,7 @@ pub mod isi {
             for observed_key in &observed_nullifier_keys {
                 if state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .get(observed_key)
                     .is_some()
                 {
@@ -939,7 +936,7 @@ pub mod isi {
             for observed_key in &observed_output_keys {
                 if state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .get(observed_key)
                     .is_some()
                 {
@@ -956,32 +953,33 @@ pub mod isi {
             )?;
             state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .insert(audit_token_key, ());
             state_transaction
                 .world
-                .offline_consumed_build_claim_ids
+                .offline_note_v2_replay_keys
                 .insert(audit_record_key, ());
             for observed_key in observed_nullifier_keys {
                 state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .insert(observed_key, ());
             }
             for observed_key in observed_output_keys {
                 state_transaction
                     .world
-                    .offline_consumed_build_claim_ids
+                    .offline_note_v2_replay_keys
                     .insert(observed_key, ());
             }
+            let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
             state_transaction
                 .world
-                .emit_events(Some(OfflineTransferEvent::AuditRecorded(
+                .emit_events(Some(OfflineNoteEvent::AuditRecorded(
                     OfflineNoteAuditRecorded {
                         token_id: audit.token_id,
                         account: audit.sender_key_certificate.account_id,
                         public_inputs_hash: expected_public_inputs_hash,
-                        recorded_at_ms: state_transaction.block_unix_timestamp_ms(),
+                        recorded_at_ms,
                     },
                 )));
             Ok(())

@@ -198,11 +198,9 @@ java/iroha_android
 │   │       │   └── TransactionPayloadAdapter.java
 │   │       ├── offline
 │   │       │   ├── OfflineToriiClient.java
-│   │       │   ├── OfflineListParams.java
-│   │       │   ├── OfflineAllowanceList.java
-│   │       │   ├── OfflineTransferList.java
-│   │       │   ├── OfflineAuditLogger.java
-│   │       │   └── OfflineWallet.java
+│   │       │   ├── OfflineQrStream.java
+│   │       │   ├── OfflineJsonParser.java
+│   │       │   └── OfflineV2Readiness.java
 │   │       ├── subscriptions
 │   │       │   ├── SubscriptionPlanCreateRequest.java
 │   │       │   ├── SubscriptionCreateRequest.java
@@ -1061,41 +1059,15 @@ transport
     .thenAccept(readiness -> System.out.println(readiness.offlineNoteV2()));
 ```
 
-The legacy offline cash, transfer-history, revocation, and build-claim HTTP routes were removed from
-the public offline client surface so callers cannot accidentally target Torii routes that now return
-404.
+Non-V2 offline HTTP routes were removed from the public offline client surface so callers cannot
+accidentally target Torii routes that now return 404.
 
-For jurisdictions that require offline spend logs, use the shared audit logger
-and facade:
-
-```java
-OfflineWallet offlineWallet =
-    transport.offlineWallet(context.getFilesDir().toPath().resolve("offline_audit.json"), true);
-
-offlineWallet.recordAuditEntry(
-    txId,
-    senderAccountId,
-    receiverAccountId,
-    assetId,
-    amountDecimalString);
-
-byte[] auditJson = offlineWallet.exportAuditJson(); // forward to regulators when requested
-byte[] verdictJournalJson =
-    offlineWallet.exportVerdictJournalJson(); // include certificate countdown evidence
+Use `OfflineToriiClient#getOfflineV2Readiness()` to check whether Torii exposes the V2 note
+capabilities before showing offline receive or payment-token UI.
 ```
 
-`OfflineTransferList.OfflineTransferItem.toJsonMap()` exposes a JSON-ready representation of the
-legacy transfer item; encode it with `JsonEncoder.encode(...)` only when reading local fixtures. The
-snapshot payload is included via `PlatformTokenSnapshot.toJsonMap()` when present.
-
-The Android logger mirrors the Swift implementation: logging can be toggled at runtime, entries
-use `{tx_id,sender_id,receiver_id,asset_id,amount,timestamp_ms}` fields, and
-exports produce deterministic JSON arrays so compliance tooling can compare
-SHA-256 or BLAKE3 digests across devices, and the verdict journal export emits the per-certificate
-metadata (`refresh_at_ms`, policy countdowns, Safety Detect snapshots) required by OA5 to prove
-when allowances were last refreshed. When long-lived audit history is required, use
-`OfflineJournal` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java`)
+Use `OfflineJournal` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java`)
 to persist pending bundles with the shared `[kind|timestamp|len|tx_id|payload|chain|hmac]` layout used
 by Rust and Swift. The helper exposes append/commit APIs, enforces the hash chain (`BLAKE2b-256` over
 the previous chain and `tx_id`), authenticates each record with `HMAC-SHA256`, and exposes pending
-entries for replay tooling so OA2’s WAL requirements are satisfied on Android as well.
+entries for replay tooling.

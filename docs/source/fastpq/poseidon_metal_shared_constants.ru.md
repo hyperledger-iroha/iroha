@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | Путь | Цель | ША-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | Канонический снимок, созданный из `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; источник истины для сборок графических процессоров. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Отражает канонический снимок, поэтому модульные тесты Swift и дымовая обвязка XCFramework загружают те же константы, которые ожидают ядра Metal. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Фикстуры Android/Kotlin используют одинаковый манифест для тестов четности и сериализации. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Канонический снимок, созданный из `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; источник истины для сборок графических процессоров. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Отражает канонический снимок, поэтому модульные тесты Swift и дымовая обвязка XCFramework загружают те же константы, которые ожидают ядра Metal. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Фикстуры Android/Kotlin используют одинаковый манифест для тестов четности и сериализации. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Каждый потребитель должен проверить хэш, прежде чем подключать константы к графическому процессору.
 трубопровод. При изменении манифеста (новый набор параметров или профиль) SHA и
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 помощник. Команда записывает как канонический файл, так и зеркала SDK:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Используйте `--constants <path>`/`--vectors <path>`, чтобы переопределить пункты назначения или

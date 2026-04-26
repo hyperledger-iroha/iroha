@@ -1019,9 +1019,12 @@ fn instruction_transaction_dataspace_target(
             TransferBox::AssetDefinition(transfer) => {
                 asset_definition_dataspace_target(&transfer.object, dataspace_catalog, state_view)
             }
-            // TODO: Route asset transfers from an explicit route-intent extractor once
-            // transparent cross-dataspace transfers have a dedicated multi-scope policy.
-            TransferBox::Asset(_) | TransferBox::Nft(_) => None,
+            TransferBox::Asset(transfer) => asset_definition_dataspace_target(
+                &transfer.source.definition,
+                dataspace_catalog,
+                state_view,
+            ),
+            TransferBox::Nft(_) => None,
         };
     }
 
@@ -1137,9 +1140,12 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 dataspace_catalog,
                 world,
             ),
-            // TODO: Route asset transfers from an explicit route-intent extractor once
-            // transparent cross-dataspace transfers have a dedicated multi-scope policy.
-            TransferBox::Asset(_) | TransferBox::Nft(_) => None,
+            TransferBox::Asset(transfer) => asset_definition_dataspace_target_with_world(
+                &transfer.source.definition,
+                dataspace_catalog,
+                world,
+            ),
+            TransferBox::Nft(_) => None,
         };
     }
 
@@ -3501,6 +3507,46 @@ mod tests {
 
         assert_eq!(
             router.try_route(&tx).expect("domain route must resolve"),
+            RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn routes_asset_transfer_to_asset_definition_dataspace_without_explicit_rule() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), dataspace_id),
+            ]),
+        );
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(asset_definition, sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("asset transfer route must resolve"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }

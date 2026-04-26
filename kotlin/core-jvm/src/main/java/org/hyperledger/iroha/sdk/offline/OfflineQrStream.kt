@@ -3,7 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.util.zip.CRC32
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 
-/** QR stream framing helpers for offline payload transfer. */
+/** Fountain QR V1 framing helpers for Offline V2 payload transfer. */
 object OfflineQrStream {
 
     private val MAGIC = byteArrayOf(0x49, 0x51)
@@ -26,9 +26,9 @@ object OfflineQrStream {
 
     enum class PayloadKind(val value: Int) {
         UNSPECIFIED(0),
-        OFFLINE_TO_ONLINE_TRANSFER(1),
-        OFFLINE_SPEND_RECEIPT(2),
-        OFFLINE_ENVELOPE(3),
+        OFFLINE_RECEIVE_CHALLENGE_V2(1),
+        OFFLINE_PAYMENT_TOKEN_V2(2),
+        OFFLINE_RECEIPT_ACK_V2(3),
     }
 
     object TextCodec {

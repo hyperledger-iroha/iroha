@@ -120,6 +120,7 @@ const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
 const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
+const INROU_PORTABLE_START_GRACE_FLOOR: Duration = Duration::from_secs(180);
 const INROU_PORTABLE_BUNDLE_METADATA_PATH: &str = "/soracloud/bundle.tgz";
 const INROU_PORTABLE_BUNDLE_METADATA_MEMBER: &str = "soracloud/bundle.tgz";
 const INROU_PORTABLE_BUNDLE_GUEST_ROOT: &str = "/var/lib/soracloud/materialization/bundle";
@@ -3816,6 +3817,14 @@ impl SoracloudRuntimeManager {
             }
         };
         let started_at = std::time::Instant::now();
+        let startup_grace = self
+            .config
+            .inrou
+            .start_grace
+            .max(Duration::from_secs(u64::from(
+                bundle.container.lifecycle.start_grace_secs.get(),
+            )))
+            .max(INROU_PORTABLE_START_GRACE_FLOOR);
         loop {
             if let Some(status) = child
                 .try_wait()
@@ -3852,16 +3861,7 @@ impl SoracloudRuntimeManager {
                         stderr_log_path,
                     ));
                 }
-                Err(error)
-                    if started_at.elapsed()
-                        < self
-                            .config
-                            .inrou
-                            .start_grace
-                            .max(Duration::from_secs(u64::from(
-                                bundle.container.lifecycle.start_grace_secs.get(),
-                            ))) =>
-                {
+                Err(error) if started_at.elapsed() < startup_grace => {
                     let _ = error;
                     thread::sleep(Duration::from_millis(250));
                 }
@@ -12113,6 +12113,10 @@ fn build_inrou_user_data(
     portable_bundle_hash: Option<&str>,
 ) -> String {
     let mut prepare_script = String::from("#!/bin/sh\nset -eu\n");
+    prepare_script.push_str(
+        "if [ -w /dev/console ]; then exec >>/dev/console 2>&1; fi\n\
+         echo 'Inrou prepare: starting'\n",
+    );
     prepare_script
         .push_str("mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
     if let Some(bundle_hash) = portable_bundle_hash {
@@ -12257,10 +12261,86 @@ fn build_inrou_user_data(
                 }
             }
             prepare_script.push_str("fi\n");
+            prepare_script.push_str("chown inrou:inrou ");
+            prepare_script.push_str(&shell_single_quote(&mount.mount_path));
+            prepare_script.push_str(" 2>/dev/null || true\n");
+            prepare_script.push_str("chmod 0775 ");
+            prepare_script.push_str(&shell_single_quote(&mount.mount_path));
+            prepare_script.push_str(" 2>/dev/null || true\n");
         }
     }
+    prepare_script.push_str("if command -v python3 >/dev/null 2>&1; then\n");
+    prepare_script.push_str("  python3 - ");
+    prepare_script.push_str(&shell_single_quote(&guest_port.to_string()));
+    prepare_script.push_str(" <<'PY' || true\n");
+    prepare_script.push_str("import os\n");
+    prepare_script.push_str("import signal\n");
+    prepare_script.push_str("import sys\n");
+    prepare_script.push_str("import time\n");
+    prepare_script.push_str("port = int(sys.argv[1])\n");
+    prepare_script.push_str("def listener_inodes():\n");
+    prepare_script.push_str("    found = set()\n");
+    prepare_script.push_str("    for table in ('/proc/net/tcp', '/proc/net/tcp6'):\n");
+    prepare_script.push_str("        try:\n");
+    prepare_script.push_str("            lines = open(table, encoding='ascii').read().splitlines()[1:]\n");
+    prepare_script.push_str("        except OSError:\n");
+    prepare_script.push_str("            continue\n");
+    prepare_script.push_str("        for line in lines:\n");
+    prepare_script.push_str("            cols = line.split()\n");
+    prepare_script.push_str("            if len(cols) < 10 or cols[3] != '0A':\n");
+    prepare_script.push_str("                continue\n");
+    prepare_script.push_str("            try:\n");
+    prepare_script.push_str("                local_port = int(cols[1].rsplit(':', 1)[1], 16)\n");
+    prepare_script.push_str("            except ValueError:\n");
+    prepare_script.push_str("                continue\n");
+    prepare_script.push_str("            if local_port == port:\n");
+    prepare_script.push_str("                found.add(cols[9])\n");
+    prepare_script.push_str("    return found\n");
+    prepare_script.push_str("def pids_for(inodes):\n");
+    prepare_script.push_str("    pids = set()\n");
+    prepare_script.push_str("    for pid in os.listdir('/proc'):\n");
+    prepare_script.push_str("        if not pid.isdigit():\n");
+    prepare_script.push_str("            continue\n");
+    prepare_script.push_str("        fd_dir = f'/proc/{pid}/fd'\n");
+    prepare_script.push_str("        try:\n");
+    prepare_script.push_str("            fds = os.listdir(fd_dir)\n");
+    prepare_script.push_str("        except OSError:\n");
+    prepare_script.push_str("            continue\n");
+    prepare_script.push_str("        for fd in fds:\n");
+    prepare_script.push_str("            try:\n");
+    prepare_script.push_str("                target = os.readlink(f'{fd_dir}/{fd}')\n");
+    prepare_script.push_str("            except OSError:\n");
+    prepare_script.push_str("                continue\n");
+    prepare_script.push_str("            if target.startswith('socket:[') and target[8:-1] in inodes:\n");
+    prepare_script.push_str("                pids.add(int(pid))\n");
+    prepare_script.push_str("                break\n");
+    prepare_script.push_str("    return pids\n");
+    prepare_script.push_str("for sig in (signal.SIGTERM, signal.SIGKILL):\n");
+    prepare_script.push_str("    victims = pids_for(listener_inodes())\n");
+    prepare_script.push_str("    if not victims:\n");
+    prepare_script.push_str("        break\n");
+    prepare_script.push_str("    for pid in victims:\n");
+    prepare_script.push_str("        if pid == 1:\n");
+    prepare_script.push_str("            continue\n");
+    prepare_script.push_str("        try:\n");
+    prepare_script.push_str("            comm = open(f'/proc/{pid}/comm', encoding='utf-8').read().strip()\n");
+    prepare_script.push_str("        except OSError:\n");
+    prepare_script.push_str("            comm = 'unknown'\n");
+    prepare_script.push_str("        print(f'Inrou prepare: terminating {comm} pid {pid} on port {port}', flush=True)\n");
+    prepare_script.push_str("        try:\n");
+    prepare_script.push_str("            os.kill(pid, sig)\n");
+    prepare_script.push_str("        except ProcessLookupError:\n");
+    prepare_script.push_str("            pass\n");
+    prepare_script.push_str("    time.sleep(0.5)\n");
+    prepare_script.push_str("PY\n");
+    prepare_script.push_str("fi\n");
+    prepare_script.push_str("echo 'Inrou prepare: completed'\n");
 
     let mut launcher_script = String::from("#!/bin/sh\nset -eu\n");
+    launcher_script.push_str(
+        "if [ -w /dev/console ]; then exec >>/dev/console 2>&1; fi\n\
+         echo 'Inrou launcher: starting'\n",
+    );
     launcher_script
         .push_str("mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
     for (key, value) in &cache_key.effective_env {
@@ -12303,6 +12383,8 @@ fn build_inrou_user_data(
     service_unit.push_str("Group=inrou\n");
     service_unit.push_str("Restart=always\n");
     service_unit.push_str("RestartSec=2\n");
+    service_unit.push_str("StandardOutput=journal+console\n");
+    service_unit.push_str("StandardError=journal+console\n");
     service_unit.push_str("ExecStartPre=/usr/local/bin/inrou-prepare.sh\n");
     service_unit.push_str("ExecStart=/usr/local/bin/inrou-launch.sh\n\n");
     service_unit.push_str("[Install]\n");
@@ -20521,6 +20603,8 @@ mod tests {
         assert!(user_data.contains("/dev/disk/by-id/virtio-sora-index_state"));
         assert!(user_data.contains("mkfs.ext4 -F \"$device_path\""));
         assert!(user_data.contains("mount -t 'ext4' -o 'rw,nofail' \"$device_path\""));
+        assert!(user_data.contains("chown inrou:inrou '/var/lib/ton-indexer'"));
+        assert!(user_data.contains("StandardOutput=journal+console"));
         assert!(!user_data.contains("mount.nfs"));
         assert!(!user_data.contains("virtiofs"));
         Ok(())
@@ -20564,6 +20648,7 @@ mod tests {
         assert!(user_data.contains("/usr/local/bin/inrou-launch.sh"));
         assert!(user_data.contains("/usr/local/bin/inrou-prepare.sh"));
         assert!(user_data.contains("PermissionsStartOnly=true"));
+        assert!(user_data.contains("StandardError=journal+console"));
         assert!(user_data.contains("ExecStartPre=/usr/local/bin/inrou-prepare.sh"));
         assert!(user_data.contains("systemctl enable --now inrou-app.service"));
         assert!(user_data.contains("uid: 1000"));

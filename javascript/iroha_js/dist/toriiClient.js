@@ -10340,7 +10340,7 @@ export class ToriiClient {
     }
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      `${context}.${operator}: field "${field}" is not allowed for offline filters`,
+      `${context}.${operator}: field "${field}" is not allowed for filters`,
       normalizeErrorPath(`${context}.${operator}`),
     );
   }
@@ -10355,7 +10355,7 @@ export class ToriiClient {
     if (!stringFields.has(field)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        `${context}.${operator}: field "${field}" is not allowed for offline filters`,
+        `${context}.${operator}: field "${field}" is not allowed for filters`,
         normalizeErrorPath(`${context}.${operator}`),
       );
     }

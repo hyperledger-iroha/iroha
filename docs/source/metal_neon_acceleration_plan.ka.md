@@ -182,7 +182,7 @@ Rust სამუშაო სივრცე და Swift SDK. ის მიმ
   Metal-vs-CPU დელტაები ახალი ტელემეტრიული არხების ხელახლა გამოგონების გარეშე.
 
 ## WP2-B Poseidon Manifest Loader & Self-Test Parity- `fastpq_prover::poseidon_manifest()` ახლა ჩაშენებულია და აანალიზებს
-  `artifacts/offline_poseidon/constants.ron`, ითვლის მის SHA-256-ს
+  `artifacts/poseidon/constants.ron`, ითვლის მის SHA-256-ს
   (`poseidon_manifest_sha256()`) და ამოწმებს სნეპშოტს CPU-სთან მიმართებაში
   პოსეიდონის ცხრილები GPU-ს ნებისმიერი მუშაობის დაწყებამდე. `build_metal_context()` იწერს
   დაიჯესტი გახურების დროს, რათა ტელემეტრიის ექსპორტიორებმა გამოაქვეყნონ

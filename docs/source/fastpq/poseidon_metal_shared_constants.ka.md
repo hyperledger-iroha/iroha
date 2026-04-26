@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | ბილიკი | დანიშნულება | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-დან გენერირებული კანონიკური სნეპშოტი; სიმართლის წყარო GPU კონსტრუქციებისთვის. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | ასახავს კანონიკურ კადრს, ასე რომ Swift-ის ერთეულის ტესტირება და XCFramework კვამლის აღკაზმულობა იტვირთება იმავე მუდმივებზე, რასაც ლითონის ბირთვი ელოდება. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin მოწყობილობები იზიარებს იდენტურ მანიფესტს პარიტეტისა და სერიალიზაციის ტესტებისთვის. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-დან გენერირებული კანონიკური სნეპშოტი; სიმართლის წყარო GPU კონსტრუქციებისთვის. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | ასახავს კანონიკურ კადრს, ასე რომ Swift-ის ერთეულის ტესტირება და XCFramework კვამლის აღკაზმულობა იტვირთება იმავე მუდმივებზე, რასაც ლითონის ბირთვი ელოდება. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin მოწყობილობები იზიარებს იდენტურ მანიფესტს პარიტეტისა და სერიალიზაციის ტესტებისთვის. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 ყველა მომხმარებელმა უნდა გადაამოწმოს ჰეში, სანამ მუდმივები GPU-ში ჩაერთვებიან
 მილსადენი. როდესაც მანიფესტი იცვლება (ახალი პარამეტრის ნაკრები ან პროფილი), SHA და
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 დამხმარე. ბრძანება წერს როგორც კანონიკურ ფაილს, ასევე SDK სარკეებს:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 გამოიყენეთ `--constants <path>`/`--vectors <path>` დანიშნულების ადგილის გადასალახად ან

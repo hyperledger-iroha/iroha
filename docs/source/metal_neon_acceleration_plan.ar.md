@@ -182,7 +182,7 @@ translator: machine-google-reviewed
   دلتا المعدن مقابل وحدة المعالجة المركزية دون إعادة اختراع خلاصات القياس عن بعد الجديدة.
 
 ## WP2-B بوسيدون مانيفست لودر وتكافؤ الاختبار الذاتي- يقوم `fastpq_prover::poseidon_manifest()` الآن بالتضمين والتحليل
-  `artifacts/offline_poseidon/constants.ron`، يحسب SHA-256 الخاص به
+  `artifacts/poseidon/constants.ron`، يحسب SHA-256 الخاص به
   (`poseidon_manifest_sha256()`)، والتحقق من صحة اللقطة مقابل وحدة المعالجة المركزية
   بوسيدون الجداول قبل تشغيل أي عمل GPU. يقوم `build_metal_context()` بتسجيل ملف
   استوعب أثناء عملية الإحماء حتى يتمكن مصدرو القياس عن بعد من النشر

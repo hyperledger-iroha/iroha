@@ -450,7 +450,7 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 
 JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
 Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
-legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
+non-V2 offline HTTP routes are no longer published by Torii.
 
 ```js
 const readiness = await torii.getOfflineV2Readiness();

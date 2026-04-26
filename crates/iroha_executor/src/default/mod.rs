@@ -32,12 +32,11 @@ use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
         CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
-        ReclaimExpiredOfflineAllowance, RecordCapacityTelemetry, RecordReplicationReceipt,
-        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterOfflineAllowance,
-        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
+        RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
         RegisterPublicLaneValidator, RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
-        SetLaneRelayEmergencyValidators, SetPricingSchedule, SubmitOfflineToOnlineTransfer,
-        UnregisterProviderOwner, UpsertProviderCredit,
+        SetLaneRelayEmergencyValidators, SetPricingSchedule, UnregisterProviderOwner,
+        UpsertProviderCredit,
         bridge::RecordBridgeReceipt,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
@@ -70,13 +69,6 @@ pub use role::{
 pub use staking::{
     visit_activate_public_lane_validator, visit_exit_public_lane_validator,
     visit_register_public_lane_validator,
-};
-mod offline;
-
-/// Re-export offline settlement visitor helper.
-pub use offline::{
-    visit_reclaim_expired_offline_allowance, visit_register_offline_allowance,
-    visit_submit_offline_to_online_transfer,
 };
 /// Re-export trigger visitor helpers used by the default executor.
 pub use trigger::{
@@ -292,18 +284,6 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<TransferBox>() {
             executor.visit_transfer(isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<SubmitOfflineToOnlineTransfer>() {
-            visit_submit_offline_to_online_transfer(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<RegisterOfflineAllowance>() {
-            visit_register_offline_allowance(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<ReclaimExpiredOfflineAllowance>() {
-            visit_reclaim_expired_offline_allowance(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RepoInstructionBox>() {

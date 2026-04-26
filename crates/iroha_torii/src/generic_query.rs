@@ -32,12 +32,6 @@ pub(crate) const RESOURCE_REPO_AGREEMENTS: &str = "repo_agreements";
 pub(crate) const RESOURCE_DOMAINS: &str = "domains";
 /// Stable resource identifier for asset definition rows.
 pub(crate) const RESOURCE_ASSET_DEFINITIONS: &str = "asset_definitions";
-/// Stable resource identifier for offline allowance rows.
-pub(crate) const RESOURCE_OFFLINE_ALLOWANCES: &str = "offline_allowances";
-/// Stable resource identifier for offline revocation rows.
-pub(crate) const RESOURCE_OFFLINE_REVOCATIONS: &str = "offline_revocations";
-/// Stable resource identifier for offline transfer rows.
-pub(crate) const RESOURCE_OFFLINE_TRANSFERS: &str = "offline_transfers";
 /// Stable resource identifier for NFT rows.
 pub(crate) const RESOURCE_NFTS: &str = "nfts";
 /// Stable resource identifier for RWA rows.
@@ -180,57 +174,6 @@ const ASSET_DEFINITION_FIELDS: &[QueryFieldSpec] = &[
     field("alias_binding.bound_at_ms", QueryFieldType::Number),
 ];
 
-const OFFLINE_ALLOWANCE_FIELDS: &[QueryFieldSpec] = &[
-    field("certificate_id_hex", QueryFieldType::String),
-    field("controller_id", QueryFieldType::String),
-    field("controller_display", QueryFieldType::String),
-    field("asset_id", QueryFieldType::String),
-    field("asset_definition_id", QueryFieldType::String),
-    field("asset_definition_name", QueryFieldType::String),
-    field("asset_definition_alias", QueryFieldType::String),
-    field("registered_at_ms", QueryFieldType::Number),
-    field("expires_at_ms", QueryFieldType::Number),
-    field("policy_expires_at_ms", QueryFieldType::Number),
-    field("refresh_at_ms", QueryFieldType::Number),
-    field("verdict_id_hex", QueryFieldType::String),
-    field("attestation_nonce_hex", QueryFieldType::String),
-    field("remaining_amount", QueryFieldType::Number),
-    field("deadline_kind", QueryFieldType::String),
-    field("deadline_state", QueryFieldType::String),
-    field("deadline_ms", QueryFieldType::Number),
-    field("deadline_ms_remaining", QueryFieldType::Number),
-];
-
-const OFFLINE_REVOCATION_FIELDS: &[QueryFieldSpec] = &[
-    field("verdict_id_hex", QueryFieldType::String),
-    field("issuer_id", QueryFieldType::String),
-    field("issuer_display", QueryFieldType::String),
-    field("revoked_at_ms", QueryFieldType::Number),
-    field("reason", QueryFieldType::String),
-    field("note", QueryFieldType::String),
-];
-
-const OFFLINE_TRANSFER_FIELDS: &[QueryFieldSpec] = &[
-    field("bundle_id_hex", QueryFieldType::String),
-    field("controller_id", QueryFieldType::String),
-    field("receiver_id", QueryFieldType::String),
-    field("deposit_account_id", QueryFieldType::String),
-    field("status", QueryFieldType::String),
-    field("rejection_reason", QueryFieldType::String),
-    field("asset_id", QueryFieldType::String),
-    field("certificate_id_hex", QueryFieldType::String),
-    field("verdict_id_hex", QueryFieldType::String),
-    field("attestation_nonce_hex", QueryFieldType::String),
-    field("platform_policy", QueryFieldType::String),
-    field("receipt_count", QueryFieldType::Number),
-    field("recorded_at_ms", QueryFieldType::Number),
-    field("recorded_at_height", QueryFieldType::Number),
-    field("archived_at_height", QueryFieldType::Number),
-    field("certificate_expires_at_ms", QueryFieldType::Number),
-    field("policy_expires_at_ms", QueryFieldType::Number),
-    field("refresh_at_ms", QueryFieldType::Number),
-];
-
 const NFT_FIELDS: &[QueryFieldSpec] = &[field("id", QueryFieldType::String)];
 const RWA_FIELDS: &[QueryFieldSpec] = &[field("id", QueryFieldType::String)];
 
@@ -289,27 +232,6 @@ const ASSET_DEFINITIONS_SPEC: QueryResourceSpec = QueryResourceSpec {
     default_sort: &["id"],
     tie_breakers: &["id"],
 };
-const OFFLINE_ALLOWANCES_SPEC: QueryResourceSpec = QueryResourceSpec {
-    id: RESOURCE_OFFLINE_ALLOWANCES,
-    fields: OFFLINE_ALLOWANCE_FIELDS,
-    allow_metadata: false,
-    default_sort: &["registered_at_ms", "certificate_id_hex"],
-    tie_breakers: &["certificate_id_hex"],
-};
-const OFFLINE_REVOCATIONS_SPEC: QueryResourceSpec = QueryResourceSpec {
-    id: RESOURCE_OFFLINE_REVOCATIONS,
-    fields: OFFLINE_REVOCATION_FIELDS,
-    allow_metadata: true,
-    default_sort: &["revoked_at_ms", "verdict_id_hex"],
-    tie_breakers: &["verdict_id_hex"],
-};
-const OFFLINE_TRANSFERS_SPEC: QueryResourceSpec = QueryResourceSpec {
-    id: RESOURCE_OFFLINE_TRANSFERS,
-    fields: OFFLINE_TRANSFER_FIELDS,
-    allow_metadata: false,
-    default_sort: &["recorded_at_ms", "bundle_id_hex"],
-    tie_breakers: &["bundle_id_hex"],
-};
 const NFTS_SPEC: QueryResourceSpec = QueryResourceSpec {
     id: RESOURCE_NFTS,
     fields: NFT_FIELDS,
@@ -341,9 +263,6 @@ pub(crate) fn registered_resource(id: &str) -> Option<&'static QueryResourceSpec
         RESOURCE_REPO_AGREEMENTS => Some(&REPO_AGREEMENTS_SPEC),
         RESOURCE_DOMAINS => Some(&DOMAINS_SPEC),
         RESOURCE_ASSET_DEFINITIONS => Some(&ASSET_DEFINITIONS_SPEC),
-        RESOURCE_OFFLINE_ALLOWANCES => Some(&OFFLINE_ALLOWANCES_SPEC),
-        RESOURCE_OFFLINE_REVOCATIONS => Some(&OFFLINE_REVOCATIONS_SPEC),
-        RESOURCE_OFFLINE_TRANSFERS => Some(&OFFLINE_TRANSFERS_SPEC),
         RESOURCE_NFTS => Some(&NFTS_SPEC),
         RESOURCE_RWAS => Some(&RWAS_SPEC),
         RESOURCE_ASSET_HOLDERS => Some(&ASSET_HOLDERS_SPEC),
@@ -360,9 +279,6 @@ pub(crate) const fn aggregate_supported_resources() -> &'static [&'static str] {
         RESOURCE_REPO_AGREEMENTS,
         RESOURCE_DOMAINS,
         RESOURCE_ASSET_DEFINITIONS,
-        RESOURCE_OFFLINE_ALLOWANCES,
-        RESOURCE_OFFLINE_REVOCATIONS,
-        RESOURCE_OFFLINE_TRANSFERS,
         RESOURCE_NFTS,
         RESOURCE_RWAS,
         RESOURCE_ASSET_HOLDERS,

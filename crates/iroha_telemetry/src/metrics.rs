@@ -2657,11 +2657,11 @@ mod tests {
     }
 
     #[test]
-    fn records_offline_transfer_rejections() {
+    fn records_offline_note_rejections() {
         let metrics = Metrics::default();
-        metrics.record_offline_transfer_rejection("ios-appattest", "proof_invalid");
+        metrics.record_offline_note_rejection("ios-appattest", "proof_invalid");
         let value = metrics
-            .offline_transfer_rejections_total
+            .offline_note_rejections_total
             .with_label_values(&["ios-appattest", "proof_invalid"])
             .get();
         assert_eq!(value, 1);
@@ -6270,16 +6270,16 @@ pub struct Metrics {
     pub subscription_billing_attempts_total: IntCounterVec,
     /// Subscription billing outcomes grouped by pricing kind and result.
     pub subscription_billing_outcomes_total: IntCounterVec,
-    /// Offline-to-online transfer lifecycle events grouped by event kind.
-    pub offline_transfer_events_total: IntCounterVec,
-    /// Aggregate offline receipt counters grouped by event kind.
-    pub offline_transfer_receipts_total: IntCounterVec,
-    /// Distribution of settled offline bundle amounts.
-    pub offline_transfer_settled_amount: Histogram,
-    /// Offline transfer validation rejections grouped by platform and reason.
-    pub offline_transfer_rejections_total: IntCounterVec,
-    /// Offline transfer bundles pruned from hot storage.
-    pub offline_transfer_pruned_total: IntCounter,
+    /// Offline V2 note lifecycle events grouped by event kind.
+    pub offline_note_events_total: IntCounterVec,
+    /// Aggregate Offline V2 receipt-ack counters grouped by event kind.
+    pub offline_note_receipts_total: IntCounterVec,
+    /// Distribution of redeemed Offline V2 note amounts.
+    pub offline_note_settled_amount: Histogram,
+    /// Offline note validation rejections grouped by platform and reason.
+    pub offline_note_rejections_total: IntCounterVec,
+    /// Offline V2 note records pruned from hot storage.
+    pub offline_note_pruned_total: IntCounter,
     /// Offline attestation tokens processed grouped by integrity policy.
     pub offline_attestation_policy_total: IntCounterVec,
     /// iOS App Attest assertions accepted through the compatibility signature path.
@@ -8291,28 +8291,28 @@ impl Default for Metrics {
                 let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
             }
         }
-        let offline_transfer_events_total = IntCounterVec::new(
+        let offline_note_events_total = IntCounterVec::new(
             Opts::new(
-                "iroha_offline_transfer_events_total",
-                "Offline transfer lifecycle events grouped by event kind",
+                "iroha_offline_note_events_total",
+                "Offline note lifecycle events grouped by event kind",
             ),
             &["event"],
         )
         .expect("Infallible");
         for event in ["settled", "archived", "pruned"] {
-            let _ = offline_transfer_events_total.with_label_values(&[event]);
+            let _ = offline_note_events_total.with_label_values(&[event]);
         }
-        let offline_transfer_receipts_total = IntCounterVec::new(
+        let offline_note_receipts_total = IntCounterVec::new(
             Opts::new(
-                "iroha_offline_transfer_receipts_total",
-                "Offline transfer receipt aggregates grouped by event kind",
+                "iroha_offline_note_receipts_total",
+                "Offline note receipt aggregates grouped by event kind",
             ),
             &["event"],
         )
         .expect("Infallible");
-        let offline_transfer_pruned_total = IntCounter::new(
-            "iroha_offline_transfer_pruned_total",
-            "Offline transfer bundles pruned from hot storage",
+        let offline_note_pruned_total = IntCounter::new(
+            "iroha_offline_note_pruned_total",
+            "Offline note bundles pruned from hot storage",
         )
         .expect("Infallible");
         let offline_attestation_policy_total = IntCounterVec::new(
@@ -8414,10 +8414,10 @@ impl Default for Metrics {
         for label in ["ios-appattest", "android-keymint"] {
             let _ = offline_attestation_policy_total.with_label_values(&[label]);
         }
-        let _ = offline_transfer_receipts_total.with_label_values(&["settled"]);
-        let offline_transfer_settled_amount = Histogram::with_opts(
+        let _ = offline_note_receipts_total.with_label_values(&["settled"]);
+        let offline_note_settled_amount = Histogram::with_opts(
             HistogramOpts::new(
-                "iroha_offline_transfer_settled_amount",
+                "iroha_offline_note_settled_amount",
                 "Distribution of offline settlement bundle amounts (asset units)",
             )
             .buckets(
@@ -8426,10 +8426,10 @@ impl Default for Metrics {
             ),
         )
         .expect("Infallible");
-        let offline_transfer_rejections_total = IntCounterVec::new(
+        let offline_note_rejections_total = IntCounterVec::new(
             Opts::new(
-                "iroha_offline_transfer_rejections_total",
-                "Offline transfer validation rejections grouped by platform and reason",
+                "iroha_offline_note_rejections_total",
+                "Offline note validation rejections grouped by platform and reason",
             ),
             &["platform", "reason"],
         )
@@ -13091,11 +13091,11 @@ impl Default for Metrics {
             registry,
             subscription_billing_attempts_total,
             subscription_billing_outcomes_total,
-            offline_transfer_events_total,
-            offline_transfer_receipts_total,
-            offline_transfer_settled_amount,
-            offline_transfer_rejections_total,
-            offline_transfer_pruned_total,
+            offline_note_events_total,
+            offline_note_receipts_total,
+            offline_note_settled_amount,
+            offline_note_rejections_total,
+            offline_note_pruned_total,
             offline_attestation_policy_total,
             offline_app_attest_signature_compat_total,
             social_events_total,
@@ -14217,11 +14217,11 @@ impl Default for Metrics {
             settlement_haircut_total,
             subscription_billing_attempts_total,
             subscription_billing_outcomes_total,
-            offline_transfer_events_total,
-            offline_transfer_receipts_total,
-            offline_transfer_settled_amount,
-            offline_transfer_rejections_total,
-            offline_transfer_pruned_total,
+            offline_note_events_total,
+            offline_note_receipts_total,
+            offline_note_settled_amount,
+            offline_note_rejections_total,
+            offline_note_pruned_total,
             offline_attestation_policy_total,
             offline_app_attest_signature_compat_total,
             social_events_total,
@@ -15759,12 +15759,12 @@ impl Metrics {
             .inc_by(u128_to_f64(haircut_micro) / 1_000_000.0);
     }
 
-    /// Record a settled offline-to-online transfer bundle.
-    pub fn record_offline_transfer_settlement(&self, amount: f64, receipt_count: u32) {
-        self.offline_transfer_events_total
+    /// Record a settled offline V2 note bundle.
+    pub fn record_offline_note_settlement(&self, amount: f64, receipt_count: u32) {
+        self.offline_note_events_total
             .with_label_values(&["settled"])
             .inc();
-        self.offline_transfer_receipts_total
+        self.offline_note_receipts_total
             .with_label_values(&["settled"])
             .inc_by(u64::from(receipt_count));
         let observed = if amount.is_finite() {
@@ -15772,27 +15772,27 @@ impl Metrics {
         } else {
             0.0
         };
-        self.offline_transfer_settled_amount.observe(observed);
+        self.offline_note_settled_amount.observe(observed);
     }
 
-    /// Record an offline transfer archival transition.
-    pub fn inc_offline_transfer_archived(&self) {
-        self.offline_transfer_events_total
+    /// Record an offline note archival transition.
+    pub fn inc_offline_note_archived(&self) {
+        self.offline_note_events_total
             .with_label_values(&["archived"])
             .inc();
     }
 
-    /// Record an offline bundle being pruned from hot storage.
-    pub fn inc_offline_transfer_pruned(&self) {
-        self.offline_transfer_events_total
+    /// Record an Offline V2 note record being pruned from hot storage.
+    pub fn inc_offline_note_pruned(&self) {
+        self.offline_note_events_total
             .with_label_values(&["pruned"])
             .inc();
-        self.offline_transfer_pruned_total.inc();
+        self.offline_note_pruned_total.inc();
     }
 
     /// Record a validation rejection for an Offline V2 note operation.
-    pub fn record_offline_transfer_rejection(&self, platform: &str, reason: &str) {
-        self.offline_transfer_rejections_total
+    pub fn record_offline_note_rejection(&self, platform: &str, reason: &str) {
+        self.offline_note_rejections_total
             .with_label_values(&[platform, reason])
             .inc();
     }

@@ -21,7 +21,6 @@
       "import": "./dist/crypto.js",
       "types": "./index.d.ts"
     },
-    "./offline": "./dist/offlineEnvelope.js",
     "./connect-browser": {
       "import": "./dist/connect.browser.js",
       "types": "./connect.browser.d.ts"
@@ -41,9 +40,6 @@
       "crypto": [
         "./index.d.ts"
       ],
-      "offline": [
-        "./index.d.ts"
-      ],
       "connect-browser": [
         "./connect.browser.d.ts"
       ]
@@ -58,9 +54,6 @@
     "bundle:check": "node ./scripts/bundle-size-check.mjs",
     "test": "npm run build:native && node --test",
     "test:dist": "npm run build:dist && node --test",
-    "example:offline": "node ./recipes/offline_queue.mjs",
-    "example:offline:connect": "node ./recipes/offline_queue.mjs",
-    "example:offline:pipeline": "node ./recipes/offline_pipeline.mjs",
     "check:changelog": "node ./scripts/check-changelog.mjs",
     "release:update-docs": "node ./scripts/update-release-docs.mjs",
     "release:provenance": "node ./scripts/record-release-provenance.mjs",

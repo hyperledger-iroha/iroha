@@ -31,50 +31,15 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         try validateAmount(amount, expectedScale: expectedScale)
         _ = try parseHashHex(senderCertificateIdHex, field: "senderCertificateIdHex")
         _ = try parseHashHex(nonceHex, field: "nonceHex")
-        do {
-            guard let native = try NoritoNativeBridge.shared.offlineReceiptChallenge(
-                chainId: chainId,
-                invoiceId: invoiceId,
-                receiverId: receiverAccountId,
-                assetId: assetId,
-                amount: amount,
-                issuedAtMs: issuedAtMs,
-                senderCertificateIdHex: senderCertificateIdHex,
-                nonceHex: nonceHex
-            ) else {
-                throw Error.bridgeUnavailable
-            }
-            return Result(
-                preimage: native.preimage,
-                irohaHash: native.irohaHash,
-                clientDataHash: native.clientHash
-            )
-        } catch let bridgeError as NoritoNativeBridge.OfflineReceiptChallengeBridgeError {
-            switch bridgeError {
-            case .callFailed(let code):
-                return try computeCanonical(chainId: chainId,
-                                            invoiceId: invoiceId,
-                                            receiverAccountId: receiverAccountId,
-                                            assetId: assetId,
-                                            amount: amount,
-                                            issuedAtMs: issuedAtMs,
-                                            senderCertificateIdHex: senderCertificateIdHex,
-                                            nonceHex: nonceHex,
-                                            status: code)
-            }
-        } catch Error.bridgeUnavailable {
-            return try computeCanonical(chainId: chainId,
-                                        invoiceId: invoiceId,
-                                        receiverAccountId: receiverAccountId,
-                                        assetId: assetId,
-                                        amount: amount,
-                                        issuedAtMs: issuedAtMs,
-                                        senderCertificateIdHex: senderCertificateIdHex,
-                                        nonceHex: nonceHex,
-                                        status: nil)
-        } catch {
-            throw error
-        }
+        return try computeCanonical(chainId: chainId,
+                                    invoiceId: invoiceId,
+                                    receiverAccountId: receiverAccountId,
+                                    assetId: assetId,
+                                    amount: amount,
+                                    issuedAtMs: issuedAtMs,
+                                    senderCertificateIdHex: senderCertificateIdHex,
+                                    nonceHex: nonceHex,
+                                    status: nil)
     }
 
     private static func computeCanonical(

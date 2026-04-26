@@ -14,8 +14,8 @@ translator: manual
 
 המסמך מציג הצעת strawman לעיצוב המאוחד של תזרימי Nexus Connect בכלי ה-SDK עבור Swift, ‎Android‎ ו-JavaScript. הוא נכתב כהכנה לסדנת ה-SDK הצולבת בפברואר ‎2026 ומטרתו לרכז סימני שאלה טרם תחילת הפיתוח.
 
-> עודכן לאחרונה: ‎2026-01-12  
-> מחברים: מוביל SDK ל-Swift, ראש צוות רשתות Android, מוביל JS  
+> עודכן לאחרונה: ‎2026-01-12
+> מחברים: מוביל SDK ל-Swift, ראש צוות רשתות Android, מוביל JS
 > סטטוס: טיוטה לסקירת מועצה
 
 ## יעדים
@@ -192,7 +192,7 @@ Deliverable הסדנה דורש תכנית מפורטת כך שכל ה-SDK-ים 
   - Swift: ‎`ConnectSessionDiagnostics.snapshot()`‎ מחזיר `{state, depth, bytes, reason}` ו‎`exportJournalBundle(url:)`‎ יוצר ארכיון לשירות התמיכה.
   - Android: ‎`ConnectDiagnostics.snapshot()`‎ ו־‎`exportJournalBundle(path)`‎.
   - JS: ‎`ConnectQueueInspector.read()`‎ מחזיר מבנה זהה וידית Blob שניתן להעלות לכלי Torii.
-- כאשר משתמש מכבה ‎`offline_queue_enabled=false`‎, ה-SDK מרוקן מיד את שני היומנים, מסמן ‎`Disabled`‎ ומשדר אירוע טלמטריה סופי. ההעדפה נרשמת גם במסגרת האישור כדי שהצד השני יידע שאין מה להשמיע מחדש.
+- כאשר משתמש מכבה ‎`deferred_queue_enabled=false`‎, ה-SDK מרוקן מיד את שני היומנים, מסמן ‎`Disabled`‎ ומשדר אירוע טלמטריה סופי. ההעדפה נרשמת גם במסגרת האישור כדי שהצד השני יידע שאין מה להשמיע מחדש.
 - מפעילים מריצים ‎`connect queue inspect --sid <sid>`‎ (פקודת CLI העוטפת את ההוקים של ה-SDK) בזמן תרגילי כאוס; הפלט כולל היסטוריית מצבים, גבהים ורזום כך שסקרי הממשל אינם תלויים בכלי פלטפורמה פרטיים.
 
 ### זרימת חבילת ראיות

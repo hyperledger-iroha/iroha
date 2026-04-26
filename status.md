@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-26
 
-## 2026-04-26 Offline V2 certificate, redemption, and audit binding
+## 2026-04-26 Offline V2 first-release replacement
 
 - Hardened Offline V2 note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.
 - Hardened Offline V2 note redemption so the recursive proof public-input hash must bind the source note commitment, consumed nullifiers, certified key payload, recipient, asset, and amount, and escrow is released only for a ledger-recorded issued-note claim that has not already been redeemed.
@@ -10,24 +10,24 @@ Last updated: 2026-04-26
 - Ordered cheap issued-claim, token, and nullifier replay checks before expensive recursive proof verification while still verifying proofs before escrow release or new audit state.
 - Replaced the local transcript-style recursive proof placeholder with verifier-key-backed validation: the proof must name an active `offline_note_v2` WSV verifier, decode as an `OpenVerifyEnvelope`, match the Offline V2 public-input schema hash, expose the expected public instance columns, and pass the configured ZK backend verifier.
 - Added data-model helper payloads for canonical key-certificate signing bytes, issued-note claims, redemption public inputs, and audit public inputs.
-- Kept the retired Offline V1 settlement helpers fail-closed while documenting the retained compatibility code path for later removal.
-- The strict clippy follow-up also cleaned local warning blockers in the touched dependency graph, including ML-DSA context length conversion, QR rendering docs/casts, FASTPQ proof helper lint annotations, Soracloud/SCCP/config style issues, and data-model test/bench nits.
+- Removed legacy allowance, lineage, transfer, revocation, balance-proof, petal-stream, and settlement helper surfaces across Rust, Torii, mobile SDKs, examples, fixtures, and stale docs.
+- Torii now exposes only `/v1/offline/v2/readiness` for offline discovery; issuance, redemption, and audit use V2 transaction instructions.
+- Localnet, telemetry, QR payload kinds, and mobile parser surfaces now use Offline V2 note naming instead of legacy cash/transfer terminology.
 - Focused validation for this slice:
   - `cargo fmt --all`
-  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
-  - `cargo clippy -p iroha_data_model -p iroha_core -p iroha_torii -p connect_norito_bridge --all-targets -- -D warnings`
-  - `cargo test -p iroha_core offline_note_v2 --lib -- --nocapture`
-  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
-  - `cargo test -p iroha_torii --test offline_cash_router_smoke -- --nocapture`
-  - `cargo test -p connect_norito_bridge offline --lib -- --nocapture`
-  - `cargo test -p soranet_pq mldsa --lib -- --nocapture`
-  - `cargo test -p iroha_torii_shared qr --lib -- --nocapture`
-  - `cargo test -p fastpq_prover merkle --lib -- --nocapture`
-  - `npm run lint && node --test test/toriiClient.test.js test/package_dist.test.js test/offlineCounterJournal.test.js test/offlineEnvelope.test.js test/offlineQrStream.test.js test/offlineReplay.test.js` from `javascript/iroha_js`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_config -p iroha_kagami -p iroha_telemetry -p connect_norito_bridge -p fastpq_prover -p fastpq_isi --lib`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p connect_norito_bridge --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-workspace-test cargo test -p iroha_core offline_note_v2 --lib -- --nocapture` (ok; no Core-local tests matched after the model tests moved to `iroha_data_model`)
+  - `swift test`
+  - `./gradlew :core-jvm:test --console=plain`
+  - `./gradlew :offline-wallet-android:assembleRelease --console=plain`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+  - `npm run build:dist && node --test test/toriiClient.test.js test/package_dist.test.js test/offlineQrStream.test.js`
   - `python3 -m pytest python/iroha_torii_client/tests/test_client.py python/iroha_python/tests/testconnect_codec.py -q`
   - `git diff --check`
-  - Targeted stale legacy offline route/helper scan across docs, examples, and SDK sources returned no matches.
-  - Targeted removed native export/wrapper scan across the bridge and mobile SDK sources returned no matches.
+  - Stale-route/native-symbol scans for legacy offline routes, removed native exports, old Offline V1 fixtures, and deleted Safety Detect wrappers returned no matches in active source/fixture paths.
 
 ## 2026-04-25 Taira devex CLI and onboarding diagnostics
 

@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | Жол | Мақсаты | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` арқылы жасалған канондық сурет; GPU құрастырулары үшін ақиқат көзі. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Swift құрылғысының сынақтары мен XCFramework түтін қондырғысы Металл ядролары күткен тұрақты мәндерді жүктейтіндей канондық суретті айналайды. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin құрылғылары паритет пен сериялау сынақтары үшін бірдей манифестпен бөліседі. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` арқылы жасалған канондық сурет; GPU құрастырулары үшін ақиқат көзі. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Swift құрылғысының сынақтары мен XCFramework түтін қондырғысы Металл ядролары күткен тұрақты мәндерді жүктейтіндей канондық суретті айналайды. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin құрылғылары паритет пен сериялау сынақтары үшін бірдей манифестпен бөліседі. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Әрбір тұтынушы тұрақты мәндерді графикалық процессорға жалғамас бұрын хэшті тексеруі керек
 құбыр. Манифест өзгерген кезде (жаңа параметрлер жинағы немесе профиль), SHA және
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 көмекші. Пәрмен канондық файлды да, SDK айналарын да жазады:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Тағайындалған жерлерді қайта анықтау үшін `--constants <path>`/`--vectors <path>` пайдаланыңыз немесе

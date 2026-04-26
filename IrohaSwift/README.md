@@ -498,7 +498,7 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint; the Swift SDK no longer publishes legacy offline cash, transfer-history, or revocation helpers.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint; the Swift SDK no longer publishes non-V2 offline HTTP helpers.
 
 ### Offline transaction queue
 
@@ -522,7 +522,7 @@ apps can decide how to remediate.
 
 Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
 issuance, redemption, and audit payloads are submitted as transaction instructions; the legacy
-offline cash, transfer-history, and revocation HTTP routes are no longer published.
+non-V2 offline HTTP routes are no longer published.
 Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
 one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
 source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a

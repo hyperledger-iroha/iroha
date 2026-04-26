@@ -39,9 +39,9 @@ public enum OfflineQrStreamFrameEncoding: Sendable {
 
 public enum OfflineQrPayloadKind: UInt16, Sendable {
     case unspecified = 0
-    case offlineToOnlineTransfer = 1
-    case offlineSpendReceipt = 2
-    case offlineEnvelope = 3
+    case offlineReceiveChallengeV2 = 1
+    case offlinePaymentTokenV2 = 2
+    case offlineReceiptAckV2 = 3
 }
 
 public struct OfflineQrStreamOptions: Sendable, Equatable {

@@ -60,8 +60,7 @@ Manifests now capture the sandbox inputs exported by `android_sample_env.sh`
 (`sorafs_scoreboard`/`sorafs_summary` paths + SHA-256 digests, telemetry logs,
 harness receipts, and optional hand-off endpoints), along with retail wallet
 policy overrides and SHA-256 fingerprints for the bundled POS assets
-(`pos_manifest.json`, `security_policy.json`, `offline_revocations.json`,
-`pinned_root.pem`). The localization annotator still augments each manifest with
+(`security_policy.json`, `pinned_root.pem`). The localization annotator still augments each manifest with
 available screenshots for `en`, `ja`, and `he`.
 
 ## Local Environment Bootstrap
