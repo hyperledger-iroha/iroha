@@ -2,6 +2,14 @@
 
 Last updated: 2026-04-26
 
+## 2026-04-26 Nexus router default-lane reroute fix
+
+- Fixed state-aware queue rerouting so universal-only account scope is treated as fallback materialization, not as a dataspace routing target. Untargeted universal authority transactions now continue to use `nexus.routing_policy.default_lane`, while non-universal single-scope accounts still route to their dataspace lane.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::tests::apply_lane_lifecycle_reconfigures_router_and_limits -- --nocapture`
+  - `cargo test -p iroha_core untargeted_universal_authority_transaction_uses_default_lane_with_state -- --nocapture`
+
 ## 2026-04-26 Sumeragi recovery and worker-loop test stabilization
 
 - Stabilized Sumeragi commit recovery around QC-backed pending blocks without proposal evidence: cached prepare/commit QCs now count as consensus evidence for validation and commit gating, and local precommit emission records and applies the vote synchronously before broadcast.
