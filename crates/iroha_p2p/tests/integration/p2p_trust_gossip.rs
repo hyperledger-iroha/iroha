@@ -93,6 +93,8 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         trust_penalty_bad_gossip: TRUST_PENALTY_BAD_GOSSIP,
         trust_penalty_unknown_peer: TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip,
         prefer_ws_fallback: false,
         p2p_proxy: None,

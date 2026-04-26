@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-25
+Last updated: 2026-04-26
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -41,12 +41,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
 ## Consensus and Izanami
 
 - Close the exact-reproduction gaps in the Izanami communication vulnerability matrix.
-  - Add a timed fault scheduler that can reproduce the paper's 133s-266s injection window instead of relying only on randomized Izanami fault-loop timing.
-  - Add an OS `netem` or in-process P2P packet-drop injector so the `packet-loss` scenario can run 25%, 50%, and 75% loss between selected peer groups.
-  - Replace the current self-only trusted-peer restart approximation with a network-level relay/proxy partition so packet loss and isolation do not mutate the peer's validator view while simulating communication loss.
-  - Wire Sumeragi proposer/leader telemetry into the `leader-isolation` scenario so Izanami isolates the active proposer rather than a fixed selected peer.
+  - The 2026-04-26 paper-shaped run is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`; keep this as the current full-matrix resilience baseline. The runner now supports the paper's 133s-266s timed fault window for faulted scenarios.
+  - Native in-process P2P packet-drop injection is wired into `packet-loss` and leader-targeted `leader-isolation`; quick packet-loss validation is green for both Sumeragi modes. Rerun the full paper matrix with the exact injector before replacing the recorded full-matrix baseline.
+  - Extend the packet-loss scenario from the current 75% stress point to an explicit 25%/50%/75% sweep when the matrix report grows per-loss subrows.
   - Keep any future quick-mode publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed.
-  - After those exact injectors land, run `scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper --sumeragi-mode both` and record both Iroha classifications against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.
+  - After the exact injectors land, rerun `scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper --sumeragi-mode both` and record both Iroha classifications against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.
 - Rerun the permissioned preserved-peer stable envelope with fresh binaries from the current tree.
   - Build fresh `izanami` / `iroha3d` binaries instead of reusing prior artifacts.
   - Confirm the previously observed height-533 zero-local-vote `missing_qc` loop does not recur on the current branch.

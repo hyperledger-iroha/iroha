@@ -102,6 +102,8 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,

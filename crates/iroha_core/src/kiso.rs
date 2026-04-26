@@ -674,6 +674,8 @@ mod tests {
                 trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
                 trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
                 trust_min_score: defaults::network::TRUST_MIN_SCORE,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_outbound_percent: 0,
                 trust_gossip: defaults::network::TRUST_GOSSIP,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,

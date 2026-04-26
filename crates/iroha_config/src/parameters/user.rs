@@ -8860,6 +8860,12 @@ pub struct Network {
     /// Minimum trust score before gossip is ignored.
     #[config(default = "defaults::network::TRUST_MIN_SCORE")]
     pub trust_min_score: i32,
+    /// Debug-only inbound P2P application-frame loss percentage used by fault harnesses.
+    #[config(default)]
+    pub debug_packet_loss_inbound_percent: u8,
+    /// Debug-only outbound P2P application-frame loss percentage used by fault harnesses.
+    #[config(default)]
+    pub debug_packet_loss_outbound_percent: u8,
     /// Maximum number of transactions gossiped per batch.
     #[config(default = "defaults::network::TRANSACTION_GOSSIP_SIZE")]
     pub transaction_gossip_size: NonZeroU32,
@@ -9201,6 +9207,8 @@ impl Network {
             trust_penalty_bad_gossip,
             trust_penalty_unknown_peer,
             trust_min_score,
+            debug_packet_loss_inbound_percent,
+            debug_packet_loss_outbound_percent,
             transaction_gossip_size,
             transaction_gossip_period_ms: transaction_gossip_period,
             transaction_gossip_resend_ticks,
@@ -9357,6 +9365,16 @@ impl Network {
         });
         let scion_routes = Self::parse_scion_routes(scion_routes);
         let lane_profile = actual::LaneProfile::from_label(&lane_profile);
+        if debug_packet_loss_inbound_percent > 100 {
+            panic!(
+                "network.debug_packet_loss_inbound_percent must be between 0 and 100, got {debug_packet_loss_inbound_percent}"
+            );
+        }
+        if debug_packet_loss_outbound_percent > 100 {
+            panic!(
+                "network.debug_packet_loss_outbound_percent must be between 0 and 100, got {debug_packet_loss_outbound_percent}"
+            );
+        }
         let limits = lane_profile.derived_limits();
         let max_incoming = max_incoming.or(limits.max_incoming);
         let max_total_connections = max_total_connections.or(limits.max_total_connections);
@@ -9440,6 +9458,8 @@ impl Network {
                 trust_penalty_bad_gossip,
                 trust_penalty_unknown_peer,
                 trust_min_score,
+                debug_packet_loss_inbound_percent,
+                debug_packet_loss_outbound_percent,
                 dns_refresh_interval: dns_refresh_interval
                     .map(iroha_config_base::util::DurationMs::get),
                 dns_refresh_ttl: dns_refresh_ttl.map(iroha_config_base::util::DurationMs::get),
