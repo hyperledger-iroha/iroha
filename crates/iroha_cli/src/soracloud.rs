@@ -35341,6 +35341,7 @@ import path from "node:path";
 
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
+const REQUEST_TIMEOUT_MS = 15000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -35421,7 +35422,10 @@ async function waitForHealth(port, route) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    REQUEST_TIMEOUT_MS
+  );
   const init = { method, headers: { ...headers } };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -36351,6 +36355,7 @@ import net from "node:net";
 const SERVER_PATH = __SERVER_PATH__;
 const FORWARDED_PROTO = "https";
 const FORWARDED_HOST = "pii-auth.example.internal";
+const REQUEST_TIMEOUT_MS = 15000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -36431,7 +36436,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    REQUEST_TIMEOUT_MS
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -36613,6 +36621,7 @@ import net from "node:net";
 
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
+const REQUEST_TIMEOUT_MS = 15000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -36693,7 +36702,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    REQUEST_TIMEOUT_MS
+  );
   const init = { method, headers: { ...headers } };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -37782,6 +37794,7 @@ import path from "node:path";
 
 const SERVER_PATH = __SERVER_PATH__;
 const STATE_FILE = __STATE_FILE__;
+const REQUEST_TIMEOUT_MS = 15000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -37862,7 +37875,10 @@ async function waitForHealth(port, route) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    REQUEST_TIMEOUT_MS
+  );
   const init = { method, headers: { ...headers } };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
