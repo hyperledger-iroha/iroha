@@ -49,7 +49,7 @@ use crate::{
     config::{ChaosConfig, WorkloadProfile},
     faults::{
         self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
-        NetworkPartitionConfig,
+        NetworkPacketLossConfig, NetworkPartitionConfig,
     },
     instructions::{
         self, AccountRecord, PlanUpdate, PreparedChaos, TransactionPlan, WorkloadEngine,
@@ -2998,6 +2998,96 @@ fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng)
     indices.into_iter().take(target_count).collect()
 }
 
+fn uses_sumeragi_leader_fault_targeting(config: &ChaosConfig) -> bool {
+    let leader_network_fault = (config.faults.network_partition()
+        && !config.faults.network_packet_loss())
+        || (config.faults.network_packet_loss() && !config.faults.network_partition());
+    config.faulty_peers == 1
+        && !config.faults.crash_restart()
+        && !config.faults.wipe_storage()
+        && !config.faults.spam_invalid_transactions()
+        && !config.faults.network_latency()
+        && leader_network_fault
+        && !config.faults.cpu_stress()
+        && !config.faults.disk_saturation()
+}
+
+fn fault_config_for(config: &ChaosConfig) -> FaultConfig {
+    let toggles = config.faults;
+    FaultConfig {
+        interval: config.fault_interval.clone(),
+        crash_restart: toggles.crash_restart(),
+        wipe_storage: toggles.wipe_storage(),
+        spam_invalid_transactions: toggles.spam_invalid_transactions(),
+        network_latency: toggles
+            .network_latency()
+            .then_some(NetworkLatencyConfig::default()),
+        network_partition: toggles
+            .network_partition()
+            .then_some(NetworkPartitionConfig::default()),
+        network_packet_loss: toggles
+            .network_packet_loss()
+            .then_some(NetworkPacketLossConfig::default()),
+        cpu_stress: toggles.cpu_stress().then_some(CpuStressConfig::default()),
+        disk_saturation: toggles
+            .disk_saturation()
+            .then_some(DiskSaturationConfig::default()),
+    }
+}
+
+fn parse_sumeragi_leader_index(value: norito::json::Value) -> Option<usize> {
+    let norito::json::Value::Object(root) = value else {
+        return None;
+    };
+    root.get("leader_index")?.as_u64()?.try_into().ok()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SumeragiLeaderTarget {
+    peer_index: usize,
+    sampled_from_peer_index: usize,
+}
+
+async fn sample_sumeragi_leader_target(
+    peers: Arc<Vec<NetworkPeer>>,
+) -> Result<SumeragiLeaderTarget, String> {
+    spawn_blocking(move || {
+        let mut last_error = None;
+        for (sampled_from_peer_index, peer) in peers.iter().cloned().enumerate() {
+            let client = peer.client();
+            match client.get_sumeragi_leader_json() {
+                Ok(value) => {
+                    let Some(peer_index) = parse_sumeragi_leader_index(value) else {
+                        last_error = Some(format!(
+                            "leader payload from peer index {sampled_from_peer_index} missing leader_index"
+                        ));
+                        continue;
+                    };
+                    if peer_index >= peers.len() {
+                        last_error = Some(format!(
+                            "leader index {peer_index} from peer index {sampled_from_peer_index} outside {}-peer topology",
+                            peers.len()
+                        ));
+                        continue;
+                    }
+                    return Ok(SumeragiLeaderTarget {
+                        peer_index,
+                        sampled_from_peer_index,
+                    });
+                }
+                Err(err) => {
+                    last_error = Some(format!(
+                        "failed to sample Sumeragi leader from peer index {sampled_from_peer_index}: {err}"
+                    ));
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| "no peers available for leader sampling".to_string()))
+    })
+    .await
+    .map_err(|err| format!("leader sampling task failed: {err}"))?
+}
+
 #[derive(Clone)]
 struct RunControl {
     stop: Arc<AtomicBool>,
@@ -3034,6 +3124,49 @@ impl RunControl {
     fn stop_notifier(&self) -> Arc<Notify> {
         Arc::clone(&self.stop_notify)
     }
+}
+
+fn fault_window_start_at(
+    config: &ChaosConfig,
+    run_started_at: Instant,
+    run_deadline: Instant,
+) -> Instant {
+    config
+        .fault_window_start
+        .and_then(|offset| run_started_at.checked_add(offset))
+        .map_or(run_started_at, |start| start.min(run_deadline))
+}
+
+fn fault_window_end_at(
+    config: &ChaosConfig,
+    run_started_at: Instant,
+    run_deadline: Instant,
+) -> Instant {
+    config
+        .fault_window_end
+        .and_then(|offset| run_started_at.checked_add(offset))
+        .map_or(run_deadline, |end| end.min(run_deadline))
+}
+
+async fn wait_for_fault_window_start(
+    stop: &AtomicBool,
+    stop_notify: &Notify,
+    fault_start: Instant,
+    run_deadline: Instant,
+) -> bool {
+    if stop.load(Ordering::Relaxed) || Instant::now() >= run_deadline {
+        return false;
+    }
+    if let Some(delay) = fault_start.checked_duration_since(Instant::now())
+        && !delay.is_zero()
+    {
+        tokio::select! {
+            () = time::sleep(delay) => {},
+            () = stop_notify.notified() => return false,
+            () = time::sleep_until(run_deadline.into()) => return false,
+        }
+    }
+    !stop.load(Ordering::Relaxed) && Instant::now() < run_deadline
 }
 
 pub struct IzanamiRunner {
@@ -3107,7 +3240,8 @@ impl IzanamiRunner {
     }
 
     pub async fn run(self) -> Result<()> {
-        let deadline = Instant::now() + self.config.duration;
+        let run_started_at = Instant::now();
+        let deadline = run_started_at + self.config.duration;
         let run_control = Arc::new(RunControl::new(deadline));
         let mut rng = self.seeded_rng();
         let config_layers = Arc::new(
@@ -3128,7 +3262,15 @@ impl IzanamiRunner {
             IngressEndpointPoolConfig::default(),
             Arc::clone(&ingress_stats),
         ));
-        ingress_pool.reserve_fault_target_ingress_until(&self.peers, &fault_targets, deadline);
+        if uses_sumeragi_leader_fault_targeting(&self.config) {
+            info!(
+                target: "izanami::faults",
+                fallback_fault_targets = ?fault_targets,
+                "leader-isolation profile detected; fault target will follow Sumeragi leader telemetry"
+            );
+        } else {
+            ingress_pool.reserve_fault_target_ingress_until(&self.peers, &fault_targets, deadline);
+        }
         let submission_counter = Arc::new(AtomicU64::new(0));
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let confirmation_audit_wait_options =
@@ -3156,6 +3298,8 @@ impl IzanamiRunner {
             &config_layers,
             &genesis,
             &run_control,
+            &ingress_pool,
+            run_started_at,
             &mut rng,
             &fault_targets,
         );
@@ -3187,7 +3331,13 @@ impl IzanamiRunner {
             )
             .await
         } else {
-            wait_for_duration_deadline(&run_control).await
+            wait_for_duration_deadline(
+                &run_control,
+                &self.peers,
+                self.config.faulty_peers,
+                Some(ingress_pool.as_ref()),
+            )
+            .await
         };
 
         let mut run_error = None;
@@ -3320,31 +3470,30 @@ impl IzanamiRunner {
         config_layers: &Arc<Vec<Table>>,
         genesis: &Arc<GenesisBlock>,
         run_control: &Arc<RunControl>,
+        ingress_pool: &Arc<IngressEndpointPool>,
+        run_started_at: Instant,
         rng: &mut StdRng,
         targets: &[usize],
     ) -> Vec<JoinHandle<()>> {
         if targets.is_empty() {
             return Vec::new();
         }
+        if uses_sumeragi_leader_fault_targeting(&self.config) {
+            return self.spawn_sumeragi_leader_fault_task(
+                config_layers,
+                genesis,
+                run_control,
+                ingress_pool,
+                run_started_at,
+                rng,
+                targets[0],
+            );
+        }
         let deadline = run_control.deadline();
+        let fault_start = fault_window_start_at(&self.config, run_started_at, deadline);
+        let fault_deadline = fault_window_end_at(&self.config, run_started_at, deadline);
         let mut handles = Vec::new();
-        let toggles = self.config.faults;
-        let fault_cfg = FaultConfig {
-            interval: self.config.fault_interval.clone(),
-            crash_restart: toggles.crash_restart(),
-            wipe_storage: toggles.wipe_storage(),
-            spam_invalid_transactions: toggles.spam_invalid_transactions(),
-            network_latency: toggles
-                .network_latency()
-                .then_some(NetworkLatencyConfig::default()),
-            network_partition: toggles
-                .network_partition()
-                .then_some(NetworkPartitionConfig::default()),
-            cpu_stress: toggles.cpu_stress().then_some(CpuStressConfig::default()),
-            disk_saturation: toggles
-                .disk_saturation()
-                .then_some(DiskSaturationConfig::default()),
-        };
+        let fault_cfg = fault_config_for(&self.config);
         for (offset, idx) in targets.iter().copied().enumerate() {
             let peer = self.peers[idx].clone();
             let config_layers = Arc::clone(config_layers);
@@ -3355,6 +3504,35 @@ impl IzanamiRunner {
             let cfg = fault_cfg.clone();
             let seed = rng.next_u64();
             handles.push(tokio::spawn(async move {
+                if !wait_for_fault_window_start(
+                    stop.as_ref(),
+                    stop_notify.as_ref(),
+                    fault_start,
+                    deadline,
+                )
+                .await
+                {
+                    return;
+                }
+                if Instant::now() >= fault_deadline {
+                    debug!(
+                        target: "izanami::faults",
+                        peer = peer.mnemonic(),
+                        "fault window closed before worker became active"
+                    );
+                    return;
+                }
+                info!(
+                    target: "izanami::faults",
+                    peer = peer.mnemonic(),
+                    active_after_ms = fault_start
+                        .saturating_duration_since(run_started_at)
+                        .as_millis(),
+                    active_until_ms = fault_deadline
+                        .saturating_duration_since(run_started_at)
+                        .as_millis(),
+                    "fault worker entering timed injection window"
+                );
                 faults::run_fault_loop(
                     peer,
                     cfg,
@@ -3363,7 +3541,7 @@ impl IzanamiRunner {
                     base_domain,
                     stop,
                     stop_notify,
-                    deadline,
+                    fault_deadline,
                     seed,
                 )
                 .await;
@@ -3371,6 +3549,143 @@ impl IzanamiRunner {
             debug!(target: "izanami::faults", peer_index = idx, worker = offset, "spawned fault worker");
         }
         handles
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_sumeragi_leader_fault_task(
+        &self,
+        config_layers: &Arc<Vec<Table>>,
+        genesis: &Arc<GenesisBlock>,
+        run_control: &Arc<RunControl>,
+        ingress_pool: &Arc<IngressEndpointPool>,
+        run_started_at: Instant,
+        rng: &mut StdRng,
+        fallback_target: usize,
+    ) -> Vec<JoinHandle<()>> {
+        let deadline = run_control.deadline();
+        let fault_start = fault_window_start_at(&self.config, run_started_at, deadline);
+        let fault_deadline = fault_window_end_at(&self.config, run_started_at, deadline);
+        let fault_cfg = fault_config_for(&self.config);
+        let peers = Arc::new(self.peers.clone());
+        let config_layers = Arc::clone(config_layers);
+        let genesis = Arc::clone(genesis);
+        let base_domain = self.base_domain.clone();
+        let stop = Arc::clone(&run_control.stop);
+        let stop_notify = run_control.stop_notifier();
+        let ingress_pool = Arc::clone(ingress_pool);
+        let seed = rng.next_u64();
+        vec![tokio::spawn(async move {
+            if !wait_for_fault_window_start(
+                stop.as_ref(),
+                stop_notify.as_ref(),
+                fault_start,
+                deadline,
+            )
+            .await
+            {
+                return;
+            }
+            if Instant::now() >= fault_deadline {
+                debug!(
+                    target: "izanami::faults",
+                    "leader-targeted fault window closed before worker became active"
+                );
+                return;
+            }
+            info!(
+                target: "izanami::faults",
+                active_after_ms = fault_start
+                    .saturating_duration_since(run_started_at)
+                    .as_millis(),
+                active_until_ms = fault_deadline
+                    .saturating_duration_since(run_started_at)
+                    .as_millis(),
+                "leader-targeted fault worker entering timed injection window"
+            );
+
+            let mut rng = StdRng::seed_from_u64(seed);
+            while Instant::now() < fault_deadline && !stop.load(Ordering::Relaxed) {
+                let target = match sample_sumeragi_leader_target(Arc::clone(&peers)).await {
+                    Ok(target) => target,
+                    Err(err) => {
+                        warn!(
+                            target: "izanami::faults",
+                            ?err,
+                            fallback_peer_index = fallback_target,
+                            "failed to sample Sumeragi leader; using deterministic fallback fault target"
+                        );
+                        SumeragiLeaderTarget {
+                            peer_index: fallback_target.min(peers.len().saturating_sub(1)),
+                            sampled_from_peer_index: fallback_target,
+                        }
+                    }
+                };
+                let Some(peer) = peers.get(target.peer_index).cloned() else {
+                    warn!(
+                        target: "izanami::faults",
+                        peer_index = target.peer_index,
+                        "leader-targeted fault target is outside the peer set"
+                    );
+                    break;
+                };
+                ingress_pool.reserve_fault_target_ingress_until(
+                    peers.as_slice(),
+                    &[target.peer_index],
+                    fault_deadline,
+                );
+                info!(
+                    target: "izanami::faults",
+                    peer_index = target.peer_index,
+                    sampled_from_peer_index = target.sampled_from_peer_index,
+                    peer = peer.mnemonic(),
+                    "injecting fault into current Sumeragi leader"
+                );
+                match faults::apply_random_fault_once(
+                    &peer,
+                    &fault_cfg,
+                    &config_layers,
+                    &genesis,
+                    &base_domain,
+                    &mut rng,
+                    fault_deadline,
+                )
+                .await
+                {
+                    Ok(scenario) => {
+                        debug!(
+                            target: "izanami::faults",
+                            peer_index = target.peer_index,
+                            ?scenario,
+                            "leader-targeted fault scenario completed"
+                        );
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "izanami::faults",
+                            peer_index = target.peer_index,
+                            ?err,
+                            "leader-targeted fault scenario failed"
+                        );
+                    }
+                }
+
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let delay = fault_cfg.sample_interval(&mut rng);
+                let Some(remaining) = fault_deadline.checked_duration_since(Instant::now()) else {
+                    break;
+                };
+                if remaining.is_zero() {
+                    break;
+                }
+                let delay = delay.min(remaining);
+                tokio::select! {
+                    () = time::sleep(delay) => {},
+                    () = stop_notify.notified() => break,
+                }
+            }
+        })]
     }
 
     fn spawn_load_supervisors(
@@ -4027,14 +4342,47 @@ struct TargetProgressResult {
     strict_min_height: u64,
 }
 
-async fn wait_for_duration_deadline(run_control: &RunControl) -> Result<TargetProgressResult> {
+async fn wait_for_duration_deadline(
+    run_control: &RunControl,
+    peers: &[NetworkPeer],
+    configured_faulty_peers: usize,
+    ingress_pool: Option<&IngressEndpointPool>,
+) -> Result<TargetProgressResult> {
     if run_control.stop_requested() {
         return Err(eyre!("izanami run stopped before duration completed"));
     }
     let stop_notify = run_control.stop_notifier();
     tokio::select! {
         () = stop_notify.notified() => Err(eyre!("izanami run stopped before duration completed")),
-        () = time::sleep_until(run_control.deadline().into()) => Ok(TargetProgressResult::default()),
+        () = time::sleep_until(run_control.deadline().into()) => {
+            let sampled_heights = sampled_peer_heights_with_ids(peers);
+            let heights: Vec<_> = sampled_heights.iter().map(|(_, height)| *height).collect();
+            let tolerated_failures =
+                effective_tolerated_peer_failures(peers.len(), configured_faulty_peers);
+            let quorum_min_height =
+                quorum_min_height_from_samples(heights.clone(), tolerated_failures);
+            let strict_min_height = heights.iter().copied().min().unwrap_or(0);
+            if let Some(ingress_pool) = ingress_pool {
+                ingress_pool.update_lag_snapshot(
+                    quorum_min_height,
+                    sampled_heights.as_slice(),
+                    Instant::now(),
+                );
+            }
+            info!(
+                target: "izanami::progress",
+                quorum_min_height,
+                strict_min_height,
+                tolerated_failures,
+                sampled_peers = heights.len(),
+                "duration deadline reached with sampled block heights"
+            );
+            Ok(TargetProgressResult {
+                target_reached: false,
+                quorum_min_height,
+                strict_min_height,
+            })
+        },
     }
 }
 
@@ -5768,8 +6116,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultToggles, NexusProfile,
-        WorkloadProfile,
+        DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles, IzanamiArgs,
+        NexusProfile, WorkloadProfile,
     };
 
     fn allow_net_for_tests() -> bool {
@@ -5972,6 +6320,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 4,
@@ -6039,6 +6389,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -6109,6 +6461,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -6178,6 +6532,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -6211,6 +6567,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
@@ -6257,6 +6615,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 5.0,
             max_inflight: 8,
@@ -6307,6 +6667,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(23),
             tps: 2.0,
             max_inflight: 4,
@@ -6373,6 +6735,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(31),
             tps: 2.0,
             max_inflight: 4,
@@ -6453,6 +6817,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(41),
             tps: 2.0,
             max_inflight: 4,
@@ -6624,6 +6990,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 5.0,
             max_inflight: 8,
@@ -6717,6 +7085,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(21),
             tps: 7.0,
             max_inflight: 13,
@@ -6765,6 +7135,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(22),
             tps: 7.0,
             max_inflight: 13,
@@ -6822,6 +7194,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(17),
             tps: 3.0,
             max_inflight: 6,
@@ -6859,6 +7233,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(9),
             tps: 5.0,
             max_inflight: 8,
@@ -6893,6 +7269,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(29),
             tps: 4.0,
             max_inflight: 6,
@@ -6947,6 +7325,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
@@ -6977,6 +7357,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
@@ -7013,6 +7395,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
@@ -7052,6 +7436,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 200.0,
             max_inflight: 512,
@@ -7094,6 +7480,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 200.0,
             max_inflight: 512,
@@ -7132,6 +7520,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(5),
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
@@ -7411,6 +7801,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(12),
             tps: 5.0,
             max_inflight: 8,
@@ -7443,6 +7835,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(13),
             tps: 5.0,
             max_inflight: 8,
@@ -7475,6 +7869,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(15),
             tps: 5.0,
             max_inflight: 8,
@@ -7504,6 +7900,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(27),
             tps: 5.0,
             max_inflight: 8,
@@ -7594,6 +7992,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
             latency_p95_threshold: Some(Duration::from_secs(2)),
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
@@ -7631,6 +8031,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 4,
@@ -9102,6 +9504,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(9),
             tps: 1.0,
             max_inflight: 4,
@@ -9181,6 +9585,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(10),
             tps: 1.0,
             max_inflight: 4,
@@ -9267,6 +9673,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(11),
             tps: 1.0,
             max_inflight: 4,
@@ -9373,6 +9781,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(5),
             tps: 0.1,
             max_inflight: 1,
@@ -9418,6 +9828,90 @@ mod tests {
 
         assert_eq!(first, second, "same seed must yield same targets");
         assert_eq!(first.len(), 2);
+    }
+
+    #[test]
+    fn sumeragi_leader_targeting_detects_leader_isolation_profile() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.faulty = 1;
+        args.faults = FaultArgs {
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
+            network_latency: false,
+            network_partition: true,
+            network_packet_loss: false,
+            cpu_stress: false,
+            disk_saturation: false,
+        };
+        let config = ChaosConfig::try_from(args).expect("leader-isolation profile should parse");
+
+        assert!(
+            uses_sumeragi_leader_fault_targeting(&config),
+            "single-peer partition-only faults should follow Sumeragi leader telemetry"
+        );
+    }
+
+    #[test]
+    fn sumeragi_leader_targeting_does_not_capture_packet_loss_profile() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.peers = 6;
+        args.faulty = 2;
+        args.faults = FaultArgs {
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
+            network_latency: false,
+            network_partition: false,
+            network_packet_loss: true,
+            cpu_stress: false,
+            disk_saturation: false,
+        };
+        let config = ChaosConfig::try_from(args).expect("packet-loss profile should parse");
+
+        assert!(
+            !uses_sumeragi_leader_fault_targeting(&config),
+            "multi-peer packet-loss runs must keep their configured fault target set"
+        );
+    }
+
+    #[test]
+    fn sumeragi_leader_targeting_detects_packet_loss_leader_profile() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.faulty = 1;
+        args.faults = FaultArgs {
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
+            network_latency: false,
+            network_partition: false,
+            network_packet_loss: true,
+            cpu_stress: false,
+            disk_saturation: false,
+        };
+        let config = ChaosConfig::try_from(args).expect("leader packet-loss profile should parse");
+
+        assert!(
+            uses_sumeragi_leader_fault_targeting(&config),
+            "single-peer packet-loss faults should follow Sumeragi leader telemetry"
+        );
+    }
+
+    #[test]
+    fn parses_sumeragi_leader_index_from_status_payload() {
+        let value = norito::json!({
+            "leader_index": 3,
+            "prf": {
+                "height": 7,
+                "view": 2,
+                "epoch_seed": "abcd",
+            },
+        });
+
+        assert_eq!(parse_sumeragi_leader_index(value), Some(3));
     }
 
     #[test]
@@ -9578,6 +10072,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(7),
             tps: 15.0,
             max_inflight: 64,
@@ -9589,6 +10085,52 @@ mod tests {
             faults,
             nexus: nexus.then(|| NexusProfile::sora_defaults().expect("nexus profile")),
         }
+    }
+
+    #[test]
+    fn fault_window_uses_run_bounds_when_unset() {
+        let config = chaos_config_for_audit_window(false, 1, FaultToggles::default());
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(120);
+
+        assert_eq!(fault_window_start_at(&config, started, deadline), started);
+        assert_eq!(fault_window_end_at(&config, started, deadline), deadline);
+    }
+
+    #[test]
+    fn fault_window_resolves_paper_offsets() {
+        let mut config = chaos_config_for_audit_window(false, 1, FaultToggles::default());
+        config.duration = Duration::from_secs(800);
+        config.fault_window_start = Some(Duration::from_secs(133));
+        config.fault_window_end = Some(Duration::from_secs(266));
+        let started = Instant::now();
+        let deadline = started + config.duration;
+
+        assert_eq!(
+            fault_window_start_at(&config, started, deadline),
+            started + Duration::from_secs(133)
+        );
+        assert_eq!(
+            fault_window_end_at(&config, started, deadline),
+            started + Duration::from_secs(266)
+        );
+    }
+
+    #[tokio::test]
+    async fn fault_window_wait_stops_when_run_control_stops() {
+        let stop = AtomicBool::new(true);
+        let notify = Notify::new();
+        let now = Instant::now();
+
+        assert!(
+            !wait_for_fault_window_start(
+                &stop,
+                &notify,
+                now + Duration::from_secs(5),
+                now + Duration::from_secs(10),
+            )
+            .await
+        );
     }
 
     #[test]
@@ -9632,7 +10174,9 @@ mod tests {
         let config = chaos_config_for_audit_window(
             true,
             1,
-            FaultToggles::from_explicit_array([false, false, false, true, true, false, false]),
+            FaultToggles::from_explicit_array_with_packet_loss([
+                false, false, false, false, false, true, false, false,
+            ]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
 
@@ -9738,7 +10282,7 @@ mod tests {
     #[tokio::test]
     async fn wait_for_duration_deadline_completes_when_no_target_blocks_are_set() {
         let run_control = RunControl::new(Instant::now() + Duration::from_millis(5));
-        let result = wait_for_duration_deadline(&run_control)
+        let result = wait_for_duration_deadline(&run_control, &[], 0, None)
             .await
             .expect("duration wait should complete normally");
         assert!(!result.target_reached);
@@ -9750,7 +10294,7 @@ mod tests {
     async fn wait_for_duration_deadline_reports_explicit_stop() {
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(60));
         run_control.stop();
-        let err = wait_for_duration_deadline(&run_control)
+        let err = wait_for_duration_deadline(&run_control, &[], 0, None)
             .await
             .expect_err("explicit stop should end duration wait with an error");
         assert!(
@@ -9894,6 +10438,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(17),
             tps: 1.0,
             max_inflight: 4,
@@ -10297,6 +10843,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(19),
             tps: 1.0,
             max_inflight: 4,
@@ -10374,6 +10922,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(19),
             tps: 1.0,
             max_inflight: 4,
@@ -10483,6 +11033,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(23),
             tps: 1.0,
             max_inflight: 4,
@@ -10541,6 +11093,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(71),
             tps: 1.0,
             max_inflight: 4,
@@ -10594,6 +11148,8 @@ mod tests {
             progress_interval: Duration::from_secs(10),
             progress_timeout: Duration::from_secs(600),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(47),
             tps: 5.0,
             max_inflight: 8,
@@ -10674,6 +11230,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(13),
             tps: 0.5,
             max_inflight: 2,
@@ -10720,6 +11278,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(23),
             tps: 1.0,
             max_inflight: 4,

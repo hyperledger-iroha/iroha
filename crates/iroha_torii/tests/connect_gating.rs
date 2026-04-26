@@ -105,7 +105,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             trust_penalty_bad_gossip: iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             soranet_handshake: A::SoranetHandshake {
                 descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
                 client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),

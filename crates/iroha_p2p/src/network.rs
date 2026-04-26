@@ -250,6 +250,19 @@ fn runtime_from_handshake(
     Ok(Arc::new(config))
 }
 
+fn debug_packet_loss_should_drop(percent: u8, counter: &mut u64) -> bool {
+    debug_assert!(percent <= 100);
+    if percent == 0 {
+        return false;
+    }
+    let current = *counter;
+    *counter = counter.wrapping_add(1);
+    if percent >= 100 {
+        return true;
+    }
+    current.wrapping_mul(37).wrapping_add(17) % 100 < u64::from(percent)
+}
+
 fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> RelayRole {
     match mode {
         iroha_config::parameters::actual::RelayMode::Hub => RelayRole::Hub,
@@ -1943,6 +1956,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             deferred_send_max_per_peer,
             peer_gossip_period,
             trust_gossip,
+            debug_packet_loss_inbound_percent,
+            debug_packet_loss_outbound_percent,
             quic_enabled,
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
@@ -2372,6 +2387,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             relay_ttl,
             trust_gossip_config,
             trust_gossip,
+            debug_packet_loss_inbound_percent,
+            debug_packet_loss_outbound_percent,
+            debug_packet_loss_inbound_counter: 0,
+            debug_packet_loss_outbound_counter: 0,
             self_id,
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
@@ -3094,6 +3113,8 @@ mod accept_stream_tests {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
@@ -3757,6 +3778,10 @@ mod accept_stream_tests {
             relay_ttl: DEFAULT_RELAY_TTL,
             trust_gossip_config: true,
             trust_gossip: true,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+            debug_packet_loss_inbound_counter: 0,
+            debug_packet_loss_outbound_counter: 0,
             self_id: PeerId::from(key_pair.public_key().clone()),
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
@@ -4104,6 +4129,10 @@ mod accept_stream_tests {
             relay_ttl: DEFAULT_RELAY_TTL,
             trust_gossip_config: true,
             trust_gossip: true,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+            debug_packet_loss_inbound_counter: 0,
+            debug_packet_loss_outbound_counter: 0,
             self_id: PeerId::from(key_pair.public_key().clone()),
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
@@ -4355,6 +4384,10 @@ mod accept_stream_tests {
                 crypto_caps: None,
                 peer_capabilities: HashMap::new(),
                 post_queue_cap: 4,
+                debug_packet_loss_outbound_percent: 0,
+                debug_packet_loss_outbound_counter: 0,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_inbound_counter: 0,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
                 dns_last_refresh: HashMap::new(),
@@ -4580,6 +4613,10 @@ mod accept_stream_tests {
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
+            debug_packet_loss_outbound_percent: 0,
+            debug_packet_loss_outbound_counter: 0,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_inbound_counter: 0,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             dns_last_refresh: HashMap::new(),
@@ -5279,6 +5316,14 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     trust_gossip_config: bool,
     /// Whether this node advertises trust-gossip support.
     trust_gossip: bool,
+    /// Debug-only inbound application-frame loss percentage.
+    debug_packet_loss_inbound_percent: u8,
+    /// Debug-only outbound application-frame loss percentage.
+    debug_packet_loss_outbound_percent: u8,
+    /// Deterministic inbound packet-loss counter.
+    debug_packet_loss_inbound_counter: u64,
+    /// Deterministic outbound packet-loss counter.
+    debug_packet_loss_outbound_counter: u64,
     /// Local peer identifier (derived from key pair).
     self_id: PeerId,
     /// Known peer addresses keyed by peer id.
@@ -6463,6 +6508,18 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             Self::record_trust_gossip_skip(peer_id, TrustDirection::Outbound, reason);
             return false;
         }
+        if debug_packet_loss_should_drop(
+            self.debug_packet_loss_outbound_percent,
+            &mut self.debug_packet_loss_outbound_counter,
+        ) {
+            iroha_logger::debug!(
+                peer=%peer_id,
+                topic=?topic,
+                percent=self.debug_packet_loss_outbound_percent,
+                "debug packet-loss dropped outbound P2P frame"
+            );
+            return true;
+        }
         let (conn_id, p2p_addr) = (ref_peer.conn_id, ref_peer.p2p_addr.clone());
         let retry_frame = frame.clone();
         let outcome = match ref_peer.handle.post(frame) {
@@ -7126,6 +7183,18 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
         self.last_active
             .insert(peer_id.clone(), tokio::time::Instant::now());
+        if debug_packet_loss_should_drop(
+            self.debug_packet_loss_inbound_percent,
+            &mut self.debug_packet_loss_inbound_counter,
+        ) {
+            iroha_logger::debug!(
+                peer=%peer_id,
+                topic=?topic,
+                percent=self.debug_packet_loss_inbound_percent,
+                "debug packet-loss dropped inbound P2P frame"
+            );
+            return;
+        }
 
         let incoming_peer = msg.peer;
         let RelayMessage {
@@ -7965,6 +8034,10 @@ mod tests {
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
+            debug_packet_loss_outbound_percent: 0,
+            debug_packet_loss_outbound_counter: 0,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_inbound_counter: 0,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             dns_last_refresh: HashMap::new(),
@@ -8057,6 +8130,24 @@ mod tests {
             let _ = (direction, reason);
             trust_gossip_skipped_capability_off_count()
         }
+    }
+
+    #[test]
+    fn debug_packet_loss_dropper_respects_configured_percent() {
+        let mut counter = 0;
+        assert!(!debug_packet_loss_should_drop(0, &mut counter));
+        assert_eq!(counter, 0, "disabled loss should not advance the counter");
+
+        let mut counter = 0;
+        let dropped = (0..100)
+            .filter(|_| debug_packet_loss_should_drop(75, &mut counter))
+            .count();
+        assert_eq!(dropped, 75);
+        assert_eq!(counter, 100);
+
+        let mut counter = 0;
+        assert!((0..8).all(|_| debug_packet_loss_should_drop(100, &mut counter)));
+        assert_eq!(counter, 8);
     }
 
     #[test]

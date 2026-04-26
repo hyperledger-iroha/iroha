@@ -1667,6 +1667,10 @@ pub struct Network {
     pub trust_penalty_unknown_peer: i32,
     /// Minimum score before trust gossip is ignored.
     pub trust_min_score: i32,
+    /// Debug-only inbound application-frame loss percentage.
+    pub debug_packet_loss_inbound_percent: u8,
+    /// Debug-only outbound application-frame loss percentage.
+    pub debug_packet_loss_outbound_percent: u8,
     /// Optional DNS hostname refresh interval (None disables).
     pub dns_refresh_interval: Option<Duration>,
     /// Optional TTL-based refresh for hostname-based peers.

@@ -2443,6 +2443,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         deferred_send_ttl: Duration::from_millis(
             iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
         ),
@@ -19471,6 +19473,7 @@ async fn commit_pipeline_defers_valid_pending_without_proposal_evidence() {
 #[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_allows_tip_pending_with_cached_qc_without_proposal_evidence() {
     let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::worker_queue_test_guard();
     let actor = &mut harness.actor;
 
     let block = sample_block(1, 0, None);
@@ -47597,6 +47600,8 @@ async fn stale_pending_block_requeues_transactions() {
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         deferred_send_ttl: Duration::from_millis(
             iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
         ),
@@ -119962,6 +119967,8 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         deferred_send_ttl: Duration::from_millis(
             iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
         ),

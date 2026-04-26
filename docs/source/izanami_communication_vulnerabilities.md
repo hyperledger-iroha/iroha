@@ -11,17 +11,18 @@ Vulnerabilities" (arXiv:2603.02661v1, DOI 10.48550/arXiv.2603.02661).
 The paper compares Algorand, Aptos, Avalanche, Redbelly, and Solana under a
 common 20-node, 800-second, 200 TPS setup. Timed fault experiments inject the
 fault from 133s to 266s. Izanami uses the same labels so Iroha results can be
-reported next to the paper baseline.
+reported next to the paper baseline. In `--mode paper`, the matrix runner passes
+`--fault-window-start 133s --fault-window-end 266s` to every faulted scenario.
 
 ## Scenario Catalog
 
 | Scenario | Paper attack | Izanami coverage |
 | --- | --- | --- |
 | `targeted-load` | One client sends valid transfer traffic at 200 TPS to a single blockchain node. | Native: one Izanami submitter pins submissions to one preferred Torii endpoint unless failover is needed. |
-| `transient-failure` | A small node fraction crashes at 133s and recovers at 266s. | Native crash/restart shape; the matrix script uses Izanami crash faults and records recovery/loss metrics. |
-| `packet-loss` | 25-75% packet loss is introduced between a fault-threshold-sized group and the rest of the network. | Approximation: Izanami currently combines gossip delay and trusted-peer isolation. TODO: add an OS `netem` or in-process P2P packet-drop injector for exact loss percentages. |
+| `transient-failure` | A small node fraction crashes at 133s and recovers at 266s. | Native crash/restart shape during the paper's timed fault window; the matrix script records recovery/loss metrics. |
+| `packet-loss` | 25-75% packet loss is introduced between a fault-threshold-sized group and the rest of the network. | Native Izanami fault: the matrix applies 75% in-process P2P application-frame loss during the paper's fault window without changing the validator roster. |
 | `stopping` | A large node fraction crashes and then rejoins; post-recovery liveness is the key signal. | Native crash/restart shape with a large faulty-peer count. |
-| `leader-isolation` | The current consensus leader gets 75% inbound and outbound packet loss during its leader window. | Approximation: Izanami isolates one selected peer. TODO: wire Sumeragi proposer detection into the fault scheduler before treating this as an exact reproduction. |
+| `leader-isolation` | The current consensus leader gets 75% inbound and outbound packet loss during its leader window. | Native Izanami fault: Izanami samples Sumeragi leader telemetry and applies 75% in-process P2P application-frame loss to the current leader during the paper's fault window. |
 
 ## Paper Baseline
 

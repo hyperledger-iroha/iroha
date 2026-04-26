@@ -45,6 +45,10 @@ struct StoredArgs {
     progress_timeout_ms: u64,
     #[norito(default)]
     latency_p95_threshold_ms: Option<u64>,
+    #[norito(default)]
+    fault_window_start_ms: Option<u64>,
+    #[norito(default)]
+    fault_window_end_ms: Option<u64>,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -98,6 +102,9 @@ impl StoredArgs {
         let progress_timeout_ms = duration_to_ms(args.progress_timeout, "progress timeout")?;
         let latency_p95_threshold_ms =
             maybe_duration_to_ms(args.latency_p95_threshold, "latency p95 threshold")?;
+        let fault_window_start_ms =
+            maybe_duration_to_ms(args.fault_window_start, "fault window start")?;
+        let fault_window_end_ms = maybe_duration_to_ms(args.fault_window_end, "fault window end")?;
         let max_inflight = u32::try_from(args.max_inflight).map_err(|_| {
             eyre!(
                 "max_inflight {} exceeds persistence limits",
@@ -129,6 +136,8 @@ impl StoredArgs {
             progress_interval_ms,
             progress_timeout_ms,
             latency_p95_threshold_ms,
+            fault_window_start_ms,
+            fault_window_end_ms,
         })
     }
 
@@ -146,6 +155,8 @@ impl StoredArgs {
             progress_interval: Duration::from_millis(self.progress_interval_ms),
             progress_timeout: Duration::from_millis(self.progress_timeout_ms),
             latency_p95_threshold: self.latency_p95_threshold_ms.map(Duration::from_millis),
+            fault_window_start: self.fault_window_start_ms.map(Duration::from_millis),
+            fault_window_end: self.fault_window_end_ms.map(Duration::from_millis),
             seed: self.seed,
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
@@ -225,6 +236,25 @@ pub fn store_args(args: &IzanamiArgs) -> Result<()> {
 
 pub fn store_config(config: &ChaosConfig) -> Result<()> {
     store_args(&IzanamiArgs::from_config(config))
+}
+
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    #[test]
+    fn stored_args_roundtrip_preserves_fault_window_fields() -> Result<()> {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.fault_window_start = Some(Duration::from_secs(133));
+        args.fault_window_end = Some(Duration::from_secs(266));
+
+        let loaded = StoredArgs::from_args(&args)?.into_args()?;
+
+        assert_eq!(loaded.fault_window_start, args.fault_window_start);
+        assert_eq!(loaded.fault_window_end, args.fault_window_end);
+        Ok(())
+    }
 }
 
 #[cfg(all(unix, target_os = "linux"))]
@@ -372,6 +402,8 @@ mod tests {
             progress_interval: Duration::from_secs(7),
             progress_timeout: Duration::from_secs(55),
             latency_p95_threshold: Some(Duration::from_millis(900)),
+            fault_window_start: Some(Duration::from_secs(13)),
+            fault_window_end: Some(Duration::from_secs(26)),
             seed: Some(123),
             tps: 12.5,
             max_inflight: 64,
@@ -387,6 +419,7 @@ mod tests {
                 spam_invalid_transactions: true,
                 network_latency: false,
                 network_partition: true,
+                network_packet_loss: true,
                 cpu_stress: false,
                 disk_saturation: true,
             },
@@ -405,6 +438,8 @@ mod tests {
         assert_eq!(loaded.progress_interval, args.progress_interval);
         assert_eq!(loaded.progress_timeout, args.progress_timeout);
         assert_eq!(loaded.latency_p95_threshold, args.latency_p95_threshold);
+        assert_eq!(loaded.fault_window_start, args.fault_window_start);
+        assert_eq!(loaded.fault_window_end, args.fault_window_end);
         assert_eq!(loaded.seed, args.seed);
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);

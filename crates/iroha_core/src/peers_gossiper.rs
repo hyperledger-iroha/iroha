@@ -1249,6 +1249,8 @@ mod tests {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
             deferred_send_ttl: Duration::from_millis(
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
             ),
