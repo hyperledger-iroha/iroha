@@ -1,6 +1,15 @@
 # Status
 
-Last updated: 2026-04-25
+Last updated: 2026-04-26
+
+## 2026-04-26 Offline V1 settlement execute test alignment
+
+- Updated the `iroha_core` execute-level offline transfer tests to match the current public Offline V1 settlement gate: `SubmitOfflineToOnlineTransfer::execute` now rejects before legacy rejected-row persistence or duplicate-bundle checks run, while the direct `submit_transfer` duplicate-bundle coverage remains intact.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core --lib execute_submit_transfer_rejects_removed_v1_settlement -- --nocapture`
+  - `cargo test -p iroha_core --lib submit_transfer_rejects_duplicate_bundle_without_mutating_allowance -- --nocapture`
 
 ## 2026-04-25 Taira devex CLI and onboarding diagnostics
 
