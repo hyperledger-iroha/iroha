@@ -28,10 +28,6 @@ import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamListener;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamOptions;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
-import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectAttestation;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
@@ -205,63 +201,6 @@ public final class DefaultOkHttpWiringTests {
       final String body = recorded.getBody().readString(StandardCharsets.UTF_8);
       assertTrue(body.contains("\"manifest_id_hex\":\"" + "deadbeef".repeat(8) + "\""));
       assertEquals("application/json", recorded.getHeader("Content-Type"));
-    }
-  }
-
-  @Test
-  public void safetyDetectCreateDefaultUsesOkHttp() throws Exception {
-    try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(
-          new MockResponse()
-              .setResponseCode(200)
-              .setHeader("Content-Type", "application/json")
-              .setBody("{\"access_token\":\"abc123\",\"expires_in\":3600}"));
-      server.enqueue(
-          new MockResponse()
-              .setResponseCode(200)
-              .setHeader("Content-Type", "application/json")
-              .setBody("{\"token\":\"attest-token\"}"));
-      server.start();
-
-      final SafetyDetectOptions options =
-          SafetyDetectOptions.builder()
-              .setClientId("client-id")
-              .setClientSecret("secret")
-              .setPackageName("org.test.app")
-              .setSigningDigestSha256("aa")
-              .setOauthEndpoint(new URI(server.url("/oauth").toString()))
-              .setAttestationEndpoint(new URI(server.url("/attest").toString()))
-              .setRequestTimeout(Duration.ofSeconds(2))
-              .build();
-
-      final HttpSafetyDetectService service =
-          HttpSafetyDetectService.createDefault(options);
-
-      final SafetyDetectRequest request =
-          SafetyDetectRequest.builder()
-              .setCertificateIdHex("ff")
-              .setAppId("app-1")
-              .setNonceHex("00aa")
-              .setPackageName("org.test.app")
-              .setSigningDigestSha256("aa")
-              .build();
-
-      final SafetyDetectAttestation attestation =
-          service.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals("attest-token", attestation.token());
-      assertTrue(extractField(service, "executor") instanceof OkHttpTransportExecutor);
-
-      final RecordedRequest oauth = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull("oauth request missing", oauth);
-      assertEquals("/oauth", oauth.getPath());
-      final String oauthBody = oauth.getBody().readString(StandardCharsets.UTF_8);
-      assertTrue(oauthBody.contains("client_id=client-id"));
-      assertTrue(oauthBody.contains("client_secret=secret"));
-
-      final RecordedRequest attest = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull("attestation request missing", attest);
-      assertEquals("/attest", attest.getPath());
-      assertEquals("Bearer abc123", attest.getHeader("Authorization"));
     }
   }
 

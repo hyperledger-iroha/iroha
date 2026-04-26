@@ -351,64 +351,6 @@ function createPipelineRecoveryPayload(overrides = {}) {
   };
 }
 
-function createOfflineTransferPayload(overrides = {}) {
-  const controller = fixtureAccountForms("alice");
-  const receiver = fixtureAccountForms("bob");
-  const deposit = fixtureAccountForms("vault");
-  const baseItem = {
-    bundle_id_hex: "ff00",
-    controller_id: controller.i105,
-    controller_display: controller.i105,
-    receiver_id: receiver.i105,
-    receiver_display: receiver.i105,
-    deposit_account_id: deposit.i105,
-    deposit_account_display: deposit.i105,
-    asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-    receipt_count: 1,
-    total_amount: "1",
-    claimed_delta: "1",
-    status: "Settled",
-    recorded_at_ms: 1_000,
-    recorded_at_height: 5,
-    archived_at_height: null,
-    certificate_id_hex: "aa".repeat(32),
-    certificate_expires_at_ms: 2_000,
-    policy_expires_at_ms: 3_000,
-    refresh_at_ms: 4_000,
-    verdict_id_hex: "bb".repeat(32),
-    attestation_nonce_hex: "cc".repeat(32),
-    platform_policy: "provisioned",
-    platform_token_snapshot: {
-      policy: "provisioned",
-      attestation_jws_b64: "eyJhbGciOiJFZERTQSJ9",
-    },
-    transfer: {
-      receipts: [],
-      balance_proof: { claimed_delta: "1" },
-      metadata: {},
-    },
-    status_transitions: [],
-  };
-  const items = overrides.items ?? [baseItem];
-  return {
-    items,
-    total: overrides.total ?? items.length,
-  };
-}
-
-function createOfflineRevocationItem(overrides = {}) {
-  return {
-    verdict_id_hex: "bb".repeat(32),
-    issuer_id: SAMPLE_ACCOUNT_ID,
-    issuer_display: SAMPLE_ACCOUNT_FORMS.i105,
-    revoked_at_ms: 10,
-    reason: "certificate_revoked",
-    note: null,
-    record: {},
-    ...overrides,
-  };
-}
-
 test("listAccountAssets canonicalizes encoded account ids", async () => {
   const forms = sampleAccountForms();
   let capturedUrl;

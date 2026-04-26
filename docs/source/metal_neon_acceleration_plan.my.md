@@ -182,7 +182,7 @@ Rust IVM အဖွဲ့၊ Swift တံတားပိုင်ရှင်မ�
   တယ်လီမက်ထရီဖိဒ်အသစ်များကို ပြန်လည်တီထွင်ခြင်းမရှိဘဲ သတ္တု-နှင့်-CPU မြစ်ဝကျွန်းပေါ်ဒေသများ။
 
 ## WP2-B Poseidon Manifest Loader & Self-Test Parity- ယခု `fastpq_prover::poseidon_manifest()` ကို မြှုပ်နှံပြီး ခွဲခြမ်းစိတ်ဖြာလိုက်ပါ။
-  `artifacts/offline_poseidon/constants.ron`၊ ၎င်း၏ SHA-256 ကိုတွက်ချက်သည်။
+  `artifacts/poseidon/constants.ron`၊ ၎င်း၏ SHA-256 ကိုတွက်ချက်သည်။
   (`poseidon_manifest_sha256()`)၊ CPU နှင့် လျှပ်တစ်ပြက်ရိုက်ချက်အား အတည်ပြုသည်။
   GPU အလုပ်တစ်ခုခုမလုပ်ဆောင်မီ poseidon ဇယားများ။ `build_metal_context()` သည် မှတ်တမ်းဖြစ်သည်။
   တယ်လီမက်ထရီ တင်ပို့သူများ ထုတ်ဝေနိုင်စေရန် သွေးပူချိန်အတွင်း ချေဖျက်ပါ။

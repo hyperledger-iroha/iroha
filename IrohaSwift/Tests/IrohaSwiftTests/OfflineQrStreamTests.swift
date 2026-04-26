@@ -27,7 +27,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let payload = makePayload(length: 900)
         let frames = try OfflineQrStreamEncoder.encodeFrames(
             payload: payload,
-            payloadKind: .offlineSpendReceipt,
+            payloadKind: .offlinePaymentTokenV2,
             options: OfflineQrStreamOptions(chunkSize: 180, parityGroup: 3)
         )
         let header = frames.first(where: { $0.kind == .header })
@@ -87,7 +87,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let payload = makePayload(length: 6 * 1024)
         let frames = try OfflineQrStreamEncoder.encodeFrames(
             payload: payload,
-            payloadKind: .offlineSpendReceipt,
+            payloadKind: .offlinePaymentTokenV2,
             options: OfflineQrStreamOptions(chunkSize: 336, parityGroup: 4)
         )
         let header = try XCTUnwrap(frames.first(where: { $0.kind == .header }))
@@ -128,7 +128,7 @@ final class OfflineQrStreamTests: XCTestCase {
         let options = OfflineQrStreamOptions(chunkSize: 100, parityGroup: 0)
         let frameBytesList = try OfflineQrStreamEncoder.encodeFrameBytes(
             payload: payload,
-            payloadKind: .offlineSpendReceipt,
+            payloadKind: .offlinePaymentTokenV2,
             options: options
         )
         XCTAssertFalse(frameBytesList.isEmpty, "Should produce at least 1 frame")

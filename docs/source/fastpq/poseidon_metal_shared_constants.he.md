@@ -25,9 +25,9 @@ hashing דטרמיניסטי. מסמך זה מתעד את תמונת המצב ה
 
 | נתיב | מטרה | SHA-256 |
 |------|--------|--------|
-| `artifacts/offline_poseidon/constants.ron` | תמונת מצב קנונית שנוצרה מ-`fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; מקור האמת לבניית GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | משקף את תמונת המצב הקנונית כך שבדיקות יחידת Swift ורתמת העשן XCFramework טוענים את אותם הקבועים שגרעיני המתכת מצפים להם. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | אביזרי אנדרואיד/קוטלין חולקים את המניפסט הזהה עבור בדיקות זוגיות והסדרה. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | תמונת מצב קנונית שנוצרה מ-`fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; מקור האמת לבניית GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | משקף את תמונת המצב הקנונית כך שבדיקות יחידת Swift ורתמת העשן XCFramework טוענים את אותם הקבועים שגרעיני המתכת מצפים להם. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | אביזרי אנדרואיד/קוטלין חולקים את המניפסט הזהה עבור בדיקות זוגיות והסדרה. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 כל צרכן חייב לאמת את ה-hash לפני חיבור הקבועים ל-GPU
 צינור. כאשר המניפסט משתנה (סט פרמטרים או פרופיל חדש), ה-SHA ו
@@ -39,7 +39,7 @@ hashing דטרמיניסטי. מסמך זה מתעד את תמונת המצב ה
 עוזר. הפקודה כותבת גם את הקובץ הקנוני וגם את מראות ה-SDK:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 השתמש ב-`--constants <path>`/`--vectors <path>` כדי לעקוף את היעדים או

@@ -735,7 +735,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             sorafs_por: Default::default(),
             onboarding: None,
-            offline_issuer: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {

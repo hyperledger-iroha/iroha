@@ -29,7 +29,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         0,
         QrPayloadKind::OfflineReceiveChallengeV2,
     )?;
-    let parity = build_fixture(&parity_payload, 180, 3, QrPayloadKind::OfflinePaymentTokenV2)?;
+    let parity = build_fixture(
+        &parity_payload,
+        180,
+        3,
+        QrPayloadKind::OfflinePaymentTokenV2,
+    )?;
 
     write_fixture(BASIC_FIXTURE_PATH, &basic, check_only)?;
     write_fixture(PARITY_FIXTURE_PATH, &parity, check_only)?;

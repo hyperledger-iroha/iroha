@@ -81,7 +81,7 @@ print(assets, txs, holders)
 
 Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
 Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
-legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
+non-V2 offline HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient

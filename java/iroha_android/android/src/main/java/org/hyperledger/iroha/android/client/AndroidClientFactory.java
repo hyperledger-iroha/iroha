@@ -6,16 +6,14 @@ import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnector;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClient;
-import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
 
 /**
  * Convenience factory that wires Android clients to a shared OkHttp transport stack.
  *
  * <p>The factory centralises construction of HTTP/WebSocket executors so callers can reuse a single
- * {@link OkHttpClient} across REST, Norito RPC, SSE, WebSocket, Safety Detect, and SoraFS gateway
- * flows while keeping telemetry observers attached via {@link ClientConfig}.
+ * {@link OkHttpClient} across REST, Norito RPC, SSE, WebSocket, and SoraFS gateway flows while
+ * keeping telemetry observers attached via {@link ClientConfig}.
  */
 public final class AndroidClientFactory {
 
@@ -87,11 +85,6 @@ public final class AndroidClientFactory {
         .observers(resolved.observers())
         .setWebSocketConnector(webSocketConnector)
         .build();
-  }
-
-  /** Builds a Safety Detect HTTP client backed by the shared OkHttp executor. */
-  public HttpSafetyDetectService createSafetyDetectService(final SafetyDetectOptions options) {
-    return new HttpSafetyDetectService(httpExecutor, Objects.requireNonNull(options, "options"));
   }
 
   /** Builds a SoraFS gateway client that reuses the shared OkHttp executor and {@link ClientConfig}. */

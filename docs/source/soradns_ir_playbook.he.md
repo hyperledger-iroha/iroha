@@ -40,7 +40,7 @@ translation_last_reviewed: 2026-01-21
 ## הכלה
 
 1. **הקפאת ה‑namehash המושפע** – הגישו את פעולת הרשם המתאימה
-   (`RegisterOfflineVerdictRevocation` או הקפאת GAR) לפי
+   (GAR freeze) לפי
    `docs/source/sns/governance_playbook.md`.
 2. **פרסום מחדש של Signed Tree Heads** – העלו את ארטיפקט ה‑JSON שנוצר
    על ידי ה‑CLI של הדוח ל‑bucket ראיות הממשל ושתפו אותו עם מאמתים כדי שיוכלו

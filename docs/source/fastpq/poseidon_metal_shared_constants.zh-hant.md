@@ -25,9 +25,9 @@ Metal 內核、CUDA 內核、Rust 證明器和每個 SDK 固定裝置必須共�
 
 |路徑|目的| SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` |從 `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` 生成的規範快照； GPU 構建的真實來源。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` |鏡像規範快照，以便 Swift 單元測試和 XCFramework 煙霧線束加載 Metal 內核期望的相同常量。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin 設備共享相同的奇偶校驗和序列化測試清單。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` |從 `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` 生成的規範快照； GPU 構建的真實來源。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` |鏡像規範快照，以便 Swift 單元測試和 XCFramework 煙霧線束加載 Metal 內核期望的相同常量。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin 設備共享相同的奇偶校驗和序列化測試清單。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 每個消費者在將常量連接到 GPU 之前都必須驗證哈希值
 管道。當清單發生更改（新的參數集或配置文件）時，SHA 和
@@ -39,7 +39,7 @@ Metal 內核、CUDA 內核、Rust 證明器和每個 SDK 固定裝置必須共�
 幫手。該命令寫入規範文件和 SDK 鏡像：
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 使用 `--constants <path>`/`--vectors <path>` 覆蓋目標或

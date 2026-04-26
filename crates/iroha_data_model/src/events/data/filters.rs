@@ -63,7 +63,7 @@ mod model {
         /// Matches native asset escrow lifecycle events
         Escrow(EscrowEventFilter),
         /// Matches offline settlement lifecycle events
-        Offline(OfflineTransferEventFilter),
+        Offline(OfflineNoteEventFilter),
         /// Matches oracle feed lifecycle events
         Oracle(OracleEventFilter),
         /// Matches viral incentive lifecycle events
@@ -674,16 +674,16 @@ impl Default for OracleEventFilter {
     }
 }
 
-/// An event filter for [`super::offline::OfflineTransferEvent`] values.
+/// An event filter for [`super::offline::OfflineNoteEvent`] values.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-pub struct OfflineTransferEventFilter {
+pub struct OfflineNoteEventFilter {
     /// Optional note commitment matcher.
     pub(super) note_matcher: Option<iroha_crypto::Hash>,
     /// Optional account matcher.
     pub(super) account_matcher: Option<crate::account::AccountId>,
     /// Matched event-set.
-    pub(super) event_set: super::offline::OfflineTransferEventSet,
+    pub(super) event_set: super::offline::OfflineNoteEventSet,
 }
 
 /// Filter for oracle feed aggregation events.
@@ -721,14 +721,14 @@ impl OracleEventFilter {
     }
 }
 
-impl OfflineTransferEventFilter {
-    /// Creates a new [`OfflineTransferEventFilter`] accepting all events.
+impl OfflineNoteEventFilter {
+    /// Creates a new [`OfflineNoteEventFilter`] accepting all events.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             note_matcher: None,
             account_matcher: None,
-            event_set: super::offline::OfflineTransferEventSet::all(),
+            event_set: super::offline::OfflineNoteEventSet::all(),
         }
     }
 
@@ -748,13 +748,13 @@ impl OfflineTransferEventFilter {
 
     /// Restricts matches to the provided event-set.
     #[must_use]
-    pub const fn for_events(mut self, event_set: super::offline::OfflineTransferEventSet) -> Self {
+    pub const fn for_events(mut self, event_set: super::offline::OfflineNoteEventSet) -> Self {
         self.event_set = event_set;
         self
     }
 }
 
-impl Default for OfflineTransferEventFilter {
+impl Default for OfflineNoteEventFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -1081,8 +1081,8 @@ impl super::EventFilter for EscrowEventFilter {
 }
 
 #[cfg(feature = "transparent_api")]
-impl super::EventFilter for OfflineTransferEventFilter {
-    type Event = super::offline::OfflineTransferEvent;
+impl super::EventFilter for OfflineNoteEventFilter {
+    type Event = super::offline::OfflineNoteEvent;
 
     fn matches(&self, event: &Self::Event) -> bool {
         if !self.event_set.matches(event) {
@@ -1091,13 +1091,11 @@ impl super::EventFilter for OfflineTransferEventFilter {
 
         if let Some(expected_note) = &self.note_matcher {
             let actual_note = match event {
-                super::offline::OfflineTransferEvent::NoteIssued(payload) => {
-                    &payload.note_commitment
-                }
-                super::offline::OfflineTransferEvent::NoteRedeemed(payload) => {
+                super::offline::OfflineNoteEvent::NoteIssued(payload) => &payload.note_commitment,
+                super::offline::OfflineNoteEvent::NoteRedeemed(payload) => {
                     &payload.source_note_commitment
                 }
-                super::offline::OfflineTransferEvent::AuditRecorded(_) => return false,
+                super::offline::OfflineNoteEvent::AuditRecorded(_) => return false,
             };
             if actual_note != expected_note {
                 return false;
@@ -1106,17 +1104,17 @@ impl super::EventFilter for OfflineTransferEventFilter {
 
         if let Some(expected_account) = &self.account_matcher {
             match event {
-                super::offline::OfflineTransferEvent::NoteIssued(payload) => {
+                super::offline::OfflineNoteEvent::NoteIssued(payload) => {
                     if &payload.account != expected_account {
                         return false;
                     }
                 }
-                super::offline::OfflineTransferEvent::NoteRedeemed(payload) => {
+                super::offline::OfflineNoteEvent::NoteRedeemed(payload) => {
                     if &payload.recipient != expected_account {
                         return false;
                     }
                 }
-                super::offline::OfflineTransferEvent::AuditRecorded(payload) => {
+                super::offline::OfflineNoteEvent::AuditRecorded(payload) => {
                     if &payload.account != expected_account {
                         return false;
                     }
@@ -1763,7 +1761,7 @@ pub mod prelude {
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OfflineTransferEventFilter,
+        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OfflineNoteEventFilter,
         OracleEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter,
         SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
         TriggerEventFilter, VerifyingKeyEventFilter,

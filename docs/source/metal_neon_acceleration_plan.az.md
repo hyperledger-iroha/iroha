@@ -182,7 +182,7 @@ həyata keçirilməsi və sınaqdan keçirilməsi.
   Yeni telemetriya lentlərini yenidən kəşf etmədən metal-prosessor deltaları.
 
 ## WP2-B Poseidon Manifest Yükləyicisi və Özünü Test Pariteti- `fastpq_prover::poseidon_manifest()` indi yerləşdirir və təhlil edir
-  `artifacts/offline_poseidon/constants.ron`, SHA-256-nı hesablayır
+  `artifacts/poseidon/constants.ron`, SHA-256-nı hesablayır
   (`poseidon_manifest_sha256()`) və snapshotı CPU ilə təsdiqləyir
   hər hansı bir GPU işi başlamazdan əvvəl poseidon cədvəlləri. `build_metal_context()` qeyd edir
   isinmə zamanı həzm edin ki, telemetriya ixracatçıları dərc edə bilsinlər

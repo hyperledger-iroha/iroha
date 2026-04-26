@@ -20,7 +20,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
+        offline::{AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         zk::{Shield, Unshield, ZkTransfer},
     },
@@ -671,8 +671,9 @@ pub(crate) enum ExplorerInstructionKind {
     Shield,
     ZkTransfer,
     Unshield,
-    RegisterOfflineAllowance,
-    SubmitOfflineToOnlineTransfer,
+    IssueOfflineNoteV2,
+    RedeemOfflineNoteV2,
+    AuditOfflineNoteV2,
     Custom,
 }
 
@@ -695,8 +696,9 @@ impl ExplorerInstructionKind {
             Self::Shield => "Shield",
             Self::ZkTransfer => "ZkTransfer",
             Self::Unshield => "Unshield",
-            Self::RegisterOfflineAllowance => "RegisterOfflineAllowance",
-            Self::SubmitOfflineToOnlineTransfer => "SubmitOfflineToOnlineTransfer",
+            Self::IssueOfflineNoteV2 => "IssueOfflineNoteV2",
+            Self::RedeemOfflineNoteV2 => "RedeemOfflineNoteV2",
+            Self::AuditOfflineNoteV2 => "AuditOfflineNoteV2",
             Self::Custom => "Custom",
         }
     }
@@ -723,12 +725,9 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "shield" => Ok(Self::Shield),
             "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
             "unshield" => Ok(Self::Unshield),
-            "registerofflineallowance" | "register_offline_allowance" => {
-                Ok(Self::RegisterOfflineAllowance)
-            }
-            "submitofflinetoonlinetransfer" | "submit_offline_to_online_transfer" => {
-                Ok(Self::SubmitOfflineToOnlineTransfer)
-            }
+            "issueofflinenotev2" | "issue_offline_note_v2" => Ok(Self::IssueOfflineNoteV2),
+            "redeemofflinenotev2" | "redeem_offline_note_v2" => Ok(Self::RedeemOfflineNoteV2),
+            "auditofflinenotev2" | "audit_offline_note_v2" => Ok(Self::AuditOfflineNoteV2),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -841,13 +840,12 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::ZkTransfer
             } else if any.downcast_ref::<Unshield>().is_some() {
                 ExplorerInstructionKind::Unshield
-            } else if any.downcast_ref::<RegisterOfflineAllowance>().is_some() {
-                ExplorerInstructionKind::RegisterOfflineAllowance
-            } else if any
-                .downcast_ref::<SubmitOfflineToOnlineTransfer>()
-                .is_some()
-            {
-                ExplorerInstructionKind::SubmitOfflineToOnlineTransfer
+            } else if any.downcast_ref::<IssueOfflineNoteV2>().is_some() {
+                ExplorerInstructionKind::IssueOfflineNoteV2
+            } else if any.downcast_ref::<RedeemOfflineNoteV2>().is_some() {
+                ExplorerInstructionKind::RedeemOfflineNoteV2
+            } else if any.downcast_ref::<AuditOfflineNoteV2>().is_some() {
+                ExplorerInstructionKind::AuditOfflineNoteV2
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -948,12 +946,9 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::Shield => zk_payload(instruction, "Shield"),
         ExplorerInstructionKind::ZkTransfer => zk_payload(instruction, "ZkTransfer"),
         ExplorerInstructionKind::Unshield => zk_payload(instruction, "Unshield"),
-        ExplorerInstructionKind::RegisterOfflineAllowance => {
-            register_offline_allowance_payload(instruction)
-        }
-        ExplorerInstructionKind::SubmitOfflineToOnlineTransfer => {
-            submit_offline_to_online_transfer_payload(instruction)
-        }
+        ExplorerInstructionKind::IssueOfflineNoteV2 => issue_offline_note_v2_payload(instruction),
+        ExplorerInstructionKind::RedeemOfflineNoteV2 => redeem_offline_note_v2_payload(instruction),
+        ExplorerInstructionKind::AuditOfflineNoteV2 => audit_offline_note_v2_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1133,77 +1128,84 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     Some(instruction_variant_value("Log", value))
 }
 
-fn register_offline_allowance_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction
-        .as_any()
-        .downcast_ref::<RegisterOfflineAllowance>()?;
-    let cert = &isi.certificate;
-    let allowance = &cert.allowance;
+fn issue_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<IssueOfflineNoteV2>()?;
+    let issue = &isi.issue;
     let mut value = Map::new();
     value.insert(
-        "controller".to_string(),
-        Value::String(cert.controller.to_string()),
+        "note_commitment".to_string(),
+        Value::String(issue.note_commitment.to_string()),
     );
     value.insert(
-        "operator".to_string(),
-        Value::String(cert.operator.to_string()),
+        "account".to_string(),
+        Value::String(issue.key_certificate.account_id.to_string()),
     );
     value.insert(
         "asset".to_string(),
-        json::to_value(&allowance.asset).unwrap_or(Value::Null),
+        json::to_value(&issue.asset).unwrap_or(Value::Null),
     );
     value.insert(
         "amount".to_string(),
-        Value::String(allowance.amount.to_string()),
-    );
-    value.insert(
-        "issued_at_ms".to_string(),
-        Value::Number(cert.issued_at_ms.into()),
-    );
-    value.insert(
-        "expires_at_ms".to_string(),
-        Value::Number(cert.expires_at_ms.into()),
+        Value::String(issue.amount.to_string()),
     );
     Some(instruction_variant_value(
-        "RegisterOfflineAllowance",
+        "IssueOfflineNoteV2",
         Value::Object(value),
     ))
 }
 
-fn submit_offline_to_online_transfer_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction
-        .as_any()
-        .downcast_ref::<SubmitOfflineToOnlineTransfer>()?;
-    let transfer = &isi.transfer;
-    let proof = &transfer.balance_proof;
-    let allowance = &proof.initial_commitment;
+fn redeem_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<RedeemOfflineNoteV2>()?;
+    let redemption = &isi.redemption;
     let mut value = Map::new();
     value.insert(
-        "receiver".to_string(),
-        Value::String(transfer.receiver.to_string()),
+        "source_note_commitment".to_string(),
+        Value::String(redemption.source_note_commitment.to_string()),
     );
     value.insert(
-        "deposit_account".to_string(),
-        Value::String(transfer.deposit_account.to_string()),
+        "recipient".to_string(),
+        Value::String(redemption.recipient.to_string()),
     );
     value.insert(
         "asset".to_string(),
-        json::to_value(&allowance.asset).unwrap_or(Value::Null),
+        json::to_value(&redemption.asset).unwrap_or(Value::Null),
     );
     value.insert(
-        "claimed_delta".to_string(),
-        Value::String(proof.claimed_delta.to_string()),
+        "amount".to_string(),
+        Value::String(redemption.amount.to_string()),
     );
     value.insert(
-        "receipt_count".to_string(),
-        Value::Number((transfer.receipts.len() as u64).into()),
-    );
-    value.insert(
-        "bundle_id".to_string(),
-        Value::String(transfer.bundle_id.to_string()),
+        "input_nullifier_count".to_string(),
+        Value::Number((redemption.input_nullifiers.len() as u64).into()),
     );
     Some(instruction_variant_value(
-        "SubmitOfflineToOnlineTransfer",
+        "RedeemOfflineNoteV2",
+        Value::Object(value),
+    ))
+}
+
+fn audit_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<AuditOfflineNoteV2>()?;
+    let audit = &isi.audit;
+    let mut value = Map::new();
+    value.insert(
+        "token_id".to_string(),
+        Value::String(audit.token_id.to_string()),
+    );
+    value.insert(
+        "account".to_string(),
+        Value::String(audit.sender_key_certificate.account_id.to_string()),
+    );
+    value.insert(
+        "input_nullifier_count".to_string(),
+        Value::Number((audit.input_nullifiers.len() as u64).into()),
+    );
+    value.insert(
+        "output_commitment_count".to_string(),
+        Value::Number((audit.output_commitments.len() as u64).into()),
+    );
+    Some(instruction_variant_value(
+        "AuditOfflineNoteV2",
         Value::Object(value),
     ))
 }

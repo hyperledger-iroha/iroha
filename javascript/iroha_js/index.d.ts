@@ -1984,85 +1984,6 @@ export class ConnectQueueJournal {
   ): Promise<ConnectJournalRecord[]>;
 }
 
-export type OfflineCounterPlatform = "apple_key" | "android_series";
-
-export const OfflineCounterPlatform: {
-  readonly APPLE_KEY: "apple_key";
-  readonly ANDROID_SERIES: "android_series";
-};
-
-export class OfflineCounterJournalError extends Error {
-  constructor(message?: string, options?: { code?: string; context?: string; cause?: unknown });
-  readonly code?: string;
-  readonly context?: string;
-}
-
-export interface OfflineCounterCheckpoint {
-  certificateIdHex: string;
-  controllerId: string;
-  controllerDisplay: string | null;
-  summaryHashHex: string;
-  appleKeyCounters: Record<string, number>;
-  androidSeriesCounters: Record<string, number>;
-  recordedAtMs: number;
-}
-
-export interface OfflineCounterJournalOptions {
-  storage?: "file" | "memory";
-  storagePath?: string;
-}
-
-export interface OfflineCounterJournalUpsertOptions {
-  recordedAtMs?: number;
-  allowSummaryHashMismatch?: boolean;
-}
-
-export interface OfflineCounterJournalUpdateParams {
-  certificateIdHex: string;
-  controllerId: string;
-  controllerDisplay?: string | null;
-  platform: OfflineCounterPlatform | string;
-  scope: string;
-  counter: number | bigint;
-  recordedAtMs?: number;
-}
-
-export interface OfflineCounterJournalAdvanceParams {
-  certificateIdHex: string;
-  controllerId: string;
-  controllerDisplay?: string | null;
-  platformProof: Record<string, unknown>;
-  recordedAtMs?: number;
-}
-
-export class OfflineCounterJournal {
-  constructor(options?: OfflineCounterJournalOptions);
-  static computeSummaryHashHex(
-    appleKeyCounters: Record<string, number>,
-    androidSeriesCounters: Record<string, number>,
-  ): string;
-  static computeSummaryHash(
-    appleKeyCounters: Record<string, number>,
-    androidSeriesCounters: Record<string, number>,
-  ): Uint8Array;
-  readonly storage: "file" | "memory";
-  readonly storagePath: string | null;
-  upsert(
-    summaries:
-      | ReadonlyArray<Record<string, unknown>>
-      | { items: ReadonlyArray<Record<string, unknown>> },
-    options?: OfflineCounterJournalUpsertOptions,
-  ): Promise<OfflineCounterCheckpoint[]>;
-  updateCounter(params: OfflineCounterJournalUpdateParams): Promise<OfflineCounterCheckpoint>;
-  advanceCounterFromProof(
-    params: OfflineCounterJournalAdvanceParams,
-  ): Promise<OfflineCounterCheckpoint>;
-  checkpoint(certificateIdHex: string): Promise<OfflineCounterCheckpoint | null>;
-  snapshot(): Promise<OfflineCounterCheckpoint[]>;
-  clear(): Promise<void>;
-  refresh(): Promise<void>;
-}
-
 export function connectErrorFrom(
   error: unknown,
   options?: ConnectErrorFromOptions,
@@ -2526,10 +2447,7 @@ export function sorafsGatewayFetch(
 export const Torii: typeof import("./src/toriiClient.js");
 export const Norito: typeof import("./src/norito.js");
 export const Crypto: typeof import("./src/crypto.js");
-export const Offline: typeof import("./src/offlineEnvelope.js");
-export const OfflineCounters: typeof import("./src/offlineCounterJournal.js");
 export const OfflineQrStream: typeof import("./src/offlineQrStream.js");
-export const OfflinePetalStream: typeof import("./src/offlinePetalStream.js");
 
 export interface SoranetPuzzleParamsSnapshot {
   memoryKib: number;
@@ -8060,65 +7978,6 @@ export function resignSignedTransaction(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
-export interface OfflineEnvelope {
-  version: number;
-  signedTransaction: Buffer;
-  hashHex: string;
-  schemaName: string;
-  keyAlias: string;
-  issuedAtMs: number;
-  metadata: Record<string, string>;
-  publicKey: Buffer | null;
-  exportedKeyBundle: Buffer | null;
-}
-
-export interface SerializedOfflineEnvelope {
-  version: number;
-  schema_name: string;
-  key_alias: string;
-  issued_at_ms: number;
-  hash_hex: string;
-  metadata: Record<string, string>;
-  signed_transaction_b64: string;
-  public_key_b64: string | null;
-  exported_key_bundle_b64: string | null;
-}
-
-export function buildOfflineEnvelope(input: {
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer;
-  hashHex?: string;
-  schemaName?: string;
-  keyAlias: string;
-  issuedAtMs?: number;
-  metadata?: Record<string, string>;
-  publicKey?: ArrayBufferView | ArrayBuffer | Buffer | null;
-  exportedKeyBundle?: ArrayBufferView | ArrayBuffer | Buffer | null;
-}): OfflineEnvelope;
-
-export function serializeOfflineEnvelope(envelope: OfflineEnvelope): SerializedOfflineEnvelope;
-
-export function parseOfflineEnvelope(
-  payload: SerializedOfflineEnvelope | string | Record<string, unknown>,
-): OfflineEnvelope;
-
-export function readOfflineEnvelopeFile(path: string): Promise<OfflineEnvelope>;
-
-export function writeOfflineEnvelopeFile(
-  path: string,
-  envelope: OfflineEnvelope,
-): Promise<void>;
-
-export function replayOfflineEnvelope(
-  toriiClient: ToriiClient,
-  envelope: OfflineEnvelope,
-  options?: {
-    waitForStatus?: boolean;
-    intervalMs?: number;
-    timeoutMs?: number | null;
-    maxAttempts?: number | null;
-  },
-): Promise<any>;
-
 export const OfflineQrStreamFrameKind: Readonly<{
   header: number;
   data: number;
@@ -8132,9 +7991,9 @@ export const OfflineQrStreamFrameEncoding: Readonly<{
 
 export const OfflineQrPayloadKind: Readonly<{
   unspecified: number;
-  offlineToOnlineTransfer: number;
-  offlineSpendReceipt: number;
-  offlineEnvelope: number;
+  offlineReceiveChallengeV2: number;
+  offlinePaymentTokenV2: number;
+  offlineReceiptAckV2: number;
 }>;
 
 export class OfflineQrStreamOptions {
@@ -8315,112 +8174,6 @@ export function scanQrStreamFrames(
   progress: number;
   isComplete: boolean;
 } | null>;
-
-export const PETAL_STREAM_GRID_SIZES: ReadonlyArray<number>;
-
-export class OfflinePetalStreamOptions {
-  gridSize: number;
-  border: number;
-  anchorSize: number;
-  constructor(options?: { gridSize?: number; border?: number; anchorSize?: number });
-}
-
-export class OfflinePetalStreamGrid {
-  readonly gridSize: number;
-  readonly cells: boolean[];
-  constructor(input: { gridSize: number; cells: boolean[] });
-  get(x: number, y: number): boolean | null;
-}
-
-export class OfflinePetalStreamSampleGrid {
-  readonly gridSize: number;
-  readonly samples: number[];
-  constructor(input: { gridSize: number; samples: number[] });
-}
-
-export class OfflinePetalStreamEncoder {
-  static encodeGrid(
-    payload: ArrayBufferView | ArrayBuffer | Buffer,
-    options?: { gridSize?: number; border?: number; anchorSize?: number },
-  ): OfflinePetalStreamGrid;
-  static encodeGrids(
-    payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
-    options?: { gridSize?: number; border?: number; anchorSize?: number },
-  ): { gridSize: number; grids: OfflinePetalStreamGrid[] };
-}
-
-export class OfflinePetalStreamDecoder {
-  static decodeGrid(
-    grid: OfflinePetalStreamGrid,
-    options?: { gridSize?: number; border?: number; anchorSize?: number },
-  ): Buffer;
-  static decodeSamples(
-    sampleGrid: OfflinePetalStreamSampleGrid,
-    options?: { gridSize?: number; border?: number; anchorSize?: number },
-  ): Buffer;
-}
-
-export function samplePetalStreamGridFromRgba(
-  image: {
-    data: ArrayBufferView | ArrayBuffer | Buffer;
-    width: number;
-    height: number;
-  },
-  gridSize: number,
-): OfflinePetalStreamSampleGrid;
-
-export function decodePetalStreamFrameAuto(
-  image: {
-    data: ArrayBufferView | ArrayBuffer | Buffer;
-    width: number;
-    height: number;
-  },
-  options?: { gridSize?: number; border?: number; anchorSize?: number },
-): { gridSize: number; payload: Buffer };
-
-export class OfflinePetalStreamScanSession {
-  readonly qrSession: OfflineQrStreamScanSession;
-  gridSize: number | null;
-  constructor(options?: {
-    qrSession?: OfflineQrStreamScanSession;
-    petalOptions?: { gridSize?: number; border?: number; anchorSize?: number };
-  });
-  ingestSampleGrid(sampleGrid: OfflinePetalStreamSampleGrid): {
-    payload: Buffer | null;
-    receivedChunks: number;
-    totalChunks: number;
-    recoveredChunks: number;
-    progress: number;
-    isComplete: boolean;
-  };
-  ingestRgba(
-    image: {
-      data: ArrayBufferView | ArrayBuffer | Buffer;
-      width: number;
-      height: number;
-    },
-    gridSize?: number | null,
-  ): {
-    payload: Buffer | null;
-    receivedChunks: number;
-    totalChunks: number;
-    recoveredChunks: number;
-    progress: number;
-    isComplete: boolean;
-  };
-  ingestRgbaAuto(image: {
-    data: ArrayBufferView | ArrayBuffer | Buffer;
-    width: number;
-    height: number;
-  }): {
-    payload: Buffer | null;
-    receivedChunks: number;
-    totalChunks: number;
-    recoveredChunks: number;
-    progress: number;
-    isComplete: boolean;
-  };
-}
 
 export function buildRegisterDomainTransaction(
   input: RegisterDomainInput,

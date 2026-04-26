@@ -19,9 +19,9 @@ export const OfflineQrStreamFrameEncoding = Object.freeze({
 
 export const OfflineQrPayloadKind = Object.freeze({
   unspecified: 0,
-  offlineToOnlineTransfer: 1,
-  offlineSpendReceipt: 2,
-  offlineEnvelope: 3,
+  offlineReceiveChallengeV2: 1,
+  offlinePaymentTokenV2: 2,
+  offlineReceiptAckV2: 3,
 });
 
 export class OfflineQrStreamOptions {

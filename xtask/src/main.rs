@@ -103,13 +103,6 @@ mod mochi;
 mod nexus;
 mod nexus_lane_maintenance;
 mod norito_rpc;
-mod offline_bundle;
-mod offline_pos_provision;
-mod offline_pos_verify;
-mod offline_poseidon;
-mod offline_provision;
-mod offline_tooling;
-mod offline_topup;
 mod poseidon_bench;
 mod sm;
 mod sns;
@@ -140,16 +133,9 @@ mod stage1_bench;
 mod streaming_bench;
 mod taikai;
 mod taikai_anchor;
-use crate::{
-    norito_rpc::{
-        FixtureOptions as NoritoRpcFixtureOptions, generate_fixtures as run_norito_rpc_fixtures,
-        run_verify,
-    },
-    offline_bundle::OfflineBundleOptions,
-    offline_pos_provision::OfflinePosProvisionOptions,
-    offline_pos_verify::OfflinePosVerifyOptions,
-    offline_provision::OfflineProvisionOptions,
-    offline_topup::{OfflineTopupOptions, RegisterMode, RegisterOptions},
+use crate::norito_rpc::{
+    FixtureOptions as NoritoRpcFixtureOptions, generate_fixtures as run_norito_rpc_fixtures,
+    run_verify,
 };
 
 fn main() {
@@ -518,12 +504,6 @@ enum CommandKind {
     NoritoRpcFixtures {
         options: NoritoRpcFixtureOptions,
     },
-    OfflinePosProvision(OfflinePosProvisionOptions),
-    OfflinePosVerify(OfflinePosVerifyOptions),
-    OfflineProvision(OfflineProvisionOptions),
-    OfflineTopup(OfflineTopupOptions),
-    OfflineBundle(OfflineBundleOptions),
-    OfflinePoseidonFixtures(offline_poseidon::OfflinePoseidonFixtureOptions),
     AccelerationState {
         format: AccelerationOutputFormat,
     },
@@ -1947,24 +1927,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::MinistryJury(command) => {
             ministry_jury::run(command)?;
         }
-        CommandKind::OfflinePosProvision(options) => {
-            offline_pos_provision::run(options)?;
-        }
-        CommandKind::OfflinePosVerify(options) => {
-            offline_pos_verify::run(options)?;
-        }
-        CommandKind::OfflineProvision(options) => {
-            offline_provision::run(options)?;
-        }
-        CommandKind::OfflineTopup(options) => {
-            offline_topup::run(options)?;
-        }
-        CommandKind::OfflineBundle(options) => {
-            offline_bundle::run(options)?;
-        }
-        CommandKind::OfflinePoseidonFixtures(options) => {
-            offline_poseidon::generate(options)?;
-        }
         CommandKind::Help => {
             print_usage();
         }
@@ -2031,318 +1993,6 @@ where
                 )
                 .into()),
             }
-        }
-        "offline-pos-provision" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut operator_key: Option<String> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--operator-key" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --operator-key".into());
-                        };
-                        operator_key = Some(value);
-                    }
-                    flag => {
-                        return Err(
-                            format!("unknown flag for offline-pos-provision: {flag}").into()
-                        );
-                    }
-                }
-            }
-            let spec_path = spec_path
-                .ok_or_else(|| "offline-pos-provision requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_pos_provision")))?;
-            Ok(CommandKind::OfflinePosProvision(
-                OfflinePosProvisionOptions {
-                    spec_path,
-                    output_root,
-                    operator_key_override: operator_key,
-                },
-            ))
-        }
-        "offline-provision" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut inspector_key: Option<String> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--inspector-key" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --inspector-key".into());
-                        };
-                        inspector_key = Some(value);
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-provision: {flag}").into());
-                    }
-                }
-            }
-            let spec_path =
-                spec_path.ok_or_else(|| "offline-provision requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_provision")))?;
-            Ok(CommandKind::OfflineProvision(OfflineProvisionOptions {
-                spec_path,
-                output_root,
-                inspector_key_override: inspector_key,
-            }))
-        }
-        "offline-pos-verify" => {
-            let mut bundle_path: Option<PathBuf> = None;
-            let mut manifest_path: Option<PathBuf> = None;
-            let mut allowance_summaries: Vec<PathBuf> = Vec::new();
-            let mut policy_path: Option<PathBuf> = None;
-            let mut audit_log_path: Option<PathBuf> = None;
-            let mut api_snapshot: Option<PathBuf> = None;
-            let mut now_ms_override: Option<u64> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--bundle" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --bundle".into());
-                        };
-                        bundle_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--manifest" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --manifest".into());
-                        };
-                        manifest_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--allowance-summary" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --allowance-summary".into());
-                        };
-                        allowance_summaries.push(normalize_path(Path::new(&path))?);
-                    }
-                    "--policy" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --policy".into());
-                        };
-                        policy_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--audit-log" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --audit-log".into());
-                        };
-                        audit_log_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--api-snapshot" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --api-snapshot".into());
-                        };
-                        api_snapshot = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--now-ms" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --now-ms".into());
-                        };
-                        let parsed = value.parse::<u64>().map_err(|err| {
-                            format!("invalid value for --now-ms `{value}`: {err}")
-                        })?;
-                        now_ms_override = Some(parsed);
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-pos-verify: {flag}").into());
-                    }
-                }
-            }
-            if bundle_path.is_none() && manifest_path.is_none() && allowance_summaries.is_empty() {
-                return Err(
-                    "offline-pos-verify requires --bundle, --manifest, or --allowance-summary"
-                        .into(),
-                );
-            }
-            if bundle_path.is_none() && api_snapshot.is_some() {
-                return Err("--api-snapshot requires --bundle".into());
-            }
-            Ok(CommandKind::OfflinePosVerify(OfflinePosVerifyOptions {
-                bundle_json: bundle_path,
-                manifest_json: manifest_path,
-                allowance_summaries,
-                policy_path,
-                audit_log_path,
-                api_snapshot_path: api_snapshot,
-                now_ms_override,
-            }))
-        }
-        "offline-topup" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut operator_key: Option<String> = None;
-            let mut register_config: Option<PathBuf> = None;
-            let mut register_mode = RegisterMode::Blocking;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--operator-key" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --operator-key".into());
-                        };
-                        operator_key = Some(value);
-                    }
-                    "--register-config" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --register-config".into());
-                        };
-                        register_config = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--register-mode" => {
-                        let Some(mode) = pending.next() else {
-                            return Err("expected mode after --register-mode".into());
-                        };
-                        register_mode =
-                            match mode.as_str() {
-                                "blocking" => RegisterMode::Blocking,
-                                "immediate" => RegisterMode::Immediate,
-                                other => return Err(format!(
-                                    "register mode must be `blocking` or `immediate` (got {other})"
-                                )
-                                .into()),
-                            };
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-topup: {flag}").into());
-                    }
-                }
-            }
-            let spec_path =
-                spec_path.ok_or_else(|| "offline-topup requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_topup")))?;
-            let register = register_config.map(|config_path| RegisterOptions {
-                config_path,
-                mode: register_mode,
-            });
-            Ok(CommandKind::OfflineTopup(OfflineTopupOptions {
-                spec_path,
-                output_root,
-                operator_key_override: operator_key,
-                register,
-            }))
-        }
-        "offline-bundle" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-bundle: {flag}").into());
-                    }
-                }
-            }
-            let spec_path =
-                spec_path.ok_or_else(|| "offline-bundle requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_bundle")))?;
-            Ok(CommandKind::OfflineBundle(OfflineBundleOptions {
-                spec_path,
-                output_root,
-            }))
-        }
-        "offline-poseidon-fixtures" => {
-            let mut constants_path: Option<PathBuf> = None;
-            let mut vectors_path: Option<PathBuf> = None;
-            let mut domain_tag: Option<String> = None;
-            let mut mirror_sdk = true;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--constants" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --constants".into());
-                        };
-                        constants_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--vectors" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --vectors".into());
-                        };
-                        vectors_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--tag" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --tag".into());
-                        };
-                        domain_tag = Some(value);
-                    }
-                    "--no-sdk-mirror" => {
-                        mirror_sdk = false;
-                    }
-                    flag => {
-                        return Err(
-                            format!("unknown flag for offline-poseidon-fixtures: {flag}").into(),
-                        );
-                    }
-                }
-            }
-            Ok(CommandKind::OfflinePoseidonFixtures(
-                offline_poseidon::OfflinePoseidonFixtureOptions::new(
-                    constants_path,
-                    vectors_path,
-                    domain_tag,
-                    mirror_sdk,
-                ),
-            ))
         }
         "openapi" => {
             let mut outputs = Vec::new();
@@ -12015,18 +11665,6 @@ fn print_usage() {
     eprintln!(
         "    Rebuild the pin registry snapshot fixture (manifests, aliases, replication orders). Defaults to crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json"
     );
-    eprintln!(
-        "  cargo xtask offline-pos-provision --spec <path> [--output <dir>] [--operator-key <ed25519:...>]"
-    );
-    eprintln!(
-        "    Generate POS manifest and revocation bundles for OA12 pilots. Defaults to artifacts/offline_pos_provision."
-    );
-    eprintln!(
-        "  cargo xtask offline-pos-verify --bundle <revocations.json> [--api-snapshot <path|->]"
-    );
-    eprintln!(
-        "    Verify the signature on a revocation bundle and optionally emit a Torii-style `/v1/offline/revocations` snapshot for USB/QR distribution."
-    );
     eprintln!("  cargo xtask nexus-fixtures [--out <dir>] [--verify]");
     eprintln!(
         "    Regenerate Nexus lane commitment fixtures (defaults to fixtures/nexus/lane_commitments); pass --verify to ensure existing files match the generated payloads."
@@ -12292,31 +11930,6 @@ fn print_usage() {
     );
     eprintln!(
         "    Lint ISO bridge reference data and fixture bundles (defaults to repository samples)."
-    );
-    eprintln!(
-        "  cargo xtask offline-pos-provision --spec <path> [--output <dir>] [--operator-key <key>]"
-    );
-    eprintln!(
-        "    Generate OfflinePosProvisionManifest fixtures (and optional revocation bundles). Defaults to artifacts/offline_pos_provision."
-    );
-    eprintln!(
-        "  cargo xtask offline-provision --spec <path> [--output <dir>] [--inspector-key <key>]"
-    );
-    eprintln!(
-        "    Produce AndroidProvisioned proofs (inspector manifests) for kiosks. Defaults to artifacts/offline_provision."
-    );
-    eprintln!(
-        "  cargo xtask offline-topup --spec <path> [--output <dir>] [--operator-key <key>] [--register-config <path>] [--register-mode blocking|immediate]"
-    );
-    eprintln!("  cargo xtask offline-bundle --spec <path> [--output <dir>]");
-    eprintln!(
-        "    Emit OfflineToOnlineTransfer fixtures plus FASTPQ witness requests. Defaults to artifacts/offline_bundle."
-    );
-    println!(
-        "  cargo xtask offline-poseidon-fixtures [--constants <path>] [--vectors <path>] [--tag <domain_tag>] [--no-sdk-mirror]"
-    );
-    eprintln!(
-        "    Generate offline allowance fixtures and optionally register them against a Torii config. Defaults to fixtures/offline_allowance."
     );
     eprintln!("  cargo xtask acceleration-state [--format table|json]");
     eprintln!(

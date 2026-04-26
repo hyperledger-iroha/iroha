@@ -10,10 +10,6 @@ use iroha_config::parameters::{
 };
 use iroha_data_model::{
     escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord},
-    offline::{
-        OfflineAllowanceRecord, OfflineCounterSummary, OfflineTransferRecord,
-        OfflineVerdictRevocation,
-    },
     prelude::*,
     query::{
         CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox, QueryRequest,
@@ -300,77 +296,6 @@ impl SortableQueryOutput for Permission {
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
         norito::codec::Encode::encode(self)
-    }
-}
-
-impl SortableQueryOutput for OfflineAllowanceRecord {
-    type TiebreakKey = iroha_crypto::Hash;
-
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
-        self.certificate.metadata.get(key)
-    }
-
-    fn tiebreak_key(&self) -> Self::TiebreakKey {
-        self.certificate_id()
-    }
-
-    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.certificate_id().cmp(&other.certificate_id())
-    }
-}
-
-impl SortableQueryOutput for OfflineTransferRecord {
-    type TiebreakKey = iroha_crypto::Hash;
-
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
-        None
-    }
-
-    fn tiebreak_key(&self) -> Self::TiebreakKey {
-        self.transfer.bundle_id
-    }
-
-    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.transfer.bundle_id.cmp(&other.transfer.bundle_id)
-    }
-}
-
-impl SortableQueryOutput for OfflineCounterSummary {
-    type TiebreakKey = (iroha_crypto::Hash, AccountId);
-
-    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
-        None
-    }
-
-    fn tiebreak_key(&self) -> Self::TiebreakKey {
-        (self.certificate_id, self.controller.clone())
-    }
-
-    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.certificate_id
-            .cmp(&other.certificate_id)
-            .then_with(|| self.controller.cmp(&other.controller))
-    }
-}
-
-impl SortableQueryOutput for OfflineVerdictRevocation {
-    type TiebreakKey = Vec<u8>;
-
-    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
-        self.metadata.get(key)
-    }
-
-    fn tiebreak_key(&self) -> Self::TiebreakKey {
-        norito::codec::Encode::encode(self)
-    }
-
-    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.verdict_id
-            .cmp(&other.verdict_id)
-            .then_with(|| self.issuer.cmp(&other.issuer))
-            .then_with(|| self.revoked_at_ms.cmp(&other.revoked_at_ms))
-            .then_with(|| self.reason.cmp(&other.reason))
-            .then_with(|| self.note.cmp(&other.note))
     }
 }
 
@@ -2000,7 +1925,7 @@ impl ValidQueryRequest {
                                     iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                                     iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                                 )
-                            },
+                            }
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
@@ -3100,7 +3025,7 @@ impl ValidQueryRequest {
                                     iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                                     iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                                 )
-                            },
+                            }
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }

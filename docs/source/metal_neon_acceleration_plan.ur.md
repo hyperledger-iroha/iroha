@@ -182,7 +182,7 @@ translator: machine-google-reviewed
   میٹل-وی ایس-سی پی یو ڈیلٹاس نئے ٹیلی میٹری فیڈز کی بحالی کے بغیر۔
 
 ## WP2-B پوسیڈن مینی فیسٹ لوڈر اور سیلف ٹیسٹ برابری- `fastpq_prover::poseidon_manifest()` اب سرایت اور پارسیس
-  `artifacts/offline_poseidon/constants.ron` ، اس کے SHA-256 کی گنتی کرتا ہے
+  `artifacts/poseidon/constants.ron` ، اس کے SHA-256 کی گنتی کرتا ہے
   (`poseidon_manifest_sha256()`) ، اور سی پی یو کے خلاف اسنیپ شاٹ کی توثیق کرتا ہے
   کسی بھی GPU کام چلنے سے پہلے پوسیڈن ٹیبلز۔ `build_metal_context()` لاگ ان کرتا ہے
   وارم اپ کے دوران ہضم کریں تاکہ ٹیلی میٹری برآمد کنندگان شائع کرسکیں

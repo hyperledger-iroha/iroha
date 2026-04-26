@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | المسار | الغرض | شا-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | لقطة قانونية تم إنشاؤها من `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`؛ مصدر الحقيقة لبناء GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | يعكس اللقطة الأساسية بحيث تقوم اختبارات وحدة Swift وحزام الدخان XCFramework بتحميل نفس الثوابت التي تتوقعها النوى المعدنية. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | تشترك تركيبات Android/Kotlin في نفس البيان لاختبارات التكافؤ والتسلسل. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | لقطة قانونية تم إنشاؤها من `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`؛ مصدر الحقيقة لبناء GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | يعكس اللقطة الأساسية بحيث تقوم اختبارات وحدة Swift وحزام الدخان XCFramework بتحميل نفس الثوابت التي تتوقعها النوى المعدنية. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | تشترك تركيبات Android/Kotlin في نفس البيان لاختبارات التكافؤ والتسلسل. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 يجب على كل مستهلك التحقق من التجزئة قبل توصيل الثوابت بوحدة معالجة الرسومات
 خط أنابيب. عندما يتغير البيان (مجموعة المعلمات الجديدة أو الملف الشخصي)، فإن SHA و
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 مساعد. يكتب الأمر كلاً من الملف المتعارف عليه ومرايا SDK:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 استخدم `--constants <path>`/`--vectors <path>` لتجاوز الوجهات أو

@@ -455,10 +455,10 @@ const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
-const LOCALNET_OFFLINE_CASH_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-const LOCALNET_OFFLINE_CASH_ASSET_NAME: &str = "usd";
-const LOCALNET_OFFLINE_CASH_ASSET_ALIAS: &str = "usd#wonderland";
-const LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY: u64 = 100;
+const LOCALNET_OFFLINE_NOTE_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+const LOCALNET_OFFLINE_NOTE_ASSET_NAME: &str = "usd";
+const LOCALNET_OFFLINE_NOTE_ASSET_ALIAS: &str = "usd#wonderland";
+const LOCALNET_OFFLINE_NOTE_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
 const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
@@ -572,26 +572,26 @@ fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
 
-fn localnet_offline_cash_asset_literal() -> String {
-    LOCALNET_OFFLINE_CASH_ASSET_ID.to_owned()
+fn localnet_offline_note_asset_literal() -> String {
+    LOCALNET_OFFLINE_NOTE_ASSET_ID.to_owned()
 }
 
-fn localnet_offline_cash_asset_spec() -> AssetSpec {
+fn localnet_offline_note_asset_spec() -> AssetSpec {
     let client_account_id = localnet_client_account_id();
     AssetSpec {
-        id: localnet_offline_cash_asset_literal(),
-        name: LOCALNET_OFFLINE_CASH_ASSET_NAME.to_owned(),
-        alias: Some(LOCALNET_OFFLINE_CASH_ASSET_ALIAS.to_owned()),
+        id: localnet_offline_note_asset_literal(),
+        name: LOCALNET_OFFLINE_NOTE_ASSET_NAME.to_owned(),
+        alias: Some(LOCALNET_OFFLINE_NOTE_ASSET_ALIAS.to_owned()),
         owned_by: client_account_id.clone(),
         mint_to: client_account_id,
-        quantity: LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY,
+        quantity: LOCALNET_OFFLINE_NOTE_INITIAL_QUANTITY,
     }
 }
 
 fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
     let mut seen_asset_ids = BTreeSet::new();
-    let built_in = localnet_offline_cash_asset_spec();
+    let built_in = localnet_offline_note_asset_spec();
     seen_asset_ids.insert(built_in.id.clone());
     assets.push(built_in);
     for asset in extra_assets {
@@ -642,7 +642,7 @@ pub struct Args {
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
     /// Register the optional sample asset and mint to the default account.
-    /// The built-in offline-cash asset is always emitted.
+    /// The built-in offline-note asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
     /// Override the consensus block time (milliseconds) in generated manifests/configs.
@@ -1390,10 +1390,10 @@ fn localnet_dataspace_catalog(
     if localnet_uses_alias_multilane_catalog(sora_profile) {
         for (alias, id, description) in [
             (
-                "paynet",
+                "sbp",
                 i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64"),
-                "PAYNET / FI retail alias dataspace",
+                "SBP / FI retail alias dataspace",
             ),
             (
                 "cbuae",
@@ -1448,7 +1448,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
             i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
             "paynet",
             "PAYNET / FI retail alias lane",
-            "paynet",
+            "sbp",
             "public",
         ),
         (
@@ -2173,69 +2173,6 @@ fn render_peer_config(
     faucet.insert("pow_vrf_seed_enabled".into(), Value::Boolean(false));
     torii.insert("faucet".into(), Value::Table(faucet));
 
-    let mut offline_lineage_policy = Table::new();
-    offline_lineage_policy.insert(
-        "max_balance".into(),
-        Value::String(
-            iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_MAX_BALANCE
-                .to_owned(),
-        ),
-    );
-    offline_lineage_policy.insert(
-        "max_tx_value".into(),
-        Value::String(
-            iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE
-                .to_owned(),
-        ),
-    );
-    offline_lineage_policy.insert(
-        "authorization_ttl_ms".into(),
-        Value::Integer(
-            i64::try_from(
-                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS,
-            )
-            .expect("authorization ttl fits i64"),
-        ),
-    );
-    offline_lineage_policy.insert(
-        "authorization_refresh_ms".into(),
-        Value::Integer(
-            i64::try_from(
-                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS,
-            )
-            .expect("authorization refresh fits i64"),
-        ),
-    );
-    offline_lineage_policy.insert(
-        "revocation_ttl_ms".into(),
-        Value::Integer(
-            i64::try_from(
-                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS,
-            )
-            .expect("revocation ttl fits i64"),
-        ),
-    );
-
-    let mut offline_issuer = Table::new();
-    offline_issuer.insert("enabled".into(), Value::Boolean(true));
-    offline_issuer.insert(
-        "operator_authority".into(),
-        Value::String(localnet_client_account.clone()),
-    );
-    offline_issuer.insert(
-        "operator_private_key".into(),
-        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
-    );
-    offline_issuer.insert(
-        "legacy_operator_private_keys".into(),
-        Value::Array(Vec::new()),
-    );
-    offline_issuer.insert("allowed_controllers".into(), Value::Array(Vec::new()));
-    offline_issuer.insert(
-        "lineage_policy".into(),
-        Value::Table(offline_lineage_policy),
-    );
-    torii.insert("offline_issuer".into(), Value::Table(offline_issuer));
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -2252,11 +2189,10 @@ fn render_peer_config(
 
     let mut settlement_offline_escrow_accounts = Table::new();
     settlement_offline_escrow_accounts.insert(
-        localnet_offline_cash_asset_literal(),
+        localnet_offline_note_asset_literal(),
         Value::String(localnet_client_account),
     );
     let mut settlement_offline = Table::new();
-    settlement_offline.insert("skip_platform_attestation".into(), Value::Boolean(true));
     settlement_offline.insert(
         "escrow_accounts".into(),
         Value::Table(settlement_offline_escrow_accounts),
@@ -3272,10 +3208,10 @@ fn write_localnet_readme(
             "- Signed genesis: `{genesis_signed}`\n",
             "- Client config: `{client_config}`\n\n",
             "## Built-in App API bootstrap\n\n",
-            "- Offline-cash asset definition: `{offline_cash_asset}`\n",
-            "- Offline-cash alias: `{offline_cash_alias}`\n",
+            "- Offline-note asset definition: `{offline_note_asset}`\n",
+            "- Offline-note alias: `{offline_note_alias}`\n",
             "- Localnet app authority / escrow account: `{client_account_id}`\n",
-            "- Generated peer configs enable `torii.onboarding`, `torii.offline_issuer`, and local-only `settlement.offline.skip_platform_attestation = true`\n\n",
+            "- Generated peer configs enable `torii.onboarding` and Offline V2 escrow routing\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -3296,8 +3232,8 @@ fn write_localnet_readme(
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
         client_config = client_config_path.display(),
-        offline_cash_asset = LOCALNET_OFFLINE_CASH_ASSET_ID,
-        offline_cash_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS,
+        offline_note_asset = LOCALNET_OFFLINE_NOTE_ASSET_ID,
+        offline_note_alias = LOCALNET_OFFLINE_NOTE_ASSET_ALIAS,
         client_account_id = client_account_id,
         start_script = start_path.display(),
         stop_script = stop_path.display(),
@@ -3519,13 +3455,13 @@ mod tests {
     }
 
     #[test]
-    fn generated_localnet_bootstraps_builtin_offline_cash_asset_and_permissions() {
+    fn generated_localnet_bootstraps_builtin_offline_note_asset_and_permissions() {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("offline-cash-bootstrap".to_owned()),
+            seed: Some("offline-note-bootstrap".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -3543,11 +3479,11 @@ mod tests {
 
         let manifest = localnet_genesis_for_opts(&opts);
         let offline_asset_id =
-            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_CASH_ASSET_ID)
-                .expect("offline cash asset id");
-        let offline_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS
+            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_NOTE_ASSET_ID)
+                .expect("offline note asset id");
+        let offline_alias = LOCALNET_OFFLINE_NOTE_ASSET_ALIAS
             .parse::<AssetDefinitionAlias>()
-            .expect("offline cash alias");
+            .expect("offline note alias");
         let client_account_id = localnet_client_account_id();
         let (genesis_public_key, _) =
             generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED);
@@ -3571,7 +3507,7 @@ mod tests {
         });
         assert!(
             has_definition,
-            "localnet must register the built-in offline-cash asset"
+            "localnet must register the built-in offline-note asset"
         );
 
         let has_alias_binding = manifest.instructions().any(|instruction| {
@@ -3585,7 +3521,7 @@ mod tests {
         });
         assert!(
             has_alias_binding,
-            "localnet must bind the built-in offline-cash alias"
+            "localnet must bind the built-in offline-note alias"
         );
 
         let has_initial_mint = manifest.instructions().any(|instruction| {
@@ -3601,7 +3537,7 @@ mod tests {
         });
         assert!(
             has_initial_mint,
-            "localnet must mint the built-in offline-cash asset to the client signer"
+            "localnet must mint the built-in offline-note asset to the client signer"
         );
 
         let has_owner_transfer = manifest.instructions().any(|instruction| {
@@ -3618,7 +3554,7 @@ mod tests {
         });
         assert!(
             has_owner_transfer,
-            "localnet must transfer offline-cash asset ownership to the client signer"
+            "localnet must transfer offline-note asset ownership to the client signer"
         );
 
         let mut has_alias_manage = false;
@@ -3747,14 +3683,14 @@ mod tests {
     }
 
     #[test]
-    fn generated_peer_config_enables_offline_cash_bootstrap_services() {
+    fn generated_peer_config_enables_offline_note_bootstrap_services() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("offline-cash-config".to_owned()),
+            seed: Some("offline-note-config".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -3790,38 +3726,19 @@ mod tests {
             Some(client_account_id.as_str())
         );
 
-        let offline_issuer = peer_cfg
-            .get("torii")
-            .and_then(toml::Value::as_table)
-            .and_then(|torii| torii.get("offline_issuer"))
-            .and_then(toml::Value::as_table)
-            .expect("torii.offline_issuer table");
-        assert_eq!(
-            offline_issuer
-                .get("operator_authority")
-                .and_then(toml::Value::as_str),
-            Some(client_account_id.as_str())
-        );
-
         let settlement_offline = peer_cfg
             .get("settlement")
             .and_then(toml::Value::as_table)
             .and_then(|settlement| settlement.get("offline"))
             .and_then(toml::Value::as_table)
             .expect("settlement.offline table");
-        assert_eq!(
-            settlement_offline
-                .get("skip_platform_attestation")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
         let escrow_accounts = settlement_offline
             .get("escrow_accounts")
             .and_then(toml::Value::as_table)
             .expect("settlement.offline.escrow_accounts table");
         assert_eq!(
             escrow_accounts
-                .get(LOCALNET_OFFLINE_CASH_ASSET_ID)
+                .get(LOCALNET_OFFLINE_NOTE_ASSET_ID)
                 .and_then(toml::Value::as_str),
             Some(client_account_id.as_str())
         );
@@ -5081,7 +4998,7 @@ mod tests {
             .collect();
         assert_eq!(
             lanes_by_alias.get("paynet"),
-            Some(&("paynet".to_owned(), "public".to_owned()))
+            Some(&("sbp".to_owned(), "public".to_owned()))
         );
         assert_eq!(
             lanes_by_alias.get("cbuae"),
@@ -5109,7 +5026,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            dataspaces_by_alias.get("paynet"),
+            dataspaces_by_alias.get("sbp"),
             Some(
                 &i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64")
@@ -5944,7 +5861,7 @@ mod tests {
         .expect("write readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
         assert!(contents.contains("- Base seed: `Iroha`"));
-        assert!(contents.contains(LOCALNET_OFFLINE_CASH_ASSET_ALIAS));
+        assert!(contents.contains(LOCALNET_OFFLINE_NOTE_ASSET_ALIAS));
     }
 
     #[test]

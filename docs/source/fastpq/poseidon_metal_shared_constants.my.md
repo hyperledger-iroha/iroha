@@ -25,9 +25,9 @@ hashing အဆုံးအဖြတ်။ ဤစာတမ်းသည် canonic
 
 | မဂ် | ရည်ရွယ်ချက် | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` မှ ထုတ်လုပ်ထားသော Canonical snapshot GPU တည်ဆောက်မှုအတွက် အမှန်တရားအရင်းအမြစ်။ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Canonical လျှပ်တစ်ပြက်ရိုက်ချက်အား Mirrors ဖြင့်ပြသထားသောကြောင့် Swift ယူနစ်စမ်းသပ်မှုများနှင့် XCFramework မီးခိုးကြိုးသည် Metal kernels မျှော်မှန်းထားသည့်ကိန်းသေများနှင့်တူညီပါသည်။ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin အစုံလိုက်များသည် တူညီမှုနှင့် အမှတ်စဉ်စမ်းသပ်မှုများအတွက် ထပ်တူကျသော သရုပ်ကို မျှဝေပါသည်။ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` မှ ထုတ်လုပ်ထားသော Canonical snapshot GPU တည်ဆောက်မှုအတွက် အမှန်တရားအရင်းအမြစ်။ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Canonical လျှပ်တစ်ပြက်ရိုက်ချက်အား Mirrors ဖြင့်ပြသထားသောကြောင့် Swift ယူနစ်စမ်းသပ်မှုများနှင့် XCFramework မီးခိုးကြိုးသည် Metal kernels မျှော်မှန်းထားသည့်ကိန်းသေများနှင့်တူညီပါသည်။ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin အစုံလိုက်များသည် တူညီမှုနှင့် အမှတ်စဉ်စမ်းသပ်မှုများအတွက် ထပ်တူကျသော သရုပ်ကို မျှဝေပါသည်။ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 အသုံးပြုသူတိုင်းသည် ကိန်းသေများကို GPU တစ်ခုသို့ မချိတ်ဆက်မီ hash ကို စစ်ဆေးရပါမည်။
 ပိုက်လိုင်း။ မန်နီးဖက်စ်သည် ပြောင်းလဲသောအခါ (ပါရာမီတာအသစ် သို့မဟုတ် ပရိုဖိုင်)၊ SHA နှင့်
@@ -39,7 +39,7 @@ hashing အဆုံးအဖြတ်။ ဤစာတမ်းသည် canonic
 ကူညီသူ။ command သည် canonical file နှင့် SDK mirrors နှစ်ခုလုံးကို ရေးသားသည်-
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 ဦးတည်ရာများကို ကျော်ရန် `--constants <path>`/`--vectors <path>` ကိုသုံးပါ သို့မဟုတ်

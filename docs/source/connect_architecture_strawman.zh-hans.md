@@ -16,8 +16,8 @@ translator: machine-google-reviewed
 跨 Swift、Android 和 JavaScript SDK。其目的是支持
 2026 年 2 月跨 SDK 研讨会并在实施前捕获悬而未决的问题。
 
-> 最后更新: 2026-01-29  
-> 作者：Swift SDK 主管、Android 网络 TL、JS 主管  
+> 最后更新: 2026-01-29
+> 作者：Swift SDK 主管、Android 网络 TL、JS 主管
 > 状态：供理事会审查的草案（2026 年 3 月 12 日添加威胁模型 + 数据保留调整）
 
 ## 目标
@@ -106,17 +106,17 @@ Swift 之前发布了占位符 JSON 编码器 (`ConnectCodec.swift`)。截至 20
 
 ### 会话标识符和盐
 
-- `sid` 是从 `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` 派生的 32 字节标识符。  
+- `sid` 是从 `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` 派生的 32 字节标识符。
   DApp 在调用 `/v1/connect/session` 之前计算它；钱包在 `approve` 帧中回应它，因此双方可以一致地输入日志和遥测数据。
 - 相同的盐提供每个密钥派生步骤，因此 SDK 从不依赖于从主机平台获取的熵。
 
 ### 临时密钥处理
 
-- 每个会话都使用新的 X25519 密钥材料。  
+- 每个会话都使用新的 X25519 密钥材料。
   Swift 通过 `ConnectCrypto` 将其存储在 Keychain/Secure Enclave 中，Android 钱包默认为 StrongBox（回退到 TEE 支持的密钥库），JS 需要安全上下文 WebCrypto 实例或本机 `iroha_js_host` 插件。
 - 开放框架包括 dApp 临时公钥以及可选的证明捆绑包。钱包批准会返回钱包公钥以及合规流程所需的任何硬件证明。
-- 证明有效负载遵循可接受的架构：  
-  `attestation { platform, evidence_b64, statement_hash }`。  
+- 证明有效负载遵循可接受的架构：
+  `attestation { platform, evidence_b64, statement_hash }`。
   浏览器可能会忽略该块；每当使用硬件支持的密钥时，本机钱包都会包含它。
 
 ### 方向键和 AEAD
@@ -124,7 +124,7 @@ Swift 之前发布了占位符 JSON 编码器 (`ConnectCodec.swift`)。截至 20
 - 使用 HKDF-SHA256（通过 Rust 桥助手）和域分隔的信息字符串扩展共享密钥：
   - `iroha-connect|k_app` → 应用→钱包流量。
   - `iroha-connect|k_wallet`→钱包→应用程序流量。
-- AEAD 是 v1 信封的 ChaCha20-Poly1305（`connect_norito_bridge` 在每个平台上公开助手）。  
+- AEAD 是 v1 信封的 ChaCha20-Poly1305（`connect_norito_bridge` 在每个平台上公开助手）。
   关联数据等于 `("connect:v1", sid, dir, seq_le, kind=ciphertext)`，因此检测到对标头的篡改。
 - 随机数源自 64 位序列计数器（`nonce[0..4]=0`、`nonce[4..12]=seq_le`）。共享帮助程序测试可确保 BigInt/UInt 转换在 SDK 中的行为相同。
 
@@ -135,19 +135,19 @@ Swift 之前发布了占位符 JSON 编码器 (`ConnectCodec.swift`)。截至 20
 
 ## 权限和证明
 
-- 权限清单必须通过桥导出的共享 Norito 结构进行往返。  
+- 权限清单必须通过桥导出的共享 Norito 结构进行往返。
   领域：
-  - `methods` — 动词（`sign_transaction`、`sign_raw`、`submit_proof`，...）。  
-  - `events` — 允许 dApp 附加的订阅。  
-  - `resources` — 可选帐户/资产过滤器，以便钱包可以限制访问范围。  
+  - `methods` — 动词（`sign_transaction`、`sign_raw`、`submit_proof`，...）。
+  - `events` — 允许 dApp 附加的订阅。
+  - `resources` — 可选帐户/资产过滤器，以便钱包可以限制访问范围。
   - `constraints` — 链 ID、TTL 或钱包在签名前强制执行的自定义策略旋钮。
 - 合规性元数据与权限并存：
-  - 可选 `attachments[]` 包含 Norito 附件参考（KYC 捆绑包、监管机构收据）。  
+  - 可选 `attachments[]` 包含 Norito 附件参考（KYC 捆绑包、监管机构收据）。
   - `compliance_manifest_id` 将请求与先前批准的清单联系起来，以便操作员可以审核出处。
 - 钱包响应使用约定的代码：
-  - `user_declined`、`permissions_mismatch`、`compliance_failed`、`internal_error`。  
+  - `user_declined`、`permissions_mismatch`、`compliance_failed`、`internal_error`。
   每个可能携带一个用于 UI 提示的 `localized_message` 以及一个机器可读的 `reason_code`。
-- 批准框架包括选定的帐户/控制器、权限回显、证明包（ZK 证明或证明）以及任何策略切换（例如 `offline_queue_enabled`）。  
+- 批准框架包括选定的帐户/控制器、权限回显、证明包（ZK 证明或证明）以及任何策略切换（例如 `deferred_queue_enabled`）。
   拒绝镜像具有空 `proof` 的相同架构，但仍记录 `sid` 以供审核。
 
 ## SDK 外观
@@ -171,7 +171,7 @@ Swift 之前发布了占位符 JSON 编码器 (`ConnectCodec.swift`)。截至 20
 - 错误处理：将 Norito 错误代码映射到 SDK 特定错误；包括
   使用共享分类法的 UI 的域特定代码（`Transport`、`Codec`、`Authorization`、`Timeout`、`QueueOverflow`、`Internal`）。 Swift 的基线实现 + 遥测指南位于 [`connect_error_taxonomy.md`](connect_error_taxonomy.md) 中，是 Android/JS 奇偶校验的参考。
 - 发出队列深度、重新连接计数和请求延迟的遥测挂钩（`connect.queue_depth`、`connect.reconnects_total`、`connect.latency_ms`）。
- 
+
 ## 序列号和流量控制
 
 - 每个方向都保留一个专用的 64 位 `sequence` 计数器，该计数器在会话打开时从零开始。共享帮助程序类型会限制增量并在计数器回绕之前触发 `ConnectError.sequenceOverflow` + 密钥旋转握手。
@@ -294,7 +294,7 @@ Swift (`ConnectSessionDiagnostics`)、Android 中常见
   - 安卓：`ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`。
   - JS: `ConnectQueueInspector.read()` 返回相同的结构和 blob 句柄
     该UI代码可以上传到Torii支持工具。
-- 当应用程序切换 `offline_queue_enabled=false` 时，SDK 会立即耗尽并
+- 当应用程序切换 `deferred_queue_enabled=false` 时，SDK 会立即耗尽并
   清除两个日志，将状态标记为 `Disabled`，并发出一个终端
   遥测事件。面向用户的偏好反映在 Norito 中
   批准帧，以便同行知道他们是否可以恢复缓冲的帧。

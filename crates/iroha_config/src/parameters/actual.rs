@@ -5544,8 +5544,6 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional offline certificate issuer configuration.
-    pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
@@ -6132,36 +6130,6 @@ pub struct ToriiFaucet {
     pub pow_adaptive_max_extra_bits: u8,
     /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
     pub pow_vrf_seed_enabled: bool,
-}
-
-/// Offline certificate issuer configuration exposed to Torii.
-#[derive(Debug, Clone)]
-pub struct ToriiOfflineIssuer {
-    /// Optional on-chain operator account authorized to manage offline escrow on behalf of users.
-    pub operator_authority: Option<AccountId>,
-    /// Private key used to sign offline wallet certificates.
-    pub operator_private_key: ExposedPrivateKey,
-    /// Additional legacy private keys accepted for build-claim signatures.
-    pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
-    /// Allowed controller allow-list (empty => allow all).
-    pub allowed_controllers: Vec<AccountId>,
-    /// Lineage-policy values used for device-bound offline bearer authorization.
-    pub lineage_policy: ToriiOfflineLineagePolicy,
-}
-
-/// Device-bound offline lineage policy exposed to Torii.
-#[derive(Debug, Clone)]
-pub struct ToriiOfflineLineagePolicy {
-    /// Maximum total spendable offline balance per bearer lineage.
-    pub max_balance: String,
-    /// Maximum single offline transfer value.
-    pub max_tx_value: String,
-    /// Authorization lifetime.
-    pub authorization_ttl: Duration,
-    /// Authorization refresh deadline.
-    pub authorization_refresh: Duration,
-    /// Revocation bundle lifetime.
-    pub revocation_ttl: Duration,
 }
 
 /// RAM-LFE runtime configuration exposed to Torii.
@@ -7684,33 +7652,21 @@ impl Default for Repo {
     }
 }
 
-/// Offline settlement retention policy parameters.
+/// Offline V2 note retention policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
-    /// Minimum number of blocks to keep settlement bundles in hot storage.
+    /// Minimum number of blocks to keep note records in hot storage.
     pub hot_retention_blocks: u64,
-    /// Maximum number of bundles to archive per retention pass.
+    /// Maximum number of note records to archive per retention pass.
     pub archive_batch_size: usize,
-    /// Minimum number of blocks archived bundles remain available before pruning (0 disables pruning).
+    /// Minimum number of blocks archived note records remain available before pruning (0 disables pruning).
     pub cold_retention_blocks: u64,
-    /// Maximum number of archived bundles pruned per retention pass.
+    /// Maximum number of archived note records pruned per retention pass.
     pub prune_batch_size: usize,
-    /// Aggregate-proof enforcement mode for offline bundles.
-    pub proof_mode: OfflineProofMode,
-    /// Maximum age for offline receipts (0 disables age checks).
-    pub max_receipt_age: Duration,
-    /// Whether offline allowances must be escrow-backed.
+    /// Whether Offline V2 notes must be escrow-backed.
     pub escrow_required: bool,
-    /// Escrow accounts keyed by asset definition for offline allowances.
+    /// Escrow accounts keyed by asset definition for Offline V2 notes.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Optional DER-encoded trust anchors appended to the built-in Android root set.
-    pub android_trust_anchors: Vec<Vec<u8>>,
-    /// Skip platform attestation verification (for local testing only).
-    pub skip_platform_attestation: bool,
-    /// Skip build claim verification (for local testing only).
-    pub skip_build_claim_verification: bool,
-    /// Enforce strict iOS App Attest signature verification (disable compatibility fallback).
-    pub apple_app_attest_strict_signature: bool,
 }
 
 impl Default for Offline {
@@ -7720,38 +7676,8 @@ impl Default for Offline {
             archive_batch_size: defaults::settlement::offline::ARCHIVE_BATCH_SIZE,
             cold_retention_blocks: defaults::settlement::offline::COLD_RETENTION_BLOCKS,
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
-            proof_mode: OfflineProofMode::Optional,
-            max_receipt_age: Duration::from_millis(
-                defaults::settlement::offline::MAX_RECEIPT_AGE_MS,
-            ),
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            android_trust_anchors: Vec::new(),
-            skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
-            skip_build_claim_verification:
-                defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION,
-            apple_app_attest_strict_signature:
-                defaults::settlement::offline::APPLE_APP_ATTEST_STRICT_SIGNATURE,
-        }
-    }
-}
-
-/// Offline aggregate-proof enforcement modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineProofMode {
-    /// Accept bundles without aggregate proofs (proofs verified when present).
-    Optional,
-    /// Require bundles to carry aggregate proofs.
-    Required,
-}
-
-impl OfflineProofMode {
-    /// Canonical config label for this mode.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Optional => "optional",
-            Self::Required => "required",
         }
     }
 }
