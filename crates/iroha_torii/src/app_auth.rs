@@ -102,27 +102,57 @@ impl From<&AppApiConfig> for CanonicalRequestAuthConfig {
     }
 }
 
-#[derive(Debug)]
-struct ReplayCache {
+#[derive(Debug, Clone, Copy)]
+struct ReplayCacheConfig {
     ttl: Duration,
     capacity: NonZeroUsize,
+}
+
+impl From<CanonicalRequestAuthConfig> for ReplayCacheConfig {
+    fn from(config: CanonicalRequestAuthConfig) -> Self {
+        Self {
+            ttl: config.nonce_ttl.max(Duration::from_secs(1)),
+            capacity: config.replay_cache_capacity,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReplayCache {
+    config: RwLock<ReplayCacheConfig>,
     entries: DashMap<String, Instant>,
     order: Mutex<VecDeque<(String, Instant)>>,
 }
 
 impl ReplayCache {
-    fn new(ttl: Duration, capacity: NonZeroUsize) -> Self {
+    fn new(config: CanonicalRequestAuthConfig) -> Self {
         Self {
-            ttl: ttl.max(Duration::from_secs(1)),
-            capacity,
+            config: RwLock::new(config.into()),
             entries: DashMap::new(),
             order: Mutex::new(VecDeque::new()),
         }
     }
 
+    fn configure(&self, config: CanonicalRequestAuthConfig) {
+        let config = ReplayCacheConfig::from(config);
+        *self
+            .config
+            .write()
+            .expect("canonical request replay cache config lock") = config;
+        if let Ok(mut guard) = self.order.lock() {
+            self.prune_locked(&mut guard, Instant::now(), config.capacity);
+        }
+    }
+
     fn check_and_insert(&self, key: String) -> bool {
         let now = Instant::now();
-        let expires_at = now + self.ttl;
+        let (expires_at, capacity) = {
+            let replay_config = self
+                .config
+                .read()
+                .expect("canonical request replay cache config lock");
+            (now + replay_config.ttl, replay_config.capacity)
+        };
 
         match self.entries.entry(key.clone()) {
             Entry::Occupied(mut occ) => {
@@ -138,14 +168,19 @@ impl ReplayCache {
 
         if let Ok(mut guard) = self.order.lock() {
             guard.push_back((key, expires_at));
-            self.prune_locked(&mut guard, now);
+            self.prune_locked(&mut guard, now, capacity);
         }
 
         true
     }
 
-    fn prune_locked(&self, order: &mut VecDeque<(String, Instant)>, now: Instant) {
-        let cap = self.capacity.get();
+    fn prune_locked(
+        &self,
+        order: &mut VecDeque<(String, Instant)>,
+        now: Instant,
+        capacity: NonZeroUsize,
+    ) {
+        let cap = capacity.get();
         while let Some((_key, expiry)) = order.front() {
             if *expiry > now && order.len() <= cap {
                 break;
@@ -170,10 +205,7 @@ impl CanonicalRequestAuthRuntime {
     fn new(config: CanonicalRequestAuthConfig) -> Self {
         Self {
             config,
-            replay_cache: Arc::new(ReplayCache::new(
-                config.nonce_ttl,
-                config.replay_cache_capacity,
-            )),
+            replay_cache: Arc::new(ReplayCache::new(config)),
         }
     }
 }
@@ -192,9 +224,11 @@ fn auth_runtime_snapshot() -> (CanonicalRequestAuthConfig, Arc<ReplayCache>) {
 
 /// Configure app-facing canonical request freshness enforcement.
 pub fn configure(config: CanonicalRequestAuthConfig) {
-    *auth_runtime()
+    let mut guard = auth_runtime()
         .write()
-        .expect("canonical request auth config lock") = CanonicalRequestAuthRuntime::new(config);
+        .expect("canonical request auth config lock");
+    guard.config = config;
+    guard.replay_cache.configure(config);
 }
 
 /// Authenticated canonical request identity.
@@ -752,7 +786,7 @@ mod tests {
         let guard = TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         configure(config);
         Guard(guard)
     }
@@ -1010,6 +1044,55 @@ mod tests {
             .expect("first request must pass");
         let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
             .expect_err("replay must fail");
+        match err {
+            crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                assert!(msg.contains("nonce already used"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn configure_preserves_replay_cache_entries() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
+            .parse()
+            .expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let nonce = format!("configure-preserves-replay-cache-{timestamp_ms}");
+        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, &nonce);
+        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let account_literal = account.canonical_i105().expect("i105 account");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            axum::http::HeaderValue::from_str(&account_literal).unwrap(),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            axum::http::HeaderValue::from_str(&BASE64_STANDARD.encode(signature.payload()))
+                .unwrap(),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
+        );
+        headers.insert(
+            HEADER_NONCE,
+            axum::http::HeaderValue::from_str(&nonce).unwrap(),
+        );
+
+        verify_canonical_request(&state, &headers, &method, &uri, &[], None)
+            .expect("first request must pass");
+        configure(CanonicalRequestAuthConfig {
+            max_clock_skew: Duration::from_secs(120),
+            ..CanonicalRequestAuthConfig::default()
+        });
+        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
+            .expect_err("replay must still fail after reconfigure");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
                 assert!(msg.contains("nonce already used"));
