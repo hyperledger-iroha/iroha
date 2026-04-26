@@ -18,7 +18,6 @@ mod json_utils;
 mod jurisdiction;
 mod list_support;
 mod nexus;
-mod offline;
 mod runtime;
 mod soracloud;
 mod space_directory;
@@ -259,9 +258,6 @@ enum Command {
     /// Node and operator helpers
     #[command(subcommand)]
     Ops(ops::Command),
-    /// Inspect offline allowances and offline-to-online bundles
-    #[command(subcommand)]
-    Offline(crate::offline::Command),
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
@@ -536,7 +532,6 @@ impl Run for Command {
             Tx(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
-            Offline(variant) => Run::run(variant, context),
             App(variant) => Run::run(variant, context),
             Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
@@ -620,9 +615,6 @@ mod ops {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Inspect offline allowances and offline-to-online bundles
-        #[command(subcommand)]
-        Offline(crate::offline::Command),
         /// Read and write the executor
         #[command(subcommand)]
         Executor(crate::executor::Command),
@@ -648,7 +640,6 @@ mod ops {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
-                Offline(variant) => Run::run(variant, context),
                 Executor(variant) => Run::run(variant, context),
                 Runtime(variant) => Run::run(variant, context),
                 Sumeragi(variant) => Run::run(variant, context),
@@ -8680,19 +8671,6 @@ mod multisig_json_tests {
         );
     }
 
-}
-
-#[cfg(test)]
-mod cli_command_tests {
-    use super::*;
-    use clap::Parser;
-
-    #[test]
-    fn top_level_offline_parses() {
-        let args =
-            Args::try_parse_from(["iroha_cli", "offline", "allowance", "list"]).expect("parse");
-        assert!(matches!(args.command, Command::Offline(_)));
-    }
 }
 
 #[cfg(all(test, feature = "cli_integration_harness"))]

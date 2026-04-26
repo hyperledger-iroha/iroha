@@ -74,7 +74,7 @@ Exported under Prometheus metrics:
 - Safety: NTS never adjusts the OS/system clock; it maintains an offset against the local clock.
 - Performance: Sampling and aggregation are lightweight; per‑peer ring buffers cap memory use.
 - Admission: Time-sensitive instructions are gated by NTS health when `enforcement_mode = "reject"`; `warn` mode logs and allows. If the sampler is not running yet, admission still applies the configured enforcement mode with `fallback=true` health.
-- Time-sensitive scope: Includes offline receipt submissions, attestation flows (twitter binding records/rewards), governance window actions, repo lifecycle actions, staking exit/unbond/finalize, settlement DvP/PvP, ExecuteTrigger calls, trigger registrations whose actions execute time-sensitive instructions, CustomInstruction payloads (treated as time-sensitive by default), and all IVM bytecode transactions.
+- Time-sensitive scope: Includes Offline V2 receipt-ack submissions, attestation flows (twitter binding records/rewards), governance window actions, repo lifecycle actions, staking exit/unbond/finalize, settlement DvP/PvP, ExecuteTrigger calls, trigger registrations whose actions execute time-sensitive instructions, CustomInstruction payloads (treated as time-sensitive by default), and all IVM bytecode transactions.
 - Torii rejects NTS-unhealthy admission with `x-iroha-reject-code: PRTRY:NTS_UNHEALTHY`.
 
 ### Notes

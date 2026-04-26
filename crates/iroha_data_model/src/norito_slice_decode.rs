@@ -179,11 +179,15 @@ impl_decode_from_slice_via_archived! {
     crate::soradns::ResolverDirectoryRecordV1,
     crate::soradns::ResolverRevocationRecordV1,
     crate::soradns::RadRevokeReason,
-    crate::offline::AggregateProofEnvelope,
-    crate::offline::AndroidIntegrityPolicy,
-    crate::offline::OfflineVerdictSnapshot,
-    crate::offline::OfflinePlatformTokenSnapshot,
-    crate::offline::PoseidonDigest,
+    crate::offline::OfflineNoteAuditBundleV2,
+    crate::offline::OfflineNoteAuditPublicInputsV2,
+    crate::offline::OfflineNoteIssueV2,
+    crate::offline::OfflineNoteIssuedClaimV2,
+    crate::offline::OfflineNoteKeyCertificatePayloadV2,
+    crate::offline::OfflineNoteKeyCertificateV2,
+    crate::offline::OfflineNoteRecursiveProofV2,
+    crate::offline::OfflineNoteRedeemPublicInputsV2,
+    crate::offline::OfflineNoteRedeemV2,
 }
 
 // Governance types (feature-gated, but default-enabled)

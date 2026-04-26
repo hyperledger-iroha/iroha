@@ -158,14 +158,6 @@ export {
   submitTransactionEntrypoint,
 } from "./transaction.js";
 export {
-  buildOfflineEnvelope,
-  parseOfflineEnvelope,
-  serializeOfflineEnvelope,
-  readOfflineEnvelopeFile,
-  replayOfflineEnvelope,
-  writeOfflineEnvelopeFile,
-} from "./offlineEnvelope.js";
-export {
   OfflineQrPayloadKind,
   OfflineQrStreamDecoder,
   OfflineQrStreamEncoder,
@@ -187,22 +179,6 @@ export {
   sakuraQrStreamReducedMotionSkin,
   sakuraQrStreamLowPowerSkin,
 } from "./offlineQrStream.js";
-export {
-  PETAL_STREAM_GRID_SIZES,
-  OfflinePetalStreamOptions,
-  OfflinePetalStreamGrid,
-  OfflinePetalStreamSampleGrid,
-  OfflinePetalStreamEncoder,
-  OfflinePetalStreamDecoder,
-  OfflinePetalStreamScanSession,
-  samplePetalStreamGridFromRgba,
-  decodePetalStreamFrameAuto,
-} from "./offlinePetalStream.js";
-export {
-  OfflineCounterJournal,
-  OfflineCounterJournalError,
-  OfflineCounterPlatform,
-} from "./offlineCounterJournal.js";
 export {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -336,18 +312,12 @@ export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 import * as toriiNamespace from "./toriiClient.js";
 import * as noritoNamespace from "./norito.js";
 import * as cryptoNamespace from "./crypto.js";
-import * as offlineNamespace from "./offlineEnvelope.js";
-import * as offlineCounterNamespace from "./offlineCounterJournal.js";
 import * as offlineQrStreamNamespace from "./offlineQrStream.js";
-import * as offlinePetalStreamNamespace from "./offlinePetalStream.js";
 
 export const Torii = toriiNamespace;
 export const Norito = noritoNamespace;
 export const Crypto = cryptoNamespace;
-export const Offline = offlineNamespace;
-export const OfflineCounters = offlineCounterNamespace;
 export const OfflineQrStream = offlineQrStreamNamespace;
-export const OfflinePetalStream = offlinePetalStreamNamespace;
 export {
   ConnectError,
   ConnectErrorCategory,

@@ -468,12 +468,8 @@ impl SingularQueryJson {
                 payload.insert("asset".to_owned(), Value::String(asset.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindAssetEscrowById { escrow_id } => {
-                let mut payload = Map::new();
-                payload.insert("escrow_id".to_owned(), Value::String(escrow_id.clone()));
-                map.insert("payload".to_owned(), Value::Object(payload));
-            }
-            Self::FindAnonymousAssetEscrowById { escrow_id } => {
+            Self::FindAssetEscrowById { escrow_id }
+            | Self::FindAnonymousAssetEscrowById { escrow_id } => {
                 let mut payload = Map::new();
                 payload.insert("escrow_id".to_owned(), Value::String(escrow_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
@@ -582,6 +578,7 @@ impl SingularQueryJson {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn into_box(self) -> Result<SingularQueryBox, QueryJsonError> {
         match self {
             SingularQueryJson::FindAbiVersion => Ok(SingularQueryBox::FindAbiVersion(

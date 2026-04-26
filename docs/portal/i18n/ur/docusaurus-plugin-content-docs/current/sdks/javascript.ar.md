@@ -180,67 +180,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## آف لائن الاؤنسز اور ورڈکٹ میٹا ڈیٹا
+## Offline V2 readiness
 
-آف لائن الاؤنس کے ردعمل افزودہ لیجر میٹا ڈیٹا اپ فرنٹ کو بے نقاب کرتے ہیں۔
-`expires_at_ms` ، `policy_expires_at_ms` ، `refresh_at_ms` ، `verdict_id_hex` ،
-`attestation_nonce_hex` ، اور `remaining_amount` خام کے ساتھ ساتھ واپس کردیئے گئے ہیں
-ریکارڈ کریں لہذا ڈیش بورڈز کو ایمبیڈڈ Norito پے لوڈ کو ڈی کوڈ کرنے کی ضرورت نہیں ہے۔ نیا
-الٹی گنتی مددگار (`deadline_kind` ، `deadline_state` ، `deadline_ms` ،
-`deadline_ms_remaining`) اگلی میعاد ختم ہونے والی آخری تاریخ (ریفریش → پالیسی کو اجاگر کریں
-→ سرٹیفکیٹ) لہذا جب بھی الاؤنس ہوتا ہے تو UI بیج آپریٹرز کو متنبہ کرسکتے ہیں
-<24h باقی۔ ایس ڈی کے
-`/v1/offline/reserve/topup` کے ذریعہ بے نقاب باقی فلٹرز کی آئینہ دار:
-`certificateExpiresBeforeMs/AfterMs` ، `policyExpiresBeforeMs/AfterMs` ،
-`verdictIdHex` ، `attestationNonceHex` ، `refreshBeforeMs/AfterMs` ، اور The
-`requireVerdict` / `onlyMissingVerdict` بولینز۔ غلط امتزاج (کے لئے
-مثال `onlyMissingVerdict` + `verdictIdHex`) Torii سے پہلے مقامی طور پر مسترد کردی گئی ہے
-کہا جاتا ہے۔
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## آف لائن ٹاپ اپ (جاری کریں + رجسٹر)جب آپ فوری طور پر سرٹیفکیٹ جاری کرنا چاہتے ہیں تو ٹاپ اپ مددگار استعمال کریں
-اس کو لیجر پر رجسٹر کریں۔ ایس ڈی کے جاری کردہ اور رجسٹرڈ سرٹیفکیٹ کی تصدیق کرتا ہے
-آئی ڈی واپس آنے سے پہلے میچ کرتے ہیں ، اور جواب میں دونوں پے لوڈ شامل ہیں۔ وہاں ہے
-کوئی سرشار ٹاپ اپ اختتامی نقطہ نہیں۔ مددگار زنجیروں میں اس مسئلے کو + رجسٹر کال کرتا ہے۔ اگر
-آپ کے پاس پہلے ہی دستخط شدہ سرٹیفکیٹ ہے ، `registerOfflineAllowance` پر کال کریں (یا
-`renewOfflineAllowance`) براہ راست۔
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii سوالات اور اسٹریمنگ (ویب ساکٹس)
 
 استفسار مددگار حیثیت ، Prometheus میٹرکس ، ٹیلی میٹری اسنیپ شاٹس ، اور واقعہ کو بے نقاب کرتے ہیں

@@ -89,7 +89,7 @@ mod model {
         /// `SoraFS` gateway compliance events
         Sorafs(super::sorafs::SorafsGatewayEvent),
         /// Offline settlement lifecycle events
-        Offline(super::offline::OfflineTransferEvent),
+        Offline(super::offline::OfflineNoteEvent),
         /// Space Directory manifest lifecycle events
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
         /// Native asset escrow lifecycle events

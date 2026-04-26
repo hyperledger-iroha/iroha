@@ -129,21 +129,6 @@
     "path": "waitForIsoMessageStatus.options.retryProfile",
     "message": "waitForIsoMessageStatus.options.retryProfile must not be empty"
   },
-  "listOfflineAllowances_conflict_verdictId_onlyMissingVerdict": {
-    "code": "ERR_INVALID_OBJECT",
-    "path": "options for /v1/offline/allowances.verdictIdHex",
-    "message": "options for /v1/offline/allowances.verdictIdHex cannot be combined with options for /v1/offline/allowances.onlyMissingVerdict"
-  },
-  "listOfflineAllowances_conflict_requireVerdict_onlyMissingVerdict": {
-    "code": "ERR_INVALID_OBJECT",
-    "path": "options for /v1/offline/allowances.onlyMissingVerdict",
-    "message": "options for /v1/offline/allowances.onlyMissingVerdict cannot be combined with options for /v1/offline/allowances.requireVerdict"
-  },
-  "listOfflineAllowances_requireVerdict_type": {
-    "code": "ERR_INVALID_OBJECT",
-    "path": "options for /v1/offline/allowances.requireVerdict",
-    "message": "options for /v1/offline/allowances.requireVerdict must be a boolean"
-  },
   "governanceDeriveCouncilVrf_candidates_array": {
     "code": "ERR_INVALID_OBJECT",
     "path": "governanceDeriveCouncilVrf.payload.candidates",

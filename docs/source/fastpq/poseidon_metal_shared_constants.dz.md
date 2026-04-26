@@ -25,9 +25,9 @@ hashing གཏན་འབེབས་བཟོ་ནི། ཡིག་ཆ་�
 
 | ལམ། དམིགས་ཡུལ། | SHA-256 |
 |----------------------|--------------------------------------------------
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` ལས་ཐོན་པའི་ ཀེན་ནོ་ཀཱལ་པར་ཆས་ ; GPU གི་དོན་ལུ་བདེན་པ་གི་འབྱུང་ཁུངས་། | Norito |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | མེ་ལོང་ནང་ལུ་ པར་ཆས་འདི་གིས་ Swift unit test དང་ XCFramework གི་ཐ་མག་འདི་གིས་ ལྕགས་རིགས་ཀྱི་ཀར་ནེལ་ཚུ་གིས་ རེ་བ་བསྐྱེད་མི་ རྟག་བརྟན་ཚུ་ ལག་ལེན་འཐབ་ཨིན། | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin གི་སྒྲིག་བཀོད་ཚུ་གིས་ འདྲ་མཉམ་དང་ རིམ་སྒྲིག་བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ གཅིག་མཚུངས་ཀྱི་གསལ་སྟོན་འདི་ བརྗེ་སོར་འབདཝ་ཨིན། | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` ལས་ཐོན་པའི་ ཀེན་ནོ་ཀཱལ་པར་ཆས་ ; GPU གི་དོན་ལུ་བདེན་པ་གི་འབྱུང་ཁུངས་། | Norito |
+| `artifacts/poseidon/constants.ron` | མེ་ལོང་ནང་ལུ་ པར་ཆས་འདི་གིས་ Swift unit test དང་ XCFramework གི་ཐ་མག་འདི་གིས་ ལྕགས་རིགས་ཀྱི་ཀར་ནེལ་ཚུ་གིས་ རེ་བ་བསྐྱེད་མི་ རྟག་བརྟན་ཚུ་ ལག་ལེན་འཐབ་ཨིན། | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin གི་སྒྲིག་བཀོད་ཚུ་གིས་ འདྲ་མཉམ་དང་ རིམ་སྒྲིག་བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ གཅིག་མཚུངས་ཀྱི་གསལ་སྟོན་འདི་ བརྗེ་སོར་འབདཝ་ཨིན། | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 ཉོ་སྤྱོད་པ་རེ་རེ་གིས་ ཇི་པི་ཡུ་ནང་ རྟག་བརྟན་ཚུ་ གློག་ཐག་མ་བཙུགས་པའི་ཧེ་མ་ ཧ་ཤི་འདི་ བདེན་དཔྱད་འབད་དགོ།
 ཆུ་རྫིང་། གསལ་སྡུད་བསྒྱུར་བཅོས་ཚུ་(ཚད་བཟུང་ཆ་ཚན་ཡང་ན་གསལ་སྡུད་གསརཔ་)དང་ ཨེསི་ཨེཆ་ཨེ་དང་།
@@ -39,7 +39,7 @@ hashing གཏན་འབེབས་བཟོ་ནི། ཡིག་ཆ་�
 གྲོགས་རམ་པ། བརྡ་བཀོད་ཀྱིས་ ཀེ་ནོ་ནིག་ཡིག་སྣོད་དང་ ཨེསི་ཌི་ཀེ་མེ་ལོང་གཉིས་ཆ་རང་བྲིས།
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 འགྲོ་ཡུལ་ཚུ་ བཀག་ཆ་འབད་ནིའི་དོན་ལུ་ `--constants <path>`/`--vectors <path>` ལག་ལེན་འཐབ།

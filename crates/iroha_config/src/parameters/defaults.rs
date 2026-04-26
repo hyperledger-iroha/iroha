@@ -1485,32 +1485,6 @@ pub mod torii {
             None
         }
     }
-    /// Offline certificate issuer defaults (only used when config is supplied).
-    pub mod offline_issuer {
-        /// Master enable switch for offline certificate issuer endpoints.
-        pub const ENABLED: bool = true;
-
-        /// Default reserve policy max balance.
-        pub const RESERVE_MAX_BALANCE: &str = "1000000";
-        /// Default reserve policy max single transfer value.
-        pub const RESERVE_MAX_TX_VALUE: &str = "1000000";
-        /// Default authorization lifetime in milliseconds.
-        pub const RESERVE_AUTHORIZATION_TTL_MS: u64 = 24 * 60 * 60 * 1000;
-        /// Default authorization refresh deadline in milliseconds.
-        pub const RESERVE_AUTHORIZATION_REFRESH_MS: u64 = 12 * 60 * 60 * 1000;
-        /// Default revocation bundle lifetime in milliseconds.
-        pub const RESERVE_REVOCATION_TTL_MS: u64 = 6 * 60 * 60 * 1000;
-
-        /// Additional legacy operator private keys retained for build-claim compatibility.
-        pub fn legacy_operator_private_keys() -> Vec<iroha_crypto::ExposedPrivateKey> {
-            Vec::new()
-        }
-
-        /// Allowed controller allow-list (empty => allow all).
-        pub fn allowed_controllers() -> Vec<String> {
-            Vec::new()
-        }
-    }
     /// RAM-LFE runtime defaults (disabled unless explicitly configured).
     pub mod ram_lfe {
         /// Master enable switch for in-process RAM-LFE runtime wiring.
@@ -3603,24 +3577,14 @@ pub mod settlement {
     }
     /// Offline settlement defaults.
     pub mod offline {
-        /// Minimum number of blocks to retain settlement bundles in hot storage.
+        /// Minimum number of blocks to retain Offline V2 note records in hot storage.
         pub const HOT_RETENTION_BLOCKS: u64 = 86_400;
-        /// Maximum number of bundles to archive in a single retention pass.
+        /// Maximum number of note records to archive in a single retention pass.
         pub const ARCHIVE_BATCH_SIZE: usize = 128;
-        /// Minimum number of blocks archived bundles remain available before pruning. Zero disables pruning.
+        /// Minimum number of blocks archived note records remain available before pruning. Zero disables pruning.
         pub const COLD_RETENTION_BLOCKS: u64 = 0;
-        /// Maximum number of archived bundles removed in a single prune pass.
+        /// Maximum number of archived note records removed in a single prune pass.
         pub const PRUNE_BATCH_SIZE: usize = 128;
-        /// Default aggregate-proof enforcement mode for offline bundles.
-        pub const PROOF_MODE: &str = "optional";
-        /// Default maximum age for offline receipts (ms). Zero disables age checks.
-        pub const MAX_RECEIPT_AGE_MS: u64 = 86_400_000;
-        /// Whether to skip platform attestation verification (for local testing only).
-        pub const SKIP_PLATFORM_ATTESTATION: bool = false;
-        /// Whether to skip build claim verification (for local testing only).
-        pub const SKIP_BUILD_CLAIM_VERIFICATION: bool = false;
-        /// Whether iOS App Attest signatures must verify only against raw `clientDataHash`.
-        pub const APPLE_APP_ATTEST_STRICT_SIGNATURE: bool = false;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

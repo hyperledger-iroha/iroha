@@ -514,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn escrow_instruction_constructors_fill_expected_fields() {
         let escrow_id = crate::escrow::EscrowId::new(Hash::new("escrow-ctor"));
         let asset_definition = crate::asset::AssetDefinitionId::new(

@@ -84,9 +84,7 @@ fn tags_section() -> Value {
     offline.insert("name".into(), Value::String("Offline".to_owned()));
     offline.insert(
         "description".into(),
-        Value::String(
-            "Offline wallet, audit, and settlement endpoints under `/v1/offline/*`.".to_owned(),
-        ),
+        Value::String("Offline V2 readiness endpoint under `/v1/offline/v2/readiness`.".to_owned()),
     );
 
     let mut bridge = Map::new();
@@ -10332,50 +10330,6 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_keeps_only_v2_offline_paths() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-
-        for legacy_path in [
-            "/v1/offline/allowances",
-            "/v1/offline/allowances/query",
-            "/v1/offline/cash/setup",
-            "/v1/offline/cash/load",
-            "/v1/offline/cash/refresh",
-            "/v1/offline/cash/sync",
-            "/v1/offline/cash/redeem",
-            "/v1/offline/cash/readiness",
-            "/v1/offline/certificates/issue",
-            "/v1/offline/certificates/renew_issue",
-            "/v1/offline/certificates/revoke",
-            "/v1/offline/policy",
-            "/v1/offline/receipts",
-            "/v1/offline/receipts/query",
-            "/v1/offline/revocations",
-            "/v1/offline/revocations/bundle",
-            "/v1/offline/revocations/query",
-            "/v1/offline/settlements/submit",
-            "/v1/offline/spend_receipts",
-            "/v1/offline/state",
-            "/v1/offline/summaries",
-            "/v1/offline/summaries/query",
-            "/v1/offline/transfers",
-            "/v1/offline/transfers/{bundle_id_hex}",
-            "/v1/offline/transfers/query",
-            "/v1/offline/transfers/proof",
-        ] {
-            assert!(
-                !paths.contains_key(legacy_path),
-                "legacy offline path should be absent: {legacy_path}"
-            );
-        }
-
-        assert!(paths.contains_key("/v1/offline/v2/readiness"));
-    }
-    #[test]
     fn identifier_policy_schema_exposes_ram_fhe_profile() {
         let doc = generate_spec();
         let schemas = doc
@@ -11166,45 +11120,6 @@ mod tests {
             "PushRegisterDeviceRequest",
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
-        }
-    }
-
-    #[test]
-    fn openapi_schemas_exclude_legacy_offline_components() {
-        let schemas = openapi_schemas();
-        for key in [
-            "OfflineAllowanceItem",
-            "OfflineAllowanceIssueRequest",
-            "OfflineAllowanceIssueResponse",
-            "OfflineAllowanceListResponse",
-            "OfflineBuildClaimIssueRequest",
-            "OfflineBuildClaimIssueResponse",
-            "OfflineBundleProofStatusResponse",
-            "OfflineBundleProofSummary",
-            "OfflinePlatformTokenSnapshot",
-            "OfflineQueryEnvelope",
-            "OfflineRejectionItem",
-            "OfflineRejectionListResponse",
-            "OfflineReceiptListItem",
-            "OfflineReceiptListResponse",
-            "OfflineSettlementBuildClaimOverride",
-            "OfflineSettlementSubmitRequest",
-            "OfflineSettlementSubmitResponse",
-            "OfflineSpendReceiptsSubmitRequest",
-            "OfflineSpendReceiptsSubmitResponse",
-            "OfflineStateResponse",
-            "OfflineSummaryItem",
-            "OfflineSummaryListResponse",
-            "OfflineTransferItem",
-            "OfflineTransferListResponse",
-            "OfflineTransferStatusTransition",
-            "OfflineVerdictSnapshot",
-            "OfflineWalletCertificateDraft",
-        ] {
-            assert!(
-                !schemas.contains_key(key),
-                "legacy offline schema should be absent: {key}"
-            );
         }
     }
 

@@ -175,6 +175,7 @@ impl Proof {
 }
 
 /// Limits applied before FASTPQ V1 replay verification performs prover-scale work.
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifyLimits {
     /// Maximum transition rows accepted in the batch supplied to the verifier.
@@ -561,6 +562,7 @@ pub fn verify_with_limits(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn enforce_verify_limits(
     batch: &TransitionBatch,
     proof: &Proof,

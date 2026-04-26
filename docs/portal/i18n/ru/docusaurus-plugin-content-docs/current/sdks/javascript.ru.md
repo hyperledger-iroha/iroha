@@ -180,67 +180,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Офлайн-допуски и метаданные вердиктов
+## Offline V2 readiness
 
-Ответы на офлайн-результаты заранее раскрывают метаданные расширенного реестра —
-И18НИ00000064Х, И18НИ00000065Х, И18НИ00000066Х, И18НИ00000067Х,
-`attestation_nonce_hex` и `remaining_amount` возвращаются вместе с необработанными данными.
-запись, чтобы панелям мониторинга не приходилось декодировать встроенные полезные данные Norito. Новый
-помощники обратного отсчета (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) выделить следующий истекающий срок (обновить → политика
-→ сертификат), чтобы значки пользовательского интерфейса могли предупреждать операторов о превышении допуска.
-Осталось <24 ч. SDK
-отражает фильтры REST, представленные `/v1/offline/reserve/topup`:
-И18НИ00000075Х, И18НИ00000076Х,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` и
-`requireVerdict` / `onlyMissingVerdict` логические значения. Недопустимые комбинации (для
-пример `onlyMissingVerdict` + `verdictIdHex`) отклоняются локально до Torii
-называется.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Оффлайн пополнения (оформить + зарегистрироваться)Используйте помощники пополнения счета, когда хотите оформить сертификат и сразу
-зарегистрировать его в реестре. SDK проверяет выданный и зарегистрированный сертификат.
-Идентификаторы совпадают перед возвратом, и ответ включает обе полезные нагрузки. Есть
-нет выделенной конечной точки пополнения счета; помощник связывает проблему + регистрирует вызовы. Если
-у вас уже есть подписанный сертификат, позвоните по `registerOfflineAllowance` (или
-`renewOfflineAllowance`) напрямую.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii запросы и потоковая передача (WebSockets)
 
 Помощники запросов предоставляют статус, метрики Prometheus, снимки телеметрии и события.

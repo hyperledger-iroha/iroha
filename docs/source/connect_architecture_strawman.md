@@ -4,8 +4,8 @@ This strawman proposal outlines the shared design for Nexus Connect workflows
 across the Swift, Android, and JavaScript SDKs. It is intended to support the
 Feb 2026 cross-SDK workshop and capture open questions before implementation.
 
-> Last updated: 2026-01-29  
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead  
+> Last updated: 2026-01-29
+> Authors: Swift SDK Lead, Android Networking TL, JS Lead
 > Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
 
 ## Goals
@@ -104,17 +104,17 @@ still captures the mandate that led to the bridge integration:
 
 ### Session identifiers & salts
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
+- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.
   DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
 - The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
 
 ### Ephemeral key handling
 
-- Every session uses fresh X25519 key material.  
+- Every session uses fresh X25519 key material.
   Swift stores it in the Keychain/Secure Enclave via `ConnectCrypto`, Android wallets default to StrongBox (falling back to TEE-backed keystores), and JS requires a secure-context WebCrypto instance or the native `iroha_js_host` plug-in.
 - Open frames include the dApp ephemeral public key plus an optional attestation bundle. Wallet approvals return the wallet public key and any hardware attestation needed for compliance flows.
-- Attestation payloads follow the accepted schema:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
+- Attestation payloads follow the accepted schema:
+  `attestation { platform, evidence_b64, statement_hash }`.
   Browsers may omit the block; native wallets include it whenever hardware-backed keys are in use.
 
 ### Directional keys & AEAD
@@ -122,7 +122,7 @@ still captures the mandate that led to the bridge integration:
 - Shared secrets are expanded with HKDF-SHA256 (via the Rust bridge helpers) and domain-separated info strings:
   - `iroha-connect|k_app` → app→wallet traffic.
   - `iroha-connect|k_wallet` → wallet→app traffic.
-- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).  
+- AEAD is ChaCha20-Poly1305 for the v1 envelope (`connect_norito_bridge` exposes helpers on every platform).
   Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
 - Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
 
@@ -135,19 +135,19 @@ For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS 
 
 ## Permissions & Proofs
 
-- Permission manifests must round-trip through the shared Norito struct exported by the bridge.  
+- Permission manifests must round-trip through the shared Norito struct exported by the bridge.
   Fields:
-  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — subscriptions the dApp is allowed to attach to.  
-  - `resources` — optional account/asset filters so wallets can scope access.  
+  - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).
+  - `events` — subscriptions the dApp is allowed to attach to.
+  - `resources` — optional account/asset filters so wallets can scope access.
   - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
 - Compliance metadata rides alongside permissions:
-  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).  
+  - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).
   - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
 - Wallet responses use the agreed codes:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
+  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.
   Each may carry a `localized_message` for UI hints plus a machine-readable `reason_code`.
-- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `offline_queue_enabled`).  
+- Approval frames include the selected account/controller, permission echo, proof bundle (ZK proof or attestation), and any policy toggles (e.g., `deferred_queue_enabled`).
   Rejections mirror the same schema with empty `proof` but still record the `sid` for auditability.
 
 ## SDK Facades
@@ -173,7 +173,7 @@ For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS 
 - Error handling: map Norito error codes to SDK-specific errors; include
   domain-specific codes for UI using the shared taxonomy (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). Swift's baseline implementation + telemetry guide lives in [`connect_error_taxonomy.md`](connect_error_taxonomy.md) and is the reference for Android/JS parity.
 - Emit telemetry hooks for queue depth, reconnect counts, and request latency (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
- 
+
 ## Sequence Numbers & Flow Control
 
 - Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
@@ -305,7 +305,7 @@ common across Swift (`ConnectSessionDiagnostics`), Android
   - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
   - JS: `ConnectQueueInspector.read()` returns the same struct and a blob handle
     that UI code can upload to Torii support tools.
-- When an app toggles `offline_queue_enabled=false`, SDKs immediately drain and
+- When an app toggles `deferred_queue_enabled=false`, SDKs immediately drain and
   purge both journals, mark the state as `Disabled`, and emit a terminal
   telemetry event. The user-facing preference is mirrored in the Norito
   approval frame so peers know whether they can resume buffered frames.

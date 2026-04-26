@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 const TOTAL_ROUNDS: usize = CPU_ROUND_CONSTANTS.len();
 const SNAPSHOT_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../artifacts/offline_poseidon/constants.ron"
+    "/../../artifacts/poseidon/constants.ron"
 ));
 const EXPECTED_SHA256: &str = "99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21";
 
@@ -21,7 +21,7 @@ enum ManifestSection {
     Mds,
 }
 
-/// Canonical Poseidon manifest derived from `artifacts/offline_poseidon/constants.ron`.
+/// Canonical Poseidon manifest derived from `artifacts/poseidon/constants.ron`.
 #[derive(Clone)]
 pub struct PoseidonManifest {
     sha256_hex: String,

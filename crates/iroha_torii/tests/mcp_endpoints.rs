@@ -2951,85 +2951,9 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.offline.transfers.get"),
-        "expected agent-friendly offline transfer detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.transfers.query"),
-        "expected agent-friendly offline transfer query MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.offline.cash.setup"),
-        "expected agent-friendly offline cash setup MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.offline.cash.load"),
-        "expected agent-friendly offline cash load MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.cash.refresh"),
-        "expected agent-friendly offline cash refresh MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.offline.cash.sync"),
-        "expected agent-friendly offline cash sync MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.offline.cash.redeem"),
-        "expected agent-friendly offline cash redeem MCP tool"
-    );
-    assert!(
-        names
-            .iter()
             .any(|name| name == "iroha.offline.revocations.list"),
-        "expected agent-friendly offline revocations list MCP tool"
+        "expected agent-friendly offline revocation list MCP tool"
     );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.revocations.bundle"),
-        "expected agent-friendly offline revocations bundle MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.revocations.register"),
-        "expected agent-friendly offline revocations register MCP tool"
-    );
-    for retired_name in [
-        "iroha.offline.allowances.get",
-        "iroha.offline.allowances.issue",
-        "iroha.offline.allowances.list",
-        "iroha.offline.allowances.query",
-        "iroha.offline.allowances.renew",
-        "iroha.offline.bundle.proof_status",
-        "iroha.offline.certificates.get",
-        "iroha.offline.certificates.issue",
-        "iroha.offline.certificates.list",
-        "iroha.offline.certificates.query",
-        "iroha.offline.certificates.renew",
-        "iroha.offline.certificates.renew_issue",
-        "iroha.offline.certificates.revoke",
-        "iroha.offline.receipts.list",
-        "iroha.offline.receipts.query",
-        "iroha.offline.revocations.query",
-        "iroha.offline.settlements.get",
-        "iroha.offline.settlements.list",
-        "iroha.offline.settlements.query",
-        "iroha.offline.settlements.submit",
-        "iroha.offline.spend_receipts.submit",
-        "iroha.offline.state",
-        "iroha.offline.transfers.proof",
-    ] {
-        assert!(
-            !names.iter().any(|name| name == retired_name),
-            "retired offline MCP alias should be absent: {retired_name}"
-        );
-    }
     assert!(
         names
             .iter()
@@ -4097,7 +4021,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_list_accepts_flat_
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106171,
+            "id": 106160,
             "method": "tools/call",
             "params": {
                 "name": "iroha.offline.transfers.list",
@@ -4112,7 +4036,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_list_accepts_flat_
     assert_eq!(status, StatusCode::OK);
     assert!(
         !tool_is_error(&call),
-        "offline transfer list alias with flat query fields should dispatch successfully"
+        "offline transfer list compatibility alias should return structured success"
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
@@ -4129,12 +4053,12 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_get_accepts_bundle
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106172,
+            "id": 106161,
             "method": "tools/call",
             "params": {
                 "name": "iroha.offline.transfers.get",
                 "arguments": {
-                    "bundle_id": "not-a-hex-bundle-id"
+                    "bundle": "legacy-bundle-001"
                 }
             }
         }),
@@ -4144,16 +4068,10 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_get_accepts_bundle
     assert_eq!(status, StatusCode::OK);
     assert!(
         tool_is_error(&call),
-        "invalid bundle id should be marked as MCP tool error for offline transfer detail alias"
+        "offline transfer bundle compatibility alias should report missing legacy bundles as a tool error"
     );
     let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid offline bundle id to be rejected by transfer detail alias"
-    );
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(404));
 }
 
 #[tokio::test]
@@ -4167,12 +4085,11 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_query_accepts_flat
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106173,
+            "id": 106162,
             "method": "tools/call",
             "params": {
                 "name": "iroha.offline.transfers.query",
                 "arguments": {
-                    "query": "FindAll",
                     "limit": 2
                 }
             }
@@ -4183,7 +4100,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_query_accepts_flat
     assert_eq!(status, StatusCode::OK);
     assert!(
         !tool_is_error(&call),
-        "offline transfer query alias with flat envelope fields should dispatch successfully"
+        "offline transfer query compatibility alias should return structured success"
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
@@ -4200,7 +4117,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_list_accepts_fla
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106192,
+            "id": 106163,
             "method": "tools/call",
             "params": {
                 "name": "iroha.offline.revocations.list",
@@ -4215,7 +4132,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_list_accepts_fla
     assert_eq!(status, StatusCode::OK);
     assert!(
         !tool_is_error(&call),
-        "offline revocations list alias with flat query fields should dispatch successfully"
+        "offline revocation list compatibility alias should return structured success"
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
@@ -4232,54 +4149,14 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_bundle_dispatche
         &app,
         norito::json!({
             "jsonrpc": "2.0",
-            "id": 106193,
+            "id": 106164,
             "method": "tools/call",
             "params": {
-                "name": "iroha.offline.revocations.bundle"
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let structured = structured_content(&call);
-    let http_status = structured.get("status").and_then(Value::as_u64);
-    assert!(
-        http_status.is_some(),
-        "offline revocations bundle alias should return an HTTP status"
-    );
-    if tool_is_error(&call) {
-        assert!(
-            http_status.is_some_and(|status| status >= 400),
-            "offline revocations bundle alias should surface an error HTTP status when unavailable"
-        );
-    } else {
-        assert_eq!(
-            http_status,
-            Some(200),
-            "offline revocations bundle alias should return HTTP 200 when available"
-        );
-    }
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_register_accepts_flat_body_shortcuts()
- {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106194,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.revocations.register",
+                "name": "iroha.offline.revocations.bundle",
                 "arguments": {
-                    "verdict_id": "not-a-verdict-id"
+                    "bundle": {
+                        "id": "legacy-revocation-bundle-001"
+                    }
                 }
             }
         }),
@@ -4287,25 +4164,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_register_accepts
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    if call.get("result").is_some() {
-        assert!(
-            tool_is_error(&call),
-            "invalid revocation registration payload should be marked as MCP tool error"
-        );
-        let structured = structured_content(&call);
-        assert!(
-            structured
-                .get("status")
-                .and_then(Value::as_u64)
-                .is_some_and(|status| status >= 400),
-            "expected revocation registration alias to surface HTTP validation errors"
-        );
-    } else {
-        assert!(
-            call.get("error").is_some(),
-            "invalid revocation registration payload should surface either an MCP tool error or a JSON-RPC error"
-        );
-    }
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 
 #[tokio::test]

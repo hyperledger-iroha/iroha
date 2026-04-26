@@ -62,20 +62,20 @@ impl QrStreamFrameKind {
 pub enum QrPayloadKind {
     /// No specific payload kind.
     Unspecified = 0,
-    /// Offline-to-online settlement transfer bundle.
-    OfflineToOnlineTransfer = 1,
-    /// Offline spend receipt payload.
-    OfflineSpendReceipt = 2,
-    /// Nested envelope payload.
-    OfflineEnvelope = 3,
+    /// Offline V2 receive challenge payload.
+    OfflineReceiveChallengeV2 = 1,
+    /// Offline V2 payment token payload.
+    OfflinePaymentTokenV2 = 2,
+    /// Offline V2 optional receipt acknowledgement payload.
+    OfflineReceiptAckV2 = 3,
 }
 
 impl QrPayloadKind {
     fn from_u16(value: u16) -> Self {
         match value {
-            1 => Self::OfflineToOnlineTransfer,
-            2 => Self::OfflineSpendReceipt,
-            3 => Self::OfflineEnvelope,
+            1 => Self::OfflineReceiveChallengeV2,
+            2 => Self::OfflinePaymentTokenV2,
+            3 => Self::OfflineReceiptAckV2,
             _ => Self::Unspecified,
         }
     }
@@ -890,9 +890,9 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("unspecified");
         let payload_kind = match payload_kind {
-            "offline_to_online_transfer" => QrPayloadKind::OfflineToOnlineTransfer,
-            "offline_spend_receipt" => QrPayloadKind::OfflineSpendReceipt,
-            "offline_envelope" => QrPayloadKind::OfflineEnvelope,
+            "offline_receive_challenge_v2" => QrPayloadKind::OfflineReceiveChallengeV2,
+            "offline_payment_token_v2" => QrPayloadKind::OfflinePaymentTokenV2,
+            "offline_receipt_ack_v2" => QrPayloadKind::OfflineReceiptAckV2,
             _ => QrPayloadKind::Unspecified,
         };
         let envelope_hex = value

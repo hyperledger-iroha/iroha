@@ -25,9 +25,9 @@ geração de código.
 
 | Caminho | Finalidade | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | Instantâneo canônico gerado a partir de `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; fonte de verdade para compilações de GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Espelha o instantâneo canônico para que os testes de unidade do Swift e o chicote de fumaça do XCFramework carreguem as mesmas constantes que os kernels do Metal esperam. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Os dispositivos Android/Kotlin compartilham o manifesto idêntico para testes de paridade e serialização. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Instantâneo canônico gerado a partir de `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; fonte de verdade para compilações de GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Espelha o instantâneo canônico para que os testes de unidade do Swift e o chicote de fumaça do XCFramework carreguem as mesmas constantes que os kernels do Metal esperam. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Os dispositivos Android/Kotlin compartilham o manifesto idêntico para testes de paridade e serialização. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Cada consumidor deve verificar o hash antes de conectar as constantes a uma GPU
 gasoduto. Quando o manifesto muda (novo conjunto de parâmetros ou perfil), o SHA e
@@ -39,7 +39,7 @@ O manifesto é gerado a partir das fontes Rust executando o `xtask`
 ajudante. O comando grava o arquivo canônico e os espelhos do SDK:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Use `--constants <path>`/`--vectors <path>` para substituir os destinos ou

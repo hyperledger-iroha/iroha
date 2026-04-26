@@ -179,69 +179,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Անցանց նպաստներ և դատավճիռների մետատվյալներ
+## Offline V2 readiness
 
-Անցանց արտոնությունների պատասխանները բացահայտում են մատյանների հարստացված մետատվյալները նախօրոք.
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` և `remaining_amount` վերադարձվում են հումքի հետ միասին
-ձայնագրեք, որպեսզի վահանակները ստիպված չլինեն վերծանել ներկառուցված Norito օգտակար բեռները: Նորը
-հետհաշվարկի օգնականներ (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) ընդգծում է հաջորդ ավարտվող ժամկետը (թարմացնել → քաղաքականություն
-→ վկայագիր), այնպես որ UI կրծքանշանները կարող են նախազգուշացնել օպերատորներին, երբ որևէ արտոնություն կա
-Մնաց <24 ժամ։ SDK-ն
-արտացոլում է REST ֆիլտրերը, որոնք ենթարկվում են `/v1/offline/reserve/topup`-ի կողմից.
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` և
-`requireVerdict` / `onlyMissingVerdict` բուլյաններ: Անվավեր համակցություններ (համար
-օրինակ `onlyMissingVerdict` + `verdictIdHex`) մերժվում են տեղայնորեն մինչև Torii
-կոչվում է.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Անցանց լիցքավորումներ (թողարկում + գրանցում)
-
-Օգտագործեք լիցքավորման օգնականները, երբ ցանկանում եք վկայական տալ և անմիջապես
-գրանցել այն մատյանում: SDK-ն ստուգում է տրված և գրանցված վկայականը
-ID-ները համընկնում են վերադարձից առաջ, և պատասխանը ներառում է երկու ծանրաբեռնվածությունը: Կա
-ոչ հատուկ լիցքավորման վերջնակետ; օգնականը շղթայում է խնդիրը + գրանցել զանգերը: Եթե
-դուք արդեն ունեք ստորագրված վկայական, զանգահարեք `registerOfflineAllowance` (կամ
-`renewOfflineAllowance`) ուղղակիորեն:
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii հարցումներ և հոսք (WebSockets)
 
 Հարցման օգնականները բացահայտում են կարգավիճակը, Prometheus չափումները, հեռաչափության պատկերները և իրադարձությունները

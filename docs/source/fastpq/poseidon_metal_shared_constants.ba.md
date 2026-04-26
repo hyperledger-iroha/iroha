@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | Юл | Маҡсат | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-тан генерацияланған канон снимок; хәҡиҡәт сығанағы өсөн GPU төҙөй. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Көҙгө канон снимок шулай Swift блогы һынауҙары һәм XCFramework төтөн жгут йөк шул уҡ константалар Metal ядролар көтә. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin ҡоролмалары паритет һәм сериализация һынауҙары өсөн бер үк күренеш менән бүлешә. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-тан генерацияланған канон снимок; хәҡиҡәт сығанағы өсөн GPU төҙөй. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Көҙгө канон снимок шулай Swift блогы һынауҙары һәм XCFramework төтөн жгут йөк шул уҡ константалар Metal ядролар көтә. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin ҡоролмалары паритет һәм сериализация һынауҙары өсөн бер үк күренеш менән бүлешә. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Һәр ҡулланыусы тикшерергә тейеш хеш проводка алдынан константалар GPU .
 торба үткәргес. Ҡасан манифест үҙгәрә (яңы параметр йыйылмаһы йәки профиль), SHA һәм
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 ярҙамсыһы. Команда канонлы файлды ла, SDK көҙгөһөн дә яҙа:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Ҡулланыу `--constants <path>`/`--vectors <path>` 2012 йәки 2000 й.

@@ -49,8 +49,8 @@ manager; the CLI does not keep a shadow control-plane mirror.
   - `https://solswap-indexer.sora/api/indexer/v1/health`
 - For clients that cannot resolve SoraDNS names directly yet, Taira exposes the
   owned Mon browser gateway:
-  - `https://docs.sora.mon.taira.sora.org/`
-  - `https://solswap-indexer.sora.mon.taira.sora.org/api/indexer/v1/health`
+  - `https://docs.sora.mon.taira.sora.net/`
+  - `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`
 - Torii also exposes a legacy generic fallback path:
   - `https://taira.sora.org/soradns/docs.sora/`
   - `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
@@ -598,7 +598,7 @@ For Taira-style deployments, keep Torii root bound to Torii itself and use the
 gateway host only as:
 
 - the Torii/control-plane base URL
-- the public non-SoraDNS browser form `https://<alias>.mon.taira.sora.org/...`
+- the public non-SoraDNS browser form `https://<alias>.mon.taira.sora.net/...`
 - the legacy fallback form `https://taira.sora.org/soradns/<alias>/...`
 - the SoraFS CID gateway for intentionally CID-only frontend assets
 

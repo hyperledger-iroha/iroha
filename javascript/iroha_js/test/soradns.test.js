@@ -31,9 +31,9 @@ customSuffixTest("deriveGatewayHosts supports the Taira Mon pretty suffix", () =
   });
   assert.equal(
     derived.prettyHost,
-    "solswap-indexer.sora.mon.taira.sora.org",
+    "solswap-indexer.sora.mon.taira.sora.net",
   );
   assert.ok(derived.canonicalHost.endsWith(".gw.sora.id"));
   assert.ok(derived.hostPatterns.includes(derived.prettyHost));
-  assert.ok(derived.matchesHost("SOLSWAP-INDEXER.SORA.MON.TAIRA.SORA.ORG"));
+  assert.ok(derived.matchesHost("SOLSWAP-INDEXER.SORA.MON.TAIRA.SORA.NET"));
 });

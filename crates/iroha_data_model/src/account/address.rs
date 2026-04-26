@@ -845,11 +845,9 @@ impl ControllerPayload {
         match self {
             Self::SingleKey { curve, public_key } => {
                 let (_alg, payload) = public_key.to_bytes();
-                if payload.len() <= u8::MAX as usize {
+                if let Ok(length) = u8::try_from(payload.len()) {
                     out.push(CONTROLLER_SINGLE_KEY_TAG);
                     out.push(curve.as_u8());
-                    let length =
-                        u8::try_from(payload.len()).expect("payload length bounded by prior check");
                     out.push(length);
                 } else {
                     out.push(CONTROLLER_SINGLE_KEY_EXTENDED_TAG);
@@ -883,6 +881,7 @@ impl ControllerPayload {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn decode(bytes: &[u8], cursor: &mut usize) -> Result<Self, AccountAddressError> {
         let tag = *bytes
             .get(*cursor)
@@ -918,7 +917,7 @@ impl ControllerPayload {
                     .ok_or(AccountAddressError::InvalidLength)?;
                 *cursor += 2;
                 let len = u16::from_be_bytes(len_bytes.try_into().unwrap()) as usize;
-                if len <= u8::MAX as usize {
+                if u8::try_from(len).is_ok() {
                     return Err(AccountAddressError::InvalidLength);
                 }
                 let payload = bytes

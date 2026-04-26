@@ -13,27 +13,18 @@ code generation.
 
 | Path | Purpose | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | Canonical snapshot generated from `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; source of truth for GPU builds. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Mirrors the canonical snapshot so Swift unit tests and the XCFramework smoke harness load the same constants the Metal kernels expect. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin fixtures share the identical manifest for parity and serialization tests. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Canonical snapshot generated from `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; source of truth for GPU builds. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Every consumer must verify the hash before wiring the constants into a GPU
 pipeline. When the manifest changes (new parameter set or profile), the SHA and
 the downstream mirrors must be updated in lock-step.
 
-## Regeneration
+## Updates
 
-The manifest is generated from the Rust sources by running the `xtask`
-helper. The command writes both the canonical file and the SDK mirrors:
-
-```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
-```
-
-Use `--constants <path>`/`--vectors <path>` to override the destinations or
-`--no-sdk-mirror` when regenerating only the canonical snapshot. The helper will
-mirror the artefacts into the Swift and Android trees when the flag is omitted,
-which keeps the hashes aligned for CI.
+The manifest is committed directly at the canonical path. When Poseidon
+parameters change, update `artifacts/poseidon/constants.ron`, refresh
+`EXPECTED_SHA256` in `crates/fastpq_prover/src/poseidon_manifest.rs`, and rerun
+the consistency tests before publishing GPU artifacts.
 
 ## Feeding Metal/CUDA Builds
 
@@ -47,9 +38,8 @@ which keeps the hashes aligned for CI.
   runtime (during Metal warm-up) so diagnostic tooling can assert that the
   shader constants match the published hash via
   `fastpq_prover::poseidon_manifest_sha256()`.
-- SDK fixture readers (Swift `PoseidonSnapshot`, Android `PoseidonSnapshot`) and
-  the Norito offline tooling rely on the same manifest, which prevents GPU-only
-  parameter forks.
+- SDK fixture readers and prover diagnostics rely on the same manifest, which
+  prevents GPU-only parameter forks.
 
 ## Validation
 

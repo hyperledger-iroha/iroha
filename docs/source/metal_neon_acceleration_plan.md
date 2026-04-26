@@ -178,7 +178,7 @@ implementation and testing.
 ## WP2-B Poseidon Manifest Loader & Self-Test Parity
 
 - `fastpq_prover::poseidon_manifest()` now embeds and parses
-  `artifacts/offline_poseidon/constants.ron`, computes its SHA-256
+  `artifacts/poseidon/constants.ron`, computes its SHA-256
   (`poseidon_manifest_sha256()`), and validates the snapshot against the CPU
   poseidon tables before any GPU work runs. `build_metal_context()` logs the
   digest during warm-up so telemetry exporters can publish

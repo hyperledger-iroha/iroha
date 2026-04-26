@@ -182,7 +182,7 @@ WP2-ի առաջին նշաձողը ներառում է Poseidon Metal միջու
   Մետաղ ընդդեմ պրոցեսորի դելտաներ՝ առանց նոր հեռաչափական հոսքերի հայտնագործման:
 
 ## WP2-B Poseidon Manifest Loader & Self-Test Parity- `fastpq_prover::poseidon_manifest()`-ն այժմ տեղադրում և վերլուծում է
-  `artifacts/offline_poseidon/constants.ron`, հաշվարկում է իր SHA-256-ը
+  `artifacts/poseidon/constants.ron`, հաշվարկում է իր SHA-256-ը
   (`poseidon_manifest_sha256()`) և վավերացնում է լուսանկարը պրոցեսորի նկատմամբ
   poseidon աղյուսակներ՝ նախքան GPU-ի ցանկացած աշխատանք: `build_metal_context()` գրանցում է
   մարսել տաքացման ժամանակ, որպեսզի հեռաչափություն արտահանողները կարողանան հրապարակել

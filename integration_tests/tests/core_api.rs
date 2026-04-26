@@ -37,8 +37,6 @@ mod native_escrow;
 mod nft;
 #[path = "non_mintable.rs"]
 mod non_mintable;
-#[path = "offline_allowance_security.rs"]
-mod offline_allowance_security;
 #[path = "pagination.rs"]
 mod pagination;
 #[path = "permissions.rs"]

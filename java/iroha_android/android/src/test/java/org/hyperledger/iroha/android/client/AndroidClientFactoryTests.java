@@ -30,10 +30,6 @@ import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClient;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketListener;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketOptions;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSession;
-import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectAttestation;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -130,18 +126,8 @@ public final class AndroidClientFactoryTests {
   }
 
   @Test
-  public void safetyDetectAndSorafsUseOkHttpExecutor() throws Exception {
+  public void sorafsUsesOkHttpExecutor() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(
-          new MockResponse()
-              .setResponseCode(200)
-              .setHeader("Content-Type", "application/json")
-              .setBody("{\"access_token\":\"token-abc\",\"expires_in\":120}"));
-      server.enqueue(
-          new MockResponse()
-              .setResponseCode(200)
-              .setHeader("Content-Type", "application/json")
-              .setBody("{\"token\":\"attestation-ok\"}"));
       server.enqueue(
           new MockResponse()
               .setResponseCode(200)
@@ -150,45 +136,6 @@ public final class AndroidClientFactoryTests {
       server.start();
 
       final AndroidClientFactory factory = AndroidClientFactory.withDefaultClient();
-
-      final SafetyDetectOptions safetyOptions =
-          SafetyDetectOptions.builder()
-              .setOauthEndpoint(server.url("/oauth").uri())
-              .setAttestationEndpoint(server.url("/attest").uri())
-              .setClientId("client-id")
-              .setClientSecret("client-secret")
-              .setPackageName("com.test.app")
-              .setSigningDigestSha256("cafebabe")
-              .setRequestTimeout(Duration.ofSeconds(5))
-              .setTokenSkew(Duration.ZERO)
-              .build();
-      final HttpSafetyDetectService safetyService =
-          factory.createSafetyDetectService(safetyOptions);
-      final SafetyDetectRequest request =
-          SafetyDetectRequest.builder()
-              .setCertificateIdHex("aa11")
-              .setAppId("app-1")
-              .setNonceHex("00ff")
-              .setPackageName("com.test.app")
-              .setSigningDigestSha256("cafebabe")
-              .build();
-      final SafetyDetectAttestation attestation =
-          safetyService.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals("attestation-ok", attestation.token());
-
-      final RecordedRequest oauth = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull(oauth);
-      assertEquals("/oauth", oauth.getPath());
-      assertEquals("POST", oauth.getMethod());
-      final String oauthBody = oauth.getBody().readUtf8();
-      assertTrue(oauthBody.contains("client_id=client-id"));
-      assertTrue(oauthBody.contains("client_secret=client-secret"));
-
-      final RecordedRequest attest = server.takeRequest(1, TimeUnit.SECONDS);
-      assertNotNull(attest);
-      assertEquals("/attest", attest.getPath());
-      assertEquals("POST", attest.getMethod());
-      assertEquals("Bearer token-abc", attest.getHeader("Authorization"));
 
       final TelemetryCaptureSink sink = new TelemetryCaptureSink(1, 1);
       final ClientConfig config = clientConfig(server, sink);

@@ -9,7 +9,7 @@ const MAX_FQDN_LENGTH: usize = 253;
 const MAX_LABEL_LENGTH: usize = 63;
 const CANONICAL_SUFFIX: &str = "gw.sora.id";
 const PRETTY_SUFFIX: &str = "gw.sora.name";
-const TAIRA_MON_PRETTY_SUFFIX: &str = "mon.taira.sora.org";
+const TAIRA_MON_PRETTY_SUFFIX: &str = "mon.taira.sora.net";
 const CANONICAL_WILDCARD: &str = "*.gw.sora.id";
 
 /// Gateway host derivation profile.
@@ -28,7 +28,7 @@ impl<'a> GatewayHostProfile<'a> {
         Self { pretty_suffix }
     }
 
-    /// Default upstream SoraDNS gateway profile.
+    /// Default upstream `SoraDNS` gateway profile.
     #[must_use]
     pub const fn default_profile() -> GatewayHostProfile<'static> {
         GatewayHostProfile::new(PRETTY_SUFFIX)
@@ -157,7 +157,7 @@ pub const fn pretty_gateway_suffix() -> &'static str {
     PRETTY_SUFFIX
 }
 
-/// Return the Taira Mon pretty gateway suffix (`mon.taira.sora.org`).
+/// Return the Taira Mon pretty gateway suffix (`mon.taira.sora.net`).
 #[must_use]
 pub const fn taira_mon_pretty_gateway_suffix() -> &'static str {
     TAIRA_MON_PRETTY_SUFFIX
@@ -355,10 +355,10 @@ mod tests {
         assert_eq!(bindings.normalized_name(), "solswap-indexer.sora");
         assert_eq!(
             bindings.pretty_host(),
-            "solswap-indexer.sora.mon.taira.sora.org"
+            "solswap-indexer.sora.mon.taira.sora.net"
         );
         assert!(bindings.canonical_host().ends_with(".gw.sora.id"));
-        assert!(bindings.matches_host("SOLSWAP-INDEXER.SORA.MON.TAIRA.SORA.ORG"));
+        assert!(bindings.matches_host("SOLSWAP-INDEXER.SORA.MON.TAIRA.SORA.NET"));
     }
 
     #[test]

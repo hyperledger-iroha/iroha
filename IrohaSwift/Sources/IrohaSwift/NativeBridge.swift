@@ -58,7 +58,7 @@ enum NoritoBridgeLoader {
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
         // dlopen(nil) returns a handle to the 57 KB stub. The stub may re-export a few symbols
         // (e.g. connect_norito_free) so the dlsym probe succeeds, but calling heavier functions
-        // like offlineReceiptChallenge through the stub crashes.  Always prefer the debug dylib.
+        // through the stub crashes. Always prefer the debug dylib.
         if let execURL = Bundle.main.executableURL {
             let debugDylibURL = execURL.deletingLastPathComponent()
                 .appendingPathComponent(execURL.lastPathComponent + ".debug.dylib")
@@ -544,24 +544,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let chainDiscriminantLock = NSRecursiveLock()
     #endif
 
-    struct NativeOfflineReceiptChallengeResult {
-        let preimage: Data
-        let irohaHash: Data
-        let clientHash: Data
-    }
-
-    enum OfflineReceiptChallengeBridgeError: Error {
-        case callFailed(Int32)
-    }
-    enum OfflineReceiptsRootBridgeError: Error {
-        case callFailed(Int32)
-    }
-    enum OfflineCommitmentBridgeError: Error {
-        case callFailed(Int32)
-    }
-    enum OfflineBalanceProofBridgeError: Error {
-        case callFailed(Int32)
-    }
     private func throwOnStatus(_ status: Int32) throws {
         if let error = NativeBridgeError.fromStatus(status) {
             throw error
@@ -1274,25 +1256,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
     ) -> Int32
 
-    private typealias OfflineReceiptChallengeFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UInt8>?, UInt
-    ) -> Int32
-
-    private typealias OfflineReceiptsRootFn = @convention(c) (
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UInt8>?, UInt
-    ) -> Int32
-
     private typealias Sm2DefaultDistidFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
@@ -1614,25 +1577,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
-    private typealias OfflineCommitmentUpdateFn = @convention(c) (
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?
-    ) -> Int32
-    private typealias OfflineBalanceProofFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?
-    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1714,10 +1658,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeConfidentialPayloadFn: EncodeConfidentialPayloadFn? = nil
     private var accountAddressParseFn: AccountAddressParseFn? = nil
     private var accountAddressRenderFn: AccountAddressRenderFn? = nil
-    private var offlineReceiptChallengeFn: OfflineReceiptChallengeFn? = nil
-    private var offlineReceiptsRootFn: OfflineReceiptsRootFn? = nil
-    private var offlineCommitmentUpdateFn: OfflineCommitmentUpdateFn? = nil
-    private var offlineBalanceProofFn: OfflineBalanceProofFn? = nil
     private var publicKeyFromPrivateFn: PublicKeyFromPrivateFn? = nil
     private var keypairFromSeedFn: KeypairFromSeedFn? = nil
     private var signDetachedFn: SignDetachedFn? = nil
@@ -1821,10 +1761,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeConfidentialPayloadFn: Any? = nil
     private let accountAddressParseFn: Any? = nil
     private let accountAddressRenderFn: Any? = nil
-    private let offlineReceiptChallengeFn: Any? = nil
-    private let offlineReceiptsRootFn: Any? = nil
-    private let offlineCommitmentUpdateFn: Any? = nil
-    private let offlineBalanceProofFn: Any? = nil
     private let publicKeyFromPrivateFn: Any? = nil
     private let keypairFromSeedFn: Any? = nil
     private let signDetachedFn: Any? = nil
@@ -2243,26 +2179,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.accountAddressRenderFn = nil
             }
-            if let offlineChallengeSymbol = dlsym(handle, "connect_norito_offline_receipt_challenge") {
-                self.offlineReceiptChallengeFn = unsafeBitCast(offlineChallengeSymbol, to: OfflineReceiptChallengeFn.self)
-            } else {
-                self.offlineReceiptChallengeFn = nil
-            }
-            if let offlineReceiptsRootSymbol = dlsym(handle, "connect_norito_offline_receipts_root") {
-                self.offlineReceiptsRootFn = unsafeBitCast(offlineReceiptsRootSymbol, to: OfflineReceiptsRootFn.self)
-            } else {
-                self.offlineReceiptsRootFn = nil
-            }
-            if let offlineCommitmentSymbol = dlsym(handle, "connect_norito_offline_commitment_update") {
-                self.offlineCommitmentUpdateFn = unsafeBitCast(offlineCommitmentSymbol, to: OfflineCommitmentUpdateFn.self)
-            } else {
-                self.offlineCommitmentUpdateFn = nil
-            }
-            if let offlineProofSymbol = dlsym(handle, "connect_norito_offline_balance_proof") {
-                self.offlineBalanceProofFn = unsafeBitCast(offlineProofSymbol, to: OfflineBalanceProofFn.self)
-            } else {
-                self.offlineBalanceProofFn = nil
-            }
             if let connectGenerateKeypairSymbol = dlsym(handle, "connect_norito_connect_generate_keypair") {
                 self.connectGenerateKeypairFn = unsafeBitCast(connectGenerateKeypairSymbol, to: ConnectGenerateKeypairFn.self)
             } else {
@@ -2557,10 +2473,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
             self.accountAddressRenderFn = nil
-            self.offlineReceiptChallengeFn = nil
-            self.offlineReceiptsRootFn = nil
-            self.offlineCommitmentUpdateFn = nil
-            self.offlineBalanceProofFn = nil
             self.sm2DefaultDistidFn = nil
             self.sm2KeypairFromSeedFn = nil
             self.sm2SignFn = nil
@@ -2629,12 +2541,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 setAccelerationConfigFn(UnsafeRawPointer(ptr))
             }
         }
-        NSLog("[NoritoNativeBridge] init done — status=%@, handle=%@, free=%@, commitUpdate=%@, balanceProof=%@",
+        NSLog("[NoritoNativeBridge] init done — status=%@, handle=%@, free=%@",
               "\(self.bridgeStatus)",
               self.bridgeHandle == nil ? "nil" : "ok",
-              self.freeFn == nil ? "nil" : "ok",
-              self.offlineCommitmentUpdateFn == nil ? "nil" : "ok",
-              self.offlineBalanceProofFn == nil ? "nil" : "ok")
+              self.freeFn == nil ? "nil" : "ok")
         #else
         self.bridgeStatus = .missing(path: "unsupported platform")
         #endif
@@ -2644,14 +2554,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return encodeTransferFn != nil && freeFn != nil
-        #else
-        return false
-        #endif
-    }
-
-    public var hasOfflineCommitmentUpdate: Bool {
-        #if canImport(Darwin)
-        return offlineCommitmentUpdateFn != nil
         #else
         return false
         #endif
@@ -3054,118 +2956,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
         return takeData(pointer: outPtr, length: UInt(outLen))
-        #else
-        return nil
-        #endif
-    }
-
-    func offlineReceiptChallenge(
-        chainId: String,
-        invoiceId: String,
-        receiverId: String,
-        assetId: String,
-        amount: String,
-        issuedAtMs: UInt64,
-        senderCertificateIdHex: String,
-        nonceHex: String
-    ) throws -> NativeOfflineReceiptChallengeResult? {
-        #if canImport(Darwin)
-        guard let offlineReceiptChallengeFn, let freeFn else { return nil }
-        var preimagePtr: UnsafeMutablePointer<UInt8>? = nil
-        var preimageLen: UInt = 0
-        var irohaHash = [UInt8](repeating: 0, count: 32)
-        var clientHash = [UInt8](repeating: 0, count: 32)
-        let irohaHashCount = UInt(irohaHash.count)
-        let clientHashCount = UInt(clientHash.count)
-
-        let status = irohaHash.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-            guard let hashPtr = hashBuffer.baseAddress else { return -1 }
-            return clientHash.withUnsafeMutableBufferPointer { clientBuffer -> Int32 in
-                guard let clientPtr = clientBuffer.baseAddress else { return -1 }
-                return chainId.withCString { chainPtr in
-                    return invoiceId.withCString { invoicePtr in
-                        return receiverId.withCString { receiverPtr in
-                            return assetId.withCString { assetPtr in
-                                return amount.withCString { amountPtr in
-                                    return senderCertificateIdHex.withCString { senderCertificateIdPtr in
-                                        return nonceHex.withCString { noncePtr in
-                                            offlineReceiptChallengeFn(
-                                                chainPtr,
-                                                UInt(chainId.utf8.count),
-                                                invoicePtr,
-                                                UInt(invoiceId.utf8.count),
-                                                receiverPtr,
-                                                UInt(receiverId.utf8.count),
-                                                assetPtr,
-                                                UInt(assetId.utf8.count),
-                                                amountPtr,
-                                                UInt(amount.utf8.count),
-                                                issuedAtMs,
-                                                senderCertificateIdPtr,
-                                                UInt(senderCertificateIdHex.utf8.count),
-                                                noncePtr,
-                                                UInt(nonceHex.utf8.count),
-                                                &preimagePtr,
-                                                &preimageLen,
-                                                hashPtr,
-                                                irohaHashCount,
-                                                clientPtr,
-                                                clientHashCount
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if status == 0 {
-            guard let preimage = takeData(pointer: preimagePtr, length: preimageLen) else {
-                return nil
-            }
-            return NativeOfflineReceiptChallengeResult(
-                preimage: preimage,
-                irohaHash: Data(irohaHash),
-                clientHash: Data(clientHash)
-            )
-        }
-
-        if let preimagePtr {
-            freeFn(preimagePtr)
-        }
-        throw OfflineReceiptChallengeBridgeError.callFailed(status)
-        #else
-        return nil
-        #endif
-    }
-
-    func offlineReceiptsRoot(receiptsJson: Data) throws -> Data? {
-        #if canImport(Darwin)
-        guard let offlineReceiptsRootFn else { return nil }
-        guard !receiptsJson.isEmpty else {
-            return Data(repeating: 0, count: 32)
-        }
-        var outRoot = [UInt8](repeating: 0, count: 32)
-        let outLen = UInt(outRoot.count)
-        let status = receiptsJson.withUnsafeBytes { buffer -> Int32 in
-            guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-            return outRoot.withUnsafeMutableBufferPointer { rootBuffer -> Int32 in
-                guard let rootPtr = rootBuffer.baseAddress else { return -1 }
-                return offlineReceiptsRootFn(
-                    base,
-                    UInt(buffer.count),
-                    rootPtr,
-                    outLen
-                )
-            }
-        }
-        if status == 0 {
-            return Data(outRoot)
-        }
-        throw OfflineReceiptsRootBridgeError.callFailed(status)
         #else
         return nil
         #endif
@@ -7045,155 +6835,6 @@ extension NoritoNativeBridge {
         }
         let data = Data(bytes: summaryPtr, count: Int(outputLen))
         freeFn(summaryPtr)
-        return data
-        #else
-        return nil
-        #endif
-    }
-
-    func offlineCommitmentUpdate(
-        claimedDelta: String,
-        initialCommitment: Data,
-        initialBlinding: Data,
-        resultingBlinding: Data
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard let offlineCommitmentUpdateFn = offlineCommitmentUpdateFn,
-              let freeFn = freeFn else {
-            NSLog("[NoritoNativeBridge] offlineCommitmentUpdate: fn=%@, free=%@, bridgeHandle=%@",
-                  self.offlineCommitmentUpdateFn == nil ? "nil" : "ok",
-                  self.freeFn == nil ? "nil" : "ok",
-                  self.bridgeHandle == nil ? "nil" : "ok")
-            return nil
-        }
-        guard !initialCommitment.isEmpty,
-              !initialBlinding.isEmpty,
-              !resultingBlinding.isEmpty else {
-            return nil
-        }
-        var outputPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outputLen: UInt = 0
-        let status = claimedDelta.withCString { deltaPtr in
-            initialCommitment.withUnsafeBytes { initCommitBuffer -> Int32 in
-                guard let initCommitPtr = initCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                    return -1
-                }
-                return initialBlinding.withUnsafeBytes { initBlindBuffer -> Int32 in
-                    guard let initBlindPtr = initBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                        return -1
-                    }
-                    return resultingBlinding.withUnsafeBytes { resBlindBuffer -> Int32 in
-                        guard let resBlindPtr = resBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                            return -1
-                        }
-                        return offlineCommitmentUpdateFn(
-                            initCommitPtr,
-                            UInt(initialCommitment.count),
-                            deltaPtr,
-                            UInt(claimedDelta.utf8.count),
-                            initBlindPtr,
-                            UInt(initialBlinding.count),
-                            resBlindPtr,
-                            UInt(resultingBlinding.count),
-                            &outputPtr,
-                            &outputLen
-                        )
-                    }
-                }
-            }
-        }
-        guard status == 0 else {
-            if let pointer = outputPtr {
-                freeFn(pointer)
-            }
-            throw OfflineCommitmentBridgeError.callFailed(status)
-        }
-        guard let pointer = outputPtr else {
-            return Data()
-        }
-        let data = Data(bytes: pointer, count: Int(outputLen))
-        freeFn(pointer)
-        return data
-        #else
-        return nil
-        #endif
-    }
-
-    func offlineBalanceProof(
-        chainId: String,
-        claimedDelta: String,
-        resultingValue: String,
-        initialCommitment: Data,
-        resultingCommitment: Data,
-        initialBlinding: Data,
-        resultingBlinding: Data
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard let offlineBalanceProofFn = offlineBalanceProofFn,
-              let freeFn = freeFn else { return nil }
-        guard !initialCommitment.isEmpty,
-              !resultingCommitment.isEmpty,
-              !initialBlinding.isEmpty,
-              !resultingBlinding.isEmpty else {
-            return nil
-        }
-        var proofPtr: UnsafeMutablePointer<UInt8>? = nil
-        var proofLen: UInt = 0
-        let status = chainId.withCString { chainPtr in
-            claimedDelta.withCString { deltaPtr in
-                resultingValue.withCString { valuePtr in
-                    initialCommitment.withUnsafeBytes { initCommitBuffer -> Int32 in
-                        guard let initCommitPtr = initCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                            return -1
-                        }
-                        return resultingCommitment.withUnsafeBytes { resCommitBuffer -> Int32 in
-                            guard let resCommitPtr = resCommitBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                return -1
-                            }
-                            return initialBlinding.withUnsafeBytes { initBlindBuffer -> Int32 in
-                                guard let initBlindPtr = initBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                    return -1
-                                }
-                                return resultingBlinding.withUnsafeBytes { resBlindBuffer -> Int32 in
-                                    guard let resBlindPtr = resBlindBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                                        return -1
-                                    }
-                                    return offlineBalanceProofFn(
-                                        chainPtr,
-                                        UInt(chainId.utf8.count),
-                                        initCommitPtr,
-                                        UInt(initialCommitment.count),
-                                        resCommitPtr,
-                                        UInt(resultingCommitment.count),
-                                        deltaPtr,
-                                        UInt(claimedDelta.utf8.count),
-                                        valuePtr,
-                                        UInt(resultingValue.utf8.count),
-                                        initBlindPtr,
-                                        UInt(initialBlinding.count),
-                                        resBlindPtr,
-                                        UInt(resultingBlinding.count),
-                                        &proofPtr,
-                                        &proofLen
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        guard status == 0 else {
-            if let pointer = proofPtr {
-                freeFn(pointer)
-            }
-            throw OfflineBalanceProofBridgeError.callFailed(status)
-        }
-        guard let pointer = proofPtr else {
-            return Data()
-        }
-        let data = Data(bytes: pointer, count: Int(proofLen))
-        freeFn(pointer)
         return data
         #else
         return nil

@@ -13,8 +13,6 @@ public sealed class SignedIterableQueryBuilder
     private ManagedIterableQueryKind? iterableQueryKind;
     private string? accountId;
     private string? assetDefinitionId;
-    private string? certificateId;
-    private string? offlineTransferId;
     private string? continueQueryId;
     private ulong continueCursor;
     private ulong? continueGasBudget;
@@ -186,56 +184,6 @@ public sealed class SignedIterableQueryBuilder
         return this;
     }
 
-    public SignedIterableQueryBuilder FindOfflineAllowances()
-    {
-        Reset();
-        requestMode = RequestMode.Start;
-        iterableQueryKind = ManagedIterableQueryKind.FindOfflineAllowances;
-        return this;
-    }
-
-    public SignedIterableQueryBuilder FindOfflineAllowanceByCertificateId(string certificateId)
-    {
-        Reset();
-        requestMode = RequestMode.Start;
-        iterableQueryKind = ManagedIterableQueryKind.FindOfflineAllowanceByCertificateId;
-        this.certificateId = NormalizeRequiredValue(certificateId, nameof(certificateId));
-        return this;
-    }
-
-    public SignedIterableQueryBuilder FindOfflineToOnlineTransfers()
-    {
-        Reset();
-        requestMode = RequestMode.Start;
-        iterableQueryKind = ManagedIterableQueryKind.FindOfflineToOnlineTransfers;
-        return this;
-    }
-
-    public SignedIterableQueryBuilder FindOfflineToOnlineTransferById(string bundleId)
-    {
-        Reset();
-        requestMode = RequestMode.Start;
-        iterableQueryKind = ManagedIterableQueryKind.FindOfflineToOnlineTransferById;
-        offlineTransferId = NormalizeRequiredValue(bundleId, nameof(bundleId));
-        return this;
-    }
-
-    public SignedIterableQueryBuilder FindOfflineCounterSummaries()
-    {
-        Reset();
-        requestMode = RequestMode.Start;
-        iterableQueryKind = ManagedIterableQueryKind.FindOfflineCounterSummaries;
-        return this;
-    }
-
-    public SignedIterableQueryBuilder FindOfflineVerdictRevocations()
-    {
-        Reset();
-        requestMode = RequestMode.Start;
-        iterableQueryKind = ManagedIterableQueryKind.FindOfflineVerdictRevocations;
-        return this;
-    }
-
     public SignedIterableQueryBuilder Continue(string queryId, ulong cursor, ulong? gasBudget = null)
     {
         if (cursor == 0)
@@ -382,12 +330,6 @@ public sealed class SignedIterableQueryBuilder
             ManagedIterableQueryKind.FindBlocks => Array.Empty<byte>(),
             ManagedIterableQueryKind.FindBlockHeaders => Array.Empty<byte>(),
             ManagedIterableQueryKind.FindProofRecords => Array.Empty<byte>(),
-            ManagedIterableQueryKind.FindOfflineAllowances => Array.Empty<byte>(),
-            ManagedIterableQueryKind.FindOfflineAllowanceByCertificateId => EncodeSingleFieldStruct(context.EncodeHashLiteral(certificateId!)),
-            ManagedIterableQueryKind.FindOfflineToOnlineTransfers => Array.Empty<byte>(),
-            ManagedIterableQueryKind.FindOfflineToOnlineTransferById => EncodeSingleFieldStruct(context.EncodeHashLiteral(offlineTransferId!)),
-            ManagedIterableQueryKind.FindOfflineCounterSummaries => Array.Empty<byte>(),
-            ManagedIterableQueryKind.FindOfflineVerdictRevocations => Array.Empty<byte>(),
             _ => throw new InvalidOperationException("Unsupported iterable query kind."),
         };
     }
@@ -441,8 +383,6 @@ public sealed class SignedIterableQueryBuilder
         iterableQueryKind = null;
         accountId = null;
         assetDefinitionId = null;
-        certificateId = null;
-        offlineTransferId = null;
         continueQueryId = null;
         continueCursor = 0;
         continueGasBudget = null;
@@ -516,12 +456,6 @@ public sealed class SignedIterableQueryBuilder
             ManagedIterableQueryKind.FindBlockHeaders => 14,
             ManagedIterableQueryKind.FindProofRecords => 15,
             ManagedIterableQueryKind.FindPermissionsByAccountId => 16,
-            ManagedIterableQueryKind.FindOfflineAllowances => 17,
-            ManagedIterableQueryKind.FindOfflineAllowanceByCertificateId => 17,
-            ManagedIterableQueryKind.FindOfflineToOnlineTransfers => 18,
-            ManagedIterableQueryKind.FindOfflineToOnlineTransferById => 18,
-            ManagedIterableQueryKind.FindOfflineCounterSummaries => 19,
-            ManagedIterableQueryKind.FindOfflineVerdictRevocations => 20,
             ManagedIterableQueryKind.FindAccountsWithAsset => 1,
             ManagedIterableQueryKind.FindRolesByAccountId => 8,
             _ => throw new InvalidOperationException("Unsupported iterable query item kind."),
@@ -555,11 +489,5 @@ public sealed class SignedIterableQueryBuilder
         FindBlocks,
         FindBlockHeaders,
         FindProofRecords,
-        FindOfflineAllowances,
-        FindOfflineAllowanceByCertificateId,
-        FindOfflineToOnlineTransfers,
-        FindOfflineToOnlineTransferById,
-        FindOfflineCounterSummaries,
-        FindOfflineVerdictRevocations,
     }
 }

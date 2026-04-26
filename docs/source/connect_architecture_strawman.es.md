@@ -16,8 +16,8 @@ Esta propuesta de pajaro describe el diseño compartido para los flujos de traba
 en los SDK de Swift, Android y JavaScript. Se pretende apoyar la
 Taller entre SDK de febrero de 2026 y captura de preguntas abiertas antes de la implementación.
 
-> Última actualización: 2026-01-29  
-> Autores: Líder de SDK de Swift, TL de redes de Android, Líder de JS  
+> Última actualización: 2026-01-29
+> Autores: Líder de SDK de Swift, TL de redes de Android, Líder de JS
 > Estado: Borrador para revisión del consejo (modelo de amenazas + alineación de retención de datos agregada el 12 de marzo de 2026)
 
 ## Metas
@@ -106,17 +106,17 @@ todavía captura el mandato que condujo a la integración del puente:
 
 ### Identificadores de sesión y sales
 
-- `sid` es un identificador de 32 bytes derivado de `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
+- `sid` es un identificador de 32 bytes derivado de `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.
   Las DApps lo calculan antes de llamar a `/v1/connect/session`; las billeteras lo hacen eco en marcos `approve` para que ambos lados puedan ingresar diarios y telemetría de manera consistente.
 - La misma sal alimenta cada paso de derivación de claves para que los SDK nunca dependan de la entropía recopilada de la plataforma host.
 
 ### Manejo de claves efímeras
 
-- Cada sesión utiliza material clave X25519 nuevo.  
+- Cada sesión utiliza material clave X25519 nuevo.
   Swift lo almacena en Keychain/Secure Enclave a través de `ConnectCrypto`, las billeteras de Android están predeterminadas en StrongBox (recurriendo a los almacenes de claves respaldados por TEE) y JS requiere una instancia WebCrypto de contexto seguro o el complemento nativo `iroha_js_host`.
 - Los marcos abiertos incluyen la clave pública efímera de dApp más un paquete de certificación opcional. Las aprobaciones de billetera devuelven la clave pública de la billetera y cualquier certificación de hardware necesaria para los flujos de cumplimiento.
-- Las cargas útiles de certificación siguen el esquema aceptado:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
+- Las cargas útiles de certificación siguen el esquema aceptado:
+  `attestation { platform, evidence_b64, statement_hash }`.
   Los navegadores pueden omitir el bloqueo; las billeteras nativas lo incluyen siempre que se utilizan claves respaldadas por hardware.
 
 ### Teclas direccionales y AEAD
@@ -124,7 +124,7 @@ todavía captura el mandato que condujo a la integración del puente:
 - Los secretos compartidos se amplían con HKDF-SHA256 (a través de los ayudantes del puente Rust) y cadenas de información separadas por dominio:
   - `iroha-connect|k_app` → aplicación → tráfico de billetera.
   - `iroha-connect|k_wallet` → billetera → tráfico de aplicaciones.
-- AEAD es ChaCha20-Poly1305 para el sobre v1 (`connect_norito_bridge` expone ayudas en cada plataforma).  
+- AEAD es ChaCha20-Poly1305 para el sobre v1 (`connect_norito_bridge` expone ayudas en cada plataforma).
   Los datos asociados equivalen a `("connect:v1", sid, dir, seq_le, kind=ciphertext)`, por lo que se detecta manipulación de los encabezados.
 - Los nonces se derivan del contador de secuencia de 64 bits (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Las pruebas de ayuda compartidas garantizan que las conversiones BigInt/UInt se comporten de manera idéntica en todos los SDK.
 
@@ -135,19 +135,19 @@ Para conocer las alternativas históricas de CryptoKit, consulte `docs/connect_s
 
 ## Permisos y pruebas
 
-- Los manifiestos de permiso deben recorrer la estructura Norito compartida exportada por el puente.  
+- Los manifiestos de permiso deben recorrer la estructura Norito compartida exportada por el puente.
   Campos:
-  - `methods` — verbos (`sign_transaction`, `sign_raw`, `submit_proof`,…).  
-  - `events`: suscripciones a las que se permite adjuntar la dApp.  
-  - `resources`: filtros opcionales de cuenta/activos para que las billeteras puedan acceder al alcance.  
+  - `methods` — verbos (`sign_transaction`, `sign_raw`, `submit_proof`,…).
+  - `events`: suscripciones a las que se permite adjuntar la dApp.
+  - `resources`: filtros opcionales de cuenta/activos para que las billeteras puedan acceder al alcance.
   - `constraints`: ID de cadena, TTL o controles de política personalizados que la billetera aplica antes de firmar.
 - Los metadatos de cumplimiento van junto con los permisos:
-  - El `attachments[]` opcional contiene referencias de archivos adjuntos Norito (paquetes KYC, recibos de reguladores).  
+  - El `attachments[]` opcional contiene referencias de archivos adjuntos Norito (paquetes KYC, recibos de reguladores).
   - `compliance_manifest_id` vincula la solicitud a un manifiesto previamente aprobado para que los operadores puedan auditar la procedencia.
 - Las respuestas de Wallet utilizan los códigos acordados:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
+  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.
   Cada uno puede llevar un `localized_message` para sugerencias de UI más un `reason_code` legible por máquina.
-- Los marcos de aprobación incluyen la cuenta/controlador seleccionado, el eco de permiso, el paquete de pruebas (prueba o atestación ZK) y cualquier cambio de política (por ejemplo, `offline_queue_enabled`).  
+- Los marcos de aprobación incluyen la cuenta/controlador seleccionado, el eco de permiso, el paquete de pruebas (prueba o atestación ZK) y cualquier cambio de política (por ejemplo, `deferred_queue_enabled`).
   Los rechazos reflejan el mismo esquema con `proof` vacío pero aún registran el `sid` para auditabilidad.
 
 ## Fachadas SDK
@@ -171,7 +171,7 @@ Para conocer las alternativas históricas de CryptoKit, consulte `docs/connect_s
 - Manejo de errores: asigne códigos de error Norito a errores específicos del SDK; incluir
   códigos específicos de dominio para la interfaz de usuario que utilizan la taxonomía compartida (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`). La guía de telemetría e implementación básica de Swift se encuentra en [`connect_error_taxonomy.md`](connect_error_taxonomy.md) y es la referencia para la paridad de Android/JS.
 - Emitir enlaces de telemetría para profundidad de cola, recuentos de reconexión y latencia de solicitudes (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
- 
+
 ## Números de secuencia y control de flujo
 
 - Cada dirección mantiene un contador `sequence` dedicado de 64 bits que comienza en cero cuando se abre la sesión. El ayudante compartido escribe incrementos de abrazadera y activa un protocolo de enlace de rotación de tecla `ConnectError.sequenceOverflow` + mucho antes de que el contador se ajuste.
@@ -294,7 +294,7 @@ común en Swift (`ConnectSessionDiagnostics`), Android
   - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
   - JS: `ConnectQueueInspector.read()` devuelve la misma estructura y un identificador de blob
     ese código de interfaz de usuario se puede cargar en las herramientas de soporte Torii.
-- Cuando una aplicación alterna `offline_queue_enabled=false`, los SDK se agotan inmediatamente y
+- Cuando una aplicación alterna `deferred_queue_enabled=false`, los SDK se agotan inmediatamente y
   purgue ambos diarios, marque el estado como `Disabled` y emita un terminal
   evento de telemetría. La preferencia de cara al usuario se refleja en el Norito
   marco de aprobación para que los pares sepan si pueden reanudar los marcos almacenados en búfer.

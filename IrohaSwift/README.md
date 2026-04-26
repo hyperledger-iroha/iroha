@@ -498,32 +498,7 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-For offline cash flows, use the dedicated offline cash helpers on an authenticated `ToriiClient`
-and treat the returned envelope as authoritative:
-
-```swift
-if #available(iOS 15, macOS 12, *) {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.httpAdditionalHeaders = [
-        "X-Account-Id": authorityId,
-        "X-Dataspace-Id": dataspaceId,
-        "X-Device-Id": deviceBinding.deviceId,
-    ]
-    let session = URLSession(configuration: configuration)
-    let sdk = ToriiClient(baseURL: coreApiBaseURL, session: session)
-    let request = try ToriiOfflineCashLoadRequest(
-        operationId: UUID().uuidString,
-        lineageId: existingEnvelope.lineageState.lineageId,
-        accountId: authorityId,
-        assetDefinitionId: assetDefinitionId,
-        amount: "10.00",
-        deviceBinding: deviceBinding,
-        deviceProof: deviceProof
-    )
-    let envelope = try await sdk.loadOfflineCash(request)
-    print("cash", envelope.lineageState.lineageId, "balance", envelope.lineageState.balance)
-}
-```
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint; the Swift SDK no longer publishes non-V2 offline HTTP helpers.
 
 ### Offline transaction queue
 
@@ -547,7 +522,16 @@ apps can decide how to remediate.
 
 Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
 issuance, redemption, and audit payloads are submitted as transaction instructions; the legacy
-offline cash, transfer-history, and revocation HTTP routes are no longer published.
+non-V2 offline HTTP routes are no longer published.
+Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
+one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
+source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a
+previously issued note claim before escrowed value is released. Optional audit bundles bind their
+token id, observed nullifiers, output commitments, and certified key payload to the proof, and the
+certified key must have been issued on-ledger first.
+Recursive proofs must name an active `offline_note_v2` verifier key in WSV, carry an
+`OpenVerifyEnvelope`, match `offline_note_v2_recursive_public_inputs_schema_hash()`, and expose the
+public-input hash limbs followed by the reserved sentinel limbs.
 
 Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
 backoff, retrying 429/5xx responses and transport errors). For example:

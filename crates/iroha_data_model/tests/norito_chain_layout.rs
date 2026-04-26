@@ -63,10 +63,7 @@ fn sample_transaction(instruction_count: usize) -> SignedTransaction {
     let chain: ChainId = "norito-chain-layout-test".parse().expect("chain id");
     let instructions = (0..instruction_count)
         .map(|index| {
-            InstructionBox::from(Log::new(
-                Level::INFO,
-                format!("layout instruction {index}").into(),
-            ))
+            InstructionBox::from(Log::new(Level::INFO, format!("layout instruction {index}")))
         })
         .collect::<Vec<_>>();
 
@@ -210,7 +207,7 @@ where
     );
 }
 
-fn assert_versioned_default_matches_compact<T>(label: &str, value: &T, versioned: Vec<u8>)
+fn assert_versioned_default_matches_compact<T>(label: &str, value: &T, versioned: &[u8])
 where
     T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq + Debug,
     T: DecodeVersioned,
@@ -220,7 +217,8 @@ where
     let canonical = versioned_payload_with_layout(value, version, candidate_by_name("canonical"));
 
     assert_eq!(
-        versioned, compact,
+        versioned,
+        compact.as_slice(),
         "{label} versioned encoding must use compact lengths by default"
     );
     assert!(
@@ -230,7 +228,7 @@ where
         canonical.len()
     );
 
-    let decoded = T::decode_all_versioned(&versioned).expect("decode compact versioned payload");
+    let decoded = T::decode_all_versioned(versioned).expect("decode compact versioned payload");
     assert_eq!(decoded, *value, "{label} compact versioned roundtrip");
     assert!(
         T::decode_all_versioned(&canonical).is_err(),
@@ -371,13 +369,13 @@ fn default_framed_chain_payloads_advertise_compact_lengths() {
 #[test]
 fn versioned_transaction_payloads_use_compact_default() {
     let tx = sample_transaction(8);
-    assert_versioned_default_matches_compact("signed_transaction", &tx, tx.encode_versioned());
+    assert_versioned_default_matches_compact("signed_transaction", &tx, &tx.encode_versioned());
 
     let entrypoint = TransactionEntrypoint::from(sample_transaction(8));
     assert_versioned_default_matches_compact(
         "transaction_entrypoint",
         &entrypoint,
-        entrypoint.encode_versioned(),
+        &entrypoint.encode_versioned(),
     );
 }
 

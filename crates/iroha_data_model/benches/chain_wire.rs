@@ -63,10 +63,7 @@ fn sample_transaction(instruction_count: usize) -> SignedTransaction {
     let chain: ChainId = "norito-chain-wire-bench".parse().expect("chain id");
     let instructions = (0..instruction_count)
         .map(|index| {
-            InstructionBox::from(Log::new(
-                Level::INFO,
-                format!("bench instruction {index}").into(),
-            ))
+            InstructionBox::from(Log::new(Level::INFO, format!("bench instruction {index}")))
         })
         .collect::<Vec<_>>();
 

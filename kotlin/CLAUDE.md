@@ -48,7 +48,7 @@ Android-specific additions:
 
 ### Module: `offline-wallet-android` (AAR, depends on `client-android`)
 Offline wallet with native libraries:
-- **`sdk.offline`** — OfflineWallet, JNI wrappers (OfflineBalanceProof, OfflineReceiptChallenge), verdicts, counter journal
+- **`sdk.offline`** — Offline V2 readiness and Fountain QR helpers
 - **`sdk.offline.attestation`** — Play Integrity, SafetyDetect
 - **`jniLibs/`** — `libconnect_norito_bridge.so` (built from Rust source, not tracked in git)
 

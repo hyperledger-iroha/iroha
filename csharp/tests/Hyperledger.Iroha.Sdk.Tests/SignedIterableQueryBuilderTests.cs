@@ -11,8 +11,6 @@ public sealed class SignedIterableQueryBuilderTests
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-    private const string FixtureCertificateId = "1111111111111111111111111111111111111111111111111111111111111122";
-    private const string FixtureOfflineTransferId = "2222222222222222222222222222222222222222222222222222222222222240";
 
     [Fact]
     public void BuildSignedEncodesZeroPayloadIterableQueries()
@@ -81,22 +79,6 @@ public sealed class SignedIterableQueryBuilderTests
             new SignedIterableQueryBuilder(FixtureAccountId).FindProofRecords().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
             expectedItemKindDiscriminant: 15,
             expectedQueryPayload: Array.Empty<byte>());
-        AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindOfflineAllowances().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
-            expectedItemKindDiscriminant: 17,
-            expectedQueryPayload: Array.Empty<byte>());
-        AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindOfflineToOnlineTransfers().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
-            expectedItemKindDiscriminant: 18,
-            expectedQueryPayload: Array.Empty<byte>());
-        AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindOfflineCounterSummaries().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
-            expectedItemKindDiscriminant: 19,
-            expectedQueryPayload: Array.Empty<byte>());
-        AssertIterableStart(
-            new SignedIterableQueryBuilder(FixtureAccountId).FindOfflineVerdictRevocations().BuildSigned(Convert.FromHexString(FixtureSeedHex)),
-            expectedItemKindDiscriminant: 20,
-            expectedQueryPayload: Array.Empty<byte>());
     }
 
     [Fact]
@@ -134,25 +116,6 @@ public sealed class SignedIterableQueryBuilderTests
         Assert.Equal(8u, rolesParams.ItemKindDiscriminant);
         Assert.NotEmpty(ReadField(rolesParams.QueryPayload, out _));
 
-        var allowanceByCertificate = new SignedIterableQueryBuilder(FixtureAccountId)
-            .FindOfflineAllowanceByCertificateId(FixtureCertificateId)
-            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
-        var allowanceParams = ReadIterableStart(allowanceByCertificate);
-        Assert.Equal(17u, allowanceParams.ItemKindDiscriminant);
-        var certificateBytes = ReadField(allowanceParams.QueryPayload, out _);
-        var expectedCertificateBytes = Convert.FromHexString(FixtureCertificateId);
-        expectedCertificateBytes[^1] |= 0x01;
-        Assert.Equal(expectedCertificateBytes, certificateBytes);
-
-        var transferById = new SignedIterableQueryBuilder(FixtureAccountId)
-            .FindOfflineToOnlineTransferById(FixtureOfflineTransferId)
-            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
-        var transferParams = ReadIterableStart(transferById);
-        Assert.Equal(18u, transferParams.ItemKindDiscriminant);
-        var transferBytes = ReadField(transferParams.QueryPayload, out _);
-        var expectedTransferBytes = Convert.FromHexString(FixtureOfflineTransferId);
-        expectedTransferBytes[^1] |= 0x01;
-        Assert.Equal(expectedTransferBytes, transferBytes);
     }
 
     [Fact]
