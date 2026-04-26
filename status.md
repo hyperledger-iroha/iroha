@@ -2,6 +2,14 @@
 
 Last updated: 2026-04-26
 
+## 2026-04-26 Sumeragi locked-chain precommit vote fix
+
+- Fixed local precommit emission so a validator with a known locked block refuses to precommit a different block at the same height, even when the candidate is in a newer view. Missing locked payloads still keep the existing newer-view override behavior.
+- Focused validation for this slice:
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::precommit_vote_skips_when_block_conflicts_with_locked_chain -- --nocapture --exact`
+  - `cargo test -p iroha_core --lib emit_precommit_vote -- --nocapture`
+  - `cargo fmt --all`
+
 ## 2026-04-26 Nexus router default-lane reroute fix
 
 - Fixed state-aware queue rerouting so universal-only account scope is treated as fallback materialization, not as a dataspace routing target. Untargeted universal authority transactions now continue to use `nexus.routing_policy.default_lane`, while non-universal single-scope accounts still route to their dataspace lane.
