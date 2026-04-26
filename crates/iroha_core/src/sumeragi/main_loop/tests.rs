@@ -290,7 +290,22 @@ fn seed_commit_votes_for_block(
     view_idx: u64,
     count: usize,
 ) -> usize {
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let roster = actor.effective_commit_topology();
+    seed_commit_votes_for_block_with_roster(
+        actor, keypairs, block_hash, height, view_idx, &roster, count,
+    )
+}
+
+fn seed_commit_votes_for_block_with_roster(
+    actor: &mut Actor,
+    keypairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view_idx: u64,
+    roster: &[PeerId],
+    count: usize,
+) -> usize {
+    let topology = super::network_topology::Topology::new(roster.to_vec());
     let epoch = actor.epoch_for_height(height);
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
@@ -330,6 +345,62 @@ fn seed_commit_votes_for_block(
     }
 
     count.min(signature_topology.as_ref().len())
+}
+
+fn seed_verified_commit_votes_for_block_with_roster(
+    actor: &mut Actor,
+    keypairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view_idx: u64,
+    roster: &[PeerId],
+    count: usize,
+) -> usize {
+    let topology = super::network_topology::Topology::new(roster.to_vec());
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+
+    let mut seeded = 0usize;
+    for peer in signature_topology
+        .as_ref()
+        .iter()
+        .take(count.min(signature_topology.as_ref().len()))
+    {
+        let signer_idx = signature_topology
+            .as_ref()
+            .iter()
+            .position(|candidate| candidate == peer)
+            .expect("signer in topology");
+        let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+        let keypair = keypairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("matching signer keypair");
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        vote.bls_sig = signature.payload().to_vec();
+        actor.vote_log.insert(
+            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            vote,
+        );
+        seeded = seeded.saturating_add(1);
+    }
+
+    seeded
 }
 
 fn seed_near_quorum_commit_votes_for_block(
@@ -19345,7 +19416,7 @@ async fn commit_pipeline_runs_without_global_cooldown() {
 
     harness.actor.process_commit_candidates();
 
-    let has_vote = harness.actor.vote_log.values().any(|vote| {
+    let has_vote = harness.actor.stored_votes().any(|vote| {
         vote.phase == Phase::Commit
             && vote.block_hash == block_hash
             && vote.height == 1
@@ -19433,14 +19504,23 @@ async fn commit_pipeline_allows_tip_pending_with_cached_qc_without_proposal_evid
         .qc_cache
         .insert((Phase::Prepare, block_hash, 1, 0, epoch), qc);
 
-    actor.process_commit_candidates();
-
-    let has_vote = actor.vote_log.values().any(|vote| {
-        vote.phase == Phase::Commit
-            && vote.block_hash == block_hash
-            && vote.height == 1
-            && vote.view == 0
-    });
+    let mut has_vote = false;
+    for _ in 0..8 {
+        let _ = actor.poll_validation_results();
+        let _ = actor.process_pending_vote_validation();
+        let _ = actor.poll_commit_results();
+        actor.process_commit_candidates();
+        has_vote = actor.stored_votes().any(|vote| {
+            vote.phase == Phase::Commit
+                && vote.block_hash == block_hash
+                && vote.height == 1
+                && vote.view == 0
+        });
+        if has_vote {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
     assert!(
         has_vote,
         "QC-backed tip pending should emit a precommit vote even after proposal evidence churn"
@@ -125328,12 +125408,24 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
         let mut journal = actor.state.commit_roster_journal.write();
         journal.upsert(commit_qc, checkpoint, None);
     }
-    seed_near_quorum_commit_votes_for_block(
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 2,
+        "test requires at least two snapshot validators"
+    );
+    let seeded = seed_verified_commit_votes_for_block_with_roster(
         actor,
         &harness.key_pairs,
         block_hash,
         height,
         view_idx,
+        &snapshot_roster,
+        required.saturating_sub(1),
+    );
+    assert_eq!(
+        seeded,
+        required.saturating_sub(1),
+        "test setup should seed a snapshot-roster near-quorum"
     );
     actor
         .pending

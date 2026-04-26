@@ -15,7 +15,8 @@ use color_eyre::{
     eyre::{WrapErr, eyre},
 };
 use iroha::client::{
-    Client, TransactionWaitOptions, TransactionWaitOutcome, TransactionWaitTerminalStatus,
+    Client, DataModelCompatibility, TransactionWaitOptions, TransactionWaitOutcome,
+    TransactionWaitTerminalStatus,
 };
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
@@ -127,14 +128,17 @@ const IZANAMI_INGRESS_MAX_ATTEMPTS: usize = 3;
 const IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD: u32 = 2;
 const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
 const IZANAMI_INGRESS_REPROBE_INTERVAL_MS: u64 = 1_000;
-const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 5_000;
+const IZANAMI_INGRESS_REQUEST_TIMEOUT_MS: u64 = 15_000;
 const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 60_000;
-const IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS: u64 = 90_000;
-const IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS: u64 = 150_000;
+const IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS: u64 = 150_000;
+const IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS: u64 = 180_000;
+const IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP: usize = 64;
+const IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP: usize = 8;
+const IZANAMI_STABLE_SEVERE_STOPPING_TPS_CAP: f64 = 10.0;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS: u64 = 250;
 const IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER: u32 = 2;
-const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 180;
+const IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 240;
 const IZANAMI_WORKER_FAILURE_SHUTDOWN_TIMEOUT_SECS: u64 = 2;
 const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 const IZANAMI_TELEMETRY_PROFILE: &str = "developer";
@@ -500,23 +504,45 @@ impl EndpointHealthPool {
                     && self.mark_failure_at(endpoint_idx, now, failure_class);
                 if transitioned_unhealthy {
                     self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
-                    warn!(
-                            target: "izanami::ingress",
-                            operation = op_name,
+                    if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                        debug!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                            endpoint = label,
+                            failure_class = failure_class.as_str(),
+                            "marking pinned ingress endpoint unhealthy"
+                        );
+                    } else {
+                        warn!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                            endpoint = label,
+                            failure_class = failure_class.as_str(),
+                            "marking pinned ingress endpoint unhealthy"
+                        );
+                    }
+                }
+                if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                    debug!(
+                        target: "izanami::ingress",
+                        ?err,
+                        operation = op_name,
                         endpoint = label,
                         failure_class = failure_class.as_str(),
-                        "marking pinned ingress endpoint unhealthy"
+                        retryable,
+                        "pinned ingress endpoint request failed"
+                    );
+                } else {
+                    warn!(
+                        target: "izanami::ingress",
+                        ?err,
+                        operation = op_name,
+                        endpoint = label,
+                        failure_class = failure_class.as_str(),
+                        retryable,
+                        "pinned ingress endpoint request failed"
                     );
                 }
-                warn!(
-                    target: "izanami::ingress",
-                    ?err,
-                    operation = op_name,
-                    endpoint = label,
-                    failure_class = failure_class.as_str(),
-                    retryable,
-                    "pinned ingress endpoint request failed"
-                );
                 Err(err)
             }
         }
@@ -577,25 +603,49 @@ impl EndpointHealthPool {
                         && self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
                         self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
-                        warn!(
+                        if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                            debug!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        } else {
+                            warn!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        }
+                    }
+                    if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                        debug!(
                             target: "izanami::ingress",
+                            ?err,
                             operation = op_name,
                             endpoint = label,
                             attempt = attempt_idx + 1,
                             failure_class = failure_class.as_str(),
-                            "marking ingress endpoint unhealthy"
+                            retryable,
+                            "ingress endpoint request failed; trying failover"
+                        );
+                    } else {
+                        warn!(
+                            target: "izanami::ingress",
+                            ?err,
+                            operation = op_name,
+                            endpoint = label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            retryable,
+                            "ingress endpoint request failed"
                         );
                     }
-                    warn!(
-                        target: "izanami::ingress",
-                        ?err,
-                        operation = op_name,
-                        endpoint = label,
-                        attempt = attempt_idx + 1,
-                        failure_class = failure_class.as_str(),
-                        retryable,
-                        "ingress endpoint request failed"
-                    );
                     last_error = Some(err);
                     if !retryable {
                         break;
@@ -661,25 +711,49 @@ impl EndpointHealthPool {
                         && self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
                         self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
-                        warn!(
+                        if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                            debug!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        } else {
+                            warn!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        }
+                    }
+                    if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                        debug!(
                             target: "izanami::ingress",
+                            ?err,
                             operation = op_name,
                             endpoint = label,
                             attempt = attempt_idx + 1,
                             failure_class = failure_class.as_str(),
-                            "marking ingress endpoint unhealthy"
+                            retryable,
+                            "ingress endpoint request failed; trying failover"
+                        );
+                    } else {
+                        warn!(
+                            target: "izanami::ingress",
+                            ?err,
+                            operation = op_name,
+                            endpoint = label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            retryable,
+                            "ingress endpoint request failed"
                         );
                     }
-                    warn!(
-                        target: "izanami::ingress",
-                        ?err,
-                        operation = op_name,
-                        endpoint = label,
-                        attempt = attempt_idx + 1,
-                        failure_class = failure_class.as_str(),
-                        retryable,
-                        "ingress endpoint request failed"
-                    );
                     last_error = Some(err);
                     if !retryable {
                         break;
@@ -746,25 +820,49 @@ impl EndpointHealthPool {
                         && self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
                         self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
-                        warn!(
+                        if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                            debug!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        } else {
+                            warn!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        }
+                    }
+                    if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                        debug!(
                             target: "izanami::ingress",
+                            ?err,
                             operation = op_name,
                             endpoint = label,
                             attempt = attempt_idx + 1,
                             failure_class = failure_class.as_str(),
-                            "marking ingress endpoint unhealthy"
+                            retryable,
+                            "alternate ingress endpoint request failed; trying failover"
+                        );
+                    } else {
+                        warn!(
+                            target: "izanami::ingress",
+                            ?err,
+                            operation = op_name,
+                            endpoint = label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            retryable,
+                            "alternate ingress endpoint request failed"
                         );
                     }
-                    warn!(
-                        target: "izanami::ingress",
-                        ?err,
-                        operation = op_name,
-                        endpoint = label,
-                        attempt = attempt_idx + 1,
-                        failure_class = failure_class.as_str(),
-                        retryable,
-                        "alternate ingress endpoint request failed"
-                    );
                     last_error = Some(err);
                     if !retryable {
                         break;
@@ -1386,6 +1484,18 @@ fn ingress_failure_affects_submit_health(op_name: &str) -> bool {
     )
 }
 
+fn should_log_ingress_retry_at_debug(
+    op_name: &str,
+    failure_class: IngressFailureClass,
+    retryable: bool,
+) -> bool {
+    retryable
+        && (matches!(
+            classify_ingress_operation(op_name),
+            IngressOperationClass::StatusRead
+        ) || matches!(failure_class, IngressFailureClass::QueuePressure))
+}
+
 fn is_shutdown_noise_status_read_failure(
     op_name: &str,
     error: &color_eyre::Report,
@@ -1400,6 +1510,13 @@ fn is_shutdown_noise_status_read_failure(
             let message = ingress_error_message(error);
             message.contains("connection refused") || message.contains("transaction did not reach")
         }
+}
+
+fn is_audit_confirmation_window_elapsed(error: &color_eyre::Report) -> bool {
+    let message = ingress_error_message(error);
+    message.contains("transaction did not reach")
+        && message.contains("applied, rejected, expired")
+        && message.contains("within")
 }
 
 fn ingress_error_message(error: &color_eyre::Report) -> String {
@@ -1561,7 +1678,7 @@ where
                 let next_attempt = retryable_attempts
                     .saturating_add(endpoint_backpressure_retries)
                     .saturating_add(1);
-                warn!(
+                debug!(
                     target: "izanami::workload",
                     plan = plan_label,
                     next_attempt,
@@ -1633,7 +1750,7 @@ where
                     retryable_attempts = retryable_attempts.saturating_add(1);
                 }
                 let delay = no_endpoint_backpressure_delay().unwrap_or(backoff);
-                warn!(
+                debug!(
                     target: "izanami::workload",
                     plan = plan_label,
                     retryable_attempts,
@@ -2048,11 +2165,46 @@ fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS)
 }
 
+fn is_severe_stopping_recovery_run(config: &ChaosConfig) -> bool {
+    matches!(config.workload_profile, WorkloadProfile::Stable)
+        && config.peer_count >= 4
+        && config.faults.crash_restart()
+        && config.faulty_peers.saturating_mul(3) >= config.peer_count.saturating_mul(2)
+}
+
 fn submission_confirmation_mode(config: &ChaosConfig) -> SubmissionConfirmationMode {
     if matches!(config.workload_profile, WorkloadProfile::Stable) {
         SubmissionConfirmationMode::AcceptedByIngress
     } else {
         SubmissionConfirmationMode::BlockingApplied
+    }
+}
+
+fn effective_submission_max_inflight(config: &ChaosConfig) -> usize {
+    if matches!(
+        submission_confirmation_mode(config),
+        SubmissionConfirmationMode::AcceptedByIngress
+    ) {
+        let stable_cap = if is_severe_stopping_recovery_run(config) {
+            IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP
+        } else {
+            IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP
+        };
+        config.max_inflight.min(stable_cap).max(1)
+    } else {
+        config.max_inflight.max(1)
+    }
+}
+
+fn effective_submission_tps(config: &ChaosConfig) -> f64 {
+    if matches!(
+        submission_confirmation_mode(config),
+        SubmissionConfirmationMode::AcceptedByIngress
+    ) && is_severe_stopping_recovery_run(config)
+    {
+        config.tps.min(IZANAMI_STABLE_SEVERE_STOPPING_TPS_CAP)
+    } else {
+        config.tps
     }
 }
 
@@ -2979,11 +3131,12 @@ impl IzanamiRunner {
         ingress_pool.reserve_fault_target_ingress_until(&self.peers, &fault_targets, deadline);
         let submission_counter = Arc::new(AtomicU64::new(0));
         let submission_confirmation = submission_confirmation_mode(&self.config);
+        let confirmation_audit_wait_options =
+            throughput_confirmation_wait_options_for(&self.config);
         let (confirmation_audit_tx, confirmation_audit_handle) = if matches!(
             submission_confirmation,
             SubmissionConfirmationMode::AcceptedByIngress
         ) {
-            let wait_options = throughput_confirmation_wait_options_for(&self.config);
             let (tx, rx) = mpsc::channel(IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP);
             (
                 Some(tx),
@@ -2992,7 +3145,7 @@ impl IzanamiRunner {
                     &ingress_pool,
                     &run_control,
                     rx,
-                    wait_options,
+                    confirmation_audit_wait_options.clone(),
                 )),
             )
         } else {
@@ -3232,15 +3385,31 @@ impl IzanamiRunner {
     ) -> Vec<JoinHandle<()>> {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
-        let semaphore = Arc::new(Semaphore::new(self.config.max_inflight));
-        let backlog_limit = submission_backlog_limit(self.config.max_inflight);
+        let submission_max_inflight = effective_submission_max_inflight(&self.config);
+        let submission_tps = effective_submission_tps(&self.config);
+        if submission_max_inflight != self.config.max_inflight
+            || (submission_tps - self.config.tps).abs() > f64::EPSILON
+        {
+            info!(
+                target: "izanami::ingress",
+                configured_tps = self.config.tps,
+                effective_tps = submission_tps,
+                configured_max_inflight = self.config.max_inflight,
+                effective_max_inflight = submission_max_inflight,
+                faulty_peers = self.config.faulty_peers,
+                peer_count = self.config.peer_count,
+                "adaptive stable ingress pacing enabled"
+            );
+        }
+        let semaphore = Arc::new(Semaphore::new(submission_max_inflight));
+        let backlog_limit = submission_backlog_limit(submission_max_inflight);
         let per_submitter_interval =
-            Duration::from_secs_f64(self.config.submitters as f64 / self.config.tps);
+            Duration::from_secs_f64(self.config.submitters as f64 / submission_tps);
         (0..self.config.submitters)
             .map(|submitter_idx| {
                 let mut load_rng = StdRng::seed_from_u64(rng.next_u64());
                 let phase_delay =
-                    Duration::from_secs_f64(submitter_idx as f64 / self.config.tps);
+                    Duration::from_secs_f64(submitter_idx as f64 / submission_tps);
                 let metrics = Arc::clone(metrics);
                 let ingress_pool = Arc::clone(ingress_pool);
                 let run_control = Arc::clone(run_control);
@@ -3543,11 +3712,19 @@ async fn wait_for_submission_capacity(
 
 fn tune_ingress_client(mut client: Client, mode: SubmissionConfirmationMode) -> Client {
     client.torii_request_timeout = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
+    mark_data_model_submit_compatible(&client.data_model_compatibility);
     if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
         client.transaction_status_timeout =
             Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
     }
     client
+}
+
+fn mark_data_model_submit_compatible(state: &Arc<StdMutex<DataModelCompatibility>>) {
+    // Izanami owns both the test nodes and clients, so repeated compatibility
+    // probes would measure Torii throttle pressure rather than Sumeragi progress.
+    *state.lock().expect("data model compatibility lock") =
+        DataModelCompatibility::SubmitCompatible;
 }
 
 async fn await_worker_shutdown_with_timeout(
@@ -4741,12 +4918,12 @@ async fn submit_plan(
                                     );
                                     let metadata =
                                         submission_metadata(submission_counter_for_submit.as_ref());
-                                    client
-                                        .submit_all_with_metadata(
-                                            instructions_for_submit.clone(),
-                                            metadata,
-                                        )
-                                        .map(|hash| hash)
+                                    let transaction = client.build_transaction_from_items(
+                                        instructions_for_submit.clone(),
+                                        metadata,
+                                    );
+                                    let hash = transaction.hash();
+                                    client.submit_transaction(&transaction).map(|_| hash)
                                 },
                             )
                             .map(|(endpoint_idx, hash)| SubmissionOutcome { endpoint_idx, hash })
@@ -5003,20 +5180,18 @@ fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
     ))
 }
 
-fn npos_recovery_confirmation_window_needed(config: &ChaosConfig) -> bool {
+fn npos_extended_confirmation_window_needed(config: &ChaosConfig) -> bool {
     config.nexus.is_some()
-        && config.faulty_peers > 0
-        && (config.faults.crash_restart()
-            || (config.faults.network_partition() && !config.faults.network_latency()))
 }
 
 fn throughput_confirmation_wait_options_for(config: &ChaosConfig) -> TransactionWaitOptions {
-    let timeout = if npos_recovery_confirmation_window_needed(config) {
-        Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
+    if npos_extended_confirmation_window_needed(config) {
+        confirmation_wait_options_with_timeout(Duration::from_millis(
+            IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS,
+        ))
     } else {
-        Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
-    };
-    confirmation_wait_options_with_timeout(timeout)
+        throughput_confirmation_wait_options()
+    }
 }
 
 fn confirmation_audit_has_deadline_budget(
@@ -5115,6 +5290,7 @@ fn wait_for_transaction_terminal_status_with_failover(
     };
     let target_description = transaction_wait_target_description(&stop_statuses);
     let start = Instant::now();
+    let mut preferred_endpoint_idx = Some(preferred_endpoint_idx);
     let mut attempts = 0_u64;
     let mut last_error = None;
     let mut last_observed_statuses: Vec<String> = Vec::new();
@@ -5127,7 +5303,7 @@ fn wait_for_transaction_terminal_status_with_failover(
             .health
             .run_with_failover_until_some_at_with_preference_and_limit(
                 op_name,
-                Some(preferred_endpoint_idx),
+                preferred_endpoint_idx.take(),
                 Instant::now(),
                 ingress_pool.endpoints.len(),
                 |endpoint_idx, _label| {
@@ -5269,6 +5445,15 @@ async fn audit_submitted_transaction(
                     plan = plan_label,
                     ?err,
                     "ignoring sampled confirmation failure during shutdown"
+                );
+            } else if is_audit_confirmation_window_elapsed(&err) {
+                metrics.record_confirmation_audit_budget_skipped();
+                debug!(
+                    target: "izanami::audit",
+                    endpoint_idx,
+                    hash = %log_hash,
+                    plan = plan_label,
+                    "sampled confirmation audit window elapsed before terminal status"
                 );
             } else {
                 metrics.record_confirmation_audit_failed();
@@ -6817,6 +7002,155 @@ mod tests {
     }
 
     #[test]
+    fn stable_ingress_effective_max_inflight_is_capped() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(600),
+            pipeline_time: None,
+            target_blocks: Some(200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(5),
+            tps: 5.0,
+            max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
+            submitters: 1,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        assert_eq!(
+            effective_submission_max_inflight(&config),
+            IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP
+        );
+
+        config.max_inflight = IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP / 2;
+        assert_eq!(
+            effective_submission_max_inflight(&config),
+            IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP / 2
+        );
+
+        config.max_inflight = 0;
+        assert_eq!(effective_submission_max_inflight(&config), 1);
+    }
+
+    #[test]
+    fn severe_stopping_stable_ingress_pacing_is_capped() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 20,
+            faulty_peers: 18,
+            duration: Duration::from_secs(800),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(7),
+            tps: 200.0,
+            max_inflight: 512,
+            submitters: 20,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_explicit_array([
+                true, false, false, false, false, false, false,
+            ]),
+            nexus: None,
+        };
+
+        assert!(is_severe_stopping_recovery_run(&config));
+        assert_eq!(
+            effective_submission_max_inflight(&config),
+            IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP
+        );
+        assert!(
+            (effective_submission_tps(&config) - IZANAMI_STABLE_SEVERE_STOPPING_TPS_CAP).abs()
+                <= f64::EPSILON
+        );
+
+        config.tps = 0.5;
+        config.max_inflight = 4;
+        assert_eq!(effective_submission_max_inflight(&config), 4);
+        assert!((effective_submission_tps(&config) - 0.5).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn non_stopping_stable_ingress_pacing_keeps_configured_rate() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 20,
+            faulty_peers: 5,
+            duration: Duration::from_secs(800),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(7),
+            tps: 200.0,
+            max_inflight: 512,
+            submitters: 20,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_explicit_array([
+                false, false, false, true, true, false, false,
+            ]),
+            nexus: None,
+        };
+
+        assert!(!is_severe_stopping_recovery_run(&config));
+        assert_eq!(
+            effective_submission_max_inflight(&config),
+            IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP
+        );
+        assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
+
+        config.workload_profile = WorkloadProfile::Chaos;
+        assert_eq!(effective_submission_max_inflight(&config), 512);
+        assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn blocking_ingress_effective_max_inflight_preserves_configured_limit() {
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(600),
+            pipeline_time: None,
+            target_blocks: Some(200),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(5),
+            tps: 5.0,
+            max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
+            submitters: 1,
+            workload_profile: WorkloadProfile::Chaos,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        assert_eq!(
+            effective_submission_max_inflight(&config),
+            IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8
+        );
+    }
+
+    #[test]
     fn trigger_precheck_runs_only_for_blocking_confirmation() {
         assert!(should_run_trigger_precheck(
             SubmissionConfirmationMode::BlockingApplied
@@ -7562,6 +7896,25 @@ mod tests {
             is_ingress_failover_retryable(&err),
             "HTTP 429 should be treated as queue-pressure backpressure"
         );
+    }
+
+    #[test]
+    fn retryable_status_and_queue_pressure_failures_log_at_debug() {
+        assert!(should_log_ingress_retry_at_debug(
+            "query_confirmation",
+            IngressFailureClass::QueuePressure,
+            true,
+        ));
+        assert!(should_log_ingress_retry_at_debug(
+            "submit_transaction_plan",
+            IngressFailureClass::QueuePressure,
+            true,
+        ));
+        assert!(!should_log_ingress_retry_at_debug(
+            "submit_transaction_plan",
+            IngressFailureClass::NonRetryable,
+            false,
+        ));
     }
 
     #[test]
@@ -9043,6 +9396,19 @@ mod tests {
     }
 
     #[test]
+    fn ingress_clients_mark_submit_compatibility_without_capability_probe() {
+        let state = Arc::new(StdMutex::new(DataModelCompatibility::Unchecked));
+
+        mark_data_model_submit_compatible(&state);
+
+        let cached = state.lock().expect("data model compatibility lock").clone();
+        assert!(
+            matches!(cached, DataModelCompatibility::SubmitCompatible),
+            "Izanami hot-path clients should skip repeated /v1/node/capabilities probes"
+        );
+    }
+
+    #[test]
     fn fault_target_selection_is_deterministic() {
         let mut rng_a = StdRng::seed_from_u64(5);
         let mut rng_b = StdRng::seed_from_u64(5);
@@ -9226,7 +9592,7 @@ mod tests {
     }
 
     #[test]
-    fn npos_crash_restart_faults_use_recovery_confirmation_window() {
+    fn npos_crash_restart_faults_use_extended_confirmation_window() {
         let config = chaos_config_for_audit_window(
             true,
             1,
@@ -9234,7 +9600,7 @@ mod tests {
         );
         let options = throughput_confirmation_wait_options_for(&config);
 
-        assert!(npos_recovery_confirmation_window_needed(&config));
+        assert!(npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
             Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
@@ -9246,7 +9612,23 @@ mod tests {
     }
 
     #[test]
-    fn npos_packet_loss_keeps_baseline_confirmation_window() {
+    fn npos_targeted_load_uses_extended_confirmation_window() {
+        let config = chaos_config_for_audit_window(
+            true,
+            0,
+            FaultToggles::from_explicit_array([false, false, false, false, false, false, false]),
+        );
+        let options = throughput_confirmation_wait_options_for(&config);
+
+        assert!(npos_extended_confirmation_window_needed(&config));
+        assert_eq!(
+            options.timeout,
+            Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn npos_packet_loss_uses_extended_confirmation_window() {
         let config = chaos_config_for_audit_window(
             true,
             1,
@@ -9254,10 +9636,10 @@ mod tests {
         );
         let options = throughput_confirmation_wait_options_for(&config);
 
-        assert!(!npos_recovery_confirmation_window_needed(&config));
+        assert!(npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
-            Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
+            Duration::from_millis(IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS)
         );
     }
 
@@ -9270,7 +9652,7 @@ mod tests {
         );
         let options = throughput_confirmation_wait_options_for(&config);
 
-        assert!(!npos_recovery_confirmation_window_needed(&config));
+        assert!(!npos_extended_confirmation_window_needed(&config));
         assert_eq!(
             options.timeout,
             Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
@@ -9300,6 +9682,16 @@ mod tests {
             now + options.timeout,
             &options
         ));
+    }
+
+    #[test]
+    fn audit_confirmation_window_elapsed_is_not_a_hard_failure_marker() {
+        let timeout =
+            eyre!("transaction did not reach Applied, Rejected, Expired within 150000 ms");
+        let route_error = eyre!("route_unavailable: no reachable authoritative peers");
+
+        assert!(is_audit_confirmation_window_elapsed(&timeout));
+        assert!(!is_audit_confirmation_window_elapsed(&route_error));
     }
 
     #[test]

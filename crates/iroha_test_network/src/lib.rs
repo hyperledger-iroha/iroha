@@ -311,6 +311,8 @@ const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 const STARTUP_STATUS_WARN_GRACE: Duration = Duration::from_secs(5);
 /// Minimum spacing between repeated warning logs for startup status failures after the grace.
 const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
+/// Low-priority `/status` fallback cadence after startup has already been observed.
+const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 
 type GenesisBuilderFn = Box<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
@@ -395,6 +397,14 @@ fn status_error_is_connection_refused(err: &Report) -> bool {
         cause
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io_err| io_err.kind() == ErrorKind::ConnectionRefused)
+    })
+}
+
+fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("429 Too Many Requests")
+            && message.contains("Reached the limit of parallel queries")
     })
 }
 
@@ -6020,8 +6030,9 @@ impl NetworkPeer {
                                     }
                                     Err(err) => {
                                         NetworkPeer::record_probe_error(&startup_probe, &err);
-                                        if status_error_is_connection_refused(&err)
-                                            && !http_seen.load(Ordering::Relaxed)
+                                        if (status_error_is_connection_refused(&err)
+                                            && !http_seen.load(Ordering::Relaxed))
+                                            || status_error_is_torii_query_backpressure(&err)
                                         {
                                             debug!(
                                                 error = %err,
@@ -6171,7 +6182,6 @@ impl NetworkPeer {
                     // status via different codecs back-to-back.
 
                     loop {
-                        const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_millis(500);
                         let mut fallback_interval = tokio::time::interval(STATUS_FALLBACK_INTERVAL);
                         let poll_client = client.clone();
 
@@ -6222,8 +6232,9 @@ impl NetworkPeer {
                                             status
                                         }
                                         Err(err) => {
-                                        if status_error_is_connection_refused(&err)
-                                            && !http_seen.load(Ordering::Relaxed)
+                                        if (status_error_is_connection_refused(&err)
+                                            && !http_seen.load(Ordering::Relaxed))
+                                            || status_error_is_torii_query_backpressure(&err)
                                         {
                                             debug!(
                                                 error = %err,
@@ -8914,6 +8925,22 @@ mod tests {
         let err = std::io::Error::other("other");
         let report = Report::from(err);
         assert!(!status_error_is_connection_refused(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_detects_status_throttle() {
+        let report = eyre!(
+            "Norito decode failed: Unexpected status response; status: 429 Too Many Requests; response body: Reached the limit of parallel queries"
+        );
+
+        assert!(status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_ignores_other_throttles() {
+        let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
+
+        assert!(!status_error_is_torii_query_backpressure(&report));
     }
 
     #[test]

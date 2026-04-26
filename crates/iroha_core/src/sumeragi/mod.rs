@@ -6380,6 +6380,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_preempts_votes_for_starved_payloads() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -6637,6 +6638,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_ticks_after_drains() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -6734,12 +6736,13 @@ mod tests {
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
         };
-        let past = Instant::now()
+        let now = Instant::now();
+        let past = now
             .checked_sub(Duration::from_secs(1))
             .unwrap_or_else(Instant::now);
         let mut loop_state = WorkerLoopState {
             last_tick: past,
-            last_served: [past; PRIORITY_TIER_COUNT],
+            last_served: [now; PRIORITY_TIER_COUNT],
             mailbox: WorkerMailboxState::new(),
         };
         let mut actor = RecordingActorWithTick::default();
@@ -6766,6 +6769,7 @@ mod tests {
 
     #[test]
     fn run_worker_iteration_ticks_when_backlogged_before_max_gap() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let vote_total = VOTE_BURST_CAP_WITH_BLOCKS.saturating_add(2);
@@ -7163,6 +7167,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_caps_total_drain_budget() {
+        let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -12259,6 +12264,7 @@ fn drain_mailbox<A: WorkerActor>(
         .filter(|deadline| *deadline > iter_start)
         .filter(|deadline| *deadline <= drain_budget_deadline);
     let mut overtime_non_vote_turn = false;
+    let mut phase_progress = false;
     loop {
         if !mailbox.any_pending() {
             break;
@@ -12281,6 +12287,8 @@ fn drain_mailbox<A: WorkerActor>(
                 && payload_pending;
             if grant_overtime_turn {
                 overtime_non_vote_turn = true;
+            } else if !phase_progress && matches!(phase, DrainPhase::PreTick) {
+                stats.budget_exceeded = true;
             } else {
                 stats.budget_exceeded = true;
                 break;
@@ -12437,6 +12445,7 @@ fn drain_mailbox<A: WorkerActor>(
         status::record_worker_queue_drain(tier.queue_kind(), 1);
         budgets.consume(tier);
         last_served[tier.idx()] = now;
+        phase_progress = true;
         mailbox.fill_slot(tier);
     }
 }
