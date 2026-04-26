@@ -775,11 +775,7 @@ pub async fn handle_v1_sumeragi_collectors(
     let snap = sumeragi::status_snapshot();
     let peers = state.commit_topology_snapshot();
     let chain_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-    let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
     let n = peers.len();
-    let min_votes = topology.min_votes_for_commit();
-    let tail = topology.proxy_tail_index();
-    let available = n.saturating_sub(tail);
     let fallback_mode = match snap.mode_tag.as_str() {
         iroha_core::sumeragi::consensus::NPOS_TAG | "Npos" => ConsensusMode::Npos,
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG | "Permissioned" => {
@@ -798,6 +794,47 @@ pub async fn handle_v1_sumeragi_collectors(
         chain_height,
         fallback_mode,
     );
+    let (plan_height, plan_view) =
+        collector_plan_context(snap.prf_height, snap.prf_view, chain_height);
+    let mut epoch_seed = snap.prf_epoch_seed.or_else(|| {
+        world
+            .sumeragi_npos_parameters()
+            .map(|params| params.epoch_seed())
+    });
+    if peers.is_empty() {
+        let consensus_mode_label = match mode {
+            ConsensusMode::Permissioned => "Permissioned",
+            ConsensusMode::Npos => "Npos",
+        };
+        let epoch_seed_hex = epoch_seed.map(hex::encode);
+        let payload = CollectorsResponse {
+            consensus_mode: consensus_mode_label,
+            mode: consensus_mode_label,
+            topology_len: 0,
+            min_votes_for_commit: 0,
+            proxy_tail_index: 0,
+            height: plan_height,
+            view: plan_view,
+            collectors_k: 0,
+            redundant_send_r: 0,
+            epoch_seed: epoch_seed_hex.clone(),
+            collectors: Vec::new(),
+            prf: PrfContext {
+                height: plan_height,
+                view: plan_view,
+                epoch_seed: epoch_seed_hex,
+            },
+        };
+        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
+        return Ok(crate::utils::respond_with_format(payload, format));
+    }
+    let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
+    let min_votes = topology.min_votes_for_commit();
+    let tail = topology.proxy_tail_index();
+    let available = n.saturating_sub(tail);
     let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
         ConsensusMode::Permissioned => {
             let params = world.parameters().sumeragi();
@@ -837,7 +874,7 @@ pub async fn handle_v1_sumeragi_collectors(
         k = available;
     }
     let prefer_snapshot_seed = snap.prf_height >= chain_height;
-    let mut epoch_seed = if prefer_snapshot_seed {
+    epoch_seed = if prefer_snapshot_seed {
         snap.prf_epoch_seed.or(seed_from_mode)
     } else {
         seed_from_mode.or(snap.prf_epoch_seed)
@@ -847,8 +884,6 @@ pub async fn handle_v1_sumeragi_collectors(
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_seed());
     }
-    let (plan_height, plan_view) =
-        collector_plan_context(snap.prf_height, snap.prf_view, chain_height);
     let collectors = sumeragi::collectors::deterministic_collectors(
         &topology,
         mode,
