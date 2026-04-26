@@ -11,6 +11,15 @@
 use std::{env, fs, io::Write, path::PathBuf};
 
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+const SAMPLE_MANIFEST: &str = include_str!("../../prebuilt_samples.txt");
+
+fn prebuilt_sample_names() -> Vec<&'static str> {
+    SAMPLE_MANIFEST
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -30,32 +39,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_config.as_bytes(),
     )?;
 
-    // Sample names expected by integration tests
-    let samples = [
-        // executors used by some benches/tests
-        "executor_with_admin",
-        "executor_with_custom_permission",
-        "executor_remove_permission",
-        "executor_custom_instructions_simple",
-        "executor_custom_instructions_complex",
-        "executor_with_migration_fail",
-        "executor_with_fuel",
-        "executor_with_custom_parameter",
-        // IVM samples referenced by integration tests
-        "mint_rose_trigger",
-        "create_nft_for_every_user_trigger",
-        "query_assets_and_save_cursor",
-        "smart_contract_can_filter_queries",
-        "trigger_cat_and_mouse",
-    ];
+    let samples = prebuilt_sample_names();
 
-    for (i, name) in samples.iter().enumerate() {
+    for (i, name) in samples.into_iter().enumerate() {
         let mut path = samples_dir.join(name);
         path.set_extension("to");
         let mut file = fs::File::create(&path)?;
         // Create realistic bytecode for known samples; fall back to a minimal HALT
         // program for others.
-        let payload = match *name {
+        let payload = match name {
             // Mint 1 unit of the canonical wonderland rose asset to the current authority using pointer-ABI inputs.
             "mint_rose_trigger" => build_program_mint_rose_for_authority(),
             // Convenience: create one NFT per known account
@@ -333,5 +325,10 @@ mod tests {
         assert_parses_with_abi(&build_program_create_nft_for_authority());
         assert_parses_with_abi(&build_program_set_account_detail_defaults());
         assert_parses_with_abi(&build_program_set_sc_exec_depth(5));
+    }
+
+    #[test]
+    fn sample_manifest_includes_threshold_escrow() {
+        assert!(prebuilt_sample_names().contains(&"threshold_escrow"));
     }
 }

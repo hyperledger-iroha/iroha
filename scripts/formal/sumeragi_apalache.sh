@@ -5,7 +5,8 @@ mode="${1:-fast}"
 root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 spec_dir="$root_dir/docs/formal/sumeragi"
 spec_file="$spec_dir/Sumeragi.tla"
-default_local_apalache_bin="$root_dir/target/apalache/toolchains/v0.52.2/bin/apalache-mc"
+apalache_version="${APALACHE_VERSION:-0.52.2}"
+default_local_apalache_bin="$root_dir/target/apalache/toolchains/v${apalache_version}/bin/apalache-mc"
 if [[ -n "${APALACHE_BIN:-}" ]]; then
   apalache_bin="$APALACHE_BIN"
 elif [[ -x "$default_local_apalache_bin" ]]; then
@@ -13,7 +14,7 @@ elif [[ -x "$default_local_apalache_bin" ]]; then
 else
   apalache_bin="apalache-mc"
 fi
-apalache_docker_image="${APALACHE_DOCKER_IMAGE:-ghcr.io/apalache-mc/apalache:latest}"
+apalache_docker_image="${APALACHE_DOCKER_IMAGE:-ghcr.io/apalache-mc/apalache:${apalache_version}}"
 allow_docker_fallback="${APALACHE_ALLOW_DOCKER:-1}"
 
 case "$mode" in

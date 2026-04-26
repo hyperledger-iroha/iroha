@@ -28237,14 +28237,10 @@ impl Actor {
     }
 
     fn committed_block_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
-        if height > self.committed_height_snapshot() {
-            return None;
-        }
-        usize::try_from(height)
+        let height_idx = height.checked_sub(1)?;
+        usize::try_from(height_idx)
             .ok()
-            .and_then(NonZeroUsize::new)
-            .and_then(|height_nz| self.kura.get_block(height_nz))
-            .map(|block| block.hash())
+            .and_then(|idx| self.state.block_hashes.view().get(idx).copied())
     }
 
     fn highest_qc_force_fetch_window(&self) -> Duration {

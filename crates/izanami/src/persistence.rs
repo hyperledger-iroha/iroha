@@ -11,6 +11,7 @@ use crate::config::{
     ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles,
     IzanamiArgs, WorkloadProfile,
 };
+use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
 const APP_DIR: &str = "izanami";
 const CONFIG_FILE: &str = "config.bin";
@@ -49,6 +50,8 @@ struct StoredArgs {
     fault_window_start_ms: Option<u64>,
     #[norito(default)]
     fault_window_end_ms: Option<u64>,
+    #[norito(default = "default_packet_loss_percent")]
+    packet_loss_percent: u8,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -88,6 +91,10 @@ fn default_progress_timeout_ms() -> u64 {
 
 fn default_submitters() -> u32 {
     1
+}
+
+fn default_packet_loss_percent() -> u8 {
+    DEFAULT_NETWORK_PACKET_LOSS_PERCENT
 }
 
 impl StoredArgs {
@@ -138,6 +145,7 @@ impl StoredArgs {
             latency_p95_threshold_ms,
             fault_window_start_ms,
             fault_window_end_ms,
+            packet_loss_percent: args.packet_loss_percent,
         })
     }
 
@@ -167,6 +175,7 @@ impl StoredArgs {
             fault_interval_min: to_duration(self.fault_min_ms)?,
             fault_interval_max: to_duration(self.fault_max_ms)?,
             faults: FaultArgs::from(fault_toggles),
+            packet_loss_percent: self.packet_loss_percent.min(100),
             nexus: self.nexus,
         })
     }
@@ -423,6 +432,7 @@ mod tests {
                 cpu_stress: false,
                 disk_saturation: true,
             },
+            packet_loss_percent: 50,
             nexus: true,
         };
 
@@ -456,6 +466,7 @@ mod tests {
             loaded.faults.to_toggles().bits(),
             args.faults.to_toggles().bits()
         );
+        assert_eq!(loaded.packet_loss_percent, args.packet_loss_percent);
         assert_eq!(loaded.nexus, args.nexus);
 
         let _ = fs::remove_dir_all(&dir);
@@ -512,6 +523,10 @@ mod tests {
         assert_eq!(loaded.progress_interval, DEFAULT_PROGRESS_INTERVAL);
         assert_eq!(loaded.progress_timeout, DEFAULT_PROGRESS_TIMEOUT);
         assert_eq!(loaded.latency_p95_threshold, None);
+        assert_eq!(
+            loaded.packet_loss_percent,
+            DEFAULT_NETWORK_PACKET_LOSS_PERCENT
+        );
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())

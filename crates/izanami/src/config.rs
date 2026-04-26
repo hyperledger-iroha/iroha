@@ -24,6 +24,8 @@ use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
+
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
 #[command(author, version, about = "Izanami chaosnet orchestrator for Iroha", long_about = None)]
@@ -94,6 +96,13 @@ pub struct IzanamiArgs {
     /// Fault toggle switches parsed from CLI flags.
     #[command(flatten)]
     pub faults: FaultArgs,
+    /// P2P application-frame packet-loss percentage used when packet-loss faults are enabled.
+    #[arg(
+        long = "fault-network-packet-loss-percent",
+        default_value_t = DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+        value_parser = clap::value_parser!(u8).range(0..=100),
+    )]
+    pub packet_loss_percent: u8,
     /// Enable Nexus/Sora multi-lane defaults from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
@@ -380,6 +389,7 @@ pub struct ChaosConfig {
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
+    pub packet_loss_percent: u8,
     pub log_filter: String,
     pub faults: FaultToggles,
     pub nexus: Option<NexusProfile>,
@@ -495,6 +505,12 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.fault_interval_max,
             ));
         }
+        if args.packet_loss_percent > 100 {
+            return Err(eyre!(
+                "fault-network-packet-loss-percent ({}) must be between 0 and 100",
+                args.packet_loss_percent
+            ));
+        }
 
         let toggles = args.faults.to_toggles();
         if args.faulty > 0 && !toggles.any_enabled() {
@@ -524,6 +540,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             fault_interval_min,
             fault_interval_max,
             faults: _faults,
+            packet_loss_percent,
             nexus,
             allow_net,
         } = args;
@@ -552,6 +569,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
+            packet_loss_percent,
             log_filter,
             faults: toggles,
             nexus,
@@ -596,6 +614,7 @@ impl IzanamiArgs {
             fault_interval_min: min,
             fault_interval_max: max,
             faults: FaultArgs::from(cfg.faults),
+            packet_loss_percent: cfg.packet_loss_percent,
             nexus: cfg.nexus.is_some(),
             allow_net: cfg.allow_net,
         }
@@ -1069,6 +1088,7 @@ mod tests {
                 cpu_stress: true,
                 disk_saturation: true,
             },
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         assert!(ChaosConfig::try_from(args).is_err());
@@ -1099,6 +1119,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         init_tracing_with_filter(&args.log_filter);
@@ -1130,6 +1151,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1166,6 +1188,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         assert!(ChaosConfig::try_from(args).is_err());
@@ -1200,6 +1223,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1287,6 +1311,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1323,6 +1348,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1359,6 +1385,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1395,6 +1422,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1431,6 +1459,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1467,6 +1496,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1548,6 +1578,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1593,6 +1624,7 @@ mod tests {
                 cpu_stress: false,
                 disk_saturation: false,
             },
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {

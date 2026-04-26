@@ -144,6 +144,9 @@ fn merge_with_overrides(
     if is_cli_source(matches, "network_packet_loss") {
         base.faults.network_packet_loss = overrides.faults.network_packet_loss;
     }
+    if is_cli_source(matches, "packet_loss_percent") {
+        base.packet_loss_percent = overrides.packet_loss_percent;
+    }
     if is_cli_source(matches, "cpu_stress") {
         base.faults.cpu_stress = overrides.faults.cpu_stress;
     }
@@ -409,6 +412,23 @@ mod tests {
         assert!(!cli_args.faults.network_packet_loss);
         assert!(!cli_args.faults.cpu_stress);
         assert!(!cli_args.faults.disk_saturation);
+    }
+
+    #[test]
+    fn cli_overrides_packet_loss_percent() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.packet_loss_percent = 75;
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--fault-network-packet-loss-percent".to_string(),
+            "25".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+
+        assert_eq!(merged.packet_loss_percent, 25);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use ivm::{IVM, Memory, VMError, encoding, instruction};
 #[test]
 fn unknown_syscall_traps_under_default_policy() {
     // Build a small program with an unknown syscall; policy dispatch should reject it.
-    let syscall = 0xAB;
+    let syscall = 0xDF;
     let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall);
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
@@ -13,7 +13,7 @@ fn unknown_syscall_traps_under_default_policy() {
     vm.load_code(&code).unwrap();
     match vm.run() {
         Err(VMError::UnknownSyscall(n)) => assert_eq!(n, syscall as u32),
-        other => panic!("expected UnknownSyscall(0xAB), got {other:?}"),
+        other => panic!("expected UnknownSyscall(0xDF), got {other:?}"),
     }
 }
 
