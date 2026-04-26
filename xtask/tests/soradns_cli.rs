@@ -76,7 +76,7 @@ fn soradns_hosts_supports_taira_mon_pretty_suffix() {
         "--name",
         "solswap-indexer.sora",
         "--pretty-suffix",
-        "mon.taira.sora.org",
+        "mon.taira.sora.net",
         "--json-out",
         output_path.to_str().expect("utf8 path"),
     ]);
@@ -96,7 +96,7 @@ fn soradns_hosts_supports_taira_mon_pretty_suffix() {
     assert_eq!(entry["pretty_host"].as_str(), Some(bindings.pretty_host()));
     assert_eq!(
         entry["pretty_host"].as_str(),
-        Some("solswap-indexer.sora.mon.taira.sora.org")
+        Some("solswap-indexer.sora.mon.taira.sora.net")
     );
 }
 
@@ -527,7 +527,7 @@ fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
         "--name",
         "solswap-indexer.sora",
         "--pretty-suffix",
-        "mon.taira.sora.org",
+        "mon.taira.sora.net",
         "--json-out",
         output_path.to_str().expect("utf8 path"),
     ]);
@@ -539,7 +539,7 @@ fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
     let entry = hosts[0].as_object().expect("host entry");
     assert_eq!(
         entry["pretty_host"].as_str(),
-        Some("solswap-indexer.sora.mon.taira.sora.org")
+        Some("solswap-indexer.sora.mon.taira.sora.net")
     );
     let certificates = entry["certificates"]
         .as_array()
@@ -556,6 +556,6 @@ fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
         .collect();
     assert_eq!(
         pretty_san_values,
-        vec!["solswap-indexer.sora.mon.taira.sora.org"]
+        vec!["solswap-indexer.sora.mon.taira.sora.net"]
     );
 }

@@ -25,9 +25,9 @@ generación de código.
 
 | Camino | Propósito | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | Instantánea canónica generada a partir de `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; fuente de verdad para las compilaciones de GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Refleja la instantánea canónica para que las pruebas unitarias de Swift y el arnés de humo XCFramework carguen las mismas constantes que esperan los núcleos de Metal. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Los dispositivos Android/Kotlin comparten el mismo manifiesto para las pruebas de paridad y serialización. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Instantánea canónica generada a partir de `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`; fuente de verdad para las compilaciones de GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Refleja la instantánea canónica para que las pruebas unitarias de Swift y el arnés de humo XCFramework carguen las mismas constantes que esperan los núcleos de Metal. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Los dispositivos Android/Kotlin comparten el mismo manifiesto para las pruebas de paridad y serialización. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Cada consumidor debe verificar el hash antes de conectar las constantes a una GPU.
 tubería. Cuando el manifiesto cambia (nuevo conjunto de parámetros o perfil), el SHA y
@@ -39,7 +39,7 @@ El manifiesto se genera a partir de las fuentes de Rust ejecutando `xtask`.
 ayudante. El comando escribe tanto el archivo canónico como los espejos del SDK:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Utilice `--constants <path>`/`--vectors <path>` para anular los destinos o

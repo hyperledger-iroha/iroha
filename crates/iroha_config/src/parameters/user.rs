@@ -24,7 +24,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::{Infallible, TryFrom, TryInto},
     fmt::Debug,
-    fs, io,
+    io,
     num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -9656,84 +9656,27 @@ pub struct Repo {
     pub collateral_substitution_matrix: BTreeMap<AssetDefinitionId, Vec<AssetDefinitionId>>,
 }
 
-/// Offline aggregate-proof enforcement modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum OfflineProofMode {
-    /// Accept bundles without aggregate proofs (verify when present).
-    Optional,
-    /// Require bundles to carry aggregate proofs.
-    Required,
-}
-
-impl OfflineProofMode {
-    fn into_actual(self) -> actual::OfflineProofMode {
-        match self {
-            Self::Optional => actual::OfflineProofMode::Optional,
-            Self::Required => actual::OfflineProofMode::Required,
-        }
-    }
-}
-
-impl json::JsonSerialize for OfflineProofMode {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-
-impl json::JsonDeserialize for OfflineProofMode {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "settlement.offline.proof_mode".into(),
-            message: err.to_string(),
-        })
-    }
-}
-
-/// User-level configuration for offline settlement retention.
+/// User-level configuration for Offline V2 note retention.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
-    /// Minimum number of blocks to keep settlement bundles in hot storage.
+    /// Minimum number of blocks to keep Offline V2 note records in hot storage.
     #[config(default = "defaults::settlement::offline::HOT_RETENTION_BLOCKS")]
     pub hot_retention_blocks: u64,
-    /// Maximum number of bundles to archive per retention pass.
+    /// Maximum number of note records to archive per retention pass.
     #[config(default = "defaults::settlement::offline::ARCHIVE_BATCH_SIZE")]
     pub archive_batch_size: usize,
-    /// Minimum number of blocks archived bundles remain available before pruning (0 disables pruning).
+    /// Minimum number of blocks archived note records remain available before pruning (0 disables pruning).
     #[config(default = "defaults::settlement::offline::COLD_RETENTION_BLOCKS")]
     pub cold_retention_blocks: u64,
-    /// Maximum number of archived bundles pruned per pass.
+    /// Maximum number of archived note records pruned per pass.
     #[config(default = "defaults::settlement::offline::PRUNE_BATCH_SIZE")]
     pub prune_batch_size: usize,
-    /// Aggregate-proof enforcement mode for offline bundles.
-    #[config(default = "defaults::settlement::offline::PROOF_MODE.parse().unwrap()")]
-    pub proof_mode: OfflineProofMode,
-    /// Maximum age for offline receipts in milliseconds (0 disables age checks).
-    #[config(
-        default = "DurationMs(std::time::Duration::from_millis(defaults::settlement::offline::MAX_RECEIPT_AGE_MS))"
-    )]
-    pub max_receipt_age_ms: DurationMs,
-    /// Require offline allowances to be escrow-backed.
+    /// Require Offline V2 notes to be escrow-backed.
     #[config(default = "false")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
     pub escrow_accounts: BTreeMap<String, String>,
-    /// Optional list of DER-encoded Android trust anchor files used to supplement the built-in roots.
-    #[config(default)]
-    pub android_trust_anchor_files: Vec<PathBuf>,
-    /// Skip platform attestation verification (for local testing only).
-    #[config(default = "defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION")]
-    pub skip_platform_attestation: bool,
-    /// Skip build claim verification (for local testing only).
-    #[config(default = "defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION")]
-    pub skip_build_claim_verification: bool,
-    /// Enforce strict iOS App Attest signature verification (disable compatibility fallback).
-    #[config(default = "defaults::settlement::offline::APPLE_APP_ATTEST_STRICT_SIGNATURE")]
-    pub apple_app_attest_strict_signature: bool,
 }
 
 impl Default for Offline {
@@ -9743,18 +9686,8 @@ impl Default for Offline {
             archive_batch_size: defaults::settlement::offline::ARCHIVE_BATCH_SIZE,
             cold_retention_blocks: defaults::settlement::offline::COLD_RETENTION_BLOCKS,
             prune_batch_size: defaults::settlement::offline::PRUNE_BATCH_SIZE,
-            proof_mode: defaults::settlement::offline::PROOF_MODE.parse().unwrap(),
-            max_receipt_age_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::settlement::offline::MAX_RECEIPT_AGE_MS,
-            )),
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            android_trust_anchor_files: Vec::new(),
-            skip_platform_attestation: defaults::settlement::offline::SKIP_PLATFORM_ATTESTATION,
-            skip_build_claim_verification:
-                defaults::settlement::offline::SKIP_BUILD_CLAIM_VERIFICATION,
-            apple_app_attest_strict_signature:
-                defaults::settlement::offline::APPLE_APP_ATTEST_STRICT_SIGNATURE,
         }
     }
 }
@@ -9978,14 +9911,8 @@ impl Offline {
             archive_batch_size,
             cold_retention_blocks,
             prune_batch_size,
-            proof_mode,
-            max_receipt_age_ms,
             escrow_required,
             escrow_accounts,
-            android_trust_anchor_files,
-            skip_platform_attestation,
-            skip_build_claim_verification,
-            apple_app_attest_strict_signature,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -10000,29 +9927,6 @@ impl Offline {
                 Report::new(ParseError::InvalidSettlementConfig)
                     .attach("prune_batch_size must be > 0 when cold retention is enabled"),
             );
-        }
-        let mut anchors = Vec::new();
-        for path in android_trust_anchor_files {
-            match fs::read(&path) {
-                Ok(bytes) if !bytes.is_empty() => anchors.push(bytes),
-                Ok(bytes) => {
-                    drop(bytes);
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSettlementConfig).attach(format!(
-                            "android_trust_anchor file `{}` was empty",
-                            path.display()
-                        )),
-                    );
-                }
-                Err(err) => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidSettlementConfig).attach(format!(
-                            "failed to read android_trust_anchor file `{}`: {err}",
-                            path.display()
-                        )),
-                    );
-                }
-            }
         }
         let mut escrow_bindings = BTreeMap::new();
         for (definition, account) in escrow_accounts {
@@ -10060,14 +9964,8 @@ impl Offline {
             archive_batch_size,
             cold_retention_blocks,
             prune_batch_size,
-            proof_mode: proof_mode.into_actual(),
-            max_receipt_age: max_receipt_age_ms.get(),
             escrow_required,
             escrow_accounts: escrow_bindings,
-            android_trust_anchors: anchors,
-            skip_platform_attestation,
-            skip_build_claim_verification,
-            apple_app_attest_strict_signature,
         }
     }
 }
@@ -15048,8 +14946,6 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional offline certificate issuer configuration for app API endpoints.
-    pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
@@ -15522,7 +15418,6 @@ impl Torii {
             push,
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
             faucet: self.faucet.and_then(ToriiFaucet::parse),
-            offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
             app_api: actual::AppApi {
@@ -16332,107 +16227,6 @@ mod torii_faucet_tests {
         faucet.pow_scrypt_log_n = 0;
         let panic = std::panic::catch_unwind(|| faucet.parse());
         assert!(panic.is_err(), "expected zero scrypt log_n to panic");
-    }
-}
-
-/// Offline certificate issuer configuration (operator signing).
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiOfflineIssuer {
-    /// Master enable switch (defaults to enabled).
-    #[config(default = "defaults::torii::offline_issuer::ENABLED")]
-    pub enabled: bool,
-    /// Optional on-chain operator account used for offline escrow and revocation transactions.
-    pub operator_authority: Option<String>,
-    /// Private key used to sign offline wallet certificates.
-    pub operator_private_key: ExposedPrivateKey,
-    /// Additional legacy private keys accepted for build-claim signatures.
-    #[config(default = "defaults::torii::offline_issuer::legacy_operator_private_keys()")]
-    pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
-    /// Optional allow-list of controllers eligible for issuance.
-    #[config(default = "defaults::torii::offline_issuer::allowed_controllers()")]
-    pub allowed_controllers: Vec<String>,
-    /// Device-bound offline lineage policy.
-    #[config(default)]
-    pub lineage_policy: ToriiOfflineLineagePolicy,
-}
-
-impl ToriiOfflineIssuer {
-    fn parse(self) -> Option<actual::ToriiOfflineIssuer> {
-        if !self.enabled {
-            return None;
-        }
-        let allowed_controllers = self
-            .allowed_controllers
-            .into_iter()
-            .map(|controller| {
-                AccountId::parse_encoded(&controller).map_or_else(
-                    |err| {
-                        panic!("invalid torii.offline_issuer.allowed_controllers entry `{controller}`: {err}")
-                    },
-                    iroha_data_model::account::ParsedAccountId::into_account_id,
-                )
-            })
-            .collect();
-        let operator_authority = self.operator_authority.map(|authority| {
-            AccountId::parse_encoded(&authority).map_or_else(
-                |err| {
-                    panic!("invalid torii.offline_issuer.operator_authority `{authority}`: {err}")
-                },
-                iroha_data_model::account::ParsedAccountId::into_account_id,
-            )
-        });
-        Some(actual::ToriiOfflineIssuer {
-            operator_authority,
-            operator_private_key: self.operator_private_key,
-            legacy_operator_private_keys: self.legacy_operator_private_keys,
-            allowed_controllers,
-            lineage_policy: self.lineage_policy.parse(),
-        })
-    }
-}
-
-/// Device-bound offline lineage policy values.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiOfflineLineagePolicy {
-    /// Maximum total spendable offline balance per bearer lineage.
-    #[config(default = "defaults::torii::offline_issuer::RESERVE_MAX_BALANCE.to_owned()")]
-    pub max_balance: String,
-    /// Maximum single offline transfer value.
-    #[config(default = "defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE.to_owned()")]
-    pub max_tx_value: String,
-    /// Authorization lifetime in milliseconds.
-    #[config(default = "defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS")]
-    pub authorization_ttl_ms: u64,
-    /// Authorization refresh deadline in milliseconds.
-    #[config(default = "defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS")]
-    pub authorization_refresh_ms: u64,
-    /// Revocation bundle lifetime in milliseconds.
-    #[config(default = "defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS")]
-    pub revocation_ttl_ms: u64,
-}
-
-impl Default for ToriiOfflineLineagePolicy {
-    fn default() -> Self {
-        Self {
-            max_balance: defaults::torii::offline_issuer::RESERVE_MAX_BALANCE.to_owned(),
-            max_tx_value: defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE.to_owned(),
-            authorization_ttl_ms: defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS,
-            authorization_refresh_ms:
-                defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS,
-            revocation_ttl_ms: defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS,
-        }
-    }
-}
-
-impl ToriiOfflineLineagePolicy {
-    fn parse(self) -> actual::ToriiOfflineLineagePolicy {
-        actual::ToriiOfflineLineagePolicy {
-            max_balance: self.max_balance,
-            max_tx_value: self.max_tx_value,
-            authorization_ttl: Duration::from_millis(self.authorization_ttl_ms),
-            authorization_refresh: Duration::from_millis(self.authorization_refresh_ms),
-            revocation_ttl: Duration::from_millis(self.revocation_ttl_ms),
-        }
     }
 }
 
@@ -18563,18 +18357,6 @@ mod offline_cfg_tests {
         );
         assert_eq!(parsed.eligible_collateral.len(), 1);
         assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn offline_parse_maps_proof_mode() {
-        let mut offline = Offline::default();
-        offline.proof_mode = OfflineProofMode::Required;
-
-        let mut emitter = Emitter::new();
-        let parsed = offline.parse(&mut emitter);
-
-        assert_eq!(parsed.proof_mode, actual::OfflineProofMode::Required);
-        assert!(emitter.into_result().is_ok());
     }
 
     #[test]

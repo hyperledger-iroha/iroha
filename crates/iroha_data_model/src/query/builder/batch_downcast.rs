@@ -12,10 +12,6 @@ use crate::{
     metadata::Metadata,
     name::Name,
     nft::{Nft, NftId},
-    offline::{
-        OfflineAllowanceRecord, OfflineCounterSummary, OfflineToOnlineTransfer,
-        OfflineTransferRecord, OfflineVerdictRevocation,
-    },
     parameter::Parameter,
     peer::PeerId,
     permission::Permission,
@@ -105,11 +101,6 @@ mod single_item {
         BlockHeader,
         HashOf<BlockHeader>,
         ProofRecord,
-        OfflineAllowanceRecord,
-        OfflineCounterSummary,
-        OfflineToOnlineTransfer,
-        OfflineTransferRecord,
-        OfflineVerdictRevocation,
         AssetEscrowRecord,
         AnonymousAssetEscrowRecord,
     );

@@ -3,7 +3,7 @@
 use std::{format, string::String, vec, vec::Vec};
 
 pub use events::{DataEvent, confidential};
-pub use filters::{DataEventFilter, EscrowEventFilter, OfflineTransferEventFilter};
+pub use filters::{DataEventFilter, EscrowEventFilter, OfflineNoteEventFilter};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

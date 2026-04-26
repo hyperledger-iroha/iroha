@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Immutable log entry describing an offline transfer for audit exports. */
+/** Immutable log entry describing an Offline V2 note event for audit exports. */
 class OfflineAuditEntry(
     val txId: String,
     val senderId: String,

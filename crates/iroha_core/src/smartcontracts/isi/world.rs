@@ -11303,42 +11303,6 @@ pub mod isi {
                     )
                     .into());
                 }
-                if let Some((certificate_id, _)) = state_transaction
-                    .world
-                    .offline_allowances
-                    .iter()
-                    .find(|(_, record)| {
-                        record.certificate.allowance.asset.definition() == asset_definition_id
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active offline allowance state (certificate {certificate_id}); revoke or rotate allowance first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                if let Some((bundle_id, _)) = state_transaction
-                    .world
-                    .offline_to_online_transfers
-                    .iter()
-                    .find(|(_, record)| {
-                        record
-                            .transfer
-                            .receipts
-                            .iter()
-                            .any(|receipt| receipt.asset.definition() == asset_definition_id)
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active offline transfer state (bundle {bundle_id}); settle or prune transfer history first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
             }
 
             let remove_assets: Vec<AssetId> = state_transaction
@@ -12002,10 +11966,6 @@ pub mod isi {
             asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
             nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
             nft::{Nft, NftId},
-            offline::{
-                OfflineAllowanceCommitment, OfflineBalanceProof, OfflineToOnlineTransfer,
-                OfflineTransferRecord, OfflineTransferStatus,
-            },
         };
         use iroha_data_model::{
             isi::{SetParameter, bridge::RecordBridgeReceipt},
@@ -14035,8 +13995,6 @@ pub mod isi {
                 AssetDefinitionId::new(external_domain.clone(), "bond".parse().unwrap());
             let reward_def =
                 AssetDefinitionId::new(external_domain.clone(), "fee".parse().unwrap());
-            let offline_def =
-                AssetDefinitionId::new(external_domain.clone(), "coin".parse().unwrap());
             Register::asset_definition({
                 let __asset_definition_id = cash_def.clone();
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -14058,14 +14016,6 @@ pub mod isi {
             })
             .execute(&ALICE_ID, &mut stx)
             .expect("register external reward definition");
-            Register::asset_definition({
-                let __asset_definition_id = offline_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register external offline definition");
-
             let repo_id: iroha_data_model::repo::RepoAgreementId =
                 "repoguard".parse().expect("repo agreement id");
             let agreement = iroha_data_model::repo::RepoAgreement::new(
@@ -14151,52 +14101,6 @@ pub mod isi {
                 }],
             );
 
-            let allowance = OfflineAllowanceCommitment::new(
-                AssetId::new(offline_def, account_id.clone()),
-                Numeric::new(10, 0),
-                vec![0xCD],
-            );
-            let bundle_id = Hash::new(b"offline-transfer-domain-guard");
-            let transfer = OfflineToOnlineTransfer::new(
-                bundle_id,
-                account_id.clone(),
-                account_id.clone(),
-                Vec::new(),
-                OfflineBalanceProof::new(allowance, vec![0xCD], Numeric::new(1, 0), None),
-                None,
-                None,
-                None,
-            );
-            stx.world.offline_to_online_transfers.insert(
-                bundle_id,
-                OfflineTransferRecord {
-                    transfer,
-                    controller: account_id.clone(),
-                    status: OfflineTransferStatus::Settled,
-                    rejection_reason: None,
-                    recorded_at_ms: 1,
-                    recorded_at_height: 1,
-                    archived_at_height: None,
-                    history: Vec::new(),
-                    pos_verdict_snapshots: Vec::new(),
-                    verdict_snapshot: None,
-                    platform_snapshot: None,
-                },
-            );
-            let verdict_id = Hash::new(b"offline-verdict-domain-guard");
-            stx.world.offline_verdict_revocations.insert(
-                verdict_id,
-                iroha_data_model::offline::OfflineVerdictRevocation {
-                    verdict_id,
-                    issuer: account_id.clone(),
-                    revoked_at_ms: 1,
-                    reason:
-                        iroha_data_model::offline::OfflineVerdictRevocationReason::IssuerRequest,
-                    note: None,
-                    metadata: Metadata::default(),
-                },
-            );
-
             stx.world.public_lane_validators.insert(
                 (LaneId::SINGLE, account_id.clone()),
                 iroha_data_model::nexus::PublicLaneValidatorRecord {
@@ -14252,13 +14156,6 @@ pub mod isi {
             assert!(
                 stx.world.repo_agreements.get(&repo_id).is_some(),
                 "repo agreement state should remain"
-            );
-            assert!(
-                stx.world
-                    .offline_to_online_transfers
-                    .get(&bundle_id)
-                    .is_some(),
-                "offline transfer state should remain"
             );
         }
 

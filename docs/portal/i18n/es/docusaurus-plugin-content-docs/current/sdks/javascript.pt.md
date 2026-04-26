@@ -178,67 +178,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Permisos sin conexión y metadatos de veredictoLas respuestas a las asignaciones sin conexión exponen los metadatos del libro mayor enriquecidos por adelantado:
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` e `remaining_amount` se devuelven junto con el archivo sin formato.
-registre para que los paneles no tengan que decodificar las cargas útiles Norito integradas. el nuevo
-ayudantes de cuenta atrás (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) resalta la próxima fecha límite de vencimiento (actualizar → política
-→ certificado) para que las insignias de UI puedan advertir a los operadores cada vez que se haya asignado un permiso
-Quedan <24 h. El SDK
-refleja los filtros REST expuestos por `/v1/offline/reserve/topup`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` y el
-`requireVerdict` / `onlyMissingVerdict` booleanos. Combinaciones no válidas (para
-ejemplo `onlyMissingVerdict` + `verdictIdHex`) se rechazan localmente antes de Torii
-se llama.
+## Offline V2 readiness
+
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Recargas sin conexión (emitir + registrarse)
-
-Utilice los ayudantes de recarga cuando desee emitir un certificado e inmediatamente
-registrarlo en el libro mayor. El SDK verifica el certificado emitido y registrado.
-Los ID coinciden antes de regresar y la respuesta incluye ambas cargas útiles. hay
-sin punto final de recarga dedicado; el ayudante encadena la emisión + registra llamadas. si
-ya tiene un certificado firmado, llame a `registerOfflineAllowance` (o
-`renewOfflineAllowance`) directamente.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii consultas y streaming (WebSockets)Los asistentes de consulta exponen el estado, las métricas Prometheus, las instantáneas de telemetría y los eventos
 transmisiones utilizando la gramática de filtro Norito. La transmisión se actualiza automáticamente a
 WebSockets y se reanuda cuando el presupuesto de reintento lo permite.

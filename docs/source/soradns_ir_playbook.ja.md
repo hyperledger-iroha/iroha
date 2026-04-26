@@ -38,7 +38,7 @@ Signed Tree Head 証明が陳腐化した場合、またはゲートウェイが
 ## 封じ込め
 
 1. **影響を受けた namehash の凍結** – `docs/source/sns/governance_playbook.md` に従い、
-   適切なレジストラ操作（`RegisterOfflineVerdictRevocation` または GAR 凍結）を提出する。
+   適切なレジストラ操作（GAR freeze）を提出する。
 2. **Signed Tree Heads の再公開** – レポート CLI が生成した JSON アーティファクトを
    ガバナンス証拠バケットへアップロードし、バリデータと共有して新しい
    `policy_hash_hex` 値を確認できるようにする。

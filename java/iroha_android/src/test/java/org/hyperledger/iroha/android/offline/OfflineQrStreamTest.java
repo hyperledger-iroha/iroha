@@ -36,7 +36,7 @@ public final class OfflineQrStreamTest {
     final List<OfflineQrStream.Frame> frames =
         OfflineQrStream.Encoder.encodeFrames(
             payload,
-            OfflineQrStream.PayloadKind.OFFLINE_SPEND_RECEIPT,
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
             new OfflineQrStream.Options(180, 3));
     OfflineQrStream.Frame header = null;
     int droppedIndex = -1;
@@ -106,7 +106,7 @@ public final class OfflineQrStreamTest {
     final List<OfflineQrStream.Frame> frames =
         OfflineQrStream.Encoder.encodeFrames(
             payload,
-            OfflineQrStream.PayloadKind.OFFLINE_SPEND_RECEIPT,
+            OfflineQrStream.PayloadKind.OFFLINE_PAYMENT_TOKEN_V2,
             new OfflineQrStream.Options(336, 4));
 
     OfflineQrStream.Frame header = null;

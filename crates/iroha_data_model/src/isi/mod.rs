@@ -998,31 +998,7 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Allow direct boxing of offline allowance instructions.
-impl From<crate::isi::offline::RegisterOfflineLineage> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineLineage) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::CommitOfflineLineageOperation> for InstructionBox {
-    fn from(i: crate::isi::offline::CommitOfflineLineageOperation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RegisterOfflineAllowance> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineAllowance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::SubmitOfflineToOnlineTransfer> for InstructionBox {
-    fn from(i: crate::isi::offline::SubmitOfflineToOnlineTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
+// Allow direct boxing of Offline V2 note instructions.
 impl From<crate::isi::offline::IssueOfflineNoteV2> for InstructionBox {
     fn from(i: crate::isi::offline::IssueOfflineNoteV2) -> Self {
         InstructionBox(Box::new(i))
@@ -1037,30 +1013,6 @@ impl From<crate::isi::offline::RedeemOfflineNoteV2> for InstructionBox {
 
 impl From<crate::isi::offline::AuditOfflineNoteV2> for InstructionBox {
     fn from(i: crate::isi::offline::AuditOfflineNoteV2) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RegisterOfflineVerdictRevocation> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineVerdictRevocation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::ReclaimExpiredOfflineAllowance> for InstructionBox {
-    fn from(i: crate::isi::offline::ReclaimExpiredOfflineAllowance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::LoadOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::LoadOfflineEscrowBalance) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RedeemOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3389,6 +3341,7 @@ mod tests {
             OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteKeyCertificateV2,
             OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2,
         };
+        use crate::proof::{ProofBox, VerifyingKeyId};
         use iroha_crypto::{Hash, Signature};
 
         let registry = crate::instruction_registry::default();
@@ -3403,9 +3356,9 @@ mod tests {
         );
         let asset_id = AssetId::of(asset_definition_id, account_id.clone());
         let proof = OfflineNoteRecursiveProofV2 {
-            verifier_key_id: "offline-note-v2-recursive-v1".to_owned(),
+            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
             public_inputs_hash: Hash::new(b"offline-v2-public-inputs"),
-            proof: vec![0xCA, 0xFE],
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
         };
         let key_certificate = OfflineNoteKeyCertificateV2 {
             version: 2,
@@ -3420,12 +3373,14 @@ mod tests {
 
         let issue = crate::isi::offline::IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
             note_commitment: Hash::new(b"note-commitment"),
-            key_certificate,
+            key_certificate: key_certificate.clone(),
             asset: asset_id.clone(),
             amount: Numeric::new(10, 0),
         });
         let redemption = crate::isi::offline::RedeemOfflineNoteV2::new(OfflineNoteRedeemV2 {
+            source_note_commitment: Hash::new(b"note-commitment"),
             input_nullifiers: vec![Hash::new(b"input-nullifier")],
+            sender_key_certificate: key_certificate.clone(),
             recipient: account_id,
             asset: asset_id,
             amount: Numeric::new(10, 0),
@@ -3433,6 +3388,7 @@ mod tests {
         });
         let audit = crate::isi::offline::AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
             token_id: Hash::new(b"token"),
+            sender_key_certificate: key_certificate,
             input_nullifiers: vec![Hash::new(b"audit-nullifier")],
             output_commitments: vec![Hash::new(b"output-note")],
             recursive_proof: proof,

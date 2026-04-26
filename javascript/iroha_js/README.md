@@ -39,7 +39,6 @@ Common subpath imports for lighter bundling (ESM):
 import { ToriiClient } from "@iroha/iroha-js/torii";
 import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
-import { buildOfflineEnvelope } from "@iroha/iroha-js/offline";
 ```
 
 For browser-only Connect bootstrap without importing the Node-first `ToriiClient`
@@ -87,12 +86,11 @@ to the upstream node or browser Connect joins will fail with `400 Bad Request`.
 You can also use namespaced exports when you prefer grouped imports:
 
 ```js
-import { Torii, Norito, Crypto, Offline } from "@iroha/iroha-js";
+import { Torii, Norito, Crypto } from "@iroha/iroha-js";
 
 const torii = new Torii.ToriiClient("https://torii.example");
 const encoded = Norito.noritoEncodeInstruction({ Register: { Domain: { id: "wonderland" } } });
 const keys = Crypto.generateKeyPair();
-const offline = Offline.buildOfflineEnvelope({ signedTransaction: encoded, metadata: {} });
 ```
 
 > **Key storage:** Store Ed25519 seed material in dedicated key vaults or
@@ -515,49 +513,6 @@ await rpc.call("/v1/pipeline/submit", payload); // throws on host/protocol misma
 Error strings stay stable (`ToriiClient: refusing to send credentials over insecure protocol …`)
 and the regression suite in `javascript/iroha_js/test/transportSecurity.test.js` covers the
 allowed permutations so dApps can mirror the same checks.
-
-### Offline envelopes and Connect queue evidence
-
-Package signed transactions for replay with the deterministic envelope helpers and mirror the
-Connect offline queue diagnostics shipped on Swift/Android:
-
-```js
-import {
-  ToriiClient,
-  buildOfflineEnvelope,
-  writeOfflineEnvelopeFile,
-  readOfflineEnvelopeFile,
-  replayOfflineEnvelope,
-  ConnectQueueJournal,
-  ConnectDirection,
-  exportConnectQueueEvidence,
-} from "@iroha/iroha-js";
-
-const signedTransaction = Buffer.from("norito-payload"); // replace with a real signed transaction
-const envelope = buildOfflineEnvelope({
-  signedTransaction, // Norito bytes (Buffer/Uint8Array)
-  keyAlias: "alice-key",
-  metadata: { purpose: "offline-demo" },
-});
-await writeOfflineEnvelopeFile("./artifacts/js/offline/envelope.json", envelope);
-const stored = await readOfflineEnvelopeFile("./artifacts/js/offline/envelope.json");
-await replayOfflineEnvelope(new ToriiClient("https://torii.example"), stored);
-
-const journal = new ConnectQueueJournal("AQIDBAUG", { storage: "memory" });
-await journal.append(ConnectDirection.APP_TO_WALLET, 1n, Buffer.from("frame"), {
-  receivedAtMs: Date.now(),
-});
-const { manifest } = await exportConnectQueueEvidence(
-  "AQIDBAUG",
-  "./artifacts/js/connect_bundle",
-);
-console.log(manifest.snapshot.state); // "enabled"
-```
-
-Recipes mirror the same flows with deterministic fixtures: `npm run example:offline` (Connect queues)
-and `npm run example:offline:pipeline` (pipeline envelope + mock Torii). See
-`docs/source/sdk/js/offline.md` and the tests in `javascript/iroha_js/test/offline*.test.js` for the
-expected schema and layout.
 
 ### Norito helpers and fixtures
 
@@ -2472,111 +2427,6 @@ inherited from the client config; standalone calls can supply their own
 - Keep endpoint hosts/schemes aligned with the Torii base; credentialed calls reject overrides.
 - Enable telemetry hooks to detect accidental `ws://` usage during development.
 
-### Offline pipeline envelopes
-
-Build and persist deterministic Norito envelopes when Torii is unreachable. The helper normalises
-metadata, enforces non-empty hashes/schema/key aliases, and computes `hashHex` with
-`hashSignedTransaction` when omitted.
-
-```js
-import {
-  ToriiClient,
-  buildMintAssetInstruction,
-  buildOfflineEnvelope,
-  buildTransaction,
-  readOfflineEnvelopeFile,
-  replayOfflineEnvelope,
-  writeOfflineEnvelopeFile,
-} from "@iroha/iroha-js";
-
-const { signedTransaction } = buildTransaction({
-  chainId: "offline-demo",
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
-  instructions: [
-    buildMintAssetInstruction({
-      assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-      quantity: "10",
-    }),
-  ],
-  privateKey: Buffer.alloc(32, 0x11),
-});
-
-const envelope = buildOfflineEnvelope({
-  signedTransaction,
-  keyAlias: "alice-key",
-  metadata: { purpose: "offline-demo" },
-});
-await writeOfflineEnvelopeFile("./artifacts/js/offline/envelope.json", envelope);
-
-const stored = await readOfflineEnvelopeFile("./artifacts/js/offline/envelope.json");
-const torii = new ToriiClient("https://torii.devnet.example");
-await replayOfflineEnvelope(torii, stored, { intervalMs: 250, timeoutMs: 15_000 });
-```
-
-`npm run example:offline:pipeline` runs the same flow against an in-process mock Torii server and
-logs both the computed hash and what the server observes for evidence capture.
-
-### Offline Connect queueing and evidence
-
-The SDK ships a bounded offline journal (`ConnectQueueJournal`) plus diagnostics
-helpers for snapshotting queue depth/bytes and exporting evidence bundles when
-wallets or Torii endpoints are unavailable. Queues prune expired frames, cap
-record counts/bytes per direction, and prefer IndexedDB in browsers while
-falling back to memory in Node.js. Diagnostics resolve `connect.queue.root`
-from `client.toml` (defaulting to `~/.iroha/connect/<sid>/`) and only honour
-`IROHA_CONNECT_QUEUE_ROOT` when `allowEnvOverride: true` (dev/test only); pass
-`connectConfig` or `rootDir` explicitly to mirror the config.
-
-```js
-import {
-  ConnectQueueJournal,
-  ConnectDirection,
-  appendConnectQueueMetric,
-  exportConnectQueueEvidence,
-  updateConnectQueueSnapshot,
-} from "@iroha/iroha-js";
-
-const sid = preview.sidBase64Url;
-const journal = new ConnectQueueJournal(sid, { storage: "memory" });
-await journal.append(
-  ConnectDirection.APP_TO_WALLET,
-  1,
-  Buffer.from("app->wallet payload"),
-);
-const pending = await journal.records(ConnectDirection.APP_TO_WALLET);
-console.log("pending frames", pending.length);
-
-const snapshot = await updateConnectQueueSnapshot(
-  sid,
-  (current) => ({
-    ...current,
-    state: "enabled",
-    app_to_wallet: { ...current.app_to_wallet, depth: pending.length, bytes: 128 },
-    wallet_to_app: { ...current.wallet_to_app, depth: 0, bytes: 0 },
-  }),
-  { rootDir: "./artifacts/js/connect_offline" },
-);
-await appendConnectQueueMetric(
-  sid,
-  {
-    state: snapshot.state,
-    app_to_wallet_depth: snapshot.app_to_wallet.depth,
-    wallet_to_app_depth: snapshot.wallet_to_app.depth,
-  },
-  { rootDir: "./artifacts/js/connect_offline" },
-);
-const { manifest } = await exportConnectQueueEvidence(
-  sid,
-  "./artifacts/js/connect_bundle",
-  { rootDir: "./artifacts/js/connect_offline" },
-);
-console.log("evidence files", manifest.files);
-```
-
-See `docs/source/sdk/js/offline.md` for the full snapshot layout and CLI usage
-(`npm run example:offline` for Connect, `npm run example:offline:pipeline` for pipeline envelopes)
-when you need deterministic replay/evidence capture.
-
 ### Connect error taxonomy
 
 `ConnectError`, `ConnectQueueError`, and `connectErrorFrom()` mirror the shared taxonomy
@@ -3017,11 +2867,10 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline V2 readiness plus
-the allowance, certificate, settlement, summary, and telemetry endpoints that
-are still mounted by Torii. The legacy `/v1/offline/cash/*`,
-`/v1/offline/transfers*`, and `/v1/offline/revocations*` routes are no longer
-exposed by this SDK because Torii now returns 404 for them.
+The supported first-release offline HTTP surface is Offline V2 readiness. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
+non-V2 offline HTTP
+helpers are no longer exposed by this SDK because Torii now returns 404 for those routes.
 
 ```js
 const readiness = await torii.getOfflineV2Readiness();

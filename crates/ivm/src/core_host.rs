@@ -18,7 +18,7 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec},
 };
-use norito::{decode_from_bytes, json as njson, to_bytes};
+use norito::{decode_from_bytes, json as njson, literal, to_bytes};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Sha3_256};
 
@@ -44,6 +44,18 @@ struct CachedProofEntry {
     verified_slot: u64,
     manifest_root: Option<[u8; 32]>,
     valid: bool,
+}
+
+fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
+    let raw = if raw.starts_with("hash:") {
+        literal::parse("hash", raw).map_err(|_| VMError::DecodeError)?
+    } else {
+        raw.strip_prefix("0x").unwrap_or(raw)
+    };
+    if raw.len() % 2 != 0 {
+        return Err(VMError::DecodeError);
+    }
+    hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
 #[allow(dead_code)]
@@ -1764,11 +1776,7 @@ impl IVMHost for CoreHost {
                     }
                     syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let raw = raw.strip_prefix("0x").unwrap_or(raw);
-                        if raw.len() % 2 != 0 {
-                            return Err(VMError::DecodeError);
-                        }
-                        let bytes = hex::decode(raw).map_err(|_| VMError::DecodeError)?;
+                        let bytes = decode_json_blob_hex_literal(raw)?;
                         let mut out = Vec::with_capacity(7 + bytes.len() + 32);
                         out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
                         out.push(1);

@@ -4,7 +4,7 @@
   "options": {
     "chunk_size": 180,
     "parity_group": 3,
-    "payload_kind": "offline_spend_receipt"
+    "payload_kind": "offline_payment_token_v2"
   },
   "envelope_hex": "01000003b40002000100020002010000690e38bf3094807d72b8b5a1677301f670685a36767bbbee8bb22afeb4b94ce5",
   "frames": [

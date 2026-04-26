@@ -1457,61 +1457,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((certificate_id, _)) = state_transaction
-                .world
-                .offline_allowances
-                .iter()
-                .find(|(_, record)| {
-                    record.certificate.controller == account_id
-                        || record.certificate.operator == account_id
-                        || record.certificate.allowance.asset.account() == &account_id
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has active offline allowance state (certificate {certificate_id}); revoke or rotate allowance first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some((bundle_id, _)) = state_transaction
-                .world
-                .offline_to_online_transfers
-                .iter()
-                .find(|(_, record)| {
-                    record.controller == account_id
-                        || record.transfer.receiver == account_id
-                        || record.transfer.deposit_account == account_id
-                        || record.transfer.receipts.iter().any(|receipt| {
-                            receipt.from == account_id
-                                || receipt.to == account_id
-                                || receipt.asset.account() == &account_id
-                        })
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has active offline transfer state (bundle {bundle_id}); settle or prune transfer history first"
-                    )
-                    .into(),
-                )
-                    .into());
-            }
-            if let Some((verdict_id, _)) = state_transaction
-                .world
-                .offline_verdict_revocations
-                .iter()
-                .find(|(_, record)| record.issuer == account_id)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it has active offline verdict revocation state (verdict {verdict_id}); retain account for revocation audit references"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if let Some((proposal_id, _)) = state_transaction
                 .world
                 .governance_proposals
@@ -1840,14 +1785,6 @@ pub mod isi {
                 .world
                 .tx_sequences
                 .remove(account_id.clone());
-            state_transaction
-                .world
-                .offline_transfer_sender_index
-                .remove(account_id.clone());
-            state_transaction
-                .world
-                .offline_transfer_receiver_index
-                .remove(account_id.clone());
 
             for label in state_transaction
                 .world
@@ -2159,43 +2096,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((certificate_id, _)) = state_transaction
-                .world
-                .offline_allowances
-                .iter()
-                .find(|(_, record)| {
-                    record.certificate.allowance.asset.definition() == &asset_definition_id
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has active offline allowance state (certificate {certificate_id}); revoke or rotate allowance first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some((bundle_id, _)) = state_transaction
-                .world
-                .offline_to_online_transfers
-                .iter()
-                .find(|(_, record)| {
-                    record
-                        .transfer
-                        .receipts
-                        .iter()
-                        .any(|receipt| receipt.asset.definition() == &asset_definition_id)
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has active offline transfer state (bundle {bundle_id}); settle or prune transfer history first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-
             remove_asset_definition_associated_permissions(state_transaction, &asset_definition_id);
 
             let mut assets_to_remove = Vec::new();
@@ -3031,7 +2931,7 @@ pub mod query {
 mod tests {
     use std::sync::Arc;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         IntoKeyValue,
         account::{
@@ -3055,10 +2955,7 @@ mod tests {
             UniversalAccountId,
         },
         nft::{Nft, NftId},
-        offline::{
-            OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment, OfflineAllowanceRecord,
-            OfflineCounterState, OfflineWalletCertificate, OfflineWalletPolicy,
-        },
+        offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         permission::Permission,
         prelude::Domain,
         role::{Role, RoleId},
@@ -6298,114 +6195,6 @@ mod tests {
         assert!(
             err_string.contains("active oracle feed history state"),
             "error should explain oracle-history conflict: {err_string}"
-        );
-        assert!(
-            tx.world.accounts.get(&account_id).is_some(),
-            "account should remain after rejected unregister"
-        );
-    }
-
-    #[test]
-    fn unregister_account_rejects_when_account_has_offline_allowance_state() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let keypair = KeyPair::random();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-
-        let definition_id = AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
-        let allowance = OfflineAllowanceCommitment::new(
-            AssetId::new(definition_id, account_id.clone()),
-            Numeric::new(10, 0),
-            vec![0xAB],
-        );
-        let certificate = OfflineWalletCertificate::new(
-            account_id.clone(),
-            authority.clone(),
-            allowance,
-            KeyPair::random().public_key().clone(),
-            Vec::new(),
-            1,
-            2,
-            OfflineWalletPolicy::new(Numeric::new(10, 0), Numeric::new(5, 0), 2),
-            Signature::from_bytes(&[0; 64]),
-            Metadata::default(),
-            None,
-            None,
-            None,
-        );
-        tx.world.offline_allowances.insert(
-            Hash::new(b"offline-allowance-account-guard"),
-            OfflineAllowanceRecord {
-                certificate,
-                current_commitment: vec![0xAB],
-                registered_at_ms: 1,
-                remaining_amount: Numeric::new(10, 0),
-                counter_state: OfflineCounterState::default(),
-                verdict_id: None,
-                attestation_nonce: None,
-                refresh_at_ms: None,
-            },
-        );
-
-        let err = Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("account with offline allowance state must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("active offline allowance state"),
-            "error should explain offline allowance conflict: {err_string}"
-        );
-        assert!(
-            tx.world.accounts.get(&account_id).is_some(),
-            "account should remain after rejected unregister"
-        );
-    }
-
-    #[test]
-    fn unregister_account_rejects_when_account_has_offline_verdict_revocation_state() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-
-        let keypair = KeyPair::random();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-
-        let verdict_id = Hash::new(b"offline-verdict-account-guard");
-        tx.world.offline_verdict_revocations.insert(
-            verdict_id,
-            iroha_data_model::offline::OfflineVerdictRevocation {
-                verdict_id,
-                issuer: account_id.clone(),
-                revoked_at_ms: 1,
-                reason: iroha_data_model::offline::OfflineVerdictRevocationReason::IssuerRequest,
-                note: None,
-                metadata: Metadata::default(),
-            },
-        );
-
-        let err = Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("account with offline verdict revocation state must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("active offline verdict revocation state"),
-            "error should explain offline verdict revocation conflict: {err_string}"
         );
         assert!(
             tx.world.accounts.get(&account_id).is_some(),

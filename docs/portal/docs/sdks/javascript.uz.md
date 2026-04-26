@@ -179,69 +179,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Oflayn imtiyozlar va hukm metamaʼlumotlari
+## Offline V2 readiness
 
-Oflayn to'lov javoblari boyitilgan daftar metama'lumotlarini oldindan ochib beradi -
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` va `remaining_amount` xom ashyo bilan birga qaytariladi
-yozib oling, shuning uchun asboblar paneli o'rnatilgan Norito foydali yuklarini dekodlashi shart emas. Yangi
-orqaga hisoblash yordamchilari (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) keyingi tugash muddatini belgilang (yangilash → siyosat
-→ sertifikat) shuning uchun foydalanuvchi interfeysi nishonlari operatorlarni har doim ruxsat berilganda ogohlantirishi mumkin
-<24 soat qoldi. SDK
-`/v1/offline/reserve/topup` tomonidan ta'sirlangan REST filtrlarini aks ettiradi:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` va
-`requireVerdict` / `onlyMissingVerdict` mantiqiy. Yaroqsiz kombinatsiyalar (uchun
-misol `onlyMissingVerdict` + `verdictIdHex`) Torii dan oldin mahalliy ravishda rad etiladi
-deyiladi.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Oflayn to'ldirish (muammo + ro'yxatdan o'tish)
-
-Sertifikat bermoqchi bo'lganingizda va darhol to'ldirish yordamchilaridan foydalaning
-uni daftarda ro'yxatdan o'tkazing. SDK berilgan va ro'yxatdan o'tgan sertifikatni tekshiradi
-Qaytishdan oldin identifikatorlar mos keladi va javob ikkala foydali yukni ham o'z ichiga oladi. bor
-maxsus to'ldirish so'nggi nuqtasi yo'q; yordamchi muammoni zanjirlaydi + qo'ng'iroqlarni ro'yxatdan o'tkazish. Agar
-Sizda allaqachon imzolangan sertifikat bor, `registerOfflineAllowance` (yoki
-`renewOfflineAllowance`) to'g'ridan-to'g'ri.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii so'rovlar va oqim (WebSockets)
 
 So‘rov yordamchilari holat, Prometheus ko‘rsatkichlari, telemetriya suratlari va voqeani ko‘rsatadi.

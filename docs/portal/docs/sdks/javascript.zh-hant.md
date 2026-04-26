@@ -179,69 +179,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## 離線津貼和判決元數據
+## Offline V2 readiness
 
-離線津貼響應預先公開豐富的賬本元數據 -
-`expires_at_ms`、`policy_expires_at_ms`、`refresh_at_ms`、`verdict_id_hex`、
-`attestation_nonce_hex` 和 `remaining_amount` 與原始數據一起返回
-記錄，以便儀表板不必解碼嵌入式 Norito 有效負載。新的
-倒計時助手（`deadline_kind`、`deadline_state`、`deadline_ms`、
-`deadline_ms_remaining`) 突出顯示下一個即將到期的截止日期（刷新→政策
-→ 證書），以便 UI 徽章可以在津貼出現時警告操作員
-剩餘時間< 24 小時。軟件開發工具包
-鏡像 `/v1/offline/reserve/topup` 暴露的 REST 過濾器：
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs` 和
-`requireVerdict` / `onlyMissingVerdict` 布爾值。無效組合（對於
-例如 `onlyMissingVerdict` + `verdictIdHex`) 在 Torii 之前被本地拒絕
-被稱為。
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## 線下充值（發行+註冊）
-
-當您想要立即頒發證書時，請使用充值助手
-將其登記在分類賬上。 SDK驗證頒發並註冊的證書
-返回前 ID 匹配，並且響應包含兩個有效負載。有
-無專用充值端點；助手鍊接問題+註冊調用。如果
-您已經擁有簽名證書，請致電 `registerOfflineAllowance`（或
-`renewOfflineAllowance`) 直接。
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii 查詢和流式傳輸（WebSockets）
 
 查詢助手公開狀態、Prometheus 指標、遙測快照和事件

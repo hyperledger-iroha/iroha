@@ -12,8 +12,8 @@ translator: manual
 
 本ストローマンは、Swift・Android・JavaScript 向け Nexus Connect ワークフローの共通設計をまとめたものです。2026 年 2 月に予定されているクロス SDK ワークショップに向けて整備されており、実装に入る前に未解決事項を洗い出すことを目的としています。
 
-> 最終更新日: 2026-01-12  
-> 著者: Swift SDK リード、Android ネットワーキング TL、JS リード  
+> 最終更新日: 2026-01-12
+> 著者: Swift SDK リード、Android ネットワーキング TL、JS リード
 > ステータス: 評議会レビュー向けドラフト
 
 ## ゴール
@@ -188,7 +188,7 @@ Swift には以前プレースホルダーの JSON エンコーダ（`ConnectCod
   - Swift: `ConnectSessionDiagnostics.snapshot()` で `{state, depth, bytes, reason}`、`exportJournalBundle(url:)` で両キューを保存。
   - Android: `ConnectDiagnostics.snapshot()` / `exportJournalBundle(path)`.
   - JS: `ConnectQueueInspector.read()` が同じ構造体とアップロード用 Blob を返却。
-- アプリが `offline_queue_enabled=false` にした場合、即座に両ジャーナルを消去し `Disabled` 状態を記録、終端テレメトリを出力。設定は Norito 承認フレームにも反映され、相手機がリプレイ可否を判断できます。
+- アプリが `deferred_queue_enabled=false` にした場合、即座に両ジャーナルを消去し `Disabled` 状態を記録、終端テレメトリを出力。設定は Norito 承認フレームにも反映され、相手機がリプレイ可否を判断できます。
 - `connect queue inspect --sid <sid>` CLI は各 SDK の診断をラップし、カオス訓練時に状態推移・ウォーターマーク・レジューム証跡を取得します。
 
 ### 証跡バンドル手順

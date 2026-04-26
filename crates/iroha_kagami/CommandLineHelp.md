@@ -157,7 +157,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--extra-accounts <EXTRA_ACCOUNTS>` — Extra accounts to pre-register (in wonderland)
 
   Default value: `0`
-* `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in offline-cash asset is always emitted
+* `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in offline-note asset is always emitted
 
   Default value: `false`
 * `--block-time-ms <MILLISECONDS>` — Override the consensus block time (milliseconds) in generated manifests/configs. Leave unset to use the fast localnet pipeline defaults. If only one of `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other

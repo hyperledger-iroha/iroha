@@ -22,7 +22,7 @@ usage() {
 Usage: deploy_localnet.sh [OPTIONS]
 
 Builds `kagami`, `irohad`, and `iroha`, generates a fresh localnet, starts peers,
-waits for readiness, and verifies the built-in offline-cash asset alias.
+waits for readiness, and verifies the built-in offline-note asset alias.
 
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
@@ -50,10 +50,10 @@ Options:
   --release                  Build and run release binaries
   --no-build                 Skip cargo build and require prebuilt binaries
   --no-sample-asset          Do not include kagami's extra sample asset
-  --asset-id <ID>            Built-in offline-cash asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
-  --asset-name <NAME>        Built-in offline-cash asset name to verify (default: usd)
-  --asset-alias <ALIAS>      Built-in offline-cash alias to verify (default: usd#wonderland)
-  --skip-asset-check         Skip built-in offline-cash verification
+  --asset-id <ID>            Built-in offline-note asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
+  --asset-name <NAME>        Built-in offline-note asset name to verify (default: usd)
+  --asset-alias <ALIAS>      Built-in offline-note alias to verify (default: usd#wonderland)
+  --skip-asset-check         Skip built-in offline-note verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
   --force                    Remove existing out-dir before regenerating
@@ -796,7 +796,7 @@ fi
 CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_CHECK" != true ]]; then
   echo ""
-  echo "Verifying built-in offline-cash alias $ASSET_ALIAS..."
+  echo "Verifying built-in offline-note alias $ASSET_ALIAS..."
   asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
   asset_alias_response="$(
     curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
@@ -804,7 +804,7 @@ if [[ "$SKIP_ASSET_CHECK" != true ]]; then
       -d "$asset_alias_request" \
       "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
   )" || {
-    echo "Failed to resolve built-in offline-cash alias $ASSET_ALIAS." >&2
+    echo "Failed to resolve built-in offline-note alias $ASSET_ALIAS." >&2
     exit 1
   }
   ASSET_ALIAS_RESPONSE="$asset_alias_response" \
@@ -831,5 +831,5 @@ echo ""
 echo "Iroha localnet is running in $OUT_DIR."
 echo "CLI binary: $CLI_BIN"
 echo "Client config: $CFG"
-echo "Built-in offline cash: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
+echo "Built-in offline note: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
 echo "To stop: cd $OUT_DIR && ./stop.sh"

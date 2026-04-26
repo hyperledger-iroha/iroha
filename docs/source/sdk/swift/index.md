@@ -211,94 +211,21 @@ decide whether to discard or resubmit the affected envelope.
 
 ### Offline circulation modes
 
-`OfflineWallet` now exposes `OfflineWalletCirculationMode` so apps can distinguish between
-ledger-reconcilable allowances and pure offline/bearer campaigns:
+Offline value flows use Offline V2 note issuance, redemption, and audit instructions submitted
+through normal transactions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint.
 
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    circulationMode: .ledgerReconcilable) { mode, notice in
-        bannerView.show(title: notice.headline, message: notice.details)
-    }
-
-wallet.setCirculationMode(.offlineOnly)
-
-guard wallet.requiresLedgerReconciliation else {
-    logger.notice("Skipping Torii sync: offline bearer mode active")
-    return
-}
-
-try await wallet.fetchTransfers(params: ToriiOfflineListParams(limit: 25))
-```
-
-`ToriiOfflineListParams` mirrors the convenience filters exposed by Torii —
-pass `assetId`, `controllerId`, `receiverId`, `depositAccountId`,
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
-Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair used by the reserve
-attestation flow for Apple App Attest and Android KeyMint.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
+Offline V2 uses note challenges, payment tokens, and receipt acks carried over Fountain QR frames.
 
 ### Offline V2 APIs
 
 Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
-issuance, redemption, and audit payloads are submitted as transaction instructions; the legacy
-offline cash, reserve, transfer-history, and revocation HTTP routes are no longer published.
-
-### Inspector provisioning proofs
-
-Swift ships `AndroidProvisionedProof` so kiosk tooling and POS wallets can load
-the `proof.json` artefacts emitted by `cargo xtask offline-provision`, validate
-the Norito hash literal + inspector signature, and re-encode the manifest
-before attaching it to OA10.3 allowances:
-
-```swift
-let proofURL = URL(fileURLWithPath: "fixtures/offline_provision/kiosk-demo/proof.json")
-let proof = try AndroidProvisionedProof.load(from: proofURL)
-let manifest = proof.deviceManifest
-let canonical = try proof.encodedData(prettyPrinted: true)
-```
-
-The helper normalises the canonical hash literal (`hash:...#....`), exposes
-`deviceId`/`challengeHashData` for downstream attestations, and keeps the
-inspector signature in uppercase hex so OA10.3a flows align with the Norito
-schema documented in `offline_allowance.md`.【IrohaSwift/Sources/IrohaSwift/AndroidProvisionedProof.swift:1】
-
-Use the `.notice` payload to surface disclosures/localised copy and fall back to the default handler
-when no custom UI is supplied. Additional risk guidance lives in `docs/source/offline_bearer_mode.md`.
+issuance, redemption, and audit payloads are submitted as transaction instructions; non-V2
+offline HTTP routes are no longer published.
 
 ### Offline audit logging
 
-When `auditLoggingEnabled` is `true`, `OfflineWallet` writes `{sender, receiver, asset, amount, timestamp}` entries to
-`Documents/offline_audit_log.json` (or a custom `storageURL`). Record local spend events directly and
-export the deterministic journal when regulators request it:
-
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    auditStorageURL: customDirectory?.appendingPathComponent("audit.json"))
-
-try wallet.recordAuditEntry(
-    txId: txId,
-    senderId: senderAccountId,
-    receiverId: receiverAccountId,
-    assetId: assetId,
-    amount: amountDecimalString)
-
-// Export/clear the journal when regulators request it.
-let json = try wallet.exportAuditJSON()
-try wallet.clearAuditLog()
-```
-
-The audit log stays deterministic so the OA5.1 audit toggle can be flipped per jurisdiction without
-bespoke plumbing.
-
-### Counter journal
-
-Offline cash mutations and offline transfer receipts continue to use monotonic App Attest / marker
-counters. Persist the counters alongside the lineage envelope and transfer journal; there is no
-separate counter-summary endpoint in the offline cash cutover.
+Offline V2 wallet state is V2-only. App startup should discard non-V2 local state instead of
+migrating it.
 
 ## SoraFS orchestrator client
 

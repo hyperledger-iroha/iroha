@@ -16,8 +16,8 @@ Ushbu strawman taklifi Nexus Connect ish oqimlari uchun umumiy dizaynni tavsifla
 Swift, Android va JavaScript SDK-larida. ni qo'llab-quvvatlash uchun mo'ljallangan
 2026   fevral SDK bo‘yicha seminar va amalga oshirishdan oldin ochiq savollarni yozib oling.
 
-> Oxirgi yangilangan: 29.01.2026  
-> Mualliflar: Swift SDK Lead, Android Networking TL, JS Lead  
+> Oxirgi yangilangan: 29.01.2026
+> Mualliflar: Swift SDK Lead, Android Networking TL, JS Lead
 > Holat: kengash ko‘rib chiqish loyihasi (tahdid modeli + ma’lumotlarni saqlash moslashuvi 2026-03-12 qo‘shilgan)
 
 ## Maqsadlar
@@ -106,17 +106,17 @@ hali ham ko'prik integratsiyasiga olib kelgan mandatni egallab turibdi:
 
 ### Seans identifikatorlari va tuzlari
 
-- `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` dan olingan 32 baytli identifikator.  
+- `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` dan olingan 32 baytli identifikator.
   DApps uni `/v1/connect/session` ga qo'ng'iroq qilishdan oldin hisoblab chiqadi; hamyonlar buni `approve` ramkalarida aks ettiradi, shuning uchun har ikki tomon ham jurnallar va telemetriyani doimiy ravishda kaliti mumkin.
 - Xuddi shu tuz har bir kalit hosila bosqichini oziqlantiradi, shuning uchun SDK hech qachon xost platformasidan olingan entropiyaga tayanmaydi.
 
 ### Efemer kalit bilan ishlash
 
-- Har bir seans yangi X25519 kalit materialidan foydalanadi.  
+- Har bir seans yangi X25519 kalit materialidan foydalanadi.
   Swift uni `ConnectCrypto` orqali Keychain/Secure Enclave-da saqlaydi, Android hamyonlari sukut bo'yicha StrongBox (TEE tomonidan qo'llab-quvvatlanadigan kalit do'konlariga tushadi) va JS xavfsiz kontekstli WebCrypto nusxasini yoki mahalliy `iroha_js_host` plaginini talab qiladi.
 - Ochiq ramkalar dApp efemer ochiq kaliti va ixtiyoriy attestatsiya to'plamini o'z ichiga oladi. Hamyonni tasdiqlash hamyonning ochiq kalitini va muvofiqlik oqimi uchun zarur bo‘lgan har qanday apparat sertifikatini qaytaradi.
-- Attestatsiyaning foydali yuklari qabul qilingan sxema bo'yicha:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
+- Attestatsiyaning foydali yuklari qabul qilingan sxema bo'yicha:
+  `attestation { platform, evidence_b64, statement_hash }`.
   Brauzerlar blokni o'tkazib yuborishi mumkin; mahalliy hamyonlar uni apparat kalitlari ishlatilayotganda o'z ichiga oladi.
 
 ### Yo'nalish tugmalari va AEAD
@@ -124,7 +124,7 @@ hali ham ko'prik integratsiyasiga olib kelgan mandatni egallab turibdi:
 - Umumiy sirlar HKDF-SHA256 (Rust ko'prigi yordamchilari orqali) va domendan ajratilgan ma'lumotlar qatorlari bilan kengaytirilgan:
   - `iroha-connect|k_app` → ilova→hamyon trafiki.
   - `iroha-connect|k_wallet` → hamyon → ilova trafiki.
-- AEAD v1 konvert uchun ChaCha20-Poly1305 (`connect_norito_bridge` har bir platformada yordamchilarni ko'rsatadi).  
+- AEAD v1 konvert uchun ChaCha20-Poly1305 (`connect_norito_bridge` har bir platformada yordamchilarni ko'rsatadi).
   Bog'langan ma'lumotlar `("connect:v1", sid, dir, seq_le, kind=ciphertext)` ga teng, shuning uchun sarlavhalarni buzish aniqlanadi.
 - Nonces 64-bitli ketma-ketlik hisoblagichidan (`nonce[0..4]=0`, `nonce[4..12]=seq_le`) olingan. Birgalikda yordamchi testlar BigInt/UInt konversiyalari SDKlarda bir xil harakat qilishini ta'minlaydi.
 
@@ -135,19 +135,19 @@ Tarixiy CryptoKit zaxiralari uchun `docs/connect_swift_ios.md` ga qarang; Kotlin
 
 ## Ruxsatlar va dalillar
 
-- Ruxsat manifestlari ko'prik orqali eksport qilingan umumiy Norito tuzilmasi bo'ylab aylanib chiqishi kerak.  
+- Ruxsat manifestlari ko'prik orqali eksport qilingan umumiy Norito tuzilmasi bo'ylab aylanib chiqishi kerak.
   Maydonlar:
-  - `methods` — fe'llar (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — dApp ilovasini biriktirishga ruxsat berilgan obunalar.  
-  - `resources` - ixtiyoriy hisob/aktiv filtrlari, shuning uchun hamyonlar kirishni qamrab oladi.  
+  - `methods` — fe'llar (`sign_transaction`, `sign_raw`, `submit_proof`, …).
+  - `events` — dApp ilovasini biriktirishga ruxsat berilgan obunalar.
+  - `resources` - ixtiyoriy hisob/aktiv filtrlari, shuning uchun hamyonlar kirishni qamrab oladi.
   - `constraints` - zanjir identifikatori, TTL yoki maxsus siyosat tugmalari hamyon imzolashdan oldin amalga oshiradi.
 - Ruxsatlar bilan bir qatorda muvofiqlik metama'lumotlari:
-  - Majburiy emas `attachments[]` Norito biriktirma havolalarini o'z ichiga oladi (KYC to'plamlari, regulyator kvitantsiyalari).  
+  - Majburiy emas `attachments[]` Norito biriktirma havolalarini o'z ichiga oladi (KYC to'plamlari, regulyator kvitantsiyalari).
   - `compliance_manifest_id` so'rovni avval tasdiqlangan manifest bilan bog'laydi, shuning uchun operatorlar kelib chiqishini tekshirishlari mumkin.
 - Hamyon javoblari kelishilgan kodlardan foydalanadi:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
+  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.
   Ularning har birida UI ko‘rsatmalari uchun `localized_message` hamda mashinada o‘qiladigan `reason_code` bo‘lishi mumkin.
-- Tasdiqlash ramkalari tanlangan hisob/nazoratchi, ruxsat aks-sadosi, isbot to‘plami (ZK isboti yoki attestatsiyasi) va har qanday siyosat o‘tish tugmalarini (masalan, `offline_queue_enabled`) o‘z ichiga oladi.  
+- Tasdiqlash ramkalari tanlangan hisob/nazoratchi, ruxsat aks-sadosi, isbot to‘plami (ZK isboti yoki attestatsiyasi) va har qanday siyosat o‘tish tugmalarini (masalan, `deferred_queue_enabled`) o‘z ichiga oladi.
   Rad etishlar bir xil sxemani bo'sh `proof` bilan aks ettiradi, ammo audit uchun `sid` ni yozib oladi.
 
 ## SDK jabhalari
@@ -171,7 +171,7 @@ Tarixiy CryptoKit zaxiralari uchun `docs/connect_swift_ios.md` ga qarang; Kotlin
 - Xatolarni qayta ishlash: Norito xato kodlarini SDK-ga xos xatolarga xaritalash; o'z ichiga oladi
   umumiy taksonomiyadan foydalangan holda UI uchun domenga xos kodlar (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, I180NI08000). Swiftning asosiy amaliyoti + telemetriya qoʻllanmasi [`connect_error_taxonomy.md`](connect_error_taxonomy.md) da ishlaydi va Android/JS pariteti uchun maʼlumotnoma hisoblanadi.
 - Navbat chuqurligi uchun telemetriya ilgaklarini chiqaring, hisoblarni qayta ulash va so'rovning kechikishi (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
- 
+
 ## Tartib raqamlari va oqimni boshqarish
 
 - Har bir yo'nalishda seans ochilganda noldan boshlanadigan 64 bitli `sequence` hisoblagichi mavjud. Birgalikda yordamchi turlari qisqichlarni qisadi va hisoblagich o'ralishidan ancha oldin `ConnectError.sequenceOverflow` + tugmani aylantirish bilan qo'l siqishni ishga tushiradi.
@@ -294,7 +294,7 @@ Swift (`ConnectSessionDiagnostics`), Androidda keng tarqalgan
   - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
   - JS: `ConnectQueueInspector.read()` bir xil struktura va blob tutqichini qaytaradi
     bu UI kodi Torii qo'llab-quvvatlash vositalariga yuklanishi mumkin.
-- Ilova `offline_queue_enabled=false` ni o'zgartirganda, SDK darhol o'chib ketadi va
+- Ilova `deferred_queue_enabled=false` ni o'zgartirganda, SDK darhol o'chib ketadi va
   ikkala jurnalni tozalang, holatni `Disabled` deb belgilang va terminalni chiqaring
   telemetriya hodisasi. Foydalanuvchiga qaragan afzallik Norito da aks ettirilgan
   tasdiqlash ramkasi, shuning uchun tengdoshlar buferlangan freymlarni davom ettirish mumkinligini bilishadi.

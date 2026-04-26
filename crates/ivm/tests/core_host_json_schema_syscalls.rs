@@ -108,6 +108,34 @@ fn json_decode_accepts_blob() {
 }
 
 #[test]
+fn json_get_blob_hex_accepts_iroha_hash_literals() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+
+    let hash = iroha_crypto::Hash::new(b"settlement");
+    let hash_hex = hex::encode_upper(hash.as_ref());
+    let hash_literal = norito::literal::format("hash", &hash_hex);
+    let json = format!(r#"{{"settlement_hash":"{hash_literal}"}}"#);
+    let p_json = vm
+        .alloc_input_tlv(&tlv(PointerType::Json, json.as_bytes()))
+        .unwrap();
+    let p_key = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"settlement_hash"))
+        .unwrap();
+
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8]);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+
+    let out_ptr = vm.register(10);
+    let tlv_out = vm.memory.validate_tlv(out_ptr).unwrap();
+    assert_eq!(tlv_out.type_id, PointerType::Blob);
+    assert_eq!(tlv_out.payload, hash.as_ref());
+}
+
+#[test]
 fn json_get_asset_definition_id_reads_address_literals() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

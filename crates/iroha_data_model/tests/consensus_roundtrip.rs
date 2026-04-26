@@ -2241,16 +2241,19 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
             continue;
         }
         let raw = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read lane commitment fixture {path:?}: {err}"));
-        let commitment: LaneBlockCommitment = norito::json::from_str(&raw)
-            .unwrap_or_else(|err| panic!("parse lane commitment fixture {path:?}: {err}"));
+            .unwrap_or_else(|err| panic!("read lane commitment fixture {}: {err}", path.display()));
+        let commitment: LaneBlockCommitment = norito::json::from_str(&raw).unwrap_or_else(|err| {
+            panic!("parse lane commitment fixture {}: {err}", path.display())
+        });
         let reserialized =
             norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
         let replay: LaneBlockCommitment =
             norito::json::from_str(&reserialized).expect("parse reserialized commitment");
         assert_eq!(
-            commitment, replay,
-            "JSON roundtrip mismatch for fixture {path:?}"
+            commitment,
+            replay,
+            "JSON roundtrip mismatch for fixture {}",
+            path.display()
         );
         let norito_bytes =
             norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
@@ -2259,8 +2262,10 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
         let decoded = NoritoDeserialize::try_deserialize(archived)
             .expect("deserialize commitment from Norito bytes");
         assert_eq!(
-            commitment, decoded,
-            "Norito roundtrip mismatch for fixture {path:?}"
+            commitment,
+            decoded,
+            "Norito roundtrip mismatch for fixture {}",
+            path.display()
         );
         let stem = path
             .file_stem()
@@ -2270,25 +2275,30 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
         match mode {
             LaneCommitmentFixtureMode::Verify => {
                 if to_path.is_file() {
-                    let fixture_bytes = fs::read(&to_path)
-                        .unwrap_or_else(|err| panic!("read Norito bytes {to_path:?}: {err}"));
+                    let fixture_bytes = fs::read(&to_path).unwrap_or_else(|err| {
+                        panic!("read Norito bytes {}: {err}", to_path.display())
+                    });
                     let archived_file = norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes)
                         .expect("archive fixture");
                     let decoded_from_file = NoritoDeserialize::try_deserialize(archived_file)
                         .expect("deserialize fixture Norito bytes");
                     assert_eq!(
-                        commitment, decoded_from_file,
-                        "Norito fixture bytes mismatch for {to_path:?}"
+                        commitment,
+                        decoded_from_file,
+                        "Norito fixture bytes mismatch for {}",
+                        to_path.display()
                     );
                     assert_eq!(
-                        norito_bytes, fixture_bytes,
-                        "canonical Norito bytes do not match fixture {to_path:?}"
+                        norito_bytes,
+                        fixture_bytes,
+                        "canonical Norito bytes do not match fixture {}",
+                        to_path.display()
                     );
                 }
             }
             LaneCommitmentFixtureMode::Regenerate => {
                 fs::write(&to_path, &norito_bytes).unwrap_or_else(|err| {
-                    panic!("write lane commitment fixture {to_path:?}: {err}")
+                    panic!("write lane commitment fixture {}: {err}", to_path.display())
                 });
             }
         }
@@ -2350,7 +2360,7 @@ fn write_lane_commitment_json_fixture(
     let path = fixtures_dir.join(format!("{stem}.json"));
     let json = norito::json::to_json_pretty(commitment).expect("serialize lane commitment fixture");
     fs::write(&path, json)
-        .unwrap_or_else(|err| panic!("write lane commitment fixture {path:?}: {err}"));
+        .unwrap_or_else(|err| panic!("write lane commitment fixture {}: {err}", path.display()));
     path
 }
 

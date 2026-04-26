@@ -963,6 +963,7 @@ mod codec_tests {
         trigger,
     };
 
+    #[allow(clippy::needless_pass_by_value)]
     fn expect_committed_tx_tree(predicate: CompoundPredicate<query::CommittedTransaction>) -> P {
         match predicate.to_wire() {
             CompoundPredicateWire::TxPredicate(tree) => tree,

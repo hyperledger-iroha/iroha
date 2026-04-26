@@ -377,28 +377,13 @@ oflayn yol xəritəsi sətirləri. Dürüstlük siyasətlərini yoxlamaq üçün
 Bütövlük, HMS Safety Detect, Provisioned) xam metadatanı təhlil etmədən:
 
 ```bash
-# List recent allowances and log their integrity policies
+# Check Offline V2 readiness
 TORII_URL=https://torii.nexus.example \
 node -e '
   import { ToriiClient } from "@iroha/iroha-js";
   const client = new ToriiClient(process.env.TORII_URL);
-  const page = await client.listOfflineAllowances({ limit: 5 });
-  for (const entry of page.items) {
-    const policy = entry.integrity_metadata?.policy ?? "<unknown>";
-    console.log(entry.controller_display, policy);
-  }
-'
-
-# Summarize transfers + Provisioned manifest metadata
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const page = await client.listOfflineTransfers({ limit: 5 });
-  for (const entry of page.items) {
-    const manifest = entry.integrity_metadata?.provisioned?.manifest_schema ?? "<none>";
-    console.log(entry.bundle_id_hex, entry.integrity_metadata?.policy ?? "<unknown>", manifest);
-  }
+  const readiness = await client.getOfflineV2Readiness();
+  console.log(readiness.offline_note_v2, readiness.offline_recursive_note_proof);
 '
 ```
 

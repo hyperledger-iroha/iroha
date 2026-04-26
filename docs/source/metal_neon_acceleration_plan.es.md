@@ -182,7 +182,7 @@ implementación y pruebas.
   Deltas de metal versus CPU sin reinventar nuevas fuentes de telemetría.
 
 ## Cargador de manifiesto Poseidon WP2-B y paridad de autoprueba- `fastpq_prover::poseidon_manifest()` ahora incorpora y analiza
-  `artifacts/offline_poseidon/constants.ron`, calcula su SHA-256
+  `artifacts/poseidon/constants.ron`, calcula su SHA-256
   (`poseidon_manifest_sha256()`) y valida la instantánea con la CPU
   tablas Poseidon antes de ejecutar cualquier trabajo de GPU. `build_metal_context()` registra el
   resumir durante el calentamiento para que los exportadores de telemetría puedan publicar

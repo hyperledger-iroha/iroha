@@ -92,21 +92,6 @@ use iroha_data_model::{
         PublicLaneRewardShare, PublicLaneStakeShare, PublicLaneUnbonding,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
     },
-    offline::{
-        AGGREGATE_PROOF_VERSION_V1, ANDROID_PROVISIONED_APP_ID_KEY, AggregateProofEnvelope,
-        AndroidIntegrityMetadata, AndroidIntegrityPolicy, AppleAppAttestProof,
-        OFFLINE_BUILD_CLAIM_MIN_BUILD_NUMBER_KEY, OFFLINE_LINEAGE_EPOCH_KEY,
-        OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY, OFFLINE_LINEAGE_SCOPE_KEY,
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceCommitment, OfflineAllowanceRecord,
-        OfflineBalanceProof, OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCounterState,
-        OfflineCounterSummary, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
-        OfflineProofRequestCounter, OfflineProofRequestError, OfflineProofRequestKind,
-        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineSpendReceipt,
-        OfflineToOnlineTransfer, OfflineTransferLifecycleEntry, OfflineTransferRecord,
-        OfflineTransferRejectionPlatform, OfflineTransferRejectionReason, OfflineTransferStatus,
-        OfflineVerdictRevocation, OfflineVerdictRevocationReason, OfflineVerdictSnapshot,
-        OfflineWalletCertificate, OfflineWalletPolicy, compute_receipts_root,
-    },
     peer::PeerId,
     prelude::*,
     proof::VerifyingKeyId,
@@ -116,11 +101,6 @@ use iroha_data_model::{
     transaction::{
         executable::Executable,
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
-    },
-    transactions::offline_transfer::{
-        OfflineTransferSummary, transfer_attestation_nonce_hex, transfer_certificate_expires_at_ms,
-        transfer_certificate_id_hex, transfer_platform_policy_label, transfer_policy_expires_at_ms,
-        transfer_refresh_at_ms, transfer_verdict_hex,
     },
 };
 
@@ -2876,7 +2856,6 @@ use futures::stream;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
     EventFilterBox,
-    data::prelude::{DataEventFilter, OfflineTransferEventFilter},
     pipeline::{BlockEventFilter, TransactionEventFilter, TransactionStatus},
 };
 
@@ -26473,10 +26452,6 @@ fn missing_field_error(field: &str) -> Error {
     conversion_error(format!("`{field}` is required"))
 }
 
-fn proof_request_error(err: OfflineProofRequestError) -> Error {
-    conversion_error(format!("failed to build proof request: {err}"))
-}
-
 fn json_response<T>(value: &T) -> Result<Response, Error>
 where
     T: norito::json::JsonSerialize,
@@ -31012,17 +30987,21 @@ fn instruction_matches_account_id(
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         return rewards.reward_asset().account() == expected;
     }
-    // Offline instructions: match by participant account.
+    // Offline V2 note instructions: match by participant account.
     {
         use iroha_data_model::isi::offline::{
-            RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer,
+            AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2,
         };
-        if let Some(reg) = any.downcast_ref::<RegisterOfflineAllowance>() {
-            return reg.certificate.controller == *expected;
+        if let Some(issue) = any.downcast_ref::<IssueOfflineNoteV2>() {
+            return issue.issue.asset.account() == expected
+                || issue.issue.key_certificate.account_id == *expected;
         }
-        if let Some(submit) = any.downcast_ref::<SubmitOfflineToOnlineTransfer>() {
-            return submit.transfer.receiver == *expected
-                || submit.transfer.deposit_account == *expected;
+        if let Some(redeem) = any.downcast_ref::<RedeemOfflineNoteV2>() {
+            return redeem.redemption.recipient == *expected
+                || redeem.redemption.sender_key_certificate.account_id == *expected;
+        }
+        if let Some(audit) = any.downcast_ref::<AuditOfflineNoteV2>() {
+            return audit.audit.sender_key_certificate.account_id == *expected;
         }
     }
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
@@ -34226,21 +34205,14 @@ pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResp
 mod sse_filter_tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        asset::AssetDefinitionId,
         block::BlockHeader,
         events::{
             EventBox, SharedDataEvent,
-            data::{
-                offline::{OfflineTransferEvent, OfflineTransferSettled},
-                prelude::DataEvent,
-            },
+            data::prelude::DataEvent,
             pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
         },
         nexus::{DataSpaceId, LaneId},
-        offline::OfflinePlatformTokenSnapshot,
     };
-    use iroha_primitives::numeric::Numeric;
-    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -34731,45 +34703,6 @@ mod sse_filter_tests {
         .into();
         assert!(filters_null.iter().any(|f| f.matches(&ev_none)));
         assert!(!filters_null.iter().any(|f| f.matches(&ev_123)));
-    }
-
-    #[test]
-    fn platform_policy_eq_builds_offline_filter() {
-        let expr = crate::filter::FilterExpr::Eq(
-            crate::filter::FieldPath("platform_policy".into()),
-            norito::json::Value::String("play_integrity".into()),
-        );
-        let filters = event_filters_from_expr(&expr);
-        assert_eq!(filters.len(), 1);
-
-        let matching = sample_offline_event(AndroidIntegrityPolicy::PlayIntegrity);
-        let mismatched = sample_offline_event(AndroidIntegrityPolicy::HmsSafetyDetect);
-        assert!(filters.iter().any(|f| f.matches(&matching)));
-        assert!(!filters.iter().any(|f| f.matches(&mismatched)));
-    }
-
-    fn sample_offline_event(policy: AndroidIntegrityPolicy) -> EventBox {
-        let controller = ALICE_ID.clone();
-        let receiver = BOB_ID.clone();
-        let deposit = CARPENTER_ID.clone();
-        let asset_definition: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let bundled = OfflineTransferSettled {
-            bundle_id: Hash::new(b"bundle"),
-            controller,
-            receiver,
-            deposit_account: deposit,
-            asset_definition,
-            amount: Numeric::new(1, 0),
-            receipt_count: 1,
-            recorded_at_ms: 1,
-            platform_snapshot: Some(OfflinePlatformTokenSnapshot {
-                policy: policy.to_string(),
-                attestation_jws_b64: "token".into(),
-            }),
-        };
-        let data_event = DataEvent::Offline(OfflineTransferEvent::Settled(bundled));
-        EventBox::Data(SharedDataEvent::from(data_event))
     }
 }
 
@@ -48115,43 +48048,10 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
     // AND combines compatible fields into a single typed filter; OR unions filters.
     use FilterExpr as F;
 
-    #[derive(Clone, Default)]
-    struct OfflineFilterSpec {
-        platform_policy: Option<AndroidIntegrityPolicy>,
-    }
-
-    impl OfflineFilterSpec {
-        fn for_platform_policy(mut self, policy: AndroidIntegrityPolicy) -> Self {
-            self.platform_policy = Some(policy);
-            self
-        }
-
-        fn merge(self, other: Self) -> Option<Self> {
-            let mut merged = self;
-            if let Some(policy) = other.platform_policy {
-                match merged.platform_policy {
-                    None => merged.platform_policy = Some(policy),
-                    Some(existing) if existing == policy => {}
-                    Some(_) => return None,
-                }
-            }
-            Some(merged)
-        }
-
-        fn into_filter(self) -> OfflineTransferEventFilter {
-            let mut filter = OfflineTransferEventFilter::new();
-            if let Some(policy) = self.platform_policy {
-                filter = filter.for_platform_policy(policy);
-            }
-            filter
-        }
-    }
-
     #[derive(Clone)]
     enum PF {
         Tx(TransactionEventFilter),
         Block(BlockEventFilter),
-        Offline(OfflineFilterSpec),
     }
 
     fn merge(a: PF, b: PF) -> Option<PF> {
@@ -48177,7 +48077,6 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
                 }
                 Some(PF::Block(x))
             }
-            (PF::Offline(x), PF::Offline(y)) => x.merge(y).map(PF::Offline),
             _ => None, // incompatible types in AND => no single event can satisfy
         }
     }
@@ -48187,9 +48086,6 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
             .map(|pf| match pf {
                 PF::Tx(f) => EventFilterBox::Pipeline(f.into()),
                 PF::Block(f) => EventFilterBox::Pipeline(f.into()),
-                PF::Offline(spec) => {
-                    EventFilterBox::Data(DataEventFilter::Offline(spec.into_filter()))
-                }
             })
             .collect()
     }
@@ -48260,15 +48156,6 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
                     .and_then(NonZeroU64::new)
                     .map(|h| vec![PF::Block(BlockEventFilter::new().for_height(h))])
                     .unwrap_or_default(),
-                "platform_policy" => value
-                    .as_str()
-                    .and_then(parse_offline_platform_policy)
-                    .map(|policy| {
-                        vec![PF::Offline(
-                            OfflineFilterSpec::default().for_platform_policy(policy),
-                        )]
-                    })
-                    .unwrap_or_default(),
                 _ => Vec::new(),
             },
             F::IsNull(field) if field.0.as_str() == "tx_block_height" => {
@@ -48279,17 +48166,6 @@ fn event_filters_from_expr(expr: &FilterExpr) -> Vec<EventFilterBox> {
                 for v in list {
                     if let Some(st) = v.as_str().and_then(parse_tx_status) {
                         acc.push(PF::Tx(TransactionEventFilter::new().for_status(st)));
-                    }
-                }
-                acc
-            }
-            F::In(field, list) if field.0.as_str() == "platform_policy" => {
-                let mut acc = Vec::new();
-                for v in list {
-                    if let Some(policy) = v.as_str().and_then(parse_offline_platform_policy) {
-                        acc.push(PF::Offline(
-                            OfflineFilterSpec::default().for_platform_policy(policy),
-                        ));
                     }
                 }
                 acc
@@ -48493,15 +48369,6 @@ fn parse_sse_filters(expr: &FilterExpr) -> Result<SseFilterSpec, String> {
                     .ok_or_else(|| "block_height must be an unsigned integer".to_string())?;
                 if NonZeroU64::new(raw).is_none() {
                     return Err("block_height must be > 0".to_string());
-                }
-                usage.event_filter_seen = true;
-            }
-            "platform_policy" => {
-                let raw = value
-                    .as_str()
-                    .ok_or_else(|| "platform_policy must be a string".to_string())?;
-                if parse_offline_platform_policy(raw).is_none() {
-                    return Err("platform_policy is not a valid policy".to_string());
                 }
                 usage.event_filter_seen = true;
             }
@@ -49376,18 +49243,6 @@ fn parse_block_status(s: &str) -> Option<BlockStatus> {
         "Applied" => Some(BlockStatus::Applied),
         _ => None,
     }
-}
-
-#[cfg(feature = "app_api")]
-fn parse_offline_platform_policy(s: &str) -> Option<AndroidIntegrityPolicy> {
-    AndroidIntegrityPolicy::from_str(s)
-        .ok()
-        .and_then(|policy| match policy {
-            AndroidIntegrityPolicy::PlayIntegrity | AndroidIntegrityPolicy::HmsSafetyDetect => {
-                Some(policy)
-            }
-            _ => None,
-        })
 }
 
 /// Common GET list params: optional JSON filter + pagination.
@@ -67045,116 +66900,6 @@ mod adapter_filter_tests {
             assert!(matches!(parsed[1].order, crate::filter::Order::Asc));
             assert_eq!(parsed[2].key.0, "unknown");
         }
-    }
-}
-
-#[cfg(all(test, feature = "app_api"))]
-fn sample_transfer_record() -> OfflineTransferRecord {
-    use iroha_crypto::{Hash, PublicKey, Signature};
-    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
-
-    let controller = ALICE_ID.clone();
-    let receiver = BOB_ID.clone();
-    let deposit = CARPENTER_ID.clone();
-    let definition = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400cc");
-    let asset_id = AssetId::new(definition, controller.clone());
-    let certificate = OfflineWalletCertificate {
-        controller: controller.clone(),
-        operator: controller.clone(),
-        allowance: OfflineAllowanceCommitment {
-            asset: asset_id.clone(),
-            amount: Numeric::new(1_000, 0),
-            commitment: vec![0xAB; 32],
-        },
-        spend_public_key: controller
-            .try_signatory()
-            .expect("single-signature controller")
-            .clone(),
-        attestation_report: Vec::new(),
-        issued_at_ms: 1_700_000_000_000,
-        expires_at_ms: 1_900_000_000_000,
-        policy: OfflineWalletPolicy {
-            max_balance: Numeric::new(5_000, 0),
-            max_tx_value: Numeric::new(1_000, 0),
-            expires_at_ms: 1_900_000_000_000,
-        },
-        operator_signature: Signature::from_bytes(&[0; 64]),
-        metadata: Metadata::default(),
-        verdict_id: Some(Hash::new(b"verdict-transfer")),
-        attestation_nonce: Some(Hash::new(b"nonce-transfer")),
-        refresh_at_ms: Some(1_860_000_000_000),
-    };
-    let pos_snapshot = OfflineVerdictSnapshot::from_certificate(&certificate);
-
-    let receipt = OfflineSpendReceipt {
-        tx_id: Hash::new(b"receipt"),
-        from: controller.clone(),
-        to: receiver.clone(),
-        asset: asset_id.clone(),
-        amount: Numeric::new(250, 0),
-        issued_at_ms: 1_700_000_100_000,
-        invoice_id: "invoice-1".into(),
-        platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-            key_id: "a2V5".into(),
-            counter: 10,
-            assertion: vec![],
-            challenge_hash: Hash::new(b"challenge"),
-        }),
-        platform_snapshot: None,
-        sender_certificate_id: certificate.certificate_id(),
-        sender_signature: Signature::from_bytes(&[1; 64]),
-        build_claim: None,
-    };
-
-    let receipts = vec![receipt];
-    let receipts_root = compute_receipts_root(&receipts).expect("sample receipts root");
-    let aggregate_proof = Some(AggregateProofEnvelope {
-        version: AGGREGATE_PROOF_VERSION_V1,
-        receipts_root,
-        proof_sum: None,
-        proof_counter: None,
-        proof_replay: None,
-        metadata: Metadata::default(),
-    });
-    let mut sample_proof = vec![0u8; 12_385];
-    sample_proof[0] = 1;
-
-    let transfer = OfflineToOnlineTransfer {
-        bundle_id: Hash::new(b"bundle"),
-        receiver,
-        deposit_account: deposit,
-        receipts,
-        balance_proof: OfflineBalanceProof {
-            initial_commitment: OfflineAllowanceCommitment {
-                asset: asset_id,
-                amount: Numeric::new(1_000, 0),
-                commitment: vec![0xCD; 32],
-            },
-            resulting_commitment: vec![0xEF; 32],
-            claimed_delta: Numeric::new(250, 0),
-            zk_proof: Some(sample_proof),
-        },
-        balance_proofs: None,
-        aggregate_proof,
-        attachments: None,
-        platform_snapshot: None,
-    };
-
-    OfflineTransferRecord {
-        transfer,
-        controller,
-        status: OfflineTransferStatus::Settled,
-        rejection_reason: None,
-        recorded_at_ms: 1_805_000_000_000,
-        recorded_at_height: 123,
-        archived_at_height: Some(150),
-        history: Vec::new(),
-        pos_verdict_snapshots: vec![pos_snapshot],
-        verdict_snapshot: None,
-        platform_snapshot: Some(OfflinePlatformTokenSnapshot {
-            policy: AndroidIntegrityPolicy::PlayIntegrity.to_string(),
-            attestation_jws_b64: "token".into(),
-        }),
     }
 }
 

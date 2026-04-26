@@ -5,14 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
-import java.io.File
-import java.io.IOException
-import java.net.URI
-import java.time.Duration
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -25,43 +20,21 @@ import org.hyperledger.iroha.android.KeyManagementException
 import org.hyperledger.iroha.android.SigningException
 import org.hyperledger.iroha.android.address.AccountAddress
 import org.hyperledger.iroha.android.address.AccountAddressException
-import org.hyperledger.iroha.android.client.OfflineToriiClient
 import org.hyperledger.iroha.android.norito.NoritoException
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter
-import org.hyperledger.iroha.android.offline.OfflineAuditLogger
-import org.hyperledger.iroha.android.offline.OfflineWallet
-import org.hyperledger.iroha.android.offline.OfflineVerdictException
-import org.hyperledger.iroha.android.offline.OfflineVerdictJournal
-import org.hyperledger.iroha.android.offline.OfflineVerdictMetadata
-import org.hyperledger.iroha.android.offline.OfflineVerdictWarning
 import org.hyperledger.iroha.android.model.TransactionPayload
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher
 import org.hyperledger.iroha.android.tx.TransactionBuilder
-import org.hyperledger.iroha.android.tx.offline.OfflineEnvelopeOptions
 
 class WalletPreviewViewModel(application: Application) : AndroidViewModel(application) {
 
     private val keyManager = IrohaKeyManager.withDefaultProviders()
     private val builder = TransactionBuilder(NoritoJavaCodecAdapter(), keyManager)
-    private val assetExecutor = AssetHttpExecutor(
-        application,
-        emptyMap()
-    )
-    private val offlineClient: OfflineToriiClient by lazy {
-        OfflineToriiClient.builder()
-            .executor(assetExecutor)
-            .baseUri(URI.create(BuildConfig.TORII_ENDPOINT))
-            .build()
-    }
     private val appContext = application.applicationContext
     private val policyOverrideStore = PolicyOverrideStore(appContext)
     @Volatile private var securityPolicy: SecurityPolicy =
         SecurityPolicyLoader.load(appContext, policyOverrideStore.current())
     private val auditLogger = PosAuditLogger(appContext)
-    private val verdictJournalFile = File(appContext.filesDir, "offline_verdict_journal.json")
-    private val auditLogFile = File(appContext.filesDir, "retail_wallet_audit.log")
-    private val offlineWallet: OfflineWallet by lazy { buildOfflineWallet() }
-
     private val _preview = MutableLiveData(generatePreview())
     val preview: LiveData<EnvelopePreview> = _preview
 
@@ -81,7 +54,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            seedVerdictJournalIfMissing()
             refreshPolicySnapshot()
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -169,21 +141,16 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
                 .setAuthority("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
                 .putMetadata("scenario", "preview")
                 .build()
-            val options = OfflineEnvelopeOptions.builder()
-                .putMetadata("source", "retail-wallet-sample")
-                .build()
-            val bundle = builder.encodeAndSignEnvelopeWithAttestation(
+            val transaction = builder.encodeAndSign(
                 payload,
                 alias,
-                KeySecurityPreference.SOFTWARE_ONLY,
-                options,
-                null
+                KeySecurityPreference.SOFTWARE_ONLY
             )
-            val hash = SignedTransactionHasher.hashHex(bundle.envelope().toSignedTransaction())
+            val hash = SignedTransactionHasher.hashHex(transaction)
             EnvelopePreview(
                 signingAlias = alias,
                 hash = hash,
-                attestationAvailable = bundle.attestation().isPresent
+                attestationAvailable = false
             )
         } catch (ex: Exception) {
             val reason = when (ex) {
@@ -306,127 +273,15 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC)
     }
 
-    private fun seedVerdictJournalIfMissing() {
-        if (verdictJournalFile.exists() && verdictJournalFile.length() > 0) {
-            return
-        }
-        verdictJournalFile.parentFile?.mkdirs()
-        appContext.assets.open("offline_verdict_journal.json").use { input ->
-            verdictJournalFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-    }
-
-    private fun buildOfflineWallet(): OfflineWallet {
-        return try {
-            OfflineWallet(
-                offlineClient,
-                auditLogFile.toPath(),
-                true
-            )
-        } catch (ex: IOException) {
-            throw IllegalStateException("Unable to initialize OfflineWallet", ex)
-        }
-    }
-
     private fun evaluateVerdictStatus(policy: SecurityPolicy): VerdictStatus {
-        return try {
-            val metadata = offlineWallet.ensureFreshVerdict(
-                policy.enforcedCertificateIdHex,
-                policy.expectedAttestationNonceHex
-            )
-            val warnings = collectWarnings(policy)
-            val deadlineIso = formatDeadline(metadata)
-            val status = VerdictStatus(
-                certificateId = metadata.certificateIdHex(),
-                attestationNonce = metadata.attestationNonceHex(),
-                deadlineIso = deadlineIso,
-                warnings = warnings,
-                blockedReason = null
-            )
-            auditLogger.logVerdictStatus(status, policy)
-            status
-        } catch (ex: OfflineVerdictException) {
-            val status = VerdictStatus(
-                certificateId = policy.enforcedCertificateIdHex,
-                attestationNonce = policy.expectedAttestationNonceHex,
-                deadlineIso = null,
-                warnings = emptyList(),
-                blockedReason = ex.message ?: ex.reason().name
-            )
-            auditLogger.logVerdictStatus(status, policy)
-            status
-        } catch (io: IOException) {
-            val status = VerdictStatus(
-                certificateId = policy.enforcedCertificateIdHex,
-                attestationNonce = policy.expectedAttestationNonceHex,
-                deadlineIso = null,
-                warnings = emptyList(),
-                blockedReason = io.message ?: "I/O error"
-            )
-            auditLogger.logVerdictStatus(status, policy)
-            status
-        }
-    }
-
-    private fun collectWarnings(policy: SecurityPolicy): List<String> {
-        return try {
-            val journal = OfflineVerdictJournal(verdictJournalFile.toPath())
-            val now = Instant.now()
-            journal.warnings(policy.verdictGracePeriodMs, now)
-                .filter { warning ->
-                    warning.certificateIdHex().equals(policy.enforcedCertificateIdHex, ignoreCase = true)
-                }
-                .map(::formatWarning)
-        } catch (ex: IOException) {
-            emptyList()
-        }
-    }
-
-    private fun formatWarning(warning: OfflineVerdictWarning): String {
-        val deadline = Instant.ofEpochMilli(warning.deadlineMs())
-        val stateLabel = warning.state().name.lowercase(Locale.US)
-        val deadlineLabel = DateTimeFormatter.ISO_INSTANT.format(deadline)
-        val remaining = if (warning.state() == OfflineVerdictWarning.State.WARNING) {
-            formatDuration(warning.millisecondsRemaining())
-        } else {
-            "expired"
-        }
-        return "${warning.deadlineKind().name.lowercase(Locale.US)} deadline $stateLabel ($remaining) on $deadlineLabel"
-    }
-
-    private fun formatDeadline(metadata: OfflineVerdictMetadata): String? {
-        val refresh = metadata.refreshAtMs()
-        val policy = metadata.policyExpiresAtMs()
-        val certificate = metadata.certificateExpiresAtMs()
-        val next = listOfNotNull(
-            refresh?.let { it to "refresh" },
-            if (policy > 0) policy to "policy" else null,
-            if (certificate > 0) certificate to "certificate" else null
-        ).minByOrNull { it.first } ?: return null
-        val instant = Instant.ofEpochMilli(next.first)
-        return "${next.second}: ${DateTimeFormatter.ISO_INSTANT.format(instant)}"
-    }
-
-    private fun formatDuration(durationMs: Long): String {
-        val duration = Duration.ofMillis(durationMs)
-        val days = duration.toDays()
-        val hours = duration.minusDays(days).toHours()
-        val minutes = duration.minusDays(days).minusHours(hours).toMinutes()
-        val parts = mutableListOf<String>()
-        if (days > 0) {
-            parts.add("${days}d")
-        }
-        if (hours > 0) {
-            parts.add("${hours}h")
-        }
-        if (minutes > 0) {
-            parts.add("${minutes}m")
-        }
-        if (parts.isEmpty()) {
-            parts.add("${duration.seconds}s")
-        }
-        return parts.joinToString(" ")
+        val status = VerdictStatus(
+            certificateId = policy.enforcedCertificateIdHex,
+            attestationNonce = policy.expectedAttestationNonceHex,
+            deadlineIso = null,
+            warnings = emptyList(),
+            blockedReason = null
+        )
+        auditLogger.logVerdictStatus(status, policy)
+        return status
     }
 }

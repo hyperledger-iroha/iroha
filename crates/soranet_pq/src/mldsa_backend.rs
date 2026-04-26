@@ -214,6 +214,7 @@ macro_rules! mldsa_suite {
                 })
             }
 
+            #[allow(clippy::too_many_lines)]
             pub(super) fn sign(
                 secret_key: &[u8],
                 context: &[u8],
@@ -243,7 +244,9 @@ macro_rules! mldsa_suite {
                     );
                 }
 
-                let context_header = [0u8, context.len() as u8];
+                let context_len = u8::try_from(context.len())
+                    .map_err(|_| MlDsaError::ContextTooLong { len: context.len() })?;
+                let context_header = [0u8, context_len];
                 shake256_into(
                     mu.as_mut(),
                     &[tr.as_ref(), &context_header, context, message],

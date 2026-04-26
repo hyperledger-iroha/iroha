@@ -9,7 +9,7 @@ use std::{str::FromStr, time::SystemTime};
 
 use iroha_data_model::{
     account::{AccountAddress, AccountId, rekey::AccountAlias},
-    asset::{AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::DomainId,
     isi::{
@@ -48,6 +48,8 @@ const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_YEAR: u64 = MS_PER_DAY * 365;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
 const LEGACY_ACCOUNT_ALIAS_LABEL_REGEX: &str = r"^[a-z0-9@.-]{3,255}$";
+const LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+const DEFAULT_NAMESPACE_LEASE_PRICE: u128 = 120;
 
 /// Reserved dataspace alias that must stay permanently defined.
 pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
@@ -454,7 +456,11 @@ pub fn seed_genesis_alias_bootstrap(
     }
 }
 
-fn default_namespace_policy(namespace: SnsNamespace, steward: &AccountId) -> SuffixPolicyV1 {
+fn default_namespace_policy(
+    namespace: SnsNamespace,
+    steward: &AccountId,
+    payment_asset_id: &str,
+) -> SuffixPolicyV1 {
     SuffixPolicyV1 {
         suffix_id: namespace.suffix_id(),
         suffix: namespace.policy_suffix().to_owned(),
@@ -480,11 +486,11 @@ fn default_namespace_policy(namespace: SnsNamespace, steward: &AccountId) -> Suf
             }],
             _ => Vec::new(),
         },
-        payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
+        payment_asset_id: payment_asset_id.to_owned(),
         pricing: vec![PriceTierV1 {
             tier_id: 0,
             label_regex: namespace.label_regex().to_owned(),
-            base_price: TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120),
+            base_price: TokenValue::new(payment_asset_id, DEFAULT_NAMESPACE_LEASE_PRICE),
             auction_kind: AuctionKind::VickreyCommitReveal,
             dutch_floor: None,
             min_duration_years: 1,
@@ -523,6 +529,53 @@ fn upgrade_legacy_default_namespace_policy(
     changed
 }
 
+fn resolve_registered_payment_asset_literal(world: &World, selector: &str) -> Option<String> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return None;
+    }
+
+    if let Ok(definition_id) = AssetDefinitionId::parse_address_literal(selector)
+        && world.view().asset_definition(&definition_id).is_ok()
+    {
+        return Some(selector.to_owned());
+    }
+
+    let alias = AssetDefinitionAlias::from_str(selector).ok()?;
+    let definition_id = world.view().asset_definition_id_by_alias_at(&alias, 0)?;
+    world
+        .view()
+        .asset_definition(&definition_id)
+        .is_ok()
+        .then(|| definition_id.to_string())
+}
+
+fn namespace_policy_payment_asset_registered(world: &World, policy: &SuffixPolicyV1) -> bool {
+    payment_asset_definition_id(policy)
+        .is_ok_and(|definition_id| world.view().asset_definition(&definition_id).is_ok())
+}
+
+fn retarget_namespace_policy_payment_asset(
+    policy: &mut SuffixPolicyV1,
+    payment_asset_id: &str,
+) -> bool {
+    let mut changed = false;
+    if policy.payment_asset_id != payment_asset_id {
+        policy.payment_asset_id = payment_asset_id.to_owned();
+        changed = true;
+    }
+    for tier in &mut policy.pricing {
+        if tier.base_price.asset_id != payment_asset_id {
+            tier.base_price.asset_id = payment_asset_id.to_owned();
+            changed = true;
+        }
+    }
+    if changed {
+        policy.policy_version = policy.policy_version.saturating_add(1);
+    }
+    changed
+}
+
 /// Seed the fixed namespace policies required by the on-chain SNS model.
 pub fn seed_default_namespace_policies(world: &mut World) {
     let steward = bootstrap_steward_for_world(world);
@@ -531,7 +584,11 @@ pub fn seed_default_namespace_policies(world: &mut World) {
         SnsNamespace::Domain,
         SnsNamespace::Dataspace,
     ] {
-        let policy = default_namespace_policy(namespace, &steward);
+        let policy = default_namespace_policy(
+            namespace,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         let key = policy_storage_key(policy.suffix_id);
         let existing_policy = world
             .smart_contract_state
@@ -551,6 +608,76 @@ pub fn seed_default_namespace_policies(world: &mut World) {
             }
         }
     }
+}
+
+/// Align seeded default SNS namespace policy charges with a registered Nexus fee asset.
+///
+/// Default policies are seeded before deployment-specific Nexus configuration is applied.  When a
+/// deployment uses a non-default XOR asset id, the fixed SNS policies must stop quoting leases in
+/// the stale compile-time default or Torii onboarding will submit payments for a missing asset.
+pub fn sync_default_namespace_policy_payment_asset(
+    world: &mut World,
+    configured_fee_asset_selector: &str,
+) -> bool {
+    let Some(configured_payment_asset_id) =
+        resolve_registered_payment_asset_literal(world, configured_fee_asset_selector)
+    else {
+        return false;
+    };
+
+    let steward = bootstrap_steward_for_world(world);
+    let mut changed = false;
+    for namespace in [
+        SnsNamespace::AccountAlias,
+        SnsNamespace::Domain,
+        SnsNamespace::Dataspace,
+    ] {
+        let key = policy_storage_key(namespace.suffix_id());
+        let existing_policy = world
+            .smart_contract_state
+            .view()
+            .get(&key)
+            .and_then(|bytes| SuffixPolicyV1::decode(&mut bytes.as_slice()).ok());
+        let mut policy = match existing_policy {
+            Some(policy) => policy,
+            None => {
+                world.smart_contract_state.insert(
+                    key,
+                    default_namespace_policy(namespace, &steward, &configured_payment_asset_id)
+                        .encode(),
+                );
+                changed = true;
+                continue;
+            }
+        };
+
+        let mut policy_changed = upgrade_legacy_default_namespace_policy(namespace, &mut policy);
+        let policy_asset_registered = namespace_policy_payment_asset_registered(world, &policy);
+        let target_payment_asset_id = if policy_asset_registered
+            && policy.payment_asset_id != LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID
+        {
+            policy.payment_asset_id.clone()
+        } else {
+            configured_payment_asset_id.clone()
+        };
+        let tier_asset_mismatch = policy
+            .pricing
+            .iter()
+            .any(|tier| tier.base_price.asset_id != target_payment_asset_id);
+        if !policy_asset_registered
+            || policy.payment_asset_id == LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID
+            || tier_asset_mismatch
+        {
+            policy_changed |=
+                retarget_namespace_policy_payment_asset(&mut policy, &target_payment_asset_id);
+        }
+
+        if policy_changed {
+            world.smart_contract_state.insert(key, policy.encode());
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn years_to_ms(years: u8) -> u64 {
@@ -1497,10 +1624,12 @@ pub fn active_dataspace_owner_by_id(
 mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
+        Registrable,
         account::{
             Account, AccountAddress, AccountId,
             rekey::{AccountAlias, AccountAliasDomain},
         },
+        asset::AssetDefinition,
         block::SignedBlock,
         domain::Domain,
         isi::{InstructionBox, Register, domain_link::SetPrimaryAccountAlias},
@@ -1553,6 +1682,15 @@ mod tests {
             },
         ])
         .expect("catalog")
+    }
+
+    fn world_with_payment_asset(definition_id: AssetDefinitionId) -> World {
+        let authority = owner();
+        let domain_id = DomainId::try_new("issuer", "universal").expect("domain");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let definition = AssetDefinition::numeric(definition_id).build(&authority);
+        World::with([domain], [account], [definition])
     }
 
     fn controller(owner: &AccountId) -> NameControllerV1 {
@@ -1661,6 +1799,64 @@ mod tests {
         assert_eq!(quote.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
         assert_eq!(quote.charge_amount, 240);
         assert_eq!(quote.expires_at_ms, 100 + years_to_ms(2));
+    }
+
+    #[test]
+    fn sync_default_namespace_policy_payment_asset_retargets_missing_legacy_asset() {
+        let payment_asset_definition_id =
+            AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+                .expect("deployment XOR asset id");
+        let payment_asset_literal = payment_asset_definition_id.to_string();
+        let mut world = world_with_payment_asset(payment_asset_definition_id.clone());
+        seed_default_namespace_policies(&mut world);
+
+        assert!(sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_literal
+        ));
+
+        for namespace in [
+            SnsNamespace::AccountAlias,
+            SnsNamespace::Domain,
+            SnsNamespace::Dataspace,
+        ] {
+            let key = policy_storage_key(namespace.suffix_id());
+            let policy = world
+                .smart_contract_state
+                .view()
+                .get(&key)
+                .and_then(|bytes| SuffixPolicyV1::decode(&mut bytes.as_slice()).ok())
+                .expect("namespace policy");
+            assert_eq!(policy.payment_asset_id, payment_asset_literal);
+            assert!(
+                policy
+                    .pricing
+                    .iter()
+                    .all(|tier| tier.base_price.asset_id == payment_asset_literal)
+            );
+            assert_eq!(policy.policy_version, 2);
+        }
+
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
+        let quote = quote_account_alias_registration(
+            &world.view(),
+            &catalog,
+            &alias,
+            &owner(),
+            2,
+            None,
+            100,
+        )
+        .expect("registration quote");
+
+        assert_eq!(quote.payment_asset_id, payment_asset_literal);
+        assert_eq!(
+            quote.payment_asset_definition_id,
+            payment_asset_definition_id
+        );
+        assert_eq!(quote.charge_amount, 240);
     }
 
     #[test]
@@ -1790,7 +1986,11 @@ mod tests {
     #[test]
     fn seed_default_namespace_policies_upgrades_legacy_account_alias_regex() {
         let steward = owner();
-        let mut policy = default_namespace_policy(SnsNamespace::AccountAlias, &steward);
+        let mut policy = default_namespace_policy(
+            SnsNamespace::AccountAlias,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         policy.pricing[0].label_regex = LEGACY_ACCOUNT_ALIAS_LABEL_REGEX.to_owned();
         let mut world = World::default();
         world
@@ -2237,7 +2437,11 @@ mod tests {
     #[test]
     fn find_active_reserved_domain_label_matches_label_key() {
         let steward = fixtures::steward_account();
-        let policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let policy = default_namespace_policy(
+            SnsNamespace::Domain,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         let selector =
             NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "treasury.universal").expect("selector");
 
@@ -2250,7 +2454,11 @@ mod tests {
     #[test]
     fn find_active_reserved_domain_label_matches_fully_qualified_literal() {
         let steward = fixtures::steward_account();
-        let mut policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let mut policy = default_namespace_policy(
+            SnsNamespace::Domain,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         policy.reserved_labels = vec![ReservedNameV1 {
             normalized_label: "ops.universal".to_owned(),
             assigned_to: Some(steward),
@@ -2269,7 +2477,11 @@ mod tests {
     #[test]
     fn find_active_reserved_domain_label_honors_release_boundary() {
         let steward = fixtures::steward_account();
-        let mut policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let mut policy = default_namespace_policy(
+            SnsNamespace::Domain,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         policy.reserved_labels = vec![ReservedNameV1 {
             normalized_label: "ops".to_owned(),
             assigned_to: Some(steward),
@@ -2292,7 +2504,11 @@ mod tests {
     #[test]
     fn enforce_reserved_label_assignment_rejects_unassigned_domain_label() {
         let steward = fixtures::steward_account();
-        let mut policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let mut policy = default_namespace_policy(
+            SnsNamespace::Domain,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         policy.reserved_labels = vec![ReservedNameV1 {
             normalized_label: "custody".to_owned(),
             assigned_to: None,
@@ -2316,7 +2532,11 @@ mod tests {
     #[test]
     fn enforce_reserved_label_assignment_allows_matching_assignee() {
         let steward = fixtures::steward_account();
-        let policy = default_namespace_policy(SnsNamespace::Domain, &steward);
+        let policy = default_namespace_policy(
+            SnsNamespace::Domain,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
         let selector =
             NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "treasury.universal").expect("selector");
 

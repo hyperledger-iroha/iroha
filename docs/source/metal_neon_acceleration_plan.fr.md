@@ -182,7 +182,7 @@ mise en œuvre et tests.
   Deltas métal/CPU sans réinventer de nouveaux flux de télémétrie.
 
 ## WP2-B Poseidon Manifest Loader et parité d'auto-test- `fastpq_prover::poseidon_manifest()` intègre et analyse désormais
-  `artifacts/offline_poseidon/constants.ron`, calcule son SHA-256
+  `artifacts/poseidon/constants.ron`, calcule son SHA-256
   (`poseidon_manifest_sha256()`) et valide l'instantané par rapport au processeur
   tables Poséidon avant l'exécution de tout travail GPU. `build_metal_context()` enregistre le
   digérer pendant l'échauffement afin que les exportateurs de télémétrie puissent publier

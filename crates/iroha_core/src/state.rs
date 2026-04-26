@@ -81,10 +81,6 @@ use iroha_data_model::{
         UniversalAccountId,
     },
     nft::{NftEntry, NftValue},
-    offline::{
-        OfflineAllowanceRecord, OfflineLineageOperationResult, OfflineLineageRecord,
-        OfflineTransferRecord, OfflineTransferStatus, OfflineVerdictRevocation,
-    },
     oracle::{
         FeedConfig, FeedId, OracleDispute, OracleDisputeId, OracleProviderKey, OracleProviderStats,
         TwitterBindingRecord,
@@ -512,15 +508,7 @@ macro_rules! build_world_block {
             soradns_history_len: $state.soradns_history_len.$method(),
             repo_agreements: $state.repo_agreements.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
-            offline_allowances: $state.offline_allowances.$method(),
-            offline_lineages: $state.offline_lineages.$method(),
-            offline_lineage_operation_results: $state.offline_lineage_operation_results.$method(),
-            offline_verdict_revocations: $state.offline_verdict_revocations.$method(),
-            offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.$method(),
-            offline_to_online_transfers: $state.offline_to_online_transfers.$method(),
-            offline_transfer_sender_index: $state.offline_transfer_sender_index.$method(),
-            offline_transfer_receiver_index: $state.offline_transfer_receiver_index.$method(),
-            offline_transfer_status_index: $state.offline_transfer_status_index.$method(),
+            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.$method(),
             public_lane_validators: $state.public_lane_validators.$method(),
             public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
             public_lane_rewards: $state.public_lane_rewards.$method(),
@@ -714,17 +702,7 @@ macro_rules! build_world_transaction {
             soradns_history_len: $state.soradns_history_len.transaction(),
             repo_agreements: $state.repo_agreements.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
-            offline_allowances: $state.offline_allowances.transaction(),
-            offline_lineages: $state.offline_lineages.transaction(),
-            offline_lineage_operation_results: $state
-                .offline_lineage_operation_results
-                .transaction(),
-            offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
-            offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.transaction(),
-            offline_to_online_transfers: $state.offline_to_online_transfers.transaction(),
-            offline_transfer_sender_index: $state.offline_transfer_sender_index.transaction(),
-            offline_transfer_receiver_index: $state.offline_transfer_receiver_index.transaction(),
-            offline_transfer_status_index: $state.offline_transfer_status_index.transaction(),
+            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.transaction(),
             public_lane_validators: $state.public_lane_validators.transaction(),
             public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
             public_lane_rewards: $state.public_lane_rewards.transaction(),
@@ -1828,27 +1806,8 @@ pub struct World {
     pub(crate) repo_agreements: Storage<RepoAgreementId, RepoAgreement>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: Storage<Hash, OfflineAllowanceRecord>,
-    /// Shared offline lineage records keyed by stable lineage id.
-    pub(crate) offline_lineages: Storage<String, OfflineLineageRecord>,
-    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
-    pub(crate) offline_lineage_operation_results: Storage<String, OfflineLineageOperationResult>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations: Storage<Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: Storage<Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers: Storage<Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    #[norito(skip)]
-    pub(crate) offline_transfer_sender_index: Storage<AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    #[norito(skip)]
-    pub(crate) offline_transfer_receiver_index: Storage<AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    #[norito(skip)]
-    pub(crate) offline_transfer_status_index: Storage<OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: Storage<Hash, ()>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2247,26 +2206,8 @@ pub struct WorldBlock<'world> {
     pub(crate) repo_agreements: StorageBlock<'world, RepoAgreementId, RepoAgreement>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: StorageBlock<'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline lineage records keyed by stable lineage id.
-    pub(crate) offline_lineages: StorageBlock<'world, String, OfflineLineageRecord>,
-    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
-    pub(crate) offline_lineage_operation_results:
-        StorageBlock<'world, String, OfflineLineageOperationResult>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations: StorageBlock<'world, Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: StorageBlock<'world, Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers: StorageBlock<'world, Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    pub(crate) offline_transfer_sender_index: StorageBlock<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    pub(crate) offline_transfer_receiver_index: StorageBlock<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    pub(crate) offline_transfer_status_index:
-        StorageBlock<'world, OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Public lane validator registry.
     pub(crate) public_lane_validators:
         StorageBlock<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2391,18 +2332,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
-        collect_reverts!(self.offline_allowances, OfflineAllowance);
-        collect_reverts!(self.offline_lineages, OfflineLineage);
-        collect_reverts!(
-            self.offline_lineage_operation_results,
-            OfflineLineageOperationResult
-        );
-        collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
-        collect_reverts!(
-            self.offline_consumed_build_claim_ids,
-            OfflineConsumedBuildClaimId
-        );
-        collect_reverts!(self.offline_to_online_transfers, OfflineTransfer);
+        collect_reverts!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
 
         diff
     }
@@ -2452,18 +2382,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
-        collect_payload!(self.offline_allowances, OfflineAllowance);
-        collect_payload!(self.offline_lineages, OfflineLineage);
-        collect_payload!(
-            self.offline_lineage_operation_results,
-            OfflineLineageOperationResult
-        );
-        collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
-        collect_payload!(
-            self.offline_consumed_build_claim_ids,
-            OfflineConsumedBuildClaimId
-        );
-        collect_payload!(self.offline_to_online_transfers, OfflineTransfer);
+        collect_payload!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
 
         payload
     }
@@ -2885,30 +2804,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: StorageTransaction<'block, 'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline lineage records keyed by stable lineage id.
-    pub(crate) offline_lineages: StorageTransaction<'block, 'world, String, OfflineLineageRecord>,
-    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
-    pub(crate) offline_lineage_operation_results:
-        StorageTransaction<'block, 'world, String, OfflineLineageOperationResult>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations:
-        StorageTransaction<'block, 'world, Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: StorageTransaction<'block, 'world, Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers:
-        StorageTransaction<'block, 'world, Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    pub(crate) offline_transfer_sender_index:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    pub(crate) offline_transfer_receiver_index:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    pub(crate) offline_transfer_status_index:
-        StorageTransaction<'block, 'world, OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -3650,26 +3547,8 @@ pub struct WorldView<'world> {
     pub(crate) repo_agreements: StorageView<'world, RepoAgreementId, RepoAgreement>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: StorageView<'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline lineage records keyed by stable lineage id.
-    pub(crate) offline_lineages: StorageView<'world, String, OfflineLineageRecord>,
-    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
-    pub(crate) offline_lineage_operation_results:
-        StorageView<'world, String, OfflineLineageOperationResult>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations: StorageView<'world, Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: StorageView<'world, Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers: StorageView<'world, Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    pub(crate) offline_transfer_sender_index: StorageView<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    pub(crate) offline_transfer_receiver_index: StorageView<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    pub(crate) offline_transfer_status_index:
-        StorageView<'world, OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: StorageView<'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -11224,9 +11103,6 @@ impl World {
             replication_orders: Storage::default(),
             repo_agreements: Storage::default(),
             settlement_ledgers: Storage::default(),
-            offline_to_online_transfers: Storage::default(),
-            offline_lineages: Storage::default(),
-            offline_lineage_operation_results: Storage::default(),
             ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
@@ -11680,72 +11556,6 @@ impl World {
         Ok(())
     }
 
-    fn rebuild_offline_transfer_indexes(&mut self) {
-        let mut sender_index = BTreeMap::new();
-        let mut receiver_index = BTreeMap::new();
-        let mut status_index = BTreeMap::new();
-        for (bundle_id, record) in self.offline_to_online_transfers.view().iter() {
-            Self::insert_account_bundle(&mut sender_index, record.controller.clone(), *bundle_id);
-            Self::insert_account_bundle(
-                &mut receiver_index,
-                record.transfer.receiver.clone(),
-                *bundle_id,
-            );
-            Self::insert_status_bundle(&mut status_index, record.status, *bundle_id);
-        }
-        self.offline_transfer_sender_index = sender_index.into_iter().collect();
-        self.offline_transfer_receiver_index = receiver_index.into_iter().collect();
-        self.offline_transfer_status_index = status_index.into_iter().collect();
-    }
-
-    fn rebuild_offline_consumed_build_claim_ids(&mut self) {
-        let mut consumed = self
-            .offline_consumed_build_claim_ids
-            .view()
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<BTreeSet<_>>();
-        for (_, record) in self.offline_to_online_transfers.view().iter() {
-            if record.status == OfflineTransferStatus::Rejected {
-                continue;
-            }
-            for receipt in &record.transfer.receipts {
-                if let Some(claim) = &receipt.build_claim {
-                    consumed.insert(claim.claim_id);
-                }
-            }
-        }
-        self.offline_consumed_build_claim_ids = consumed.into_iter().map(|id| (id, ())).collect();
-    }
-
-    fn insert_account_bundle(
-        index: &mut BTreeMap<AccountId, BTreeSet<Hash>>,
-        account: AccountId,
-        bundle_id: Hash,
-    ) {
-        if let Some(set) = index.get_mut(&account) {
-            set.insert(bundle_id);
-        } else {
-            let mut set = BTreeSet::new();
-            set.insert(bundle_id);
-            index.insert(account, set);
-        }
-    }
-
-    fn insert_status_bundle(
-        index: &mut BTreeMap<OfflineTransferStatus, BTreeSet<Hash>>,
-        status: OfflineTransferStatus,
-        bundle_id: Hash,
-    ) {
-        if let Some(set) = index.get_mut(&status) {
-            set.insert(bundle_id);
-        } else {
-            let mut set = BTreeSet::new();
-            set.insert(bundle_id);
-            index.insert(status, set);
-        }
-    }
-
     /// Create struct to apply block's changes
     pub fn block(&self) -> WorldBlock<'_> {
         build_world_block!(self, block)
@@ -11905,15 +11715,7 @@ impl World {
             soradns_history_len: self.soradns_history_len.view(),
             repo_agreements: self.repo_agreements.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
-            offline_allowances: self.offline_allowances.view(),
-            offline_lineages: self.offline_lineages.view(),
-            offline_lineage_operation_results: self.offline_lineage_operation_results.view(),
-            offline_verdict_revocations: self.offline_verdict_revocations.view(),
-            offline_consumed_build_claim_ids: self.offline_consumed_build_claim_ids.view(),
-            offline_to_online_transfers: self.offline_to_online_transfers.view(),
-            offline_transfer_sender_index: self.offline_transfer_sender_index.view(),
-            offline_transfer_receiver_index: self.offline_transfer_receiver_index.view(),
-            offline_transfer_status_index: self.offline_transfer_status_index.view(),
+            offline_note_v2_replay_keys: self.offline_note_v2_replay_keys.view(),
             public_lane_validators: self.public_lane_validators.view(),
             public_lane_stake_shares: self.public_lane_stake_shares.view(),
             public_lane_rewards: self.public_lane_rewards.view(),
@@ -12395,28 +12197,8 @@ pub trait WorldReadOnly {
     fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement>;
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
-    /// Registered offline allowances (read-only).
-    fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord>;
-    /// Shared offline lineage records keyed by lineage id (read-only).
-    fn offline_lineages(&self) -> &impl StorageReadOnly<String, OfflineLineageRecord>;
-    /// Completed offline cash mutation results keyed by `kind:operation_id` (read-only).
-    fn offline_lineage_operation_results(
-        &self,
-    ) -> &impl StorageReadOnly<String, OfflineLineageOperationResult>;
-    /// Recorded verdict revocations (read-only).
-    fn offline_verdict_revocations(&self) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation>;
-    /// Consumed build-claim identifiers (read-only).
-    fn offline_consumed_build_claim_ids(&self) -> &impl StorageReadOnly<Hash, ()>;
-    /// Pending offline-to-online bundles (read-only).
-    fn offline_to_online_transfers(&self) -> &impl StorageReadOnly<Hash, OfflineTransferRecord>;
-    /// Offline transfer bundles indexed by controller account (read-only).
-    fn offline_transfer_sender_index(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>>;
-    /// Offline transfer bundles indexed by receiver account (read-only).
-    fn offline_transfer_receiver_index(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>>;
-    /// Offline transfer bundles indexed by lifecycle status (read-only).
-    fn offline_transfer_status_index(
-        &self,
-    ) -> &impl StorageReadOnly<OfflineTransferStatus, BTreeSet<Hash>>;
+    /// Offline V2 replay keys (read-only).
+    fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Public lane validators keyed by `(lane_id, validator)` (read-only).
     fn public_lane_validators(
         &self,
@@ -13550,44 +13332,8 @@ macro_rules! impl_world_ro {
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
-            fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord> {
-                &self.offline_allowances
-            }
-            fn offline_lineages(&self) -> &impl StorageReadOnly<String, OfflineLineageRecord> {
-                &self.offline_lineages
-            }
-            fn offline_lineage_operation_results(
-                &self,
-            ) -> &impl StorageReadOnly<String, OfflineLineageOperationResult> {
-                &self.offline_lineage_operation_results
-            }
-            fn offline_verdict_revocations(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation> {
-                &self.offline_verdict_revocations
-            }
-            fn offline_consumed_build_claim_ids(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.offline_consumed_build_claim_ids
-            }
-            fn offline_to_online_transfers(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, OfflineTransferRecord> {
-                &self.offline_to_online_transfers
-            }
-            fn offline_transfer_sender_index(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>> {
-                &self.offline_transfer_sender_index
-            }
-            fn offline_transfer_receiver_index(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>> {
-                &self.offline_transfer_receiver_index
-            }
-            fn offline_transfer_status_index(
-                &self,
-            ) -> &impl StorageReadOnly<OfflineTransferStatus, BTreeSet<Hash>> {
-                &self.offline_transfer_status_index
+            fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.offline_note_v2_replay_keys
             }
             fn public_lane_validators(
                 &self,
@@ -14027,15 +13773,7 @@ impl<'world> WorldBlock<'world> {
             soradns_history_len,
             repo_agreements,
             settlement_ledgers,
-            offline_allowances,
-            offline_lineages,
-            offline_lineage_operation_results,
-            offline_verdict_revocations,
-            offline_consumed_build_claim_ids,
-            offline_to_online_transfers,
-            offline_transfer_sender_index,
-            offline_transfer_receiver_index,
-            offline_transfer_status_index,
+            offline_note_v2_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -14139,15 +13877,7 @@ impl<'world> WorldBlock<'world> {
         soradns_history_len.commit();
         repo_agreements.commit();
         settlement_ledgers.commit();
-        offline_allowances.commit();
-        offline_lineages.commit();
-        offline_lineage_operation_results.commit();
-        offline_verdict_revocations.commit();
-        offline_consumed_build_claim_ids.commit();
-        offline_to_online_transfers.commit();
-        offline_transfer_sender_index.commit();
-        offline_transfer_receiver_index.commit();
-        offline_transfer_status_index.commit();
+        offline_note_v2_replay_keys.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -15179,15 +14909,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             manifest_aliases,
             replication_orders,
             settlement_ledgers,
-            offline_allowances,
-            offline_lineages,
-            offline_lineage_operation_results,
-            offline_verdict_revocations,
-            offline_consumed_build_claim_ids,
-            offline_to_online_transfers,
-            offline_transfer_sender_index,
-            offline_transfer_receiver_index,
-            offline_transfer_status_index,
+            offline_note_v2_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -15289,15 +15011,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
-        offline_allowances.apply();
-        offline_lineages.apply();
-        offline_lineage_operation_results.apply();
-        offline_verdict_revocations.apply();
-        offline_consumed_build_claim_ids.apply();
-        offline_to_online_transfers.apply();
-        offline_transfer_sender_index.apply();
-        offline_transfer_receiver_index.apply();
-        offline_transfer_status_index.apply();
+        offline_note_v2_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -20080,10 +19794,15 @@ impl State {
         }
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
         let previous_lane_config = self.nexus.read().lane_config.clone();
         let lanes_to_prune = lanes_requiring_state_prune(&previous_lane_config, &nexus.lane_config);
         self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
         *self.nexus.write() = nexus;
+        crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut self.world,
+            &configured_fee_asset_id,
+        );
         if !lanes_to_prune.is_empty() {
             self.lane_relays.write().prune_lanes(&lanes_to_prune);
             self.da_commitments.write().prune_lanes(&lanes_to_prune);
@@ -28540,16 +28259,8 @@ pub(crate) mod deserialize {
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
-        let offline_allowances = take_optional_default(&mut map, "offline_allowances")?;
-        let offline_lineages = take_optional_default(&mut map, "offline_lineages")?;
-        let offline_lineage_operation_results =
-            take_optional_default(&mut map, "offline_lineage_operation_results")?;
-        let offline_verdict_revocations =
-            take_optional_default(&mut map, "offline_verdict_revocations")?;
-        let offline_consumed_build_claim_ids =
-            take_optional_default(&mut map, "offline_consumed_build_claim_ids")?;
-        let offline_to_online_transfers =
-            take_optional_default(&mut map, "offline_to_online_transfers")?;
+        let offline_note_v2_replay_keys =
+            take_optional_default(&mut map, "offline_note_v2_replay_keys")?;
         let lane_relay_emergency_validators =
             take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
@@ -28694,15 +28405,7 @@ pub(crate) mod deserialize {
             soradns_history_len: Cell::default(),
             repo_agreements,
             settlement_ledgers,
-            offline_allowances,
-            offline_lineages,
-            offline_lineage_operation_results,
-            offline_verdict_revocations,
-            offline_consumed_build_claim_ids,
-            offline_to_online_transfers,
-            offline_transfer_sender_index: Storage::default(),
-            offline_transfer_receiver_index: Storage::default(),
-            offline_transfer_status_index: Storage::default(),
+            offline_note_v2_replay_keys,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
             domain_endorsements: Storage::default(),
@@ -28785,8 +28488,6 @@ pub(crate) mod deserialize {
                 field: "identifier_claims".into(),
                 message,
             })?;
-        world.rebuild_offline_transfer_indexes();
-        world.rebuild_offline_consumed_build_claim_ids();
         Ok(world)
     }
 

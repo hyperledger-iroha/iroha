@@ -2531,39 +2531,6 @@ test(
 );
 
 test(
-  "offline rejection telemetry responds (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    let stats;
-    try {
-      stats = await client.getOfflineRejectionStats();
-    } catch (error) {
-      if (isOfflineApiUnavailableError(error)) {
-        t.diagnostic(`offline rejection telemetry unavailable on target node: ${error.message}`);
-        return;
-      }
-      throw error;
-    }
-    if (!stats) {
-      t.diagnostic("offline rejection telemetry disabled on target node");
-      return;
-    }
-    assertOfflineRejectionStatsResponse(stats);
-  },
-);
-
-test(
   "call contract entrypoint via Torii (optional)",
   {
     skip: !!SKIP_REASON,
@@ -6130,97 +6097,6 @@ function assertExplorerAccountQrSnapshot(snapshot, label) {
   assert.equal(typeof snapshot.svg, "string", `${label}.svg must be a string`);
   assert.ok(snapshot.svg.startsWith("<svg"), `${label}.svg must contain an <svg> payload`);
 }
-function assertOfflineAllowanceResponse(page) {
-  assertNonNegativeInteger(page.total, "offline allowances total");
-  assert.ok(Array.isArray(page.items), "offline allowances must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.certificate_id_hex, "string", "allowance certificate_id_hex must be a string");
-  assert.equal(typeof entry.controller_id, "string", "allowance controller_id must be a string");
-  assert.equal(typeof entry.asset_id, "string", "allowance asset_id must be a string");
-  assertNonNegativeInteger(entry.registered_at_ms, "allowance registered_at_ms");
-  assertNonNegativeInteger(entry.expires_at_ms, "allowance expires_at_ms");
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(entry, "integrity_metadata"),
-    "allowance entries must expose integrity_metadata",
-  );
-  if (entry.integrity_metadata !== null) {
-    assert.equal(
-      typeof entry.integrity_metadata.policy,
-      "string",
-      "allowance integrity_metadata.policy must be a string",
-    );
-    if (entry.integrity_metadata.provisioned) {
-      const provisioned = entry.integrity_metadata.provisioned;
-      assert.equal(
-        typeof provisioned.manifest_schema,
-        "string",
-        "allowance provisioned manifest_schema must be a string",
-      );
-    }
-  }
-}
-
-function assertOfflineSummaryResponse(page) {
-  assertNonNegativeInteger(page.total, "offline summaries total");
-  assert.ok(Array.isArray(page.items), "offline summaries must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(
-    typeof entry.certificate_id_hex,
-    "string",
-    "summary certificate_id_hex must be a string",
-  );
-  assert.equal(typeof entry.controller_id, "string", "summary controller_id must be a string");
-  assert.equal(
-    typeof entry.summary_hash_hex,
-    "string",
-    "summary summary_hash_hex must be a string",
-  );
-  assertCounterMap(entry.apple_key_counters, "summary apple_key_counters");
-  assertCounterMap(entry.android_series_counters, "summary android_series_counters");
-  assertCounterMap(entry.policy_key_counters, "summary policy_key_counters");
-  assertOfflineCounterTotals(entry.counter_totals);
-  if (entry.metadata !== null && entry.metadata !== undefined) {
-    assert.ok(isPlainObject(entry.metadata), "summary metadata must be a plain object");
-  }
-}
-
-function assertCounterMap(map, label) {
-  assert.ok(isPlainObject(map), `${label} must be a plain object`);
-  for (const [key, value] of Object.entries(map)) {
-    assert.ok(typeof key === "string" && key.length > 0, `${label} keys must be non-empty strings`);
-    assertNonNegativeInteger(value, `${label}.${key}`);
-  }
-}
-
-function assertOfflineCounterTotals(totals) {
-  if (totals === null || totals === undefined) {
-    return;
-  }
-  assert.ok(isPlainObject(totals), "summary counter_totals must be an object when present");
-  assertNonNegativeInteger(totals.total_counters, "summary counter_totals.total_counters");
-  assertNonNegativeInteger(totals.total_weight, "summary counter_totals.total_weight");
-  assertNonNegativeInteger(totals.apple, "summary counter_totals.apple");
-  assertNonNegativeInteger(totals.android, "summary counter_totals.android");
-  assertNonNegativeInteger(totals.policy, "summary counter_totals.policy");
-}
-function assertOfflineRejectionStatsResponse(page) {
-  assertNonNegativeInteger(page.total, "offline rejection stats total");
-  assert.ok(Array.isArray(page.items), "offline rejection stats must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.platform, "string", "rejection stats platform must be a string");
-  assert.equal(typeof entry.reason, "string", "rejection stats reason must be a string");
-  assertNonNegativeInteger(entry.count, "rejection stats entry count");
-}
-
 function assertKaigiRelaySummaryList(list) {
   assertNonNegativeInteger(list.total, "kaigi relay list total");
   assert.ok(Array.isArray(list.items), "kaigi relay list items must be an array");

@@ -133,69 +133,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## офлай
+## Offline V2 readiness
 
-Офлайн пособие яуаптары фашлау байытылған баш кейеме метамағлүмәттәр өҫкә-алғы —
-I18NI000000063X, I18NI000000064X, I18NI000000065X, `verdict_id_hex`,
-I18NI000000067X, һәм I18NI00000000068X сеймал менән бергә ҡайтарыла
-рекорд шулай приборҙар таҡталары don’t тейеш, тип расшифровка встроенный I18NT0000000004X файҙалы йөк. Яңы
-18NI0000069X, I18NI000000070X, `deadline_ms`,
-I18NI000000072Х) сираттағы срокты айырып күрһәтә (яңыртыу → сәйәсәте
-→ сертификат) шулай итеп, UI значоктары операторҙарҙы иҫкәртергә мөмкин, ҡасан пособие бар
-<24 сәғәт ҡалған. СДК
-I18NI000000073X тарафынан фашланған REST фильтрҙарын көҙгөләй:
-`certificateExpiresBeforeMs/AfterMs`, I18NI000000075X,
-I18NI000000076X, `attestationNonceHex`, `refreshBeforeMs/AfterMs` һәм
-`requireVerdict` / I18NI000000080X бул. Дөрөҫ булмаған комбинациялар ( өсөн
-миҫал `onlyMissingVerdict` + `verdictIdHex`) урындағы кимәлдә Torii тиклем кире ҡағыла.
-тип атала.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## офлайн топ-аптар (эш + регистр)
-
-Ҡулланығыҙ, ярҙамсыларҙы тулыландырыу, ҡасан һеҙ теләйһегеҙ, сертификат бирергә һәм шунда уҡ
-уны теркәүҙә. SDK тикшерелгән һәм теркәлгән сертификат раҫлай
-Идентификаторҙар ҡайтҡансы тап килә, ә яуап ике файҙалы йөктө лә үҙ эсенә ала. Бында бар
-бағышланған өҫкө-өҫкә ос нөктәһе юҡ; ярҙамсы мәсьәләне сылбырлай + регистр шылтыратыуҙар. Әгәр
-һеҙ инде ҡул ҡуйылған сертификат, шылтыратыу I18NI0000000083X (йәки
-`renewOfflineAllowance` туранан-тура.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## I18NT000000011X эҙләүҙәр & потоковый (WebSockets)
 
 Һорау ярҙамсылары статусын фашлай, I18NT000000000000 метрикаһы, телеметрия снимоктары һәм ваҡиға

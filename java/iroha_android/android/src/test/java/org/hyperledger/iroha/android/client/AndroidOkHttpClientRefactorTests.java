@@ -32,10 +32,6 @@ import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClient;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketListener;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketOptions;
 import org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSession;
-import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectAttestation;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
-import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
@@ -74,53 +70,6 @@ public final class AndroidOkHttpClientRefactorTests {
             .build();
     assertTrue(unwrapField(streamClient, "transport") instanceof OkHttpTransportExecutor);
 
-    final SafetyDetectOptions safetyOptions =
-        SafetyDetectOptions.builder()
-            .setClientId("client")
-            .setClientSecret("secret")
-            .setPackageName("pkg")
-            .setSigningDigestSha256("abcd")
-            .setOauthEndpoint(URI.create("http://localhost/oauth"))
-            .setAttestationEndpoint(URI.create("http://localhost/attest"))
-            .build();
-    final HttpSafetyDetectService safety = HttpSafetyDetectService.createDefault(safetyOptions);
-    assertTrue(unwrapField(safety, "executor") instanceof OkHttpTransportExecutor);
-  }
-
-  @Test
-  public void safetyDetectFlowUsesPlatformDefaults() throws Exception {
-    try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"access_token\":\"token-abc\",\"expires_in\":3600}"));
-      server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"token\":\"attestation-token\"}"));
-      server.start();
-
-      final URI base = URI.create(server.url("/").toString());
-      final SafetyDetectOptions options =
-          SafetyDetectOptions.builder()
-              .setClientId("client")
-              .setClientSecret("secret")
-              .setPackageName("pkg")
-              .setSigningDigestSha256("abcd")
-              .setOauthEndpoint(base.resolve("/oauth"))
-              .setAttestationEndpoint(base.resolve("/attest"))
-              .build();
-      final HttpSafetyDetectService service = HttpSafetyDetectService.createDefault(options);
-      final SafetyDetectRequest request =
-          SafetyDetectRequest.builder()
-              .setCertificateIdHex("deadbeef")
-              .setAppId("app")
-              .setNonceHex("0a0b")
-              .setPackageName("pkg")
-              .setSigningDigestSha256("abcd")
-              .build();
-
-      final SafetyDetectAttestation attestation =
-          service.fetch(request).get(2, TimeUnit.SECONDS);
-      assertEquals("attestation-token", attestation.token());
-
-      assertEquals("/oauth", Objects.requireNonNull(server.takeRequest(1, TimeUnit.SECONDS)).getPath());
-      assertEquals("/attest", Objects.requireNonNull(server.takeRequest(1, TimeUnit.SECONDS)).getPath());
-    }
   }
 
   @Test

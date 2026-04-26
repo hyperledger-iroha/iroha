@@ -16,8 +16,8 @@ Bu strawman təklifi Nexus Connect iş axınları üçün ortaq dizaynı təsvir
 Swift, Android və JavaScript SDK-larında. dəstəkləmək üçün nəzərdə tutulub
 2026-cı ilin fevralında SDK-lararası seminar və tətbiq etməzdən əvvəl açıq sualları əldə edin.
 
-> Son yenilənmə: 29.01.2026  
-> Müəlliflər: Swift SDK Lead, Android Networking TL, JS Lead  
+> Son yenilənmə: 29.01.2026
+> Müəlliflər: Swift SDK Lead, Android Networking TL, JS Lead
 > Status: Şuranın nəzərdən keçirilməsi üçün layihə (təhlükə modeli + məlumatların saxlanması uyğunluğu 2026-03-12 əlavə edildi)
 
 ## Məqsədlər
@@ -106,17 +106,17 @@ körpü inteqrasiyasına səbəb olan mandatı hələ də ələ keçirir:
 
 ### Sessiya identifikatorları və duzları
 
-- `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`-dən əldə edilən 32 baytlıq identifikatordur.  
+- `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`-dən əldə edilən 32 baytlıq identifikatordur.
   DApps onu `/v1/connect/session`-ə zəng etməzdən əvvəl hesablayır; pul kisələri onu `approve` çərçivələrində əks etdirir ki, hər iki tərəf jurnalları və telemetriyanı ardıcıl olaraq əsaslandıra bilsin.
 - Eyni duz hər bir açar törəmə addımını qidalandırır ki, SDK heç vaxt ana platformadan toplanan entropiyaya etibar etmir.
 
 ### Efemer açarla işləmə
 
-- Hər sessiya təzə X25519 əsas materialından istifadə edir.  
+- Hər sessiya təzə X25519 əsas materialından istifadə edir.
   Swift onu `ConnectCrypto` vasitəsilə Keychain/Secure Enclave-də saxlayır, Android cüzdanları defolt olaraq StrongBox-a (TEE dəstəkli açar anbarlarına qayıdır) və JS təhlükəsiz kontekstli WebCrypto nümunəsi və ya yerli `iroha_js_host` plaginini tələb edir.
 - Açıq çərçivələrə dApp efemer açıq açarı və əlavə sertifikat paketi daxildir. Pulqabı təsdiqləri pul kisəsinin açıq açarını və uyğunluq axını üçün lazım olan hər hansı aparat sertifikatını qaytarır.
-- Attestasiya yükləri qəbul edilmiş sxemə uyğundur:  
-  `attestation { platform, evidence_b64, statement_hash }`.  
+- Attestasiya yükləri qəbul edilmiş sxemə uyğundur:
+  `attestation { platform, evidence_b64, statement_hash }`.
   Brauzerlər bloku buraxa bilər; Doğma pul kisələri, hardware tərəfindən dəstəklənən açarlar istifadə edildikdə onu ehtiva edir.
 
 ### İstiqamət açarları və AEAD
@@ -124,7 +124,7 @@ körpü inteqrasiyasına səbəb olan mandatı hələ də ələ keçirir:
 - Paylaşılan sirrlər HKDF-SHA256 (Rust körpü köməkçiləri vasitəsilə) və domenlə ayrılmış məlumat sətirləri ilə genişləndirilir:
   - `iroha-connect|k_app` → proqram→pul kisəsi trafiki.
   - `iroha-connect|k_wallet` → pul kisəsi → proqram trafiki.
-- AEAD v1 zərfi üçün ChaCha20-Poly1305-dir (`connect_norito_bridge` hər platformada köməkçiləri ifşa edir).  
+- AEAD v1 zərfi üçün ChaCha20-Poly1305-dir (`connect_norito_bridge` hər platformada köməkçiləri ifşa edir).
   Əlaqədar məlumatlar `("connect:v1", sid, dir, seq_le, kind=ciphertext)`-ə bərabərdir, beləliklə başlıqlarda müdaxilə aşkar edilir.
 - Nonces 64-bit ardıcıllıq sayğacından əldə edilir (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Paylaşılan köməkçi testlər BigInt/UInt dönüşümlərinin SDK-lar arasında eyni davranmasını təmin edir.
 
@@ -135,19 +135,19 @@ Tarixi CryptoKit ehtiyatları üçün baxın `docs/connect_swift_ios.md`; Kotlin
 
 ## İcazələr və Sübutlar
 
-- İcazə manifestləri körpü tərəfindən ixrac edilən paylaşılan Norito strukturu vasitəsilə gediş-gəliş etməlidir.  
+- İcazə manifestləri körpü tərəfindən ixrac edilən paylaşılan Norito strukturu vasitəsilə gediş-gəliş etməlidir.
   Sahələr:
-  - `methods` — fellər (`sign_transaction`, `sign_raw`, `submit_proof`, …).  
-  - `events` — dApp-ın qoşulmasına icazə verilən abunəliklər.  
-  - `resources` — pul kisələrinin girişi əhatə edə bilməsi üçün əlavə hesab/aktiv filtrləri.  
+  - `methods` — fellər (`sign_transaction`, `sign_raw`, `submit_proof`, …).
+  - `events` — dApp-ın qoşulmasına icazə verilən abunəliklər.
+  - `resources` — pul kisələrinin girişi əhatə edə bilməsi üçün əlavə hesab/aktiv filtrləri.
   - `constraints` — pul kisəsinin imzalamadan əvvəl tətbiq etdiyi zəncir ID, TTL və ya fərdi siyasət düymələri.
 - İcazələrlə yanaşı uyğunluq metadata gəzintiləri:
-  - Könüllü `attachments[]`-də Norito qoşma arayışları var (KYC paketləri, tənzimləyici qəbzlər).  
+  - Könüllü `attachments[]`-də Norito qoşma arayışları var (KYC paketləri, tənzimləyici qəbzlər).
   - `compliance_manifest_id` sorğunu əvvəllər təsdiq edilmiş manifestlə əlaqələndirir ki, operatorlar mənşəyi yoxlaya bilsinlər.
 - Pul kisəsi cavabları razılaşdırılmış kodlardan istifadə edir:
-  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.  
+  - `user_declined`, `permissions_mismatch`, `compliance_failed`, `internal_error`.
   Hər biri UI göstərişləri üçün `localized_message` və maşınla oxuna bilən `reason_code` daşıya bilər.
-- Təsdiq çərçivələrinə seçilmiş hesab/nəzarətçi, icazə əks-sədası, sübut paketi (ZK sübutu və ya attestasiya) və hər hansı siyasət keçidləri (məsələn, `offline_queue_enabled`) daxildir.  
+- Təsdiq çərçivələrinə seçilmiş hesab/nəzarətçi, icazə əks-sədası, sübut paketi (ZK sübutu və ya attestasiya) və hər hansı siyasət keçidləri (məsələn, `deferred_queue_enabled`) daxildir.
   Rəddlər eyni sxemi boş `proof` ilə əks etdirir, lakin yenə də audit üçün `sid` qeyd edir.
 
 ## SDK Fasadları
@@ -171,7 +171,7 @@ Tarixi CryptoKit ehtiyatları üçün baxın `docs/connect_swift_ios.md`; Kotlin
 - Səhvlərin idarə edilməsi: Norito xəta kodlarını SDK-ya xas xətalarla əlaqələndirin; daxildir
   paylaşılan taksonomiyadan istifadə edən UI üçün domenə məxsus kodlar (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, I180NI08000). Swift-in əsas tətbiqi + telemetriya bələdçisi [`connect_error_taxonomy.md`](connect_error_taxonomy.md) daxilində yaşayır və Android/JS pariteti üçün istinaddır.
 - Növbənin dərinliyi üçün telemetriya qarmaqlarını buraxın, sayları yenidən birləşdirin və gecikməni tələb edin (`connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms`).
- 
+
 ## Ardıcıl Nömrələr və Axına Nəzarət
 
 - Hər bir istiqamət seans açıldığında sıfırdan başlayan xüsusi 64-bit `sequence` sayğacını saxlayır. Paylaşılan köməkçi tiplər artımları sıxışdırır və sayğacın sarılmasından xeyli əvvəl `ConnectError.sequenceOverflow` + düymə fırlanması ilə əl sıxışdırır.
@@ -294,7 +294,7 @@ Swift (`ConnectSessionDiagnostics`), Android-də ümumi
   - Android: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
   - JS: `ConnectQueueInspector.read()` eyni strukturu və blob sapını qaytarır
     həmin UI kodu Torii dəstək alətlərinə yükləyə bilər.
-- Proqram `offline_queue_enabled=false`-i dəyişdikdə, SDK-lar dərhal boşalır və
+- Proqram `deferred_queue_enabled=false`-i dəyişdikdə, SDK-lar dərhal boşalır və
   hər iki jurnalı təmizləyin, vəziyyəti `Disabled` olaraq qeyd edin və terminal buraxın
   telemetriya hadisəsi. İstifadəçiyə baxan üstünlük Norito-də əks olunur
   təsdiq çərçivəsi belədir ki, həmyaşıdlar tamponlanmış çərçivələri davam etdirə bilsinlər.

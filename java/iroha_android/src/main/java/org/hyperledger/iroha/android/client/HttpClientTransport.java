@@ -33,9 +33,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
-import org.hyperledger.iroha.android.offline.OfflineAuditLogger;
 import org.hyperledger.iroha.android.offline.OfflineJournalKey;
-import org.hyperledger.iroha.android.offline.OfflineWallet;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -524,20 +522,6 @@ public final class HttpClientTransport implements IrohaClient {
    */
   public SubscriptionToriiClient subscriptionToriiClient() {
     return config.toSubscriptionToriiClient(executor);
-  }
-
-  /**
-   * Creates an {@link OfflineWallet} that shares this transport's HTTP executor and attaches a
-   * file-backed audit logger.
-   *
-   * @param auditLogPath filesystem location for the audit JSON file
-   * @param auditLoggingEnabled initial state for the audit toggle
-   */
-  public OfflineWallet offlineWallet(final Path auditLogPath, final boolean auditLoggingEnabled)
-      throws IOException {
-    final OfflineToriiClient offlineClient = offlineToriiClient();
-    final OfflineAuditLogger logger = new OfflineAuditLogger(auditLogPath, auditLoggingEnabled);
-    return new OfflineWallet(offlineClient, logger);
   }
 
   private CompletableFuture<Void> flushPendingQueue() {

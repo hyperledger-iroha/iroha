@@ -25,9 +25,9 @@ hashing deterministic. Այս փաստաթուղթը գրանցում է կան�
 
 | Ճանապարհ | Նպատակը | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-ից ստացված կանոնական լուսանկար; ճշմարտության աղբյուր GPU կառուցումների համար: | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Հայելի է կանոնական պատկերը, որպեսզի Swift միավորը փորձարկի և XCFramework ծխի ամրագոտիները բեռնեն նույն հաստատունները, որոնք ակնկալում են մետաղական միջուկները: | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin սարքերը կիսում են նույնական մանիֆեստը հավասարության և սերիականացման թեստերի համար: | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-ից ստացված կանոնական լուսանկար; ճշմարտության աղբյուր GPU կառուցումների համար: | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Հայելի է կանոնական պատկերը, որպեսզի Swift միավորը փորձարկի և XCFramework ծխի ամրագոտիները բեռնեն նույն հաստատունները, որոնք ակնկալում են մետաղական միջուկները: | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin սարքերը կիսում են նույնական մանիֆեստը հավասարության և սերիականացման թեստերի համար: | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Յուրաքանչյուր սպառող պետք է ստուգի հեշը նախքան հաստատունները GPU-ի մեջ միացնելը
 խողովակաշար. Երբ մանիֆեստը փոխվում է (նոր պարամետրերի հավաքածու կամ պրոֆիլ), SHA և
@@ -39,7 +39,7 @@ hashing deterministic. Այս փաստաթուղթը գրանցում է կան�
 օգնական. Հրամանը գրում է և՛ կանոնական ֆայլը, և՛ SDK հայելիները.
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Օգտագործեք `--constants <path>`/`--vectors <path>` ուղղությունները վերացնելու համար կամ

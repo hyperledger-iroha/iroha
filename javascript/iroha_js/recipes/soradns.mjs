@@ -11,7 +11,7 @@
  *   npm install
  *   npm run build:native
  *   node ./recipes/soradns.mjs docs.sora --gar-patterns canonical,pretty,*.gw.sora.id
- *   node ./recipes/soradns.mjs solswap-indexer.sora --pretty-suffix mon.taira.sora.org
+ *   node ./recipes/soradns.mjs solswap-indexer.sora --pretty-suffix mon.taira.sora.net
  */
 import process from "node:process";
 import {
@@ -108,7 +108,7 @@ async function main() {
     }
   } else {
     console.log(
-      "\nTip: pass --pretty-suffix mon.taira.sora.org for Taira Mon hosts, and --gar-patterns host1,host2,host3 (or set SORADNS_GAR) to validate a live GAR payload.",
+      "\nTip: pass --pretty-suffix mon.taira.sora.net for Taira Mon hosts, and --gar-patterns host1,host2,host3 (or set SORADNS_GAR) to validate a live GAR payload.",
     );
   }
 }
