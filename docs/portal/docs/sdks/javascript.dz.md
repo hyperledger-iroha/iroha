@@ -144,54 +144,26 @@ I18NI000000061X, `/v1/assets/definitions`, NFTs, balues, རྒྱུ་དང�
 
 I18NF0000022X
 
-## ཟུར་ཐོ་དང་ འཁྲུན་ཆོད་མེ་ཊ་ཌེ་ཊ་
+## Offline V2 readiness
 
-ཕྱིར་གཏོང་འཐུས་ཀྱི་ལན་འདེབས་ཚུ་གིས་ མཐོ་རིམ་གྱི་ ལག་དེབ་མེ་ཊ་ཌེ་ཊ་ གདོང་ཁར་ གསལ་སྟོན་འབདཝ་ཨིན།
-I18NI000000063X, `policy_expires_at_ms`, I18NI000000065, I18NI000000066,
-I18NI000000067X, དང་ `remaining_amount` དེ་ རུལ་བའི་མཉམ་དུ་ལོག་ཡོད།
-ཐོ་བཀོད་འབདཝ་ལས་ ཌེཤ་བོརཌ་ཚུ་གིས་ བཙུགས་ཏེ་ཡོད་མི་ Norito གི་ འབབ་ཁུངས་ཚུ་ གསལ་སྟོན་འབད་མི་དགོ། གསརཔ་འདི།
-གྲོགས་རམ་པ་ (`deadline_kind`, I18NI0000000070X, I18NI0000000071X,
-I18NI000000072X) ཤུལ་མའི་དུས་ཡུན་ཚང་བའི་དུས་ཚོད་ (གསར་བསྐྲུན་ → སྲིད་བྱུས།
-→ལག་ཁྱེར་༽ དེ་འབདཝ་ལས་ འཐུས་ཅིག་ཡོད་པའི་སྐབས་ ཡུ་ཨའི་ ངོ་རྟགས་ཚུ་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ཉེན་བརྡ་འབད་ཚུགས།
-<24h ལྷག་ཡོད། ཨེསི་ཌི་ཀེ་
-`/v1/offline/reserve/topup` གིས་ བརྡ་སྟོན་འབད་མི་ REST ཚགས་མ་ཚུ་ མེ་ལོང་:
-`certificateExpiresBeforeMs/AfterMs`, I18NI00000075,
-I18NI0000000076X, I18NI000000077X, I18NI0000000078X, དང་།
-I18NI000000079X / I18NI0000080X བུ་ལོན། ནུས་མེད་མཉམ་སྡེབ་ཚུ་(དོན་ལུ་དོན་ལུ།
-དཔེར་ན་ `onlyMissingVerdict` + `verdictIdHex`) འདི་ Torii གི་ཧེ་མ་ ཉེ་གནས་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
-ཟེར་སླབ་ཨིན།
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
-I18NF0000023X
+```js
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
+```
+## Offline V2 readiness
 
-## ཕྱིར་ཐིག་མཐོ་རིམ་ (གནད་ཚིག + ཐོ་འགོད་)།
-
-ཁྱོད་ཀྱིས་ལག་ཁྱེར་བྱིན་དགོ་པའི་སྐབས་ མཐོ་ཚད་གྲོགས་རམ་པ་ཚུ་ལག་ལེན་འཐབ།
-ཡིག་ཚང་ནང་ཐོ་བཀོད་འབད། ཨེསི་ཌི་ཀེ་གིས་ བཏོན་ཡོད་པའི་དང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ལག་ཁྱེར་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
-ལོག་མ་འབད་བའི་ཧེ་མ་ ཨའི་ཌི་ཚུ་མཐུན་སྒྲིག་འབདཝ་ཨིནམ་དང་ ལན་ནང་ པེ་ལོཌི་གཉིས་ཆ་ར་ཚུདཔ་ཨིན། ཡོདཔ༌ཨིན
-མཐོ་རིམ་གྱི་མཇུག་བསྡུའི་ས་ཚིགས་མེད། གྲོགས་རམ་པ་འདི་གིས་ གནད་དོན་ + ཐོ་བཀོད་ཁ་པར་ཚུ་ རིམ་སྒྲིག་འབདཝ་ཨིན། གལ་སྲིད
-ཁྱོད་ལུ་ཧེ་མ་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ལག་ཁྱེར་ཅིག་ཡོདཔ་ཨིན། `registerOfflineAllowance` (ཡང་ན་ ཡང་ན་)
-`renewOfflineAllowance` ཐད་ཀར་ ཐད་ཀར་.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
 ## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 
 འདྲི་དཔྱད་གྲོགས་རམ་པ་ཚུ་གིས་ གནས་ཚད་ཕྱིར་བཏོན་འབདཝ་ཨིན།

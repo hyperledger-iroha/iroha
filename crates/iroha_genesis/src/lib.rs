@@ -1352,8 +1352,10 @@ pub mod genesis_instructions_json {
             let mut fields = Map::new();
             let account = account_literal(set_account_alias_binding.account())?;
             fields.insert("account".to_string(), Value::String(account));
-            let alias = match set_account_alias_binding.alias().as_ref() {
-                Some(alias) => {
+            let alias = set_account_alias_binding
+                .alias()
+                .as_ref()
+                .map_or(Value::Null, |alias| {
                     let mut alias_fields = Map::new();
                     alias_fields.insert(
                         "label".to_string(),
@@ -1370,9 +1372,7 @@ pub mod genesis_instructions_json {
                         Value::Number(Number::U64(alias.dataspace.as_u64())),
                     );
                     Value::Object(alias_fields)
-                }
-                None => Value::Null,
-            };
+                });
             fields.insert("alias".to_string(), alias);
             fields.insert(
                 "lease_expiry_ms".to_string(),

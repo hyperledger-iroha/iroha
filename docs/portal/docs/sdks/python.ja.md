@@ -89,48 +89,19 @@ holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=ass
 print(assets, txs, holders)
 ```
 
-## 5. Offline allowances
+## 5. Offline V2 readiness
 
-offline allowance のエンドポイントを使ってウォレット証明書を発行し、オンチェーンに登録します。`top_up_offline_allowance` は発行+登録を連結します（単一の top‑up エンドポイントはありません）:
+Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-
-draft = {
-    "controller": "<i105-account-id>",
-    "allowance": {"asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2]},
-    "spend_public_key": "ed0120deadbeef",
-    "attestation_report": [3, 4],
-    "issued_at_ms": 100,
-    "expires_at_ms": 200,
-    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-    "metadata": {},
-}
-
-top_up = client.top_up_offline_allowance(
-    certificate=draft,
-    authority="sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-    private_key="operator-private-key",
-)
-print("registered", top_up.registration.certificate_id_hex)
+readiness = client.get_offline_v2_readiness()
+print("offline notes", readiness.offline_note_v2)
 ```
-
-更新する場合は現在の証明書 ID で `top_up_offline_allowance_renewal` を呼び出します:
-
-```python
-renewed = client.top_up_offline_allowance_renewal(
-    certificate_id_hex=top_up.registration.certificate_id_hex,
-    certificate=draft,
-    authority="sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-    private_key="operator-private-key",
-)
-print("renewed", renewed.registration.certificate_id_hex)
-```
-
-フローを分割したい場合は `issue_offline_certificate`（または `issue_offline_certificate_renewal`）の後に `register_offline_allowance` または `renew_offline_allowance` を呼びます。
-
 ## 6. イベントストリーム
 
 Torii の SSE エンドポイントはジェネレータとして公開されています。`resume=True` と `EventCursor` を指定すると SDK が自動的に再開します。

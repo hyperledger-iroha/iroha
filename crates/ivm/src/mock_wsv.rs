@@ -22,6 +22,7 @@ use norito::{
     decode_from_bytes,
     derive::{Decode, Encode},
     json::{self as njson},
+    literal,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -78,6 +79,18 @@ fn parse_json_numeric_field(field: &njson::Value) -> Result<Numeric, VMError> {
         njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
         _ => Err(VMError::DecodeError),
     }
+}
+
+fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
+    let raw = if raw.starts_with("hash:") {
+        literal::parse("hash", raw).map_err(|_| VMError::DecodeError)?
+    } else {
+        raw.strip_prefix("0x").unwrap_or(raw)
+    };
+    if raw.len() % 2 != 0 {
+        return Err(VMError::DecodeError);
+    }
+    hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
 impl DataspaceAxtPolicy {
@@ -3817,11 +3830,7 @@ impl IVMHost for WsvHost {
                     }
                     crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let raw = raw.strip_prefix("0x").unwrap_or(raw);
-                        if raw.len() % 2 != 0 {
-                            return Err(VMError::DecodeError);
-                        }
-                        let bytes = hex::decode(raw).map_err(|_| VMError::DecodeError)?;
+                        let bytes = decode_json_blob_hex_literal(raw)?;
                         let mut out = Vec::with_capacity(7 + bytes.len() + 32);
                         out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
                         out.push(1);

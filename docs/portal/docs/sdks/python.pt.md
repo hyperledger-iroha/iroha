@@ -89,48 +89,19 @@ holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=ass
 print(assets, txs, holders)
 ```
 
-## 5. Offline allowances
+## 5. Offline V2 readiness
 
-Use os endpoints de offline allowance para emitir certificados de wallet e registrá-los on‑ledger. `top_up_offline_allowance` encadeia emissão + registro (não há um único endpoint de top‑up):
+Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-
-draft = {
-    "controller": "<i105-account-id>",
-    "allowance": {"asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2]},
-    "spend_public_key": "ed0120deadbeef",
-    "attestation_report": [3, 4],
-    "issued_at_ms": 100,
-    "expires_at_ms": 200,
-    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-    "metadata": {},
-}
-
-top_up = client.top_up_offline_allowance(
-    certificate=draft,
-    authority="sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-    private_key="operator-private-key",
-)
-print("registered", top_up.registration.certificate_id_hex)
+readiness = client.get_offline_v2_readiness()
+print("offline notes", readiness.offline_note_v2)
 ```
-
-Para renovações, chame `top_up_offline_allowance_renewal` com o id do certificado atual:
-
-```python
-renewed = client.top_up_offline_allowance_renewal(
-    certificate_id_hex=top_up.registration.certificate_id_hex,
-    certificate=draft,
-    authority="sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-    private_key="operator-private-key",
-)
-print("renewed", renewed.registration.certificate_id_hex)
-```
-
-Se precisar dividir o fluxo, chame `issue_offline_certificate` (ou `issue_offline_certificate_renewal`) seguido de `register_offline_allowance` ou `renew_offline_allowance`.
-
 ## 6. Stream de eventos
 
 Os endpoints SSE de Torii são expostos via geradores. O SDK retoma automaticamente quando `resume=True` e você fornece um `EventCursor`.

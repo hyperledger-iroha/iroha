@@ -178,38 +178,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline reserves
+## Offline V2 readiness
 
-The pre-release allowance/certificate flow was removed before launch. JavaScript integrations should
-use the reserve routes directly:
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
-```ts
-const setup = await fetch(`${baseUrl}/v1/offline/reserve/setup`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    account_id: "<i105-account-id>",
-    device_id: "device-123",
-    offline_public_key: "ed25519:...",
-    operation_id: crypto.randomUUID(),
-  }),
-}).then((response) => response.json());
-
-const topUp = await fetch(`${baseUrl}/v1/offline/reserve/topup`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    reserve_id: setup.reserve_state.reserve_id,
-    amount: "100.00",
-    operation_id: crypto.randomUUID(),
-  }),
-}).then((response) => response.json());
+```js
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-Use `POST /v1/offline/reserve/renew`, `POST /v1/offline/reserve/sync`, `POST /v1/offline/reserve/defund`,
-and `GET /v1/offline/revocations` for the rest of the lifecycle. Transfer history remains under
-`/v1/offline/transfers`.
-
 ## Torii queries & streaming (WebSockets)
 
 Query helpers expose status, Prometheus metrics, telemetry snapshots, and event

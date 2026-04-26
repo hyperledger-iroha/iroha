@@ -1536,6 +1536,7 @@ pub struct SccpSubstrateRuntimeSubmissionPayloadV1 {
     derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
 )]
 #[norito(tag = "platform", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum SccpPlatformSubmissionPayloadV1 {
     EvmContractCall(SccpEvmContractSubmissionPayloadV1),
     SolanaProgramInstruction(SccpSolanaProgramSubmissionPayloadV1),
@@ -3914,7 +3915,7 @@ fn validate_evm_hex_codec(bytes: &[u8]) -> bool {
 
     let lowercase_payload = payload
         .iter()
-        .map(|byte| byte.to_ascii_lowercase())
+        .map(u8::to_ascii_lowercase)
         .collect::<Vec<_>>();
     let checksum = keccak256_bytes(&lowercase_payload);
 

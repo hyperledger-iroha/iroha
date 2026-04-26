@@ -3017,11 +3017,10 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline V2 readiness plus
-the allowance, certificate, settlement, summary, and telemetry endpoints that
-are still mounted by Torii. The legacy `/v1/offline/cash/*`,
-`/v1/offline/transfers*`, and `/v1/offline/revocations*` routes are no longer
-exposed by this SDK because Torii now returns 404 for them.
+The supported first-release offline HTTP surface is Offline V2 readiness. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
+offline allowance, cash, transfer-history, revocation, settlement, summary, and telemetry HTTP
+helpers are no longer exposed by this SDK because Torii now returns 404 for those routes.
 
 ```js
 const readiness = await torii.getOfflineV2Readiness();

@@ -412,7 +412,7 @@ impl FromStr for MusubiPackageRef {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiArchiveRef {
-    /// Canonical SoraFS manifest digest for the source archive.
+    /// Canonical `SoraFS` manifest digest for the source archive.
     pub sorafs_manifest: ManifestDigest,
     /// BLAKE3-256 hash of the canonical source archive payload.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -946,7 +946,7 @@ fn validate_comparator_req(raw: &str) -> Result<(), ParseError> {
     validate_semver(version)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SemverPrecedence<'a> {
     major: u64,
     minor: u64,
@@ -998,7 +998,7 @@ fn version_req_matches(req: &str, version: &str) -> Result<bool, ParseError> {
         }
         return Ok(true);
     }
-    compare_semver(version, req.strip_prefix('=').unwrap_or(req)).map(|ordering| ordering.is_eq())
+    compare_semver(version, req.strip_prefix('=').unwrap_or(req)).map(std::cmp::Ordering::is_eq)
 }
 
 fn range_matches(
@@ -1212,7 +1212,11 @@ mod tests {
     use crate::{Decode, Encode};
 
     fn sample_source_plan(source_bytes: u64, file_count: u32) -> MusubiSourceArchivePlan {
-        let chunks = vec![MusubiSourceChunkPlan::new(0, source_bytes as u32, [3; 32])];
+        let chunks = vec![MusubiSourceChunkPlan::new(
+            0,
+            u32::try_from(source_bytes).expect("fixture source bytes fit u32"),
+            [3; 32],
+        )];
         let files = (0..file_count)
             .map(|index| {
                 MusubiSourceFilePlan::new(

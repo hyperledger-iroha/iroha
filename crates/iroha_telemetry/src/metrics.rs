@@ -21,9 +21,6 @@ use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as Actua
 use iroha_data_model::{
     block::consensus::PERMISSIONED_TAG,
     da::types::DaRentQuote,
-    offline::{
-        AndroidIntegrityPolicy, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
-    },
     soranet::privacy_metrics::{
         SoranetPrivacyBucketMetricsV1, SoranetPrivacyModeV1, SoranetPrivacySuppressionReasonV1,
     },
@@ -2662,16 +2659,10 @@ mod tests {
     #[test]
     fn records_offline_transfer_rejections() {
         let metrics = Metrics::default();
-        metrics.record_offline_transfer_rejection(
-            OfflineTransferRejectionPlatform::Apple,
-            OfflineTransferRejectionReason::PlatformAttestationInvalid,
-        );
+        metrics.record_offline_transfer_rejection("ios-appattest", "proof_invalid");
         let value = metrics
             .offline_transfer_rejections_total
-            .with_label_values(&[
-                OfflineTransferRejectionPlatform::Apple.as_label(),
-                OfflineTransferRejectionReason::PlatformAttestationInvalid.as_label(),
-            ])
+            .with_label_values(&["ios-appattest", "proof_invalid"])
             .get();
         assert_eq!(value, 1);
     }
@@ -8420,12 +8411,7 @@ impl Default for Metrics {
             "Open viral escrows currently tracked on-ledger",
         )
         .expect("Infallible");
-        for label in [
-            AndroidIntegrityPolicy::MarkerKey.as_str(),
-            AndroidIntegrityPolicy::PlayIntegrity.as_str(),
-            AndroidIntegrityPolicy::HmsSafetyDetect.as_str(),
-            AndroidIntegrityPolicy::Provisioned.as_str(),
-        ] {
+        for label in ["ios-appattest", "android-keymint"] {
             let _ = offline_attestation_policy_total.with_label_values(&[label]);
         }
         let _ = offline_transfer_receipts_total.with_label_values(&["settled"]);
@@ -15804,14 +15790,10 @@ impl Metrics {
         self.offline_transfer_pruned_total.inc();
     }
 
-    /// Record a validation rejection for an offline transfer bundle.
-    pub fn record_offline_transfer_rejection(
-        &self,
-        platform: OfflineTransferRejectionPlatform,
-        reason: OfflineTransferRejectionReason,
-    ) {
+    /// Record a validation rejection for an Offline V2 note operation.
+    pub fn record_offline_transfer_rejection(&self, platform: &str, reason: &str) {
         self.offline_transfer_rejections_total
-            .with_label_values(&[platform.as_label(), reason.as_label()])
+            .with_label_values(&[platform, reason])
             .inc();
     }
 

@@ -28,7 +28,7 @@ impl<'a> GatewayHostProfile<'a> {
         Self { pretty_suffix }
     }
 
-    /// Default upstream SoraDNS gateway profile.
+    /// Default upstream `SoraDNS` gateway profile.
     #[must_use]
     pub const fn default_profile() -> GatewayHostProfile<'static> {
         GatewayHostProfile::new(PRETTY_SUFFIX)

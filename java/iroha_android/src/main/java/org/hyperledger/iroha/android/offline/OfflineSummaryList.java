@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** Immutable view over `/v1/offline/summaries` responses. */
+/** Immutable view over offline counter summary payloads. */
 public final class OfflineSummaryList {
 
   private final List<OfflineSummaryItem> items;

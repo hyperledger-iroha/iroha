@@ -41,17 +41,7 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineAllowanceDeadline,
-    OfflineAllowanceListItem,
-    OfflineAllowanceListPage,
-    OfflineAllowanceRegisterResponse,
-    OfflineCertificateIssueResponse,
-    OfflineSummaryListItem,
-    OfflineSummaryListPage,
-    OfflineTopUpResponse,
-    OfflineTransferHistoryEntry,
-    OfflineTransferListItem,
-    OfflineTransferListPage,
+    OfflineV2Readiness,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -6936,14 +6926,7 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
-    "OfflineAllowanceDeadline",
-    "OfflineAllowanceListItem",
-    "OfflineAllowanceListPage",
-    "OfflineTransferHistoryEntry",
-    "OfflineTransferListItem",
-    "OfflineTransferListPage",
-    "OfflineSummaryListItem",
-    "OfflineSummaryListPage",
+    "OfflineV2Readiness",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -7786,20 +7769,6 @@ class ToriiClient(_BaseToriiClient):
             context="repo agreements query",
         )
         return RepoAgreementListPage.from_payload(payload)
-
-    # ------------------------------------------------------------------
-    # Offline allowances and summaries
-    # ------------------------------------------------------------------
-
-    def list_offline_allowances(self, **params: Any) -> OfflineAllowanceListPage:
-        """List offline allowances (`GET /v1/offline/allowances`)."""
-
-        return super().list_offline_allowances(**params)
-
-    def list_offline_summaries(self, **params: Any) -> OfflineSummaryListPage:
-        """List offline counter summaries (`GET /v1/offline/summaries`)."""
-
-        return super().list_offline_summaries(**params)
 
     def get_sorafs_pin_manifest(
         self,

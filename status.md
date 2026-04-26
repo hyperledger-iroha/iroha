@@ -1,6 +1,33 @@
 # Status
 
-Last updated: 2026-04-25
+Last updated: 2026-04-26
+
+## 2026-04-26 Offline V2 certificate, redemption, and audit binding
+
+- Hardened Offline V2 note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.
+- Hardened Offline V2 note redemption so the recursive proof public-input hash must bind the source note commitment, consumed nullifiers, certified key payload, recipient, asset, and amount, and escrow is released only for a ledger-recorded issued-note claim that has not already been redeemed.
+- Hardened Offline V2 optional audit so the proof public-input hash binds the token id, observed nullifiers, output commitments, and certified key payload; audit now requires a previously issued key certificate and detects token/public-input conflicts plus duplicate output commitments.
+- Ordered cheap issued-claim, token, and nullifier replay checks before expensive recursive proof verification while still verifying proofs before escrow release or new audit state.
+- Replaced the local transcript-style recursive proof placeholder with verifier-key-backed validation: the proof must name an active `offline_note_v2` WSV verifier, decode as an `OpenVerifyEnvelope`, match the Offline V2 public-input schema hash, expose the expected public instance columns, and pass the configured ZK backend verifier.
+- Added data-model helper payloads for canonical key-certificate signing bytes, issued-note claims, redemption public inputs, and audit public inputs.
+- Kept the retired Offline V1 settlement helpers fail-closed while documenting the retained compatibility code path for later removal.
+- The strict clippy follow-up also cleaned local warning blockers in the touched dependency graph, including ML-DSA context length conversion, QR rendering docs/casts, FASTPQ proof helper lint annotations, Soracloud/SCCP/config style issues, and data-model test/bench nits.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `cargo clippy -p iroha_data_model -p iroha_core -p iroha_torii -p connect_norito_bridge --all-targets -- -D warnings`
+  - `cargo test -p iroha_core offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_cash_router_smoke -- --nocapture`
+  - `cargo test -p connect_norito_bridge offline --lib -- --nocapture`
+  - `cargo test -p soranet_pq mldsa --lib -- --nocapture`
+  - `cargo test -p iroha_torii_shared qr --lib -- --nocapture`
+  - `cargo test -p fastpq_prover merkle --lib -- --nocapture`
+  - `npm run lint && node --test test/toriiClient.test.js test/package_dist.test.js test/offlineCounterJournal.test.js test/offlineEnvelope.test.js test/offlineQrStream.test.js test/offlineReplay.test.js` from `javascript/iroha_js`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py python/iroha_python/tests/testconnect_codec.py -q`
+  - `git diff --check`
+  - Targeted stale legacy offline route/helper scan across docs, examples, and SDK sources returned no matches.
+  - Targeted removed native export/wrapper scan across the bridge and mobile SDK sources returned no matches.
 
 ## 2026-04-25 Taira devex CLI and onboarding diagnostics
 
