@@ -2,6 +2,37 @@
 
 Last updated: 2026-04-26
 
+## 2026-04-26 Loose-end closure pass: escrow, Izanami, and release hygiene
+
+- Wired the native anonymous escrow ISI family into the V1 IVM syscall surface: open, accept, mark-payment-sent, release, cancel, open-dispute, and resolve-dispute now have ABI constants, policy-table coverage, unknown-syscall fixture updates, host dispatch into the typed ISIs, syscall docs, and an updated V1 ABI hash (`6e26a7b44f773a856e45e91baa9aebbc975d47bb452f12962cd4b03fecfe27b3`).
+- Added proof-carrying anonymous escrow helper surfaces for Swift, Kotlin, and Java Android so app clients can build the open/accept/payment/release/cancel/dispute/resolve payload shapes without hand-assembling argument maps.
+- Fixed the account-alias onboarding auto-renew enqueue path so the subscriber is granted `CanModifyNftMetadata` for the subscription NFT before the auto-renew trigger is registered, closing the focused permission gap for user-signed metadata updates on that lease record.
+- Replaced split IVM sample staging with a shared `crates/ivm/prebuilt_samples.txt` manifest consumed by both `ivm_prebuild` and `integration_tests/build.rs`; the manifest now includes `threshold_escrow` so CLI and integration fixture staging cannot drift on that sample.
+- Plumbed Izanami packet-loss percentage through CLI arguments, stored configuration, runtime config merging, persistence, and fault-config generation. The matrix runner now supports `--packet-loss-sweep`, uses `75%` for quick packet-loss smokes, and defaults paper mode to `25%,50%,75%` packet-loss subrows while keeping leader isolation pinned to the existing `75%` stress point.
+- Completed the exact-injector 75% packet-loss paper baseline at `dist/izanami-exact-packet-paper-20260426` with `--mode paper --sumeragi-mode both` and seed `7`: all ten permissioned/NPoS rows exited `0`, reported `status=ok`, and classified as `paper_outcome=resilient`. The acceptance-marker scan found no `429`, confirmation timeout, stuck queued transaction, route-unavailable, queue-pressure, panic, or error signatures. The wrapper tripped a post-run `note_path` finalization bug after recording all rows; `note_path` is now initialized up front, the shell smoke passes, and `summary.md` was regenerated from the completed `summary.tsv` / `evidence.tsv`. With the current sweep-capable script, reproduce this ten-row baseline with `--packet-loss-sweep 75`.
+- Pinned Sumeragi formal CI to Apalache `0.52.2` through the local installer/toolchain path, updated the fallback Docker reference, and added a `docs/formal` translation metadata audit job for `source`, `source_hash`, and `translation_last_reviewed`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `git diff --check`
+  - `python3 -m py_compile ci/check_docs_i18n_metadata.py`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --max-messages 5` (passed with stale `source_hash` warnings for existing formal translations)
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --out /tmp/izanami-note-path-smoke --mode quick --sumeragi-mode permissioned --only targeted-load --izanami-cmd true`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-exact-packet-paper-20260426 --mode paper --sumeragi-mode both --izanami-cmd target/codex-packet-loss/debug/izanami -- --seed 7` (all ten single-75% packet-loss baseline rows completed and were recorded as resilient; with the current sweep-capable script, add `--packet-loss-sweep 75` to reproduce the same ten-row shape; the wrapper finalization bug above was fixed afterward)
+  - `rg -n "429 Too Many Requests|confirmation timeout|confirmation timed out|sampled confirmation failed|transaction did not reach|transaction remained queued|transaction queued for too long|load-worker shutdown timeout|worker shutdown timeout|worker shutdown timed out|queue pressure|No endpoint|route_unavailable|panic|error:" dist/izanami-exact-packet-paper-20260426` (no hits)
+  - `cargo check -p izanami --bin izanami`
+  - `cargo test -p izanami cli_overrides_packet_loss_percent --no-run`
+  - `cargo test -p ivm --bin ivm_prebuild sample_manifest_includes_threshold_escrow --no-run`
+  - `cargo test -p ivm --test abi_syscall_list_golden --no-run`
+  - `cargo test -p ivm --test abi_hash_versions --no-run`
+  - `cargo test -p iroha_core native_anonymous_escrow_syscalls_queue_expected_instructions --lib --no-run`
+  - `cargo test -p iroha_torii onboarding_alias_auto_renew_grants_subscriber_metadata_mutation --lib --features app_api --no-run`
+  - `swift test --filter NativeEscrowInstructionBuildersTests`
+- Validation blockers:
+  - `cargo test -p ivm --test abi_syscall_list_golden -- --nocapture` compiled but the test binary wedged before entering the test body at `_dyld_start`; a direct `target/debug/deps/abi_syscall_list_golden-* --nocapture` run timed out the same way after the no-run compile passed.
+  - Kotlin and Java Android focused Gradle tests were not runnable in this shell because `java` and `/usr/libexec/java_home -v 21` reported no installed Java runtime.
+  - A broader `python3 ci/check_docs_i18n_metadata.py --paths docs/source docs/formal docs/portal --max-messages 10` run found existing `docs/source` and `docs/portal` metadata debt, including missing `source_hash` and `translation_last_reviewed` fields, so source/portal-wide gating remains open.
+
 ## 2026-04-26 Sumeragi locked-chain precommit vote fix
 
 - Fixed local precommit emission so a validator with a known locked block refuses to precommit a different block at the same height, even when the candidate is in a newer view. Missing locked payloads still keep the existing newer-view override behavior.
@@ -23,7 +54,7 @@ Last updated: 2026-04-26
 - Stabilized Sumeragi commit recovery around QC-backed pending blocks without proposal evidence: cached prepare/commit QCs now count as consensus evidence for validation and commit gating, and local precommit emission records and applies the vote synchronously before broadcast.
 - Tightened recovery scheduling for empty-frontier local vote evidence, authoritative RBC/body ingress, and snapshot-roster near-quorum reschedules.
 - Restored deterministic worker-loop budget tests by isolating queue-depth state and allowing one pre-tick drain before marking tiny drain budgets exhausted.
-- The Sumeragi/Izanami paper-shaped communication vulnerability matrix now completes for both Sumeragi modes with resilient rows across targeted load, transient failure, packet loss, stopping, and leader isolation. The 2026-04-26 paper run at `dist/izanami-communication-vuln-20260426-154826` produced ten `exit_code=0`, `status=ok`, `paper_outcome=resilient` rows, and the failure-marker scan found no `429`, confirmation timeout, stuck queued transaction, route-unavailable, queue-pressure, startup/config, or pipeline-status failure signatures.
+- The Sumeragi/Izanami paper-shaped communication vulnerability matrix now completes for both Sumeragi modes with resilient rows across targeted load, transient failure, packet loss, stopping, and leader isolation. The exact-injector 2026-04-26 paper run at `dist/izanami-exact-packet-paper-20260426` produced ten `exit_code=0`, `status=ok`, `paper_outcome=resilient` rows, and the failure-marker scan found no `429`, confirmation timeout, stuck queued transaction, route-unavailable, queue-pressure, startup/config, or pipeline-status failure signatures.
 - Izanami now has an in-process P2P packet-loss injector controlled through `iroha_config` network fields. The matrix `packet-loss` and `leader-isolation` scenarios use 75% application-frame loss during their attack windows without mutating validator rosters or deterministic consensus state.
 - Duration-only Izanami runs now sample quorum and strict block heights at the deadline, so matrix reports can record progress evidence even when no `--target-blocks` KPI is configured. The matrix runner now writes `evidence.tsv` and an `Iroha Run Evidence` section with progress evidence and acceptance-failure marker counts while preserving the original paper-style result table.
 - Izanami now supports run-relative `--fault-window-start` / `--fault-window-end` offsets. Paper-mode matrix fault scenarios pass the paper's `133s` to `266s` attack window, while quick mode remains immediate/randomized for fast local smoke runs.

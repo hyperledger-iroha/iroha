@@ -3027,7 +3027,10 @@ fn fault_config_for(config: &ChaosConfig) -> FaultConfig {
             .then_some(NetworkPartitionConfig::default()),
         network_packet_loss: toggles
             .network_packet_loss()
-            .then_some(NetworkPacketLossConfig::default()),
+            .then(|| NetworkPacketLossConfig {
+                percent: config.packet_loss_percent..=config.packet_loss_percent,
+                ..NetworkPacketLossConfig::default()
+            }),
         cpu_stress: toggles.cpu_stress().then_some(CpuStressConfig::default()),
         disk_saturation: toggles
             .disk_saturation()
@@ -6119,6 +6122,7 @@ mod tests {
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles, IzanamiArgs,
         NexusProfile, WorkloadProfile,
     };
+    use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
     fn allow_net_for_tests() -> bool {
         std::env::var("IZANAMI_ALLOW_NET")
@@ -6329,6 +6333,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -6398,6 +6403,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(profile),
@@ -6470,6 +6476,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(profile),
@@ -6541,6 +6548,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -6576,6 +6584,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -6624,6 +6633,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(profile),
@@ -6676,6 +6686,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
@@ -6744,6 +6755,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile.clone()),
@@ -6826,6 +6838,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile.clone()),
@@ -6999,6 +7012,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -7094,6 +7108,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7144,6 +7159,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7203,6 +7219,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -7242,6 +7259,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -7278,6 +7296,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -7334,6 +7353,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7366,6 +7386,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7404,6 +7425,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7445,6 +7467,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_explicit_array([
                 true, false, false, false, false, false, false,
@@ -7489,6 +7512,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_explicit_array([
                 false, false, false, true, true, false, false,
@@ -7529,6 +7553,7 @@ mod tests {
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7810,6 +7835,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -7844,6 +7870,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -7878,6 +7905,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -7909,6 +7937,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -8001,6 +8030,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
@@ -8040,6 +8070,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(nexus.clone()),
@@ -9513,6 +9544,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -9594,6 +9626,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -9682,6 +9715,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -9790,6 +9824,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -9897,6 +9932,35 @@ mod tests {
         assert!(
             uses_sumeragi_leader_fault_targeting(&config),
             "single-peer packet-loss faults should follow Sumeragi leader telemetry"
+        );
+    }
+
+    #[test]
+    fn fault_config_uses_configured_packet_loss_percent() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.faulty = 1;
+        args.faults = FaultArgs {
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
+            network_latency: false,
+            network_partition: false,
+            network_packet_loss: true,
+            cpu_stress: false,
+            disk_saturation: false,
+        };
+        args.packet_loss_percent = 25;
+        let config = ChaosConfig::try_from(args).expect("packet-loss profile should parse");
+
+        let fault_config = fault_config_for(&config);
+
+        assert_eq!(
+            fault_config
+                .network_packet_loss
+                .expect("packet loss fault should be enabled")
+                .percent,
+            25..=25
         );
     }
 
@@ -10081,6 +10145,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "info".to_string(),
             faults,
             nexus: nexus.then(|| NexusProfile::sora_defaults().expect("nexus profile")),
@@ -10447,6 +10512,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -10852,6 +10918,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -10931,6 +10998,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
@@ -11042,6 +11110,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
@@ -11102,6 +11171,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -11157,6 +11227,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
@@ -11239,6 +11310,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
@@ -11287,6 +11359,7 @@ mod tests {
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(nexus.clone()),

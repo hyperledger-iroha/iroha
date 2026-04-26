@@ -61,12 +61,12 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     vm.run().expect("known syscall should be allowed under V1");
 
     // Replace syscall with an unknown number and expect UnknownSyscall
-    let mut bad = assemble_syscall(0xAB);
+    let mut bad = assemble_syscall(0xDF);
     bad[4 + 1 + 1 + 1 + 1 + 8] = 1; // ABI v1
     let mut vm2 = IVM::new(u64::MAX);
     vm2.load_program(&bad).unwrap();
     let res = vm2.run();
-    assert!(matches!(res, Err(VMError::UnknownSyscall(0xAB))));
+    assert!(matches!(res, Err(VMError::UnknownSyscall(0xDF))));
 }
 
 #[test]

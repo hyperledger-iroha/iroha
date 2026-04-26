@@ -100,6 +100,9 @@ impl Default for NetworkPartitionConfig {
     }
 }
 
+/// Default inbound/outbound P2P packet-loss percentage.
+pub const DEFAULT_NETWORK_PACKET_LOSS_PERCENT: u8 = 75;
+
 /// Settings for temporary P2P application-frame packet loss.
 #[derive(Clone, Debug)]
 pub struct NetworkPacketLossConfig {
@@ -113,7 +116,7 @@ impl Default for NetworkPacketLossConfig {
     fn default() -> Self {
         Self {
             duration: Duration::from_secs(5)..=Duration::from_secs(10),
-            percent: 75..=75,
+            percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT..=DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
         }
     }
 }

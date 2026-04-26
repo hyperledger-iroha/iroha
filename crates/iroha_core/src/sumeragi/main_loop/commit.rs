@@ -4416,7 +4416,9 @@ impl Actor {
                 epoch,
             };
             let locked_payload_known = self.block_known_for_lock(lock.subject_block_hash);
-            if locked_payload_known
+            let locked_hash_committed =
+                self.committed_block_hash_for_height(lock.height) == Some(lock.subject_block_hash);
+            if (locked_payload_known || locked_hash_committed)
                 && candidate.height == lock.height
                 && candidate.subject_block_hash != lock.subject_block_hash
             {

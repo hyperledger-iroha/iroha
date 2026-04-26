@@ -12271,7 +12271,7 @@ fn drain_mailbox<A: WorkerActor>(
         }
         let now = Instant::now();
         if let Some(deadline) = tick_deadline {
-            if now >= deadline {
+            if now >= deadline && (phase_progress || !matches!(phase, DrainPhase::PreTick)) {
                 break;
             }
         }

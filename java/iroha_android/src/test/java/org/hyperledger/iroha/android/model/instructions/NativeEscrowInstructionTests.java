@@ -82,6 +82,58 @@ public final class NativeEscrowInstructionTests {
   }
 
   @org.junit.Test
+  public void anonymousOperationsCarryShieldedProofMaterial() {
+    final NativeEscrowInstructions.AnonymousEscrowInstruction open =
+        NativeEscrowInstructions.openAnonymousAssetEscrow(
+            "anonymous-escrow",
+            "xor#wonderland",
+            NativeEscrowInstructions.evidenceHashes("n1", "n2"),
+            "escrow-note",
+            "proof-envelope",
+            "root",
+            NativeEscrowInstructions.evidenceHashes("receipt"));
+    final NativeEscrowInstructions.AnonymousEscrowInstruction release =
+        NativeEscrowInstructions.releaseAnonymousAssetEscrow(
+            "anonymous-escrow",
+            NativeEscrowInstructions.evidenceHashes("escrow-nullifier"),
+            NativeEscrowInstructions.evidenceHashes("buyer-note"),
+            "release-proof",
+            null);
+    final NativeEscrowInstructions.AnonymousEscrowInstruction resolve =
+        NativeEscrowInstructions.resolveAnonymousEscrowDispute(
+            "anonymous-escrow",
+            NativeEscrowInstructions.evidenceHashes("escrow-nullifier"),
+            NativeEscrowInstructions.evidenceHashes("buyer-note"),
+            NativeEscrowInstructions.evidenceHashes("seller-note"),
+            "resolve-proof",
+            null,
+            NativeEscrowInstructions.evidenceHashes("judgement"));
+
+    assert "OpenAnonymousAssetEscrow".equals(open.action()) : "open action mismatch";
+    assert "n1,n2".equals(open.toArguments().get("funding_nullifiers"))
+        : "funding nullifiers mismatch";
+    assert "escrow-note".equals(open.toArguments().get("escrow_commitment"))
+        : "commitment mismatch";
+    assert "proof-envelope".equals(open.toArguments().get("proof")) : "proof mismatch";
+    assert "root".equals(open.toArguments().get("root_hint")) : "root hint mismatch";
+    assert open.equals(
+        NativeEscrowInstructions.AnonymousEscrowInstruction.fromArguments(open.toArguments()))
+        : "open anonymous roundtrip mismatch";
+    assert "buyer-note".equals(release.toArguments().get("buyer_output_commitments"))
+        : "release output mismatch";
+    assert release.equals(
+        NativeEscrowInstructions.AnonymousEscrowInstruction.fromArguments(release.toArguments()))
+        : "release anonymous roundtrip mismatch";
+    assert "seller-note".equals(resolve.toArguments().get("seller_output_commitments"))
+        : "resolve seller output mismatch";
+    assert "judgement".equals(resolve.toArguments().get("evidence_hashes"))
+        : "resolve evidence mismatch";
+    assert resolve.equals(
+        NativeEscrowInstructions.AnonymousEscrowInstruction.fromArguments(resolve.toArguments()))
+        : "resolve anonymous roundtrip mismatch";
+  }
+
+  @org.junit.Test
   public void statusAndPermissionConstantsMatchWireNames() {
     assert NativeEscrowInstructions.Status.PAYMENT_SENT
         == NativeEscrowInstructions.Status.fromWireName("PaymentSent")

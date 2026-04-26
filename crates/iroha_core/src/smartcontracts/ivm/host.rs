@@ -29,8 +29,11 @@ use iroha_data_model::{
         RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
         TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
         escrow::{
-            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
-            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
+            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
+            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
+            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
+            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
         },
         register::RegisterPeerWithPop,
         smart_contract_code as scode, zk as DMZk,
@@ -5933,6 +5936,53 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => self.apply_fastpq_batch_from_tlv(vm),
+            // ----------------- Native anonymous asset escrow ISIs via pointer-ABI -----------------
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => {
+                let request: OpenAnonymousAssetEscrow =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                Ok(self.queue_instruction(InstructionBox::from(request)))
+            }
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                Ok(
+                    self.queue_instruction(InstructionBox::from(AcceptAnonymousAssetEscrow {
+                        escrow_id,
+                    })),
+                )
+            }
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                Ok(
+                    self.queue_instruction(InstructionBox::from(MarkAnonymousEscrowPaymentSent {
+                        escrow_id,
+                    })),
+                )
+            }
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE => {
+                let request: ReleaseAnonymousAssetEscrow =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                Ok(self.queue_instruction(InstructionBox::from(request)))
+            }
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL => {
+                let request: CancelAnonymousAssetEscrow =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                Ok(self.queue_instruction(InstructionBox::from(request)))
+            }
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => {
+                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
+                Ok(
+                    self.queue_instruction(InstructionBox::from(OpenAnonymousEscrowDispute {
+                        escrow_id,
+                        evidence_hashes,
+                    })),
+                )
+            }
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
+                let request: ResolveAnonymousEscrowDispute =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                Ok(self.queue_instruction(InstructionBox::from(request)))
+            }
             // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
             ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
                 let escrow_ptr = vm.register(10);
@@ -9078,6 +9128,138 @@ mod pointer_abi_tests {
                 evidence_hashes,
             }),
         );
+    }
+
+    #[test]
+    fn native_anonymous_escrow_syscalls_queue_expected_instructions() {
+        fn proof_attachment(tag: &str) -> ProofAttachment {
+            let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
+            ProofAttachment::new_inline(
+                backend.clone(),
+                ProofBox::new(backend.clone(), tag.as_bytes().to_vec()),
+                VerifyingKeyBox::new(backend, Vec::new()),
+            )
+        }
+
+        let mut vm = ivm::IVM::new(2_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+
+        let escrow_name = Name::from_str("anonymous_aitai_offer").expect("fixture escrow name");
+        let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
+        let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
+        let evidence_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&evidence_hashes),
+        );
+
+        let open = OpenAnonymousAssetEscrow::with_evidence_hashes(
+            escrow_id.clone(),
+            asset_definition,
+            vec![[0x11; 32]],
+            [0x22; 32],
+            proof_attachment("open"),
+            Some([0x33; 32]),
+            evidence_hashes.clone(),
+        );
+        let release = ReleaseAnonymousAssetEscrow::new(
+            escrow_id.clone(),
+            vec![[0x44; 32]],
+            vec![[0x55; 32]],
+            proof_attachment("release"),
+            Some([0x66; 32]),
+        );
+        let cancel = CancelAnonymousAssetEscrow::new(
+            escrow_id.clone(),
+            vec![[0x77; 32]],
+            vec![[0x88; 32]],
+            proof_attachment("cancel"),
+            None,
+        );
+        let resolve = ResolveAnonymousEscrowDispute::with_evidence_hashes(
+            escrow_id.clone(),
+            vec![[0x99; 32]],
+            vec![[0xAA; 32]],
+            vec![[0xBB; 32]],
+            proof_attachment("resolve"),
+            Some([0xCC; 32]),
+            evidence_hashes.clone(),
+        );
+
+        let open_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&open));
+        let release_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&release));
+        let cancel_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&cancel));
+        let resolve_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&resolve));
+
+        let assert_queued = |host: &mut CoreHost, res, expected: InstructionBox| {
+            let expected_gas = crate::gas::meter_instruction(&expected);
+            assert_eq!(res, Ok(expected_gas));
+            assert_eq!(host.queued, vec![expected]);
+            host.queued.clear();
+        };
+
+        vm.set_register(10, open_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER, &mut vm);
+        assert_queued(&mut host, res, InstructionBox::from(open));
+
+        vm.set_register(10, escrow_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT, &mut vm);
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(AcceptAnonymousAssetEscrow {
+                escrow_id: escrow_id.clone(),
+            }),
+        );
+
+        vm.set_register(10, escrow_ptr);
+        let res = host.syscall(
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
+            &mut vm,
+        );
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(MarkAnonymousEscrowPaymentSent {
+                escrow_id: escrow_id.clone(),
+            }),
+        );
+
+        vm.set_register(10, release_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE, &mut vm);
+        assert_queued(&mut host, res, InstructionBox::from(release));
+
+        vm.set_register(10, cancel_ptr);
+        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL, &mut vm);
+        assert_queued(&mut host, res, InstructionBox::from(cancel));
+
+        vm.set_register(10, escrow_ptr);
+        vm.set_register(11, evidence_ptr);
+        let res = host.syscall(
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
+            &mut vm,
+        );
+        assert_queued(
+            &mut host,
+            res,
+            InstructionBox::from(OpenAnonymousEscrowDispute {
+                escrow_id: escrow_id.clone(),
+                evidence_hashes,
+            }),
+        );
+
+        vm.set_register(10, resolve_ptr);
+        let res = host.syscall(
+            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
+            &mut vm,
+        );
+        assert_queued(&mut host, res, InstructionBox::from(resolve));
     }
 
     #[test]
