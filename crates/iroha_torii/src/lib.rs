@@ -35236,7 +35236,9 @@ pub(crate) mod tests_runtime_handlers {
             }
         }
 
-        let guard = TEST_LOCK.lock().expect("test lock");
+        let guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::app_auth::configure(config);
         Guard(guard)
     }
