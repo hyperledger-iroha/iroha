@@ -3931,7 +3931,7 @@ pub mod isi {
         }
 
         #[test]
-        fn execute_submit_transfer_persists_rejected_record_for_offline_rejection() {
+        fn execute_submit_transfer_rejects_removed_v1_settlement_without_mutation() {
             let issued_at_ms = 1_700_000_100;
             let (mut transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
             record
@@ -3962,24 +3962,24 @@ pub mod isi {
             let mut transaction = block.transaction();
 
             let authority = transfer.receiver.clone();
-            SubmitOfflineToOnlineTransfer {
+            let err = SubmitOfflineToOnlineTransfer {
                 transfer: transfer.clone(),
             }
             .execute(&authority, &mut transaction)
-            .expect("offline rejection should be persisted as rejected record");
-
-            let stored = transaction
-                .world
-                .offline_to_online_transfers
-                .get(&transfer.bundle_id)
-                .expect("rejected transfer row should be stored");
-            assert_eq!(stored.status, OfflineTransferStatus::Rejected);
-            assert_eq!(
-                stored.rejection_reason.as_deref(),
-                Some(OfflineTransferRejectionReason::DeltaMismatch.as_label())
+            .expect_err("removed Offline V1 settlement should reject before audit recording");
+            assert!(
+                err.to_string()
+                    .contains("offline V1 online settlement is removed"),
+                "unexpected error: {err}"
             );
-            assert_eq!(stored.history.len(), 1);
-            assert_eq!(stored.history[0].status, OfflineTransferStatus::Rejected);
+            assert!(
+                transaction
+                    .world
+                    .offline_to_online_transfers
+                    .get(&transfer.bundle_id)
+                    .is_none(),
+                "removed settlement path must not persist a rejected transfer row"
+            );
 
             let allowance = transaction
                 .world
@@ -4000,7 +4000,7 @@ pub mod isi {
         }
 
         #[test]
-        fn execute_submit_transfer_preserves_duplicate_bundle_error() {
+        fn execute_submit_transfer_rejects_removed_v1_settlement_before_duplicate_check() {
             let issued_at_ms = 1_700_000_100;
             let (transfer, mut record) = sample_transfer_with_receipt_timestamp(issued_at_ms);
             record
@@ -4050,12 +4050,12 @@ pub mod isi {
                 transfer: transfer.clone(),
             }
             .execute(&authority, &mut transaction)
-            .expect_err("duplicate bundle should remain a submit-time error");
-            let expected = format!(
-                "{OFFLINE_REJECTION_REASON_PREFIX}{}",
-                OfflineTransferRejectionReason::DuplicateBundle.as_label()
+            .expect_err("removed Offline V1 settlement should reject before duplicate checks");
+            assert!(
+                err.to_string()
+                    .contains("offline V1 online settlement is removed"),
+                "unexpected error: {err}"
             );
-            assert!(err.to_string().contains(&expected));
             assert_eq!(
                 transaction.world.offline_to_online_transfers.len(),
                 1,

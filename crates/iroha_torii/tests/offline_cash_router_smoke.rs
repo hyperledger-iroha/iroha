@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
+use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
 use iroha_data_model::{ChainId, peer::PeerId};
-use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -119,12 +119,7 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
         .await
         .unwrap();
     assert_eq!(readiness.status(), StatusCode::OK);
-    let body = readiness
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
+    let body = readiness.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert!(body.contains("\"offline_note_v2\":true"));
     assert!(body.contains("\"offline_one_use_keys\":true"));
