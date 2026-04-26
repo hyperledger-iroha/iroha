@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonParser;
 
-/** Immutable view over `/v1/offline/allowances` responses. */
+/** Immutable view over offline allowance payloads. */
 public final class OfflineAllowanceList {
 
   private final List<OfflineAllowanceItem> items;

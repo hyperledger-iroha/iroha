@@ -2,7 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import org.hyperledger.iroha.sdk.client.JsonParser
 
-/** Immutable view over `/v1/offline/allowances` responses. */
+/** Immutable view over offline allowance payloads. */
 class OfflineAllowanceList(
     items: List<OfflineAllowanceItem>,
     val total: Long,

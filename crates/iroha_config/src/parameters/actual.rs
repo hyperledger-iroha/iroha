@@ -222,31 +222,26 @@ impl SoracloudRuntime {
         if !self.production_mode {
             return;
         }
-        if self.inrou.proxy_only {
-            panic!(
-                "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
-            );
-        }
-        if self.egress.default_allow {
-            panic!(
-                "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
-            );
-        }
-        if self.egress.rate_per_minute.is_none() {
-            panic!(
-                "soracloud_runtime.production_mode requires soracloud_runtime.egress.rate_per_minute"
-            );
-        }
-        if self.egress.max_bytes_per_minute.is_none() {
-            panic!(
-                "soracloud_runtime.production_mode requires soracloud_runtime.egress.max_bytes_per_minute"
-            );
-        }
-        if self.hf.allow_inference_bridge_fallback {
-            panic!(
-                "soracloud_runtime.production_mode forbids soracloud_runtime.hf.allow_inference_bridge_fallback"
-            );
-        }
+        assert!(
+            !self.inrou.proxy_only,
+            "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
+        );
+        assert!(
+            !self.egress.default_allow,
+            "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
+        );
+        assert!(
+            self.egress.rate_per_minute.is_some(),
+            "soracloud_runtime.production_mode requires soracloud_runtime.egress.rate_per_minute"
+        );
+        assert!(
+            self.egress.max_bytes_per_minute.is_some(),
+            "soracloud_runtime.production_mode requires soracloud_runtime.egress.max_bytes_per_minute"
+        );
+        assert!(
+            !self.hf.allow_inference_bridge_fallback,
+            "soracloud_runtime.production_mode forbids soracloud_runtime.hf.allow_inference_bridge_fallback"
+        );
     }
 }
 
@@ -4360,16 +4355,11 @@ impl Default for AdaptiveObservability {
 }
 
 /// Runtime Sumeragi resilience profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SumeragiResilienceProfile {
     /// Balanced mode keeps normal operation close to baseline and widens only on distress.
+    #[default]
     Balanced,
-}
-
-impl Default for SumeragiResilienceProfile {
-    fn default() -> Self {
-        Self::Balanced
-    }
 }
 
 /// Volatile Sumeragi resilience tuning limits.

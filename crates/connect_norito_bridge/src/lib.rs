@@ -2545,6 +2545,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn encode_asset_transaction_with_nonce_and_metadata<F>(
     chain_id: ChainId,
     authority: AccountId,

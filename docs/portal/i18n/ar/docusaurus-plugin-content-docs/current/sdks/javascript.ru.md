@@ -178,67 +178,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## البدلات غير المتصلة بالإنترنت والبيانات الوصفية للحكمتكشف استجابات المخصصات دون اتصال عن بيانات تعريف دفتر الأستاذ المعززة مقدمًا —
-`expires_at_ms`، `policy_expires_at_ms`، `refresh_at_ms`، `verdict_id_hex`،
-يتم إرجاع `attestation_nonce_hex` و`remaining_amount` إلى جانب الملف الخام
-قم بالتسجيل حتى لا تضطر لوحات المعلومات إلى فك تشفير حمولات Norito المضمنة. الجديد
-مساعدو العد التنازلي (`deadline_kind`، `deadline_state`، `deadline_ms`،
-`deadline_ms_remaining`) قم بتسليط الضوء على الموعد النهائي التالي لانتهاء الصلاحية (التحديث → السياسة
-→ الشهادة) حتى تتمكن شارات واجهة المستخدم من تحذير المشغلين عند وجود بدل
-<24 ساعة متبقية. SDK
-يعكس مرشحات REST المكشوفة بواسطة `/v1/offline/reserve/topup`:
-`certificateExpiresBeforeMs/AfterMs`، `policyExpiresBeforeMs/AfterMs`،
-`verdictIdHex`، `attestationNonceHex`، `refreshBeforeMs/AfterMs`، و
-`requireVerdict` / `onlyMissingVerdict` القيم المنطقية. مجموعات غير صالحة (ل
-مثال `onlyMissingVerdict` + `verdictIdHex`) تم رفضه محليًا قبل Torii
-يسمى.
+## Offline V2 readiness
+
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## عمليات تعبئة الرصيد دون الاتصال بالإنترنت (الإصدار + التسجيل)
-
-استخدم مساعدي تعبئة الرصيد عندما تريد إصدار شهادة وعلى الفور
-تسجيله على دفتر الأستاذ. يتحقق SDK من الشهادة الصادرة والمسجلة
-تتطابق المعرفات قبل العودة، وتتضمن الاستجابة كلا الحمولتين. هناك
-لا توجد نقطة نهاية مخصصة لزيادة الرصيد؛ يقوم المساعد بتسلسل المشكلة + تسجيل المكالمات. إذا
-لديك بالفعل شهادة موقعة، اتصل بالرقم `registerOfflineAllowance` (أو
-`renewOfflineAllowance`) مباشرة.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii الاستعلامات والبث (WebSockets)تعرض مساعدات الاستعلام الحالة ومقاييس Prometheus ولقطات القياس عن بعد والحدث
 التدفقات باستخدام قواعد التصفية Norito. يتم ترقية البث تلقائيًا إلى
 WebSockets ويستأنف عندما تسمح ميزانية إعادة المحاولة.

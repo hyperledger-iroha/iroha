@@ -220,26 +220,15 @@ apps do not have to duplicate parsing logic when staging OA10.3a allowances.
 Track results in `status.md` (Android section) and archive supporting artefacts
 in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
 
-## 8. Offline reserve flow
+## 8. Offline V2 readiness
 
-The first retail reserve release removed the pre-release allowance/certificate/settlement inspection
-flow from the supported Android SDK documentation. Wallets should use the reserve routes directly:
+Torii exposes only `GET /v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
+offline cash, transfer-history, and revocation HTTP endpoints are no longer published.
 
-- `POST /v1/offline/cash/setup`
-- `POST /v1/offline/cash/load`
-- `POST /v1/offline/cash/refresh`
-- `POST /v1/offline/cash/sync`
-- `POST /v1/offline/cash/redeem`
-- `GET /v1/offline/revocations`
-- `GET /v1/offline/transfers` and `POST /v1/offline/transfers/query` only when transfer history is required
-
-Offline cash lineage envelopes are authoritative for balance, locked balance, authorization policy, and
-revocation freshness. The old allowance/summaries/state/spend-receipts/settlements APIs are not part
-of the shipped offline cash wallet path.
-
-When journaling is required, persist the lineage anchor, locked/spendable split, pending receipts,
-pending offline cash mutations, seen transfer ids, sender-state replay guards, revocation bundle, and
-App Attest key id together so incomplete state freezes the wallet instead of recreating value.
+Offline V2 note payloads are authoritative for online settlement. Wallets should persist their
+local note lineage, pending instructions, and seen nullifiers together so incomplete local state
+freezes spend/redeem until the operator can reconcile it.
 
 ## QR stream handoff
 

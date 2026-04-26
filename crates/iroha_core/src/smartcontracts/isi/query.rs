@@ -58,12 +58,8 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::block::SignedBlock>,
         dm_query::ErasedIterQuery<dm::block::BlockHeader>,
         dm_query::ErasedIterQuery<dm::proof::ProofRecord>,
-        dm_query::ErasedIterQuery<dm::offline::OfflineAllowanceRecord>,
-        dm_query::ErasedIterQuery<dm::offline::OfflineTransferRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
         dm_query::ErasedIterQuery<dm::escrow::AnonymousAssetEscrowRecord>,
-        dm_query::ErasedIterQuery<dm::offline::OfflineCounterSummary>,
-        dm_query::ErasedIterQuery<dm::offline::OfflineVerdictRevocation>,
     ]);
 }
 
@@ -658,17 +654,9 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
             dm::block::BlockHeader => dm::query::block::prelude::FindBlockHeaders,
             dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecords,
             dm::query::CommittedTransaction => dm::query::transaction::prelude::FindTransactions,
-            dm::offline::OfflineAllowanceRecord =>
-                dm::query::offline::prelude::FindOfflineAllowances,
-            dm::offline::OfflineCounterSummary =>
-                dm::query::offline::prelude::FindOfflineCounterSummaries,
-            dm::offline::OfflineTransferRecord =>
-                dm::query::offline::prelude::FindOfflineToOnlineTransfers,
             dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
             dm::escrow::AnonymousAssetEscrowRecord =>
                 dm::query::escrow::prelude::FindAnonymousAssetEscrows,
-            dm::offline::OfflineVerdictRevocation =>
-                dm::query::offline::prelude::FindOfflineVerdictRevocations,
         }
 
         Err(Error::Conversion(
@@ -2003,30 +1991,6 @@ impl ValidQueryRequest {
                                 iroha_data_model::proof::ProofRecord,
                                 iroha_data_model::query::proof::prelude::FindProofRecords
                             ),
-                            QueryItemKind::OfflineAllowanceRecord => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::offline::OfflineAllowanceRecord,
-                                        iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::offline::OfflineAllowanceRecord,
-                                    iroha_data_model::query::offline::prelude::FindOfflineAllowances
-                                )
-                            }
-                            QueryItemKind::OfflineToOnlineTransfer => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::offline::OfflineTransferRecord,
-                                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::offline::OfflineTransferRecord,
-                                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
-                                )
-                            }
                             QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -2036,15 +2000,7 @@ impl ValidQueryRequest {
                                     iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                                     iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                                 )
-                            }
-                            QueryItemKind::OfflineCounterSummary => run_payload_or_default!(
-                                iroha_data_model::offline::OfflineCounterSummary,
-                                iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
-                            ),
-                            QueryItemKind::OfflineVerdictRevocation => run_payload_or_default!(
-                                iroha_data_model::offline::OfflineVerdictRevocation,
-                                iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations
-                            ),
+                            },
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }
@@ -2156,14 +2112,6 @@ impl ValidQueryRequest {
                             iroha_data_model::proof::ProofRecord,
                             iroha_data_model::query::proof::prelude::FindProofRecords
                         ),
-                        QueryItemKind::OfflineAllowanceRecord => run_unit!(
-                            iroha_data_model::offline::OfflineAllowanceRecord,
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances
-                        ),
-                        QueryItemKind::OfflineToOnlineTransfer => run_unit!(
-                            iroha_data_model::offline::OfflineTransferRecord,
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
-                        ),
                         QueryItemKind::AssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -2171,14 +2119,6 @@ impl ValidQueryRequest {
                         QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
-                        ),
-                        QueryItemKind::OfflineCounterSummary => run_unit!(
-                            iroha_data_model::offline::OfflineCounterSummary,
-                            iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
-                        ),
-                        QueryItemKind::OfflineVerdictRevocation => run_unit!(
-                            iroha_data_model::offline::OfflineVerdictRevocation,
-                            iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations
                         ),
                         QueryItemKind::Permission => {
                             return Err(Error::Conversion(
@@ -2278,14 +2218,6 @@ impl ValidQueryRequest {
                             iroha_data_model::proof::ProofRecord,
                             iroha_data_model::query::proof::prelude::FindProofRecords
                         ),
-                        QueryItemKind::OfflineAllowanceRecord => run_unit!(
-                            iroha_data_model::offline::OfflineAllowanceRecord,
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances
-                        ),
-                        QueryItemKind::OfflineToOnlineTransfer => run_unit!(
-                            iroha_data_model::offline::OfflineTransferRecord,
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
-                        ),
                         QueryItemKind::AssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -2293,14 +2225,6 @@ impl ValidQueryRequest {
                         QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
-                        ),
-                        QueryItemKind::OfflineCounterSummary => run_unit!(
-                            iroha_data_model::offline::OfflineCounterSummary,
-                            iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
-                        ),
-                        QueryItemKind::OfflineVerdictRevocation => run_unit!(
-                            iroha_data_model::offline::OfflineVerdictRevocation,
-                            iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations
                         ),
                         QueryItemKind::Permission => {
                             return Err(Error::Conversion(
@@ -2406,14 +2330,6 @@ impl ValidQueryRequest {
                             iroha_data_model::proof::ProofRecord,
                             iroha_data_model::query::proof::prelude::FindProofRecords
                         ),
-                        QueryItemKind::OfflineAllowanceRecord => run_unit!(
-                            iroha_data_model::offline::OfflineAllowanceRecord,
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances
-                        ),
-                        QueryItemKind::OfflineToOnlineTransfer => run_unit!(
-                            iroha_data_model::offline::OfflineTransferRecord,
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
-                        ),
                         QueryItemKind::AssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -2421,14 +2337,6 @@ impl ValidQueryRequest {
                         QueryItemKind::AnonymousAssetEscrowRecord => run_unit!(
                             iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
-                        ),
-                        QueryItemKind::OfflineCounterSummary => run_unit!(
-                            iroha_data_model::offline::OfflineCounterSummary,
-                            iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
-                        ),
-                        QueryItemKind::OfflineVerdictRevocation => run_unit!(
-                            iroha_data_model::offline::OfflineVerdictRevocation,
-                            iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations
                         ),
                         QueryItemKind::Permission => {
                             return Err(Error::Conversion(
@@ -2900,304 +2808,6 @@ impl ValidQueryRequest {
                 )? {
                     return Ok(resp);
                 }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineAllowanceRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineAllowanceRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineAllowances,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances,
-                        ))
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    |e| {
-                        try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById,
-                    >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers,
-                        ))
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByController,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByController,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByReceiver,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByReceiver,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByStatus,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByStatus,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByPolicy,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByPolicy,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineAllowanceRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId,
-                    >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineAllowanceRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineAllowances,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::offline::prelude::FindOfflineAllowances,
-                        ))
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById,
-                    >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers,
-                        ))
-                    },
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByController,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByController,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByReceiver,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByReceiver,
-                    >,
-                )? {
-                    return Ok(resp);
-                }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::offline::OfflineTransferRecord,
-                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByStatus,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfersByStatus,
-                    >(e)
-                    },
-                )? {
-                    return Ok(resp);
-                }
 
                 Err(Error::Conversion(
                     "unsupported iterable query type".to_string(),
@@ -3481,30 +3091,6 @@ impl ValidQueryRequest {
                                 iroha_data_model::proof::ProofRecord,
                                 iroha_data_model::query::proof::prelude::FindProofRecords
                             ),
-                            QueryItemKind::OfflineAllowanceRecord => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::offline::OfflineAllowanceRecord,
-                                        iroha_data_model::query::offline::prelude::FindOfflineAllowanceByCertificateId
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::offline::OfflineAllowanceRecord,
-                                    iroha_data_model::query::offline::prelude::FindOfflineAllowances
-                                )
-                            }
-                            QueryItemKind::OfflineToOnlineTransfer => {
-                                if !iter_query.query_payload.is_empty() {
-                                    run_payload_or_default!(
-                                        require_payload iroha_data_model::offline::OfflineTransferRecord,
-                                        iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransferById
-                                    )
-                                }
-                                run_payload_or_default!(
-                                    iroha_data_model::offline::OfflineTransferRecord,
-                                    iroha_data_model::query::offline::prelude::FindOfflineToOnlineTransfers
-                                )
-                            }
                             QueryItemKind::AssetEscrowRecord => run_payload_or_default!(
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
@@ -3514,15 +3100,7 @@ impl ValidQueryRequest {
                                     iroha_data_model::escrow::AnonymousAssetEscrowRecord,
                                     iroha_data_model::query::escrow::prelude::FindAnonymousAssetEscrows
                                 )
-                            }
-                            QueryItemKind::OfflineCounterSummary => run_payload_or_default!(
-                                iroha_data_model::offline::OfflineCounterSummary,
-                                iroha_data_model::query::offline::prelude::FindOfflineCounterSummaries
-                            ),
-                            QueryItemKind::OfflineVerdictRevocation => run_payload_or_default!(
-                                iroha_data_model::offline::OfflineVerdictRevocation,
-                                iroha_data_model::query::offline::prelude::FindOfflineVerdictRevocations
-                            ),
+                            },
                             QueryItemKind::Permission => {
                                 run_payload_or_default!(require_payload iroha_data_model::permission::Permission, iroha_data_model::query::permission::prelude::FindPermissionsByAccountId)
                             }

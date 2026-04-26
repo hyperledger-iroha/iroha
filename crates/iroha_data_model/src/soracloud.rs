@@ -150,6 +150,7 @@ const SORA_STORAGE_BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SORA_NETWORK_BYTES_PER_MIB: u64 = 1024 * 1024;
 const SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN: &str = "taira-open";
 
+#[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SoraHttpServiceQuotaClassPolicy {
     max_replicas: u16,
@@ -423,14 +424,14 @@ impl SoraArtifactDistributionPolicyV1 {
     }
 }
 
-/// Immutable SoraFS artifact reference used to hydrate Inrou guest images.
+/// Immutable `SoraFS` artifact reference used to hydrate Inrou guest images.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct SoraPublishedInrouGuestImageArtifactV1 {
-    /// SoraFS manifest digest hex for the uploaded guest-image artifact bundle.
+    /// `SoraFS` manifest digest hex for the uploaded guest-image artifact bundle.
     pub manifest_digest_hex: String,
     /// CID rendered for the uploaded guest-image artifact bundle.
     pub content_cid: String,
@@ -483,7 +484,7 @@ pub struct SoraInrouGuestImageV1 {
     /// Requested distribution policy for the published guest-image artifact.
     #[norito(default)]
     pub distribution: SoraArtifactDistributionPolicyV1,
-    /// Immutable SoraFS artifact that carries the guest image members after release.
+    /// Immutable `SoraFS` artifact that carries the guest image members after release.
     #[norito(default)]
     pub published_artifact: Option<SoraPublishedInrouGuestImageArtifactV1>,
 }
@@ -513,9 +514,8 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
             field: &str,
         ) -> Result<Option<T>, json::Error> {
             match object.remove(field) {
-                Some(Value::Null) => Ok(None),
+                Some(Value::Null) | None => Ok(None),
                 Some(value) => json::from_value(value).map(Some),
-                None => Ok(None),
             }
         }
 
@@ -593,7 +593,7 @@ pub struct SoraInrouManifestV1 {
     pub schema_version: u16,
     /// Guest userspace contract expected by the runtime.
     pub guest_os: SoraInrouGuestOsV1,
-    /// Admitted guest image assets keyed by guest ISA. Both x86_64 and aarch64 are required.
+    /// Admitted guest image assets keyed by guest ISA. Both `x86_64` and `aarch64` are required.
     #[cfg_attr(
         feature = "json",
         norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
@@ -673,6 +673,7 @@ impl JsonDeserialize for SoraInrouManifestV1 {
         Self::json_from_value(&value)
     }
 
+    #[allow(clippy::too_many_lines, clippy::single_match_else)]
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
         fn take_required<T: JsonDeserialize>(
             object: &mut BTreeMap<String, Value>,
@@ -691,9 +692,8 @@ impl JsonDeserialize for SoraInrouManifestV1 {
             field: &str,
         ) -> Result<Option<T>, json::Error> {
             match object.remove(field) {
-                Some(Value::Null) => Ok(None),
+                Some(Value::Null) | None => Ok(None),
                 Some(value) => json::from_value(value).map(Some),
-                None => Ok(None),
             }
         }
 
@@ -1181,9 +1181,8 @@ impl JsonDeserialize for SoraContainerManifestV1 {
             field: &str,
         ) -> Result<Option<T>, json::Error> {
             match object.remove(field) {
-                Some(Value::Null) => Ok(None),
+                Some(Value::Null) | None => Ok(None),
                 Some(value) => json::from_value(value).map(Some),
-                None => Ok(None),
             }
         }
 
@@ -2645,6 +2644,7 @@ impl AgentApartmentManifestV1 {
     /// # Errors
     /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
     /// policy fields violate deterministic constraints.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != AGENT_APARTMENT_MANIFEST_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
@@ -10963,10 +10963,10 @@ fn canonical_agent_workflow_input_json_for_payload(
     let trimmed = workflow_input_json.trim();
     #[cfg(feature = "json")]
     {
-        if let Ok(parsed) = norito::json::from_str::<norito::json::Value>(trimmed) {
-            if let Ok(canonical) = norito::json::to_json(&parsed) {
-                return Some(canonical);
-            }
+        if let Ok(parsed) = norito::json::from_str::<norito::json::Value>(trimmed)
+            && let Ok(canonical) = norito::json::to_json(&parsed)
+        {
+            return Some(canonical);
         }
     }
     Some(trimmed.to_owned())

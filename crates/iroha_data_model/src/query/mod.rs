@@ -797,18 +797,10 @@ mod model {
         BlockHeaderHash(Vec<HashOf<BlockHeader>>),
         /// Batch of proof records.
         ProofRecord(Vec<crate::proof::ProofRecord>),
-        /// Batch of offline allowance records.
-        OfflineAllowanceRecord(Vec<crate::offline::OfflineAllowanceRecord>),
-        /// Batch of offline-to-online transfer records.
-        OfflineToOnlineTransfer(Vec<crate::offline::OfflineTransferRecord>),
         /// Batch of native asset escrow records.
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
         /// Batch of native anonymous asset escrow records.
         AnonymousAssetEscrowRecord(Vec<crate::escrow::AnonymousAssetEscrowRecord>),
-        /// Batch of offline counter summaries.
-        OfflineCounterSummary(Vec<crate::offline::OfflineCounterSummary>),
-        /// Batch of offline verdict revocations.
-        OfflineVerdictRevocation(Vec<crate::offline::OfflineVerdictRevocation>),
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Constructor, IntoSchema)]
@@ -1014,14 +1006,14 @@ mod model {
         fn clone(&self) -> Self {
             #[cfg(feature = "fast_dsl")]
             {
-                return Self {
+                Self {
                     query: (),
                     query_payload: self.query_payload.clone(),
                     item: self.item,
                     predicate_bytes: self.predicate_bytes.clone(),
                     selector_bytes: self.selector_bytes.clone(),
                     params: self.params.clone(),
-                };
+                }
             }
 
             #[cfg(not(feature = "fast_dsl"))]
@@ -1092,14 +1084,6 @@ mod model {
                 try_build!(crate::block::BlockHeader, BlockHeader);
                 try_build!(crate::proof::ProofRecord, ProofRecord);
                 try_build!(crate::permission::Permission, Permission);
-                try_build!(
-                    crate::offline::OfflineAllowanceRecord,
-                    OfflineAllowanceRecord
-                );
-                try_build!(
-                    crate::offline::OfflineTransferRecord,
-                    OfflineToOnlineTransfer
-                );
                 try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
                 try_build!(
                     crate::escrow::AnonymousAssetEscrowRecord,
@@ -1196,18 +1180,10 @@ mod model {
         ProofRecord,
         /// Permission items.
         Permission,
-        /// Offline allowance records.
-        OfflineAllowanceRecord,
-        /// Offline-to-online transfer records.
-        OfflineToOnlineTransfer,
         /// Native asset escrow records.
         AssetEscrowRecord,
         /// Native anonymous asset escrow records.
         AnonymousAssetEscrowRecord,
-        /// Offline counter summary records.
-        OfflineCounterSummary,
-        /// Offline verdict revocation records.
-        OfflineVerdictRevocation,
     }
 
     /// Trait mapping item types to a `QueryItemKind` marker.
@@ -1334,18 +1310,6 @@ mod model {
         }
     }
     #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineAllowanceRecord {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineAllowanceRecord
-        }
-    }
-    #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineTransferRecord {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineToOnlineTransfer
-        }
-    }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::escrow::AssetEscrowRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::AssetEscrowRecord
@@ -1357,19 +1321,6 @@ mod model {
             QueryItemKind::AnonymousAssetEscrowRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineCounterSummary {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineCounterSummary
-        }
-    }
-    #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineVerdictRevocation {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineVerdictRevocation
-        }
-    }
-
     // Manual schema for QueryWithParams: represent only `params` field.
     impl iroha_schema::TypeId for QueryWithParams {
         fn id() -> String {
@@ -1937,14 +1888,8 @@ impl QueryOutputBatchBox {
             (Self::BlockHeader(v1), Self::BlockHeader(v2)) => v1.extend(v2),
             (Self::BlockHeaderHash(v1), Self::BlockHeaderHash(v2)) => v1.extend(v2),
             (Self::RepoAgreement(v1), Self::RepoAgreement(v2)) => v1.extend(v2),
-            (Self::OfflineAllowanceRecord(v1), Self::OfflineAllowanceRecord(v2)) => v1.extend(v2),
-            (Self::OfflineToOnlineTransfer(v1), Self::OfflineToOnlineTransfer(v2)) => v1.extend(v2),
             (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
             (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
-                v1.extend(v2)
-            }
-            (Self::OfflineCounterSummary(v1), Self::OfflineCounterSummary(v2)) => v1.extend(v2),
-            (Self::OfflineVerdictRevocation(v1), Self::OfflineVerdictRevocation(v2)) => {
                 v1.extend(v2)
             }
             _ => panic!("Cannot extend different types of IterableQueryOutputBatchBox"),
@@ -1991,12 +1936,8 @@ impl QueryOutputBatchBox {
             Self::BlockHeaderHash(v) => v.len(),
             Self::ProofRecord(v) => v.len(),
             Self::RepoAgreement(v) => v.len(),
-            Self::OfflineAllowanceRecord(v) => v.len(),
-            Self::OfflineToOnlineTransfer(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
             Self::AnonymousAssetEscrowRecord(v) => v.len(),
-            Self::OfflineCounterSummary(v) => v.len(),
-            Self::OfflineVerdictRevocation(v) => v.len(),
         }
     }
 }
@@ -2681,16 +2622,6 @@ impl_iter_queries! {
     FindPeers => crate::peer::PeerId,
     FindActiveTriggerIds => crate::trigger::TriggerId,
     FindTriggers => crate::trigger::Trigger,
-    offline::FindOfflineAllowances => crate::offline::OfflineAllowanceRecord,
-    offline::FindOfflineAllowanceByCertificateId => crate::offline::OfflineAllowanceRecord,
-    offline::FindOfflineCounterSummaries => crate::offline::OfflineCounterSummary,
-    offline::FindOfflineToOnlineTransfers => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByController => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByReceiver => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByStatus => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByPolicy => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransferById => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineVerdictRevocations => crate::offline::OfflineVerdictRevocation,
     escrow::FindAssetEscrows => crate::escrow::AssetEscrowRecord,
     escrow::FindAssetEscrowsBySeller => crate::escrow::AssetEscrowRecord,
     escrow::FindAssetEscrowsByBuyer => crate::escrow::AssetEscrowRecord,
@@ -3271,105 +3202,6 @@ pub mod repo {
     pub mod prelude {
         //! Prelude re-export for repo queries.
         pub use super::FindRepoAgreements;
-    }
-}
-
-pub mod offline {
-    //! Offline allowance and settlement query definitions.
-    use derive_more::Display;
-    use iroha_crypto::Hash;
-
-    use crate::{account::AccountId, offline::OfflineTransferStatus};
-
-    queries! {
-        /// Find all registered offline allowances.
-        #[derive(Copy, Display)]
-        #[display("Find all offline allowances")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineAllowances;
-
-        /// Find a specific offline allowance by its certificate id.
-        #[derive(Display)]
-        #[display("Find offline allowance `{certificate_id}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineAllowanceByCertificateId {
-            /// Deterministic certificate identifier.
-            pub certificate_id: Hash,
-        }
-
-        /// Find all pending offline-to-online transfer bundles.
-        #[derive(Copy, Display)]
-        #[display("Find all offline-to-online transfers")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineToOnlineTransfers;
-
-        /// Find a specific offline-to-online transfer bundle by id.
-        #[derive(Display)]
-        #[display("Find offline-to-online transfer `{bundle_id}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransferById {
-            /// Deterministic bundle identifier.
-            pub bundle_id: Hash,
-        }
-
-        /// Find offline-to-online transfers submitted by a specific controller account.
-        #[derive(Display)]
-        #[display("Find offline-to-online transfers by controller `{controller}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByController {
-            /// Controller account identifier.
-            pub controller: AccountId,
-        }
-
-        /// Find offline-to-online transfers targeting a specific receiver account.
-        #[derive(Display)]
-        #[display("Find offline-to-online transfers by receiver `{receiver}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByReceiver {
-            /// Receiver account identifier.
-            pub receiver: AccountId,
-        }
-
-        /// Find offline-to-online transfers by lifecycle status.
-        #[derive(Display)]
-        #[display("Find offline-to-online transfers by status `{status:?}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByStatus {
-            /// Lifecycle status filter.
-            pub status: OfflineTransferStatus,
-        }
-
-        /// Find offline-to-online transfers by Android attestation policy.
-        #[derive(Display)]
-        #[display("Find offline-to-online transfers by policy `{policy:?}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByPolicy {
-            /// Attestation policy filter.
-            pub policy: crate::offline::AndroidIntegrityPolicy,
-        }
-
-        /// Retrieve counter summaries derived from offline allowance records.
-        #[derive(Copy, Display)]
-        #[display("Find offline counter summaries")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineCounterSummaries;
-
-        /// Retrieve recorded offline verdict revocations.
-        #[derive(Copy, Display)]
-        #[display("Find offline verdict revocations")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineVerdictRevocations;
-    }
-
-    pub mod prelude {
-        //! Prelude re-exports for offline queries.
-        pub use super::{
-            FindOfflineAllowanceByCertificateId, FindOfflineAllowances,
-            FindOfflineCounterSummaries, FindOfflineToOnlineTransferById,
-            FindOfflineToOnlineTransfers, FindOfflineToOnlineTransfersByController,
-            FindOfflineToOnlineTransfersByPolicy, FindOfflineToOnlineTransfersByReceiver,
-            FindOfflineToOnlineTransfersByStatus, FindOfflineVerdictRevocations,
-        };
     }
 }
 

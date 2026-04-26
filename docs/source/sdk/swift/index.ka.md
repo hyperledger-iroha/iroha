@@ -216,35 +216,10 @@ decide whether to discard or resubmit the affected envelope.
 
 ### Offline circulation modes
 
-`OfflineWallet` now exposes `OfflineWalletCirculationMode` so apps can distinguish between
-ledger-reconcilable allowances and pure offline/bearer campaigns:
-
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    circulationMode: .ledgerReconcilable) { mode, notice in
-        bannerView.show(title: notice.headline, message: notice.details)
-    }
-
-wallet.setCirculationMode(.offlineOnly)
-
-guard wallet.requiresLedgerReconciliation else {
-    logger.notice("Skipping Torii sync: offline bearer mode active")
-    return
-}
-
-try await wallet.fetchTransfers(params: ToriiOfflineListParams(limit: 25))
-```
-
-`ToriiOfflineListParams` mirrors the convenience filters exposed by Torii —
-pass `assetId`, `controllerId`, `receiverId`, `depositAccountId`,
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`refreshBeforeMs/AfterMs`, `attestationNonceHex`, `verdictIdHex`,
-`requireVerdict`, or `onlyMissingVerdict` directly to the struct instead of
-composing JSON predicates. The helper lowercases verdict IDs and rejects invalid
-combinations before the request is executed, keeping the Swift surface aligned
-with the OA11 roadmap guarantees.
+New offline value flows use Offline V2 note issuance, redemption, and audit instructions submitted
+through normal transactions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint,
+so Swift apps should not call legacy transfer-history or revocation routes when reconciling local
+offline state.
 
 `OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
 Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair that Apple App Attest and
@@ -352,40 +327,9 @@ let metadata: [String: ToriiJSONValue] = [
 ]
 ```
 
-Torii builds FASTPQ witness payloads from the transfer payload
-(`POST /v1/offline/transfers/proof`). Feed the JSON into
-`OfflineReceiptBuilder.generateAggregateProofs` to get proof bytes (requires the native bridge):
-
-```swift
-let sumRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "sum")
-)
-let counterRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "counter", counterCheckpoint: counterCheckpoint)
-)
-let replayRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer,
-          kind: "replay",
-          replayLogHeadHex: replayHeadHex,
-          replayLogTailHex: replayTailHex)
-)
-
-let proofs = try OfflineReceiptBuilder.generateAggregateProofs(
-    sumRequest: sumRequest,
-    counterRequest: counterRequest,
-    replayRequest: replayRequest
-)
-let envelope = try OfflineReceiptBuilder.buildAggregateProofEnvelope(
-    receipts: receipts,
-    proofSum: proofs.sum,
-    proofCounter: proofs.counter,
-    proofReplay: proofs.replay,
-    metadata: metadata
-)
-```
-
-Note: the native bridge emits deterministic sum/counter/replay proofs (Norito-encoded
-`OfflineFastpq*Proof`), and the core verifier enforces them when `proof_mode = "required"`.
+Offline V2 note proofs are submitted as transaction instruction payloads. Torii no longer
+exposes a legacy transfer-proof HTTP route; build local witness inputs before constructing
+the Offline V2 issue, redeem, or audit instruction.
 
 ### Inspector provisioning proofs
 
@@ -409,109 +353,11 @@ schema documented in `offline_allowance.md`.【IrohaSwift/Sources/IrohaSwift/And
 Use the `.notice` payload to surface disclosures/localised copy and fall back to the default handler
 when no custom UI is supplied. Additional risk guidance lives in `docs/source/offline_bearer_mode.md`.
 
-### Offline cash setup, load, and refresh
+### Offline V2 APIs
 
-Use the `ToriiOfflineCash*Request` and `ToriiOfflineCashEnvelope` models when calling the
-authenticated offline cash endpoints directly. The returned envelope is authoritative for the current
-`account_id` / device binding tuple:
-
-```swift
-let envelope = try await authenticatedTransport.post(
-    "/v1/offline/cash/setup",
-    body: ToriiOfflineCashSetupRequest(
-        accountId: controllerId,
-        assetDefinitionId: assetDefinitionId,
-        deviceBinding: deviceBinding,
-        deviceProof: deviceProof
-    ),
-    decode: ToriiOfflineCashEnvelope.self
-)
-
-print("lineage id", envelope.lineageState.lineageId)
-print("balance", envelope.lineageState.balance)
-```
-
-To move value offline, call `/v1/offline/cash/load`. The issuer debits the online balance, updates the
-offline cash lineage, and returns the new authoritative envelope. Authorization refreshes use
-`/v1/offline/cash/refresh` for the same lineage and never mint value:
-
-```swift
-let loaded = try await authenticatedTransport.post(
-    "/v1/offline/cash/load",
-    body: try ToriiOfflineCashLoadRequest(
-        operationId: UUID().uuidString,
-        lineageId: envelope.lineageState.lineageId,
-        accountId: controllerId,
-        assetDefinitionId: assetDefinitionId,
-        amount: "100.00",
-        deviceBinding: deviceBinding,
-        deviceProof: deviceProof
-    ),
-    decode: ToriiOfflineCashEnvelope.self
-)
-
-let refreshed = try await authenticatedTransport.post(
-    "/v1/offline/cash/refresh",
-    body: ToriiOfflineCashRefreshRequest(
-        operationId: UUID().uuidString,
-        lineageId: loaded.lineageState.lineageId,
-        accountId: controllerId,
-        deviceBinding: deviceBinding,
-        deviceProof: deviceProof
-    ),
-    decode: ToriiOfflineCashEnvelope.self
-)
-```
-
-Use `/v1/offline/cash/sync`, `/v1/offline/cash/redeem`, and `getOfflineRevocationBundle()` for the rest of
-the offline cash lifecycle. The pre-release allowance/certificate/settlement helpers were removed from
-the public SDK surface.
-
-### Offline audit logging
-
-When `auditLoggingEnabled` is `true`, `OfflineWallet` writes `{sender, receiver, asset, amount, timestamp}` entries to
-`Documents/offline_audit_log.json` (or a custom `storageURL`). Use `fetchTransfersWithAudit` to reconcile bundles and
-`recordTransferAudit(_:)` for bespoke flows:
-
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    auditStorageURL: customDirectory?.appendingPathComponent("audit.json"))
-
-// Automatically capture every bundle that Torii returns.
-let transfers = try await wallet.fetchTransfersWithAudit(params: ToriiOfflineListParams(limit: 100))
-
-// Manually log a bundle (e.g. after custom filtering).
-if let first = transfers.items.first {
-    wallet.recordTransferAudit(first)
-}
-
-// Export/clear the journal when regulators request it.
-let json = try wallet.exportAuditJSON()
-try wallet.clearAuditLog()
-```
-
-`recordTransferAudit(_:)` inspects the transfer payload, falls back to receiver/deposit metadata when receipts are missing,
-and keeps the log deterministic so the OA5.1 audit toggle can be flipped per jurisdiction without bespoke plumbing.
-
-### Revocation bundle journal
-
-Offline cash now uses the signed revocation bundle returned by `/v1/offline/revocations` plus the
-current `OfflineSpendAuthorization` carried in each lineage envelope. Persist the latest envelope and
-revocation bundle together so wallets can fail closed for send when authorization or revocation
-freshness expires.
-
-```swift
-let bundle = try await torii.getOfflineRevocationBundle()
-print("revocation bundle expires", bundle.expiresAtMs)
-```
-
-### Counter journal
-
-Offline cash mutations and offline transfer receipts continue to use monotonic App Attest / marker
-counters. Persist the counters alongside the lineage envelope and transfer journal; there is no
-separate counter-summary endpoint in the offline cash cutover.
+Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; legacy
+offline cash, transfer-history, and revocation HTTP endpoints are no longer published.
 
 ## SoraFS orchestrator client
 

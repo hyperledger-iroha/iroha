@@ -9369,9 +9369,7 @@ fn record_isi_access(
         | ir::Instr::EscrowRelease { .. }
         | ir::Instr::EscrowCancel { .. }
         | ir::Instr::EscrowOpenDispute { .. }
-        | ir::Instr::EscrowResolveDispute { .. } => {
-            return apply_fallback(access_set, hint_diagnostics);
-        }
+        | ir::Instr::EscrowResolveDispute { .. } => apply_fallback(access_set, hint_diagnostics),
         ir::Instr::TransferAsset {
             from, to, asset, ..
         } => {

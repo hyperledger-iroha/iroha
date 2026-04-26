@@ -179,69 +179,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## ოფლაინ შეღავათები და განაჩენის მეტამონაცემები
+## Offline V2 readiness
 
-ოფლაინ შემწეობის პასუხები ავლენს გამდიდრებულ წიგნში მეტამონაცემებს -
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` და `remaining_amount` ბრუნდება ნედლეულთან ერთად
-ჩაწერეთ ისე, რომ დაფებს არ დასჭირდეთ ჩაშენებული Norito დატვირთვის გაშიფვრა. ახალი
-ათვლის დამხმარეები (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) მონიშნეთ შემდეგი ვადა (განახლება → პოლიტიკა
-→ სერთიფიკატი) ასე რომ, UI სამკერდე ნიშნებს შეუძლიათ გააფრთხილონ ოპერატორები, როცა შემწეობა აქვს
-<24 საათი დარჩა. SDK
-ასახავს `/v1/offline/reserve/topup`-ის მიერ გამოვლენილ REST ფილტრებს:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` და
-`requireVerdict` / `onlyMissingVerdict` ლოგინები. არასწორი კომბინაციები (ამისთვის
-მაგალითად `onlyMissingVerdict` + `verdictIdHex`) ადგილობრივად უარყოფილია Torii-მდე
-ეწოდება.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## ოფლაინ შევსება (გამოცემა + რეგისტრაცია)
-
-გამოიყენეთ შევსების დამხმარეები, როდესაც გსურთ სერთიფიკატის გაცემა და დაუყოვნებლივ
-დაარეგისტრირეთ იგი წიგნში. SDK ამოწმებს გაცემულ და რეგისტრირებულ სერტიფიკატს
-ID-ები ემთხვევა დაბრუნებამდე და პასუხი მოიცავს ორივე დატვირთვას. არსებობს
-არ არის გამოყოფილი შევსების საბოლოო წერტილი; დამხმარე აკავშირებს საკითხს + დაარეგისტრირებს ზარებს. თუ
-თქვენ უკვე გაქვთ ხელმოწერილი სერთიფიკატი, დარეკეთ `registerOfflineAllowance` (ან
-`renewOfflineAllowance`) პირდაპირ.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii მოთხოვნები და ნაკადი (WebSockets)
 
 შეკითხვის დამხმარეები აჩვენებენ სტატუსს, Prometheus მეტრიკას, ტელემეტრიის კადრებს და მოვლენას

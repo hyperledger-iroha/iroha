@@ -5,7 +5,16 @@
 //! intentionally narrow: Iroha only needs deterministic byte payload rendering,
 //! so Kanji/alphanumeric segmentation and Micro QR are left out.
 
-use std::{error::Error, fmt};
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+
+use std::{
+    error::Error,
+    fmt::{self, Write as _},
+};
 
 const MIN_VERSION: u8 = 1;
 const MAX_VERSION: u8 = 40;
@@ -176,11 +185,18 @@ pub struct QrCode {
 
 impl QrCode {
     /// Encode bytes using byte mode and medium error correction.
+    ///
+    /// # Errors
+    /// Returns [`QrError::DataTooLong`] when `data` cannot fit in a supported QR Code version.
     pub fn new(data: &[u8]) -> Result<Self, QrError> {
         Self::with_error_correction_level(data, EcLevel::M)
     }
 
     /// Encode bytes using byte mode and the requested error-correction level.
+    ///
+    /// # Errors
+    /// Returns [`QrError`] when `data` cannot fit in a supported QR Code version or an internal
+    /// QR table invariant is violated.
     pub fn with_error_correction_level(data: &[u8], level: EcLevel) -> Result<Self, QrError> {
         let version = choose_version(data.len(), level)?;
         let data_codewords = encode_data_codewords(data, version, level)?;
@@ -220,6 +236,7 @@ impl QrCode {
 
     /// Return the quiet-zone width, in modules.
     #[must_use]
+    #[allow(clippy::unused_self)]
     pub const fn quiet_zone(&self) -> u32 {
         QUIET_ZONE_MODULES
     }
@@ -256,7 +273,8 @@ impl QrCode {
                 if self.is_dark(x, y) {
                     let x = x as u32 + quiet;
                     let y = y as u32 + quiet;
-                    path.push_str(&format!("M{x},{y}h1v1h-1z"));
+                    write!(path, "M{x},{y}h1v1h-1z")
+                        .expect("writing SVG path into String cannot fail");
                 }
             }
         }

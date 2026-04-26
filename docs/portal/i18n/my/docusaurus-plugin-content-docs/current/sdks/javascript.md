@@ -177,69 +177,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## အော့ဖ်လိုင်းထောက်ပံ့ကြေးများနှင့် စီရင်ချက်မက်တာဒေတာ
+## Offline V2 readiness
 
-အော့ဖ်လိုင်း ထောက်ပံ့ကြေး တုံ့ပြန်မှုများသည် ကြွယ်ဝသော လယ်ဂျာ မက်တာဒေတာကို ရှေ့တွင် ထုတ်ဖော်သည် —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`၊
-`attestation_nonce_hex` နှင့် `remaining_amount` ကို ကုန်ကြမ်းနှင့်အတူ ပြန်ပေးသည်
-မှတ်တမ်းတင်ထားသောကြောင့် ဒက်ရှ်ဘုတ်များသည် မြှုပ်သွင်းထားသော Norito payloads ကို ကုဒ်ကုဒ်လုပ်ရန် မလိုအပ်ပါ။ အသစ်
-နှစ်သစ်အတွက် ကူညီသူများ (`deadline_kind`၊ `deadline_state`၊ `deadline_ms`၊
-`deadline_ms_remaining`) နောက်သက်တမ်းကုန်ဆုံးမည့် နောက်ဆုံးရက်ကို မီးမောင်းထိုးပြပါ (ပြန်လည်စတင်ခြင်း → မူဝါဒ
-→ လက်မှတ်) ထို့ကြောင့် UI တံဆိပ်များသည် ထောက်ပံ့ကြေးရရှိသည့်အခါတိုင်း အော်ပရေတာများအား သတိပေးနိုင်သည်။
-<24 နာရီ ကျန်သေးတယ်။ SDK
-`/v1/offline/reserve/topup` မှ ဖော်ထုတ်ထားသော REST စစ်ထုတ်မှုများကို မှန်ကြည့်သည်-
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`၊
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` ရယ်၊
-`requireVerdict` / `onlyMissingVerdict` ဘူလီယံ။ မမှန်ကန်သော ပေါင်းစပ်မှုများ (အတွက်
-ဥပမာ `onlyMissingVerdict` + `verdictIdHex`) သည် Torii မတိုင်မီ ပြည်တွင်း၌ ငြင်းပယ်ခံရသည်
-ဟုခေါ်သည်။
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## အော့ဖ်လိုင်းငွေဖြည့်ခြင်း (ပြဿနာ + မှတ်ပုံတင်ခြင်း)
-
-လက်မှတ်ကိုချက်ချင်းထုတ်ချင်တဲ့အခါ ငွေဖြည့်အကူတွေကို သုံးပါ။
-လယ်ဂျာတွင် စာရင်းသွင်းပါ။ SDK သည် ထုတ်ပေးပြီး မှတ်ပုံတင်ထားသော လက်မှတ်ကို စစ်ဆေးသည်။
-မပြန်မီ ID များသည် တူညီပြီး တုံ့ပြန်မှုတွင် payload နှစ်ခုလုံး ပါဝင်ပါသည်။ ရှိတယ်။
-သီးသန့်ငွေဖြည့်ပေးသည့် အဆုံးမှတ်မရှိပါ။ အကူအညီပေးသူက ပြဿနာကို ဆွဲကြိုးချ + ဖုန်းခေါ်ဆိုမှုများကို စာရင်းသွင်းပါ။ အကယ်လို့
-သင့်တွင် လက်မှတ်ရေးထိုးထားသော လက်မှတ်တစ်ခုရှိပြီး၊ `registerOfflineAllowance` (သို့မဟုတ်) ခေါ်ဆိုပါ။
-`renewOfflineAllowance`) တိုက်ရိုက်။
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii မေးမြန်းချက်များနှင့် တိုက်ရိုက်ကြည့်ရှုခြင်း (WebSockets)
 
 Query helpers သည် အခြေအနေ၊ Prometheus မက်ထရစ်များ၊ တယ်လီမီတာ လျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် ဖြစ်ရပ်ကို ဖော်ထုတ်ပြသသည်

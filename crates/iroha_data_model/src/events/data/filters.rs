@@ -678,12 +678,10 @@ impl Default for OracleEventFilter {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
 pub struct OfflineTransferEventFilter {
-    /// Optional bundle identifier matcher.
-    pub(super) bundle_matcher: Option<iroha_crypto::Hash>,
-    /// Optional receiver matcher (applies only to settled events).
-    pub(super) receiver_matcher: Option<crate::account::AccountId>,
-    /// Optional platform policy matcher (applies only to settled events with platform snapshots).
-    pub(super) platform_policy_matcher: Option<crate::offline::AndroidIntegrityPolicy>,
+    /// Optional note commitment matcher.
+    pub(super) note_matcher: Option<iroha_crypto::Hash>,
+    /// Optional account matcher.
+    pub(super) account_matcher: Option<crate::account::AccountId>,
     /// Matched event-set.
     pub(super) event_set: super::offline::OfflineTransferEventSet,
 }
@@ -728,31 +726,23 @@ impl OfflineTransferEventFilter {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            bundle_matcher: None,
-            receiver_matcher: None,
-            platform_policy_matcher: None,
+            note_matcher: None,
+            account_matcher: None,
             event_set: super::offline::OfflineTransferEventSet::all(),
         }
     }
 
-    /// Restricts matches to the provided bundle identifier.
+    /// Restricts matches to the provided note commitment.
     #[must_use]
-    pub fn for_bundle(mut self, bundle_id: iroha_crypto::Hash) -> Self {
-        self.bundle_matcher = Some(bundle_id);
+    pub fn for_note(mut self, note_commitment: iroha_crypto::Hash) -> Self {
+        self.note_matcher = Some(note_commitment);
         self
     }
 
-    /// Restricts matches to settled events targeting the given receiver.
+    /// Restricts matches to events tied to the given account.
     #[must_use]
-    pub fn for_receiver(mut self, receiver: crate::account::AccountId) -> Self {
-        self.receiver_matcher = Some(receiver);
-        self
-    }
-
-    /// Restricts matches to settled events capturing the provided platform token policy.
-    #[must_use]
-    pub fn for_platform_policy(mut self, policy: crate::offline::AndroidIntegrityPolicy) -> Self {
-        self.platform_policy_matcher = Some(policy);
+    pub fn for_account(mut self, account: crate::account::AccountId) -> Self {
+        self.account_matcher = Some(account);
         self
     }
 
@@ -1099,47 +1089,38 @@ impl super::EventFilter for OfflineTransferEventFilter {
             return false;
         }
 
-        if let Some(expected_bundle) = &self.bundle_matcher {
-            let actual_bundle = match event {
-                super::offline::OfflineTransferEvent::Settled(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::Archived(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::Pruned(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::RevocationImported(_)
-                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
+        if let Some(expected_note) = &self.note_matcher {
+            let actual_note = match event {
+                super::offline::OfflineTransferEvent::NoteIssued(payload) => {
+                    &payload.note_commitment
+                }
+                super::offline::OfflineTransferEvent::NoteRedeemed(payload) => {
+                    &payload.source_note_commitment
+                }
+                super::offline::OfflineTransferEvent::AuditRecorded(_) => return false,
             };
-            if actual_bundle != expected_bundle {
+            if actual_note != expected_note {
                 return false;
             }
         }
 
-        if let Some(expected_receiver) = &self.receiver_matcher {
+        if let Some(expected_account) = &self.account_matcher {
             match event {
-                super::offline::OfflineTransferEvent::Settled(payload) => {
-                    if &payload.receiver != expected_receiver {
+                super::offline::OfflineTransferEvent::NoteIssued(payload) => {
+                    if &payload.account != expected_account {
                         return false;
                     }
                 }
-                super::offline::OfflineTransferEvent::Archived(_)
-                | super::offline::OfflineTransferEvent::Pruned(_)
-                | super::offline::OfflineTransferEvent::RevocationImported(_)
-                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
-            }
-        }
-
-        if let Some(expected_policy) = self.platform_policy_matcher {
-            match event {
-                super::offline::OfflineTransferEvent::Settled(payload) => {
-                    let Some(snapshot) = payload.platform_snapshot.as_ref() else {
-                        return false;
-                    };
-                    if snapshot.policy() != Some(expected_policy) {
+                super::offline::OfflineTransferEvent::NoteRedeemed(payload) => {
+                    if &payload.recipient != expected_account {
                         return false;
                     }
                 }
-                super::offline::OfflineTransferEvent::Archived(_)
-                | super::offline::OfflineTransferEvent::Pruned(_)
-                | super::offline::OfflineTransferEvent::RevocationImported(_)
-                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
+                super::offline::OfflineTransferEvent::AuditRecorded(payload) => {
+                    if &payload.account != expected_account {
+                        return false;
+                    }
+                }
             }
         }
 
@@ -2039,84 +2020,6 @@ mod tests {
             VerifyingKeyEventFilter::new().for_verifying_key(other_id),
         );
         assert!(!bad_filter.matches(&ev));
-    }
-
-    #[test]
-    #[cfg(feature = "transparent_api")]
-    fn offline_filter_matches_platform_policy() {
-        use crate::{
-            account::AccountId,
-            asset::AssetDefinitionId,
-            events::data::offline::{
-                OfflineTransferArchived, OfflineTransferEvent, OfflineTransferSettled,
-            },
-            offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot},
-        };
-
-        let controller =
-            AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-                .map(crate::account::ParsedAccountId::into_account_id)
-                .unwrap();
-        let receiver = AccountId::new(
-            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
-                .parse()
-                .expect("public key"),
-        );
-        let deposit_account = AccountId::new(
-            "ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C"
-                .parse()
-                .expect("public key"),
-        );
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
-        let platform_snapshot = OfflinePlatformTokenSnapshot {
-            policy: AndroidIntegrityPolicy::PlayIntegrity.as_str().to_string(),
-            attestation_jws_b64: "token".into(),
-        };
-        let settled = OfflineTransferEvent::Settled(OfflineTransferSettled {
-            bundle_id: Hash::new([1; 32]),
-            controller: controller.clone(),
-            receiver: receiver.clone(),
-            deposit_account: deposit_account.clone(),
-            asset_definition,
-            amount: Numeric::new(100, 0),
-            receipt_count: 1,
-            recorded_at_ms: 1_700_000_000,
-            platform_snapshot: Some(platform_snapshot),
-        });
-        let filter = OfflineTransferEventFilter::new()
-            .for_platform_policy(AndroidIntegrityPolicy::PlayIntegrity);
-        assert!(filter.matches(&settled));
-
-        let mismatch_filter = OfflineTransferEventFilter::new()
-            .for_platform_policy(AndroidIntegrityPolicy::HmsSafetyDetect);
-        assert!(!mismatch_filter.matches(&settled));
-
-        let missing_snapshot = OfflineTransferEvent::Settled(OfflineTransferSettled {
-            bundle_id: Hash::new([2; 32]),
-            controller,
-            receiver,
-            deposit_account: deposit_account.clone(),
-            asset_definition: AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "usd".parse().unwrap(),
-            ),
-            amount: Numeric::new(25, 0),
-            receipt_count: 2,
-            recorded_at_ms: 1_700_000_100,
-            platform_snapshot: None,
-        });
-        assert!(!filter.matches(&missing_snapshot));
-
-        let archived = OfflineTransferEvent::Archived(OfflineTransferArchived {
-            bundle_id: Hash::new([1; 32]),
-            recorded_at_height: 10,
-            archived_at_height: 20,
-            archived_at_ms: 1_700_100_000,
-        });
-        assert!(!filter.matches(&archived));
     }
 
     #[test]

@@ -84,9 +84,7 @@ fn tags_section() -> Value {
     offline.insert("name".into(), Value::String("Offline".to_owned()));
     offline.insert(
         "description".into(),
-        Value::String(
-            "Offline wallet, audit, and settlement endpoints under `/v1/offline/*`.".to_owned(),
-        ),
+        Value::String("Offline V2 readiness endpoint under `/v1/offline/v2/readiness`.".to_owned()),
     );
 
     let mut bridge = Map::new();

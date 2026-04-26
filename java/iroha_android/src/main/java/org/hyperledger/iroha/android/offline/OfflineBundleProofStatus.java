@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.util.List;
 import java.util.Objects;
 
-/** Parsed response from `/v1/offline/bundle/proof_status`. */
+/** Parsed offline bundle proof status payload. */
 public final class OfflineBundleProofStatus {
   private final String bundleIdHex;
   private final String receiptsRootHex;

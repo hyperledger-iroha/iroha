@@ -27,9 +27,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         &basic_payload,
         200,
         0,
-        QrPayloadKind::OfflineToOnlineTransfer,
+        QrPayloadKind::OfflineReceiveChallengeV2,
     )?;
-    let parity = build_fixture(&parity_payload, 180, 3, QrPayloadKind::OfflineSpendReceipt)?;
+    let parity = build_fixture(&parity_payload, 180, 3, QrPayloadKind::OfflinePaymentTokenV2)?;
 
     write_fixture(BASIC_FIXTURE_PATH, &basic, check_only)?;
     write_fixture(PARITY_FIXTURE_PATH, &parity, check_only)?;
@@ -65,9 +65,9 @@ fn build_fixture(
         .collect::<Vec<_>>();
 
     let payload_kind_label = match payload_kind {
-        QrPayloadKind::OfflineToOnlineTransfer => "offline_to_online_transfer",
-        QrPayloadKind::OfflineSpendReceipt => "offline_spend_receipt",
-        QrPayloadKind::OfflineEnvelope => "offline_envelope",
+        QrPayloadKind::OfflineReceiveChallengeV2 => "offline_receive_challenge_v2",
+        QrPayloadKind::OfflinePaymentTokenV2 => "offline_payment_token_v2",
+        QrPayloadKind::OfflineReceiptAckV2 => "offline_receipt_ack_v2",
         QrPayloadKind::Unspecified => "unspecified",
     };
 

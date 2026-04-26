@@ -29,7 +29,7 @@ pub enum HedgedEntropyStatus {
     OsEntropyUnavailable,
 }
 
-/// ChaCha20 RNG derived from deterministic seed material and, when available,
+/// `ChaCha20` RNG derived from deterministic seed material and, when available,
 /// live operating-system entropy.
 pub struct HedgedChaCha20Rng {
     inner: ChaCha20Rng,

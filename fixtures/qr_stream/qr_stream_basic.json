@@ -4,7 +4,7 @@
   "options": {
     "chunk_size": 200,
     "parity_group": 0,
-    "payload_kind": "offline_to_online_transfer"
+    "payload_kind": "offline_receive_challenge_v2"
   },
   "envelope_hex": "01000000c800010000000100180000007d6ab4cc1b9f18a717b3930aab178a39eba2de24d5f109ddd4edfe86d420d972",
   "frames": [

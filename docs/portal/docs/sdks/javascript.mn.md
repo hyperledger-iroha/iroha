@@ -179,69 +179,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Офлайн тэтгэмж ба шийдвэрийн мета өгөгдөл
+## Offline V2 readiness
 
-Офлайн тэтгэмжийн хариултууд нь дэвтэрийн баяжуулсан мета өгөгдлүүдийг урьдаас ил болгодог —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, `remaining_amount`-г түүхий эдтэй хамт буцаана
-Бичлэг хийх тул хяналтын самбарууд суулгагдсан Norito ачааллын кодыг тайлах шаардлагагүй болно. Шинэ
-тоолох туслахууд (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) дараагийн хугацаа нь дуусч байгааг онцол (шинэчлэх → бодлого)
-→ гэрчилгээ) тул UI тэмдэг нь тэтгэмж авах бүрд операторуудад анхааруулах боломжтой
-<24 цаг үлдсэн. SDK
-`/v1/offline/reserve/topup`-д илэрсэн REST шүүлтүүрүүдийг толин тусгал:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` болон
-`requireVerdict` / `onlyMissingVerdict` логик. Буруу хослолууд (for
-жишээ `onlyMissingVerdict` + `verdictIdHex`) нь Torii-ээс өмнө орон нутагт татгалзсан
-гэж нэрлэдэг.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Офлайн цэнэглэлт (асуудал + бүртгэл)
-
-Сертификат олгохыг хүсвэл нэн даруй цэнэглэх туслахуудыг ашиглаарай
-дэвтэрт бүртгүүлнэ үү. SDK нь олгосон болон бүртгэгдсэн гэрчилгээг баталгаажуулдаг
-Буцахаасаа өмнө ID-ууд таарч, хариу нь ачааллыг хоёуланг нь агуулна. Байна
-цэнэглэх зориулалтын эцсийн цэг байхгүй; туслагч асуудлыг гинжлэх + дуудлага бүртгэх. Хэрэв
-Танд гарын үсэг зурсан гэрчилгээ байгаа бол `registerOfflineAllowance` (эсвэл
-`renewOfflineAllowance`) шууд.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii асуулга ба дамжуулалт (WebSockets)
 
 Асуулгын туслахууд статус, Prometheus хэмжигдэхүүн, телеметрийн агшин зуурын зураг болон үйл явдлыг ил гаргадаг

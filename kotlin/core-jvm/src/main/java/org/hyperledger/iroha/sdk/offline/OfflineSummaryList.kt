@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Immutable view over `/v1/offline/summaries` responses. */
+/** Immutable view over offline counter summary payloads. */
 class OfflineSummaryList(
     items: List<OfflineSummaryItem>,
     val total: Long,

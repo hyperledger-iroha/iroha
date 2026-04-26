@@ -179,69 +179,16 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Офлайн жеңілдіктер және үкім метадеректері
+## Offline V2 readiness
 
-Офлайн төлем жауаптары байытылған кітап метадеректерін алдын ала көрсетеді —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` және `remaining_amount` шикізатпен бірге қайтарылады
-бақылау тақталары ендірілген Norito пайдалы жүктемелерін декодтауды қажет етпейтін етіп жазып алыңыз. Жаңа
-кері санақ көмекшілері (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) келесі аяқталатын мерзімін белгілеу (жаңарту → саясат)
-→ сертификат) сондықтан UI бейджиктері операторларға жәрдемақы болған кезде ескертеді
-<24 сағат қалды. SDK
-`/v1/offline/reserve/topup` көрсеткен REST сүзгілерін көрсетеді:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` және
-`requireVerdict` / `onlyMissingVerdict` логикалық мәндер. Жарамсыз комбинациялар (үшін
-мысалы `onlyMissingVerdict` + `verdictIdHex`) Torii алдында жергілікті түрде қабылданбады
-деп аталады.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Офлайн толтыру (мәселе + тіркеу)
-
-Сертификат беру керек кезде және дереу толтыру көмекшілерін пайдаланыңыз
-кітапқа тіркеңіз. SDK берілген және тіркелген куәлікті тексереді
-Идентификаторлар қайтару алдында сәйкес келеді және жауап екі пайдалы жүктемені де қамтиды. Бар
-арнайы толтыру нүктесі жоқ; көмекші мәселені тізбектейді + қоңырауларды тіркеу. Егер
-Сізде қол қойылған сертификат бар, `registerOfflineAllowance` (немесе
-`renewOfflineAllowance`) тікелей.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii сұраулары және ағыны (WebSockets)
 
 Сұрау көмекшілері күйді, Prometheus метрикасын, телеметрия суреттерін және оқиғаны көрсетеді

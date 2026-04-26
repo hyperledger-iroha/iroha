@@ -1459,6 +1459,7 @@ fn merkle_paths_for_leaf_indices(leaves: &[u64], leaf_indices: &[usize]) -> Resu
 ///
 /// # Errors
 /// Returns an error if an internal node hash cannot be computed.
+#[allow(clippy::unnecessary_wraps)]
 pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64]) -> Result<bool> {
     let mut current = leaf;
     let mut index = leaf_index;
@@ -1473,6 +1474,7 @@ pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64])
     Ok(current == root)
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn build_merkle_levels(leaves: &[u64]) -> Result<Vec<Vec<u64>>> {
     if leaves.is_empty() {
         return Ok(Vec::new());
@@ -1692,6 +1694,7 @@ pub fn fold_with_fri(
     Ok((layers, betas))
 }
 
+#[allow(clippy::type_complexity)]
 fn fold_with_fri_opening_layers(
     evaluations: &[u64],
     arity: u32,
@@ -1791,7 +1794,7 @@ fn open_fri_query_chains(
                 .get(round + 1)
                 .and_then(|next| next.get(folded_index))
                 .copied()
-                .ok_or(Error::QueryIndexOutOfRange {
+                .ok_or_else(|| Error::QueryIndexOutOfRange {
                     index: folded_index,
                     len: layer_values.get(round + 1).map_or(0, Vec::len),
                 })?;
@@ -1942,6 +1945,7 @@ pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, 
 }
 
 impl Backend for StarkBackend {
+    #[allow(clippy::too_many_lines)]
     fn prove(
         &self,
         batch: &TransitionBatch,

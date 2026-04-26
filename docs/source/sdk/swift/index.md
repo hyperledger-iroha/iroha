@@ -211,30 +211,11 @@ decide whether to discard or resubmit the affected envelope.
 
 ### Offline circulation modes
 
-`OfflineWallet` now exposes `OfflineWalletCirculationMode` so apps can distinguish between
-ledger-reconcilable allowances and pure offline/bearer campaigns:
+New offline value flows use Offline V2 note issuance, redemption, and audit instructions submitted
+through normal transactions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint,
+so Swift apps should not call legacy transfer-history or revocation routes when reconciling local
+offline state.
 
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    circulationMode: .ledgerReconcilable) { mode, notice in
-        bannerView.show(title: notice.headline, message: notice.details)
-    }
-
-wallet.setCirculationMode(.offlineOnly)
-
-guard wallet.requiresLedgerReconciliation else {
-    logger.notice("Skipping Torii sync: offline bearer mode active")
-    return
-}
-
-try await wallet.fetchTransfers(params: ToriiOfflineListParams(limit: 25))
-```
-
-`ToriiOfflineListParams` mirrors the convenience filters exposed by Torii —
-pass `assetId`, `controllerId`, `receiverId`, `depositAccountId`,
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
 Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair used by the reserve
 attestation flow for Apple App Attest and Android KeyMint.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】

@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Parsed response from `/v1/offline/bundle/proof_status`. */
+/** Parsed offline bundle proof status payload. */
 class OfflineBundleProofStatus(
     val bundleIdHex: String,
     val receiptsRootHex: String,

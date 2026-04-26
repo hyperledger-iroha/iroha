@@ -218,6 +218,16 @@ offline cash, reserve, transfer-history, and revocation HTTP routes are no longe
 Offline V2 note payloads are authoritative for balance, locked balance, authorization policy, and
 revocation freshness. The old allowance/summaries/state/spend-receipts/settlements APIs are not part
 of the shipped offline cash wallet path.
+Note issuance must be submitted by an account with `CanManageOfflineEscrow` and the compact one-use
+key certificate must carry that issuer's signature over the canonical certificate payload. Redemption
+proofs must expose public inputs that bind the source note commitment, consumed nullifiers,
+certified key payload, recipient, asset, and amount to an issued note claim before escrow is
+released. Optional audit bundles also bind their token id, observed nullifiers, output commitments,
+and certified key payload to the proof, and the certified key must have been issued on-ledger first.
+The recursive proof is accepted only when its `VerifyingKeyId` resolves to an active WSV verifier in
+the `offline_note_v2` namespace, the payload is an `OpenVerifyEnvelope`, the verifier schema hash is
+`offline_note_v2_recursive_public_inputs_schema_hash()`, and the public instances encode the
+public-input hash limbs followed by the reserved sentinel limbs.
 
 When journaling is required, persist the lineage anchor, locked/spendable split, pending receipts,
 pending offline cash mutations, seen transfer ids, sender-state replay guards, revocation bundle, and
