@@ -4415,7 +4415,23 @@ impl Actor {
                 view,
                 epoch,
             };
-            if !self.block_known_for_lock(lock.subject_block_hash) && candidate.view <= lock.view {
+            let locked_payload_known = self.block_known_for_lock(lock.subject_block_hash);
+            if locked_payload_known
+                && candidate.height == lock.height
+                && candidate.subject_block_hash != lock.subject_block_hash
+            {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    "skipping precommit: block conflicts with locked block at the same height"
+                );
+                return false;
+            }
+            if !locked_payload_known && candidate.view <= lock.view {
                 let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
