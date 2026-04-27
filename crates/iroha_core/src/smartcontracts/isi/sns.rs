@@ -16,9 +16,6 @@ use iroha_telemetry::metrics;
 use super::prelude::*;
 use crate::{alias::authority_can_manage_account_alias, prelude::ValidSingularQuery};
 
-// SNS quote amounts are nano-XOR; Iroha asset transfers use decimal Numeric.
-const XOR_NANOS_SCALE: u32 = 9;
-
 impl ValidSingularQuery for FindDataspaceNameOwnerById {
     #[metrics(+"find_dataspace_name_owner_by_id")]
     fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountId, QueryError> {
@@ -59,7 +56,7 @@ fn account_controller_for(
 }
 
 fn xor_nanos_to_numeric(nanos: u64) -> Numeric {
-    Numeric::new(i128::from(nanos), XOR_NANOS_SCALE)
+    crate::sns::quote_charge_amount_to_numeric(nanos)
 }
 
 impl Execute for AcquireAccountAliasLease {

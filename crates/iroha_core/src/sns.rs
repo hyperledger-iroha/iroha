@@ -32,7 +32,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
-use iroha_primitives::json::Json as IrohaJson;
+use iroha_primitives::{json::Json as IrohaJson, numeric::Numeric};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
@@ -53,8 +53,15 @@ const LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE: u128 = 120;
 const LEGACY_MILLION_XOR_ALIAS_LEASE_PAYMENT_AMOUNT: u128 = 1_000_000;
 // SNS bills the Nexus fee asset in nano-XOR so integer payment fields can
 // represent sub-XOR prices. The default alias lease is 0.5 XOR per year.
+const SNS_QUOTE_AMOUNT_SCALE: u32 = 9;
 const XOR_NANOS_PER_XOR: u128 = 1_000_000_000;
 const DEFAULT_NAMESPACE_LEASE_PRICE: u128 = XOR_NANOS_PER_XOR / 2;
+
+/// Convert an SNS quote charge from nano-XOR units into asset `Numeric`.
+#[must_use]
+pub fn quote_charge_amount_to_numeric(charge_amount_nanos: u64) -> Numeric {
+    Numeric::new(i128::from(charge_amount_nanos), SNS_QUOTE_AMOUNT_SCALE)
+}
 
 /// Reserved dataspace alias that must stay permanently defined.
 pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
@@ -1845,6 +1852,14 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
+
+    #[test]
+    fn quote_charge_amount_to_numeric_uses_nano_xor_scale() {
+        assert_eq!(
+            quote_charge_amount_to_numeric(500_000_000),
+            Numeric::new(500_000_000_i128, 9)
+        );
+    }
 
     fn owner() -> AccountId {
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"

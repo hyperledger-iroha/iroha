@@ -3940,7 +3940,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let invoice;
         match quote {
             Ok(quote) => {
-                let charge_amount: Numeric = quote.charge_amount.into();
+                let charge_amount = crate::sns::quote_charge_amount_to_numeric(quote.charge_amount);
                 let within_cap = charge_amount <= metadata.max_charge_amount.clone();
                 let can_pay = within_cap && charge_amount <= context.subscriber_balance;
                 invoice = SubscriptionInvoice {
@@ -11281,7 +11281,7 @@ seiyaku AliasPayout {{
             period_start_ms: scheduled_at_ms,
             period_end_ms: quote.expires_at_ms,
             attempted_at_ms: scheduled_at_ms,
-            amount: Numeric::from(quote.charge_amount),
+            amount: crate::sns::quote_charge_amount_to_numeric(quote.charge_amount),
             asset_definition: charge_asset_id.clone(),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
