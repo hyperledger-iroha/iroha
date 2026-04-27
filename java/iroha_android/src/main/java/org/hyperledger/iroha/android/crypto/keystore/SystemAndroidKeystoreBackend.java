@@ -142,6 +142,11 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     } catch (final ProviderException ex) {
       throw new KeyManagementException("Android Keystore generation failed", ex);
     } catch (final GeneralSecurityException ex) {
+      if (parameters.algorithm().equalsIgnoreCase("Ed25519")) {
+        throw new KeyManagementException(
+            "Android Keystore does not support hardware Ed25519 key generation on this device",
+            ex);
+      }
       throw new KeyManagementException("Android Keystore generation failed", ex);
     }
   }
