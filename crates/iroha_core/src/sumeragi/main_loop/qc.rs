@@ -3392,14 +3392,14 @@ impl Actor {
             .pending
             .pending_blocks
             .get(&block_hash)
-            .is_some_and(|pending| pending.aborted)
+            .is_some_and(|pending| pending.is_retry_aborted())
         {
             iroha_logger::debug!(
                 height,
                 view,
                 phase = ?phase,
                 block = ?block_hash,
-                "skipping QC aggregation for aborted pending block"
+                "skipping QC aggregation for retry-aborted pending block"
             );
             return;
         }
