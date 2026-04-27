@@ -65,6 +65,7 @@ export {
   canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
 } from "./canonicalRequest.js";
+export { buildSoraCloudHfDeployRequest } from "./soracloud.js";
 export {
   buildTouchManifest,
   buildAxtDescriptor,

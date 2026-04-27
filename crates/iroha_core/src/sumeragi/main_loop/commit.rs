@@ -3135,9 +3135,10 @@ impl Actor {
             }
             let proposal_evidence_seen =
                 self.slot_has_proposal_evidence(pending_height, pending_view);
+            let qc_evidence_seen = pending.commit_qc_observed()
+                || self.pending_block_has_qc(hash, pending_height, pending_view);
             let priority_reason = self.pending_block_validation_priority_reason(hash, &pending);
-            if !pending.commit_qc_observed() && !proposal_evidence_seen && priority_reason.is_none()
-            {
+            if !qc_evidence_seen && !proposal_evidence_seen && priority_reason.is_none() {
                 debug!(
                     height = pending_height,
                     view = pending_view,
@@ -4337,7 +4338,7 @@ impl Actor {
             );
             return false;
         }
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
@@ -4414,7 +4415,23 @@ impl Actor {
                 view,
                 epoch,
             };
-            if !self.block_known_for_lock(lock.subject_block_hash) && candidate.view <= lock.view {
+            let locked_payload_known = self.block_known_for_lock(lock.subject_block_hash);
+            if locked_payload_known
+                && candidate.height == lock.height
+                && candidate.subject_block_hash != lock.subject_block_hash
+            {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    "skipping precommit: block conflicts with locked block at the same height"
+                );
+                return false;
+            }
+            if !locked_payload_known && candidate.view <= lock.view {
                 let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
@@ -4471,8 +4488,20 @@ impl Actor {
         ) else {
             return false;
         };
-        self.handle_vote(vote.clone());
-        if !self.vote_recorded_or_queued_for_validation(&vote) {
+        let chain_id = self.common_config.chain.clone();
+        let evidence_context = super::evidence::EvidenceValidationContext {
+            topology,
+            chain_id: &chain_id,
+            mode_tag,
+            prf_seed,
+        };
+        if !self.validate_and_record_vote_with_signature_result(
+            &vote,
+            &signature_topology,
+            &evidence_context,
+            mode_tag,
+            None,
+        ) {
             warn!(
                 height,
                 view,
@@ -4483,6 +4512,19 @@ impl Actor {
             );
             return false;
         }
+        let topology_peers = topology.as_ref().to_vec();
+        let roster_hash = HashOf::new(&topology_peers);
+        let pops = self.cached_vote_verify_pops(&topology_peers, &roster_hash);
+        let context = super::VoteProcessingContext {
+            topology: topology.clone(),
+            signature_topology: Arc::new(signature_topology.clone()),
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+            stale_view: self.stale_view(height, view),
+            pops,
+        };
+        self.apply_validated_vote(vote.clone(), context);
         debug!(
             height,
             view,

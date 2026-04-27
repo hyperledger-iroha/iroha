@@ -1603,6 +1603,11 @@ impl Actor {
             && queue_depths.block_payload_rx == 0
             && queue_depths.block_rx == 0
             && !self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
+        let authoritative_payload_can_bypass_recovery_window =
+            authoritative_payload_can_bypass_reassembly
+                && !self.frontier_recovery.as_ref().is_some_and(|state| {
+                    state.frontier_height == height && state.last_cause == "missing_payload"
+                });
         let vote_backed_frontier_same_height_recovery_active = contiguous_frontier
             && effective_has_reschedule_votes
             && !drop_pending
@@ -1613,6 +1618,7 @@ impl Actor {
             && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately
+            && !authoritative_payload_can_bypass_recovery_window
             && self.frontier_recovery_owns_height_window_with_window(
                 height,
                 now,

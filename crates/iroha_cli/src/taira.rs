@@ -463,8 +463,13 @@ fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> 
                     .get("http_status")
                     .and_then(Value::as_u64)
                     .map_or_else(|| "-".to_owned(), |value| value.to_string());
+                let detail = check
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(|detail| format!(" ({detail})"))
+                    .unwrap_or_default();
                 let marker = if ok { "ok" } else { "fail" };
-                context.println_data(format!("  {marker} {name} HTTP {status_code}"))?;
+                context.println_data(format!("  {marker} {name} HTTP {status_code}{detail}"))?;
             }
         }
         if let Some(warnings) = object.get("warnings").and_then(Value::as_array) {
@@ -1043,6 +1048,7 @@ fn extract_response_string(response: Option<&Value>, key: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_i18n::{Bundle, Language, Localizer};
     use std::{
         io::{Read as _, Write as _},
         net::{TcpListener, TcpStream},
@@ -1061,6 +1067,61 @@ mod tests {
         status: u16,
         content_type: &'static str,
         body: String,
+    }
+
+    struct TextContext {
+        cfg: Config,
+        i18n: Localizer,
+        lines: Vec<String>,
+    }
+
+    impl TextContext {
+        fn new() -> Self {
+            Self {
+                cfg: crate::fallback_config(),
+                i18n: Localizer::new(Bundle::Cli, Language::English),
+                lines: Vec::new(),
+            }
+        }
+    }
+
+    impl RunContext for TextContext {
+        fn config(&self) -> &Config {
+            &self.cfg
+        }
+
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+
+        fn output_format(&self) -> CliOutputFormat {
+            CliOutputFormat::Text
+        }
+
+        fn print_data<T>(&mut self, data: &T) -> Result<()>
+        where
+            T: norito::json::JsonSerialize + ?Sized,
+        {
+            let _value = norito::json::to_value(data)?;
+            Ok(())
+        }
+
+        fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
+            self.lines.push(data.to_string());
+            Ok(())
+        }
     }
 
     impl MockResponse {
@@ -1324,6 +1385,36 @@ mod tests {
                 .iter()
                 .any(|request| request.method == "POST" && request.body.contains("tools/list"))
         );
+    }
+
+    #[test]
+    fn render_report_text_includes_route_check_detail() {
+        let mut checks = Vec::new();
+        push_check(
+            &mut checks,
+            "contracts_state",
+            400,
+            true,
+            route_check_detail(&[400]),
+        );
+        let report = report_value(
+            "taira_doctor",
+            "ok",
+            DEFAULT_PUBLIC_ROOT,
+            checks,
+            Vec::new(),
+            Vec::new(),
+            Map::new(),
+        )
+        .expect("report");
+        let mut context = TextContext::new();
+
+        render_report(&mut context, false, &report).expect("render report");
+
+        let output = context.lines.join("\n");
+        assert!(output.contains(
+            "contracts_state HTTP 400 (mounted route is expected to return HTTP 400"
+        ));
     }
 
     #[test]

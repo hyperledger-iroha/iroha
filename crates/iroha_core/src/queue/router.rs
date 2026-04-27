@@ -1195,10 +1195,14 @@ fn account_dataspace_target<W: WorldReadOnly>(
 ) -> Option<DataSpaceId> {
     let world = world?;
     if let Some(dataspace) = world.dataspace_for_account(account_id) {
-        return Some(dataspace);
+        return (dataspace != DataSpaceId::UNIVERSAL).then_some(dataspace);
     }
     let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
-    (hierarchy.len() == 1).then(|| *hierarchy.keys().next().expect("single dataspace"))
+    if hierarchy.len() != 1 {
+        return None;
+    }
+    let dataspace_id = *hierarchy.keys().next().expect("single dataspace");
+    (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id)
 }
 
 fn authority_dataspace_target(
@@ -3426,6 +3430,44 @@ mod tests {
                 .try_route_with_view(&tx, &state.view())
                 .expect("authority single-scope route must resolve"),
             RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn untargeted_universal_authority_transaction_uses_default_lane_with_state() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let default_lane = LaneId::new(1);
+        let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, default_lane]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            DataSpaceCatalog::default(),
+            lane_catalog,
+        );
+        let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(RegisterSmartContractBytes {
+                code_hash: Hash::new(&code),
+                code,
+            })],
+        );
+
+        let mut state = blank_state();
+        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let (account_id, account) = account.into_key_value();
+        state.world.accounts.insert(account_id, account);
+        state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("universal-only account should use configured default lane"),
+            RoutingDecision::new(default_lane, DataSpaceId::UNIVERSAL)
         );
     }
 

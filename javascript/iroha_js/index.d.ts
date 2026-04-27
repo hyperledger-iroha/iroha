@@ -8957,3 +8957,44 @@ export function resolveToriiClientConfig(input?: {
 export function extractToriiFeatureConfig(input?: {
   config?: Record<string, unknown>;
 } & Record<string, unknown>): ToriiFeatureConfigSnapshot;
+
+export type SoraCloudStorageClass = "hot" | "warm" | "cold";
+
+export interface SoraCloudHfDeployRequestInput {
+  repoId: string;
+  revision?: string;
+  modelName: string;
+  serviceName: string;
+  apartmentName?: string;
+  storageClass: SoraCloudStorageClass;
+  leaseTermMs: number | bigint | string;
+  leaseAssetDefinitionId: string;
+  baseFeeNanos: number | bigint | string;
+  privateKeyHex: string;
+}
+
+export interface SoraCloudManifestProvenance {
+  signer: string;
+  signature: string;
+}
+
+export interface SoraCloudHfDeployRequest {
+  payload: {
+    repo_id: string;
+    revision?: string;
+    model_name: string;
+    service_name: string;
+    apartment_name?: string;
+    storage_class: SoraCloudStorageClass | { type: string; value?: unknown };
+    lease_term_ms: number;
+    lease_asset_definition_id: string;
+    base_fee_nanos: string;
+  };
+  provenance: SoraCloudManifestProvenance;
+  generated_service_provenance?: SoraCloudManifestProvenance;
+  generated_apartment_provenance?: SoraCloudManifestProvenance;
+}
+
+export function buildSoraCloudHfDeployRequest(
+  input: SoraCloudHfDeployRequestInput,
+): SoraCloudHfDeployRequest;

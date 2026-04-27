@@ -448,6 +448,14 @@ fn require_active_public_lane_validator(
     }
 }
 
+fn require_soracloud_runtime_authority(
+    authority: &AccountId,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    require_soracloud_permission(authority, state_transaction)
+        .or_else(|_| require_active_public_lane_validator(authority, state_transaction))
+}
+
 fn verify_bundle_provenance(
     authority: &AccountId,
     bundle: &SoraDeploymentBundleV1,
@@ -6845,7 +6853,7 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
             provenance,
         } = self;
 
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         require_active_public_lane_validator(authority, state_transaction)?;
         if capability.validator_account_id != *authority {
             return Err(invalid_parameter(
@@ -6902,7 +6910,7 @@ impl Execute for isi::HeartbeatSoracloudModelHost {
             provenance,
         } = self;
 
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         require_active_public_lane_validator(authority, state_transaction)?;
         if validator_account_id != *authority {
             return Err(invalid_parameter(
@@ -6960,7 +6968,7 @@ impl Execute for isi::WithdrawSoracloudModelHost {
             provenance,
         } = self;
 
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         require_active_public_lane_validator(authority, state_transaction)?;
         if validator_account_id != *authority {
             return Err(invalid_parameter(
@@ -7008,7 +7016,7 @@ impl Execute for isi::AdvertiseSoracloudInrouHost {
             provenance,
         } = self;
 
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         require_active_public_lane_validator(authority, state_transaction)?;
         if capability.validator_account_id != *authority {
             return Err(invalid_parameter(
@@ -7044,7 +7052,7 @@ impl Execute for isi::WithdrawSoracloudInrouHost {
             provenance,
         } = self;
 
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         require_active_public_lane_validator(authority, state_transaction)?;
         if validator_account_id != *authority {
             return Err(invalid_parameter(
@@ -7067,7 +7075,7 @@ impl Execute for isi::ReconcileSoracloudInrouPlacements {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
         reconcile_inrou_service_placements(state_transaction, now_ms)
     }
@@ -11057,7 +11065,7 @@ impl Execute for isi::SetSoracloudRuntimeState {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         write_soracloud_runtime_state(state_transaction, self.state)
     }
 }
@@ -11068,7 +11076,7 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         let mut state = self.state;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
         if state.schema_version == 0 {
@@ -11107,7 +11115,7 @@ impl Execute for isi::ClearSoracloudInrouReplicaRuntimeState {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         if self.service_version.trim().is_empty() {
             return Err(invalid_parameter("service_version must not be empty"));
         }
@@ -11141,7 +11149,7 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         if self.active_service_version.trim().is_empty() {
             return Err(invalid_parameter(
                 "active_service_version must not be empty".to_string(),
@@ -11162,7 +11170,7 @@ impl Execute for isi::RecordSoracloudMailboxMessage {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         write_soracloud_mailbox_message(state_transaction, self.message)
     }
 }
@@ -11173,7 +11181,7 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
+        require_soracloud_runtime_authority(authority, state_transaction)?;
         write_soracloud_runtime_receipt(state_transaction, self.receipt)
     }
 }
