@@ -107,6 +107,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         lane_id,
         dataspace_id: DataSpaceId::UNIVERSAL,
         authority: &ALICE_ID,
+        authority_domains: &[],
         uaid: None,
         capability_tags: &[],
         lane_privacy_registry: Some(Arc::new(registry.clone())),

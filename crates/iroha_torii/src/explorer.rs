@@ -1201,6 +1201,10 @@ fn audit_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> 
         Value::Number((audit.input_nullifiers.len() as u64).into()),
     );
     value.insert(
+        "input_claim_count".to_string(),
+        Value::Number((audit.input_claims.len() as u64).into()),
+    );
+    value.insert(
         "output_commitment_count".to_string(),
         Value::Number((audit.output_commitments.len() as u64).into()),
     );

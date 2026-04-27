@@ -188,17 +188,14 @@ object ClientConfigManifestLoader {
     private fun optionalInt(value: Any?): Int? {
         if (value == null) return null
         if (value is Number) {
-            check(value !is Float && value !is Double) { "Fractional numbers are not supported: $value" }
-            val longValue = value.toLong()
-            check(longValue in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) { "Integer value out of range: $value" }
-            return longValue.toInt()
+            return JsonNumbers.asInt(value, "integer value")
         }
         return optionalString(value)?.toInt()
     }
 
     private fun optionalLong(value: Any?): Long? {
         if (value == null) return null
-        if (value is Number) { check(value !is Float && value !is Double) { "Fractional numbers are not supported: $value" }; return value.toLong() }
+        if (value is Number) return JsonNumbers.asLong(value, "integer value")
         val normalized = optionalString(value)
         return if (normalized.isNullOrEmpty()) null else normalized.toLong()
     }

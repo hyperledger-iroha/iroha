@@ -8,6 +8,7 @@ public final class OfflineJsonParserTest {
 
   public static void main(final String[] args) {
     parsesOfflineV2Readiness();
+    parsesOfflineTransfers();
     canonicalizesJson();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
   }
@@ -32,6 +33,54 @@ public final class OfflineJsonParserTest {
     assert readiness.offlineFountainQrV1();
     assert readiness.offlineSyncOptional();
     assert !readiness.offlineTelemetry();
+  }
+
+  private static void parsesOfflineTransfers() {
+    final String json =
+        """
+        {
+          "items": [
+            {
+              "bundle_id_hex": "0xabc123",
+              "controller_id": "payer",
+              "controller_display": "Payer",
+              "receiver_id": "payee",
+              "receiver_display": "Payee",
+              "deposit_account_id": "deposit",
+              "deposit_account_display": "Deposit",
+              "asset_id": "pkr#sbp",
+              "total_amount": "500",
+              "claimed_delta": "500",
+              "status": "PENDING",
+              "receipt_count": 1,
+              "recorded_at_ms": 1767648180000,
+              "recorded_at_height": 12345,
+              "receipt_summaries": [
+                {
+                  "sender_id": "payer",
+                  "receiver_id": "payee",
+                  "amount": "500",
+                  "asset_id": "pkr#sbp",
+                  "status": "PENDING"
+                }
+              ]
+            }
+          ],
+          "total": 1
+        }
+        """;
+    final OfflineTransferList transfers =
+        OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
+    assert transfers.total() == 1L;
+    assert transfers.items().size() == 1;
+    final OfflineTransferList.OfflineTransferItem item = transfers.items().get(0);
+    assert "0xabc123".equals(item.bundleIdHex());
+    assert "Payee".equals(item.receiverDisplay());
+    assert "Deposit".equals(item.depositAccountDisplay());
+    assert item.receiptCount() == 1L;
+    assert item.firstReceiptSummary().isPresent();
+    assert "payer".equals(item.firstReceiptSummary().get().senderId());
+    assert "pkr#sbp".equals(item.toJsonMap().get("asset_id"));
   }
 
   private static void canonicalizesJson() {

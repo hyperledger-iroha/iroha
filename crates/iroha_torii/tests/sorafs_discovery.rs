@@ -1303,6 +1303,7 @@ where
         manifest_digest_hex: manifest_digest_hex.clone(),
         chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
         submitted_epoch,
+        gas_asset_id: None,
         alias: None,
         successor_of_hex: None,
     };

@@ -3338,8 +3338,8 @@ mod tests {
     #[test]
     fn offline_note_v2_instructions_are_registered_and_boxable() {
         use crate::offline::{
-            OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteKeyCertificateV2,
-            OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2,
+            OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteIssuedClaimV2,
+            OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2,
         };
         use crate::proof::{ProofBox, VerifyingKeyId};
         use iroha_crypto::{Hash, Signature};
@@ -3382,15 +3382,24 @@ mod tests {
             input_nullifiers: vec![Hash::new(b"input-nullifier")],
             sender_key_certificate: key_certificate.clone(),
             recipient: account_id,
-            asset: asset_id,
+            asset: asset_id.clone(),
             amount: Numeric::new(10, 0),
             recursive_proof: proof.clone(),
         });
         let audit = crate::isi::offline::AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
             token_id: Hash::new(b"token"),
-            sender_key_certificate: key_certificate,
+            sender_key_certificate: key_certificate.clone(),
             input_nullifiers: vec![Hash::new(b"audit-nullifier")],
+            input_claims: vec![
+                OfflineNoteIssuedClaimV2::from_issue(&issue.issue).expect("audit input claim"),
+            ],
             output_commitments: vec![Hash::new(b"output-note")],
+            output_claims: vec![crate::offline::OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"output-note"),
+                key_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            }],
             recursive_proof: proof,
         });
 

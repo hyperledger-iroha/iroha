@@ -2497,6 +2497,8 @@ pub struct NexusFees {
     pub sponsorship_enabled: bool,
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
     pub sponsor_max_fee: Numeric,
+    /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
+    pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
 
 impl Default for NexusFees {
@@ -2510,6 +2512,7 @@ impl Default for NexusFees {
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
             sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
+            successful_claim_fee_exempt_authorities: Vec::new(),
         }
     }
 }

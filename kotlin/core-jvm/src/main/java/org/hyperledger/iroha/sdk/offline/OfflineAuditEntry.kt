@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.offline
 
+import org.hyperledger.iroha.sdk.client.JsonNumbers
+
 /** Immutable log entry describing an Offline V2 note event for audit exports. */
 class OfflineAuditEntry(
     val txId: String,
@@ -39,9 +41,7 @@ class OfflineAuditEntry(
         }
 
         private fun requireLong(value: Any?, field: String): Long {
-            check(value is Number) { "$field is not numeric" }
-            check(value !is Float && value !is Double) { "$field must be an integer" }
-            return value.toLong()
+            return JsonNumbers.asLong(value, field)
         }
     }
 }

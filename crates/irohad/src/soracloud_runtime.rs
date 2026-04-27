@@ -52,9 +52,11 @@ use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 use iroha_data_model::{
     ChainId, Encode,
     account::AccountId,
+    asset::{AssetDefinitionAlias, AssetDefinitionId},
     isi::{self, InstructionBox},
     metadata::Metadata,
     name::Name,
+    parameter::CustomParameterId,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
@@ -218,7 +220,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     ) -> eyre::Result<()> {
         let tx = TransactionBuilder::new((*self.chain_id).clone(), self.authority.clone())
             .with_instructions([instruction])
-            .with_metadata(soracloud_runtime_submission_metadata())
+            .with_metadata(soracloud_runtime_submission_metadata(&self.state))
             .sign(self.key_pair.private_key());
         let view = self.state.view();
         let params = view.world().parameters();
@@ -296,21 +298,86 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     }
 }
 
-fn soracloud_runtime_submission_metadata() -> Metadata {
+fn soracloud_runtime_submission_metadata(state: &State) -> Metadata {
     let mut metadata = Metadata::default();
-    let gas_asset_id = std::env::var("IROHA_SORACLOUD_GAS_ASSET_ID")
-        .ok()
-        .or_else(|| std::env::var("IROHA_GAS_ASSET_ID").ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-
-    if let Some(asset_id) = gas_asset_id {
+    if let Some(asset_id) = explicit_soracloud_runtime_gas_asset_id()
+        .map(|asset_id| canonicalize_or_preserve_runtime_gas_asset_id(state, asset_id))
+        .or_else(|| default_soracloud_runtime_gas_asset_id(state))
+    {
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
         metadata.insert(gas_asset_key, Json::new(asset_id));
     }
 
     metadata
+}
+
+fn explicit_soracloud_runtime_gas_asset_id() -> Option<String> {
+    ["IROHA_SORACLOUD_GAS_ASSET_ID", "IROHA_SORAFS_GAS_ASSET_ID", "IROHA_GAS_ASSET_ID"]
+        .into_iter()
+        .find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn default_soracloud_runtime_gas_asset_id(state: &State) -> Option<String> {
+    let world = state.world_view();
+    let parameter_id = CustomParameterId(
+        Name::from_str("ivm_gas_accepted_assets").expect("static gas-accepted-assets parameter"),
+    );
+    let configured_asset = world
+        .parameters()
+        .custom()
+        .get(&parameter_id)
+        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
+        .and_then(first_non_empty_string)
+        .or_else(|| first_non_empty_string(state.pipeline_snapshot().gas.accepted_assets))?;
+
+    Some(canonicalize_or_preserve_runtime_gas_asset_id(
+        state,
+        configured_asset,
+    ))
+}
+
+fn first_non_empty_string(values: Vec<String>) -> Option<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+}
+
+fn canonicalize_or_preserve_runtime_gas_asset_id(state: &State, asset_id: String) -> String {
+    let trimmed = asset_id.trim();
+    if trimmed.is_empty() {
+        return asset_id;
+    }
+
+    let world = state.world_view();
+    if let Ok(definition_id) = trimmed.parse::<AssetDefinitionId>() {
+        if world.asset_definition(&definition_id).is_ok() {
+            return definition_id.to_string();
+        }
+        return trimmed.to_owned();
+    }
+
+    if let Ok(alias) = trimmed.parse::<AssetDefinitionAlias>() {
+        let now_ms = state
+            .latest_block_header_fast()
+            .map(|header| header.creation_time_ms)
+            .unwrap_or(0);
+        if let Some(definition_id) = world.asset_definition_id_by_alias_at(&alias, now_ms) {
+            return definition_id.to_string();
+        }
+    }
+
+    iroha_logger::warn!(
+        asset = %trimmed,
+        "failed to canonicalize Soracloud runtime gas asset id; preserving configured value"
+    );
+    trimmed.to_owned()
 }
 
 fn current_host_inrou_guest_isa() -> SoraInrouGuestIsaV1 {
@@ -13298,6 +13365,69 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         Ok(Arc::new(State::new_for_testing(World::new(), kura, query)))
+    }
+
+    fn set_runtime_gas_pipeline_default(state: &mut Arc<State>, assets: Vec<String>) {
+        let mut pipeline = state.pipeline_snapshot();
+        pipeline.gas.accepted_assets = assets;
+        Arc::get_mut(state)
+            .expect("state should have no other refs")
+            .set_pipeline(pipeline);
+    }
+
+    fn set_gas_accepted_assets_parameter(state: &Arc<State>, payload: Json) {
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            iroha_data_model::parameter::CustomParameterId(
+                "ivm_gas_accepted_assets".parse().expect("parameter id"),
+            ),
+            payload,
+        );
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(custom));
+        block
+            .commit()
+            .expect("commit gas accepted assets parameter");
+    }
+
+    #[test]
+    fn default_soracloud_runtime_gas_asset_id_uses_pipeline_default() -> Result<()> {
+        let mut state = test_state()?;
+        set_runtime_gas_pipeline_default(
+            &mut state,
+            vec!["  ".to_owned(), "pipeline-gas".to_owned()],
+        );
+
+        let gas_asset_id = default_soracloud_runtime_gas_asset_id(state.as_ref());
+
+        assert_eq!(gas_asset_id, Some("pipeline-gas".to_owned()));
+        Ok(())
+    }
+
+    #[test]
+    fn default_soracloud_runtime_gas_asset_id_prefers_custom_parameter() -> Result<()> {
+        let mut state = test_state()?;
+        set_runtime_gas_pipeline_default(&mut state, vec!["pipeline-gas".to_owned()]);
+        set_gas_accepted_assets_parameter(
+            &state,
+            Json::new(vec!["  ".to_owned(), "custom-gas".to_owned()]),
+        );
+
+        let gas_asset_id = default_soracloud_runtime_gas_asset_id(state.as_ref());
+
+        assert_eq!(gas_asset_id, Some("custom-gas".to_owned()));
+        Ok(())
     }
 
     fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {

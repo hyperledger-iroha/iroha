@@ -1643,13 +1643,35 @@ impl Actor {
                 &self.subsystems.da_rbc.rbc.status_handle,
                 &pending,
             );
-        let rotate_authoritative_frontier_immediately = contiguous_frontier
+        let resilience_ingress_backlog_active = self.config.resilience.enabled
+            && (Self::frontier_consensus_ingress_queued(queue_depths)
+                || queue_depths.consensus_rx > 0
+                || queue_depths.lane_relay_rx > 0);
+        let authoritative_frontier_rotation_candidate = contiguous_frontier
             && effective_has_reschedule_votes
             && !manifest_gate_pending
             && authoritative_payload_present
             && frontier_slot_present_for_view
             && !frontier_slot_owner_was_active
             && !stale_frontier_slot_owner_for_other_view;
+        let rotate_authoritative_frontier_immediately =
+            authoritative_frontier_rotation_candidate && !resilience_ingress_backlog_active;
+        if authoritative_frontier_rotation_candidate && resilience_ingress_backlog_active {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                consensus_rx_depth = queue_depths.consensus_rx,
+                lane_relay_rx_depth = queue_depths.lane_relay_rx,
+                "suppressing immediate payload-backed frontier rotation while consensus ingress drains"
+            );
+        }
         let frontier_window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));

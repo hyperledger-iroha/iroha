@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-import java.math.BigDecimal
+import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.client.JsonEncoder
@@ -11,9 +11,7 @@ object OfflineCashCodec {
     /** Canonical amount matching Rust `iroha_primitives::numeric::Numeric::to_string`. */
     @JvmStatic
     fun canonicalAmountString(amount: String): String {
-        val trimmed = amount.trim()
-        require(trimmed.isNotEmpty()) { "amount must not be blank" }
-        return BigDecimal(trimmed).toPlainString()
+        return parseNumeric(amount).canonicalString()
     }
 
     /** Lexicographically sorted `"{transferId}:{localRevision}"` keys for a receipt list. */
@@ -92,4 +90,73 @@ object OfflineCashCodec {
         '0', '1', '2', '3', '4', '5', '6', '7',
         '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
     )
+
+    private fun parseNumeric(raw: String): NumericAmount {
+        val trimmed = raw.trim()
+        require(trimmed.isNotEmpty()) { "amount must not be blank" }
+
+        var index = 0
+        var negative = false
+        if (trimmed[index] == '-' || trimmed[index] == '+') {
+            negative = trimmed[index] == '-'
+            index++
+        }
+
+        var seenDot = false
+        var scale = 0
+        val digits = StringBuilder()
+        while (index < trimmed.length) {
+            val c = trimmed[index++]
+            if (c == '.') {
+                require(!seenDot) { "amount must contain at most one decimal point" }
+                seenDot = true
+                continue
+            }
+            require(c in '0'..'9') { "amount must contain only decimal digits" }
+            digits.append(c)
+            if (seenDot) {
+                scale++
+                require(scale <= MAX_NUMERIC_SCALE) {
+                    "amount scale exceeds Iroha limit of $MAX_NUMERIC_SCALE"
+                }
+            }
+        }
+        require(digits.isNotEmpty()) { "amount must contain at least one digit" }
+
+        val magnitudeDigits = digits.toString()
+        var mantissa = BigInteger(magnitudeDigits)
+        if (negative) mantissa = mantissa.negate()
+        require(mantissa.toByteArray().size <= MAX_NUMERIC_BYTES) {
+            "amount mantissa exceeds Iroha limit of $MAX_NUMERIC_BYTES signed bytes"
+        }
+
+        val normalizedDigits = magnitudeDigits.trimStart('0').ifEmpty { "0" }
+        return NumericAmount(
+            negative = negative && normalizedDigits != "0",
+            scale = scale,
+            digits = normalizedDigits,
+        )
+    }
+
+    private class NumericAmount(
+        private val negative: Boolean,
+        private val scale: Int,
+        private val digits: String,
+    ) {
+        fun canonicalString(): String {
+            if (scale == 0) {
+                return if (negative) "-$digits" else digits
+            }
+            val formatted = StringBuilder(digits)
+            while (formatted.length <= scale) {
+                formatted.insert(0, '0')
+            }
+            val split = formatted.length - scale
+            val body = formatted.substring(0, split) + "." + formatted.substring(split)
+            return if (negative) "-$body" else body
+        }
+    }
+
+    private const val MAX_NUMERIC_SCALE = 28
+    private const val MAX_NUMERIC_BYTES = 64
 }

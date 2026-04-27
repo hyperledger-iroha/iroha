@@ -14,7 +14,7 @@ use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
-use iroha_core::zk::confidential_v2;
+use iroha_core::zk::{self, confidential_v2};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
@@ -26,7 +26,7 @@ use iroha_data_model::{
         verifying_keys,
     },
     nexus::DataSpaceId,
-    offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
+    offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
     },
@@ -532,6 +532,9 @@ fn localnet_fee_asset_literal() -> String {
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
 const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
+const LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND: &str = "halo2/ipa";
+const LOCALNET_OFFLINE_NOTE_V2_VK_NAME: &str = "offline-note-v2-recursive-v1";
+const LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE: &str = "offline_note_v2";
 
 fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
@@ -539,6 +542,13 @@ fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
 
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
+}
+
+fn localnet_offline_note_v2_vk_id() -> VerifyingKeyId {
+    VerifyingKeyId::new(
+        LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND,
+        LOCALNET_OFFLINE_NOTE_V2_VK_NAME,
+    )
 }
 
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
@@ -567,6 +577,14 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
             localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
         ),
     ])
+}
+
+fn localnet_offline_note_v2_vk_registration() -> Result<(VerifyingKeyId, VerifyingKeyRecord)> {
+    Ok((
+        localnet_offline_note_v2_vk_id(),
+        zk::offline_note_v2_recursive_vk_record(LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE, 1)
+            .map_err(|error| eyre!(error))?,
+    ))
 }
 
 fn localnet_sample_asset_literal() -> String {
@@ -1391,16 +1409,16 @@ fn localnet_dataspace_catalog(
     if localnet_uses_alias_multilane_catalog(sora_profile) {
         for (alias, id, description) in [
             (
-                "sbp",
+                "bpng",
                 i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64"),
-                "SBP / FI retail alias dataspace",
+                "BPNG private dataspace",
             ),
             (
-                "cbuae",
+                "nexus",
                 i64::try_from(LOCALNET_CBUAE_ALIAS_DATASPACE_ID)
                     .expect("CBUAE dataspace id fits i64"),
-                "CBUAE retail alias dataspace",
+                "Nexus service alias dataspace",
             ),
         ] {
             let mut entry = Table::new();
@@ -1447,16 +1465,16 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         ),
         (
             i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
-            "paynet",
-            "PAYNET / FI retail alias lane",
-            "sbp",
+            "bpng",
+            "BPNG private dataspace lane",
+            "bpng",
             "public",
         ),
         (
             i64::from(LOCALNET_CBUAE_ALIAS_LANE_INDEX),
-            "cbuae",
-            "CBUAE retail alias lane",
-            "cbuae",
+            "nexus",
+            "Nexus service alias lane",
+            "nexus",
             "public",
         ),
     ] {
@@ -2188,7 +2206,21 @@ fn render_peer_config(
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
 
-    let settlement_offline_escrow_accounts = Table::new();
+    let mut settlement_offline_escrow_accounts = Table::new();
+    let offline_note_asset_definition =
+        AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_NOTE_ASSET_ID)
+            .expect("built-in offline-note asset definition id must parse");
+    let offline_note_escrow_account = offline_escrow_account_id(
+        &ChainId::from(chain_id.to_owned()),
+        &offline_note_asset_definition,
+    );
+    settlement_offline_escrow_accounts.insert(
+        LOCALNET_OFFLINE_NOTE_ASSET_ID.into(),
+        Value::String(account_id_runtime_literal(
+            &offline_note_escrow_account,
+            chain_discriminant,
+        )),
+    );
     let mut settlement_offline = Table::new();
     settlement_offline.insert(
         "escrow_accounts".into(),
@@ -2660,6 +2692,17 @@ fn append_localnet_npos_bootstrap(
             builder =
                 builder.append_instruction(verifying_keys::RegisterVerifyingKey { id, record });
         }
+    }
+    let (offline_note_v2_vk_id, offline_note_v2_vk_record) =
+        localnet_offline_note_v2_vk_registration()?;
+    if registrations
+        .verifying_keys
+        .insert(offline_note_v2_vk_id.clone())
+    {
+        builder = builder.append_instruction(verifying_keys::RegisterVerifyingKey {
+            id: offline_note_v2_vk_id,
+            record: offline_note_v2_vk_record,
+        });
     }
     if !registrations.zk_assets.contains(&fee_asset_id) {
         builder = builder.append_instruction(iroha_data_model::isi::zk::RegisterZkAsset::new(
@@ -3751,9 +3794,34 @@ mod tests {
             .get("escrow_accounts")
             .and_then(toml::Value::as_table)
             .expect("settlement.offline.escrow_accounts table");
-        assert!(
-            escrow_accounts.is_empty(),
-            "generated peer config must not map offline-note escrow to the localnet app authority"
+        let chain_id = peer_cfg
+            .get("chain")
+            .and_then(toml::Value::as_str)
+            .expect("chain id");
+        let chain_discriminant = peer_cfg
+            .get("chain_discriminant")
+            .and_then(toml::Value::as_integer)
+            .map(|value| u16::try_from(value).expect("chain discriminant must fit u16"));
+        let offline_note_asset_definition =
+            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_NOTE_ASSET_ID)
+                .expect("offline note asset id");
+        let expected_escrow_account = offline_escrow_account_id(
+            &ChainId::from(chain_id.to_owned()),
+            &offline_note_asset_definition,
+        );
+        let expected_escrow_literal =
+            account_id_runtime_literal(&expected_escrow_account, chain_discriminant);
+        assert_eq!(
+            escrow_accounts.len(),
+            1,
+            "generated peer config must include only the built-in offline-note escrow binding"
+        );
+        assert_eq!(
+            escrow_accounts
+                .get(LOCALNET_OFFLINE_NOTE_ASSET_ID)
+                .and_then(toml::Value::as_str),
+            Some(expected_escrow_literal.as_str()),
+            "generated peer config must map the offline-note asset to its deterministic escrow account"
         );
     }
 
@@ -5010,12 +5078,12 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            lanes_by_alias.get("paynet"),
-            Some(&("sbp".to_owned(), "public".to_owned()))
+            lanes_by_alias.get("bpng"),
+            Some(&("bpng".to_owned(), "public".to_owned()))
         );
         assert_eq!(
-            lanes_by_alias.get("cbuae"),
-            Some(&("cbuae".to_owned(), "public".to_owned()))
+            lanes_by_alias.get("nexus"),
+            Some(&("nexus".to_owned(), "public".to_owned()))
         );
 
         let dataspace_catalog = nexus
@@ -5039,14 +5107,14 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            dataspaces_by_alias.get("sbp"),
+            dataspaces_by_alias.get("bpng"),
             Some(
                 &i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64")
             )
         );
         assert_eq!(
-            dataspaces_by_alias.get("cbuae"),
+            dataspaces_by_alias.get("nexus"),
             Some(
                 &i64::try_from(LOCALNET_CBUAE_ALIAS_DATASPACE_ID)
                     .expect("CBUAE dataspace id fits i64")
@@ -5751,6 +5819,7 @@ mod tests {
 
         let transfer_vk_id = localnet_fee_vk_transfer_id();
         let unshield_vk_id = localnet_fee_vk_unshield_id();
+        let offline_note_v2_vk_id = localnet_offline_note_v2_vk_id();
         let zk_registration = raw_genesis
             .instructions()
             .find_map(|instruction| {
@@ -5804,6 +5873,20 @@ mod tests {
                         == confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
             }),
             "generated fee asset must register an active confidential unshield verifier"
+        );
+        assert!(
+            vk_registrations.iter().any(|register| {
+                register.id == offline_note_v2_vk_id
+                    && register.record.is_active()
+                    && register.record.key.as_ref().map(|key| key.backend.as_str())
+                        == Some(LOCALNET_OFFLINE_NOTE_V2_VK_BACKEND)
+                    && register.record.max_proof_bytes == zk::OFFLINE_NOTE_V2_MAX_PROOF_BYTES
+                    && register.record.namespace == LOCALNET_OFFLINE_NOTE_V2_VK_NAMESPACE
+                    && register.record.circuit_id == zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
+                    && register.record.public_inputs_schema_hash
+                        == iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash()
+            }),
+            "generated localnet genesis must register the real Offline V2 recursive verifier"
         );
     }
 

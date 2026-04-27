@@ -49,7 +49,12 @@ const MS_PER_YEAR: u64 = MS_PER_DAY * 365;
 const EXPIRED_TOMBSTONE_REASON: &str = "expired";
 const LEGACY_ACCOUNT_ALIAS_LABEL_REGEX: &str = r"^[a-z0-9@.-]{3,255}$";
 const LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-const DEFAULT_NAMESPACE_LEASE_PRICE: u128 = 120;
+const LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE: u128 = 120;
+const LEGACY_MILLION_XOR_ALIAS_LEASE_PAYMENT_AMOUNT: u128 = 1_000_000;
+// SNS bills the Nexus fee asset in nano-XOR so integer payment fields can
+// represent sub-XOR prices. The default alias lease is 0.5 XOR per year.
+const XOR_NANOS_PER_XOR: u128 = 1_000_000_000;
+const DEFAULT_NAMESPACE_LEASE_PRICE: u128 = XOR_NANOS_PER_XOR / 2;
 
 /// Reserved dataspace alias that must stay permanently defined.
 pub const RESERVED_UNIVERSAL_DATASPACE_ALIAS: &str = "universal";
@@ -95,7 +100,7 @@ pub struct LeaseQuote {
     pub payment_asset_definition_id: AssetDefinitionId,
     /// Account receiving the lease payment.
     pub collector_account: AccountId,
-    /// Gross/net charge for the operation.
+    /// Gross/net charge for the operation, in SNS payment units.
     pub charge_amount: u64,
     /// Lease expiry after the operation succeeds.
     pub expires_at_ms: u64,
@@ -270,13 +275,11 @@ pub fn policy_by_id(world: &impl WorldReadOnly, suffix_id: SuffixId) -> Option<S
     SuffixPolicyV1::decode(&mut slice).ok()
 }
 
-fn bootstrap_steward_for_world(world: &World) -> AccountId {
+fn bootstrap_steward_for_world(world: &impl WorldReadOnly) -> AccountId {
     world
-        .domains
-        .view()
-        .get(&*iroha_genesis::GENESIS_DOMAIN_ID)
+        .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
         .map(|domain| domain.owned_by().clone())
-        .unwrap_or_else(fixtures::steward_account)
+        .unwrap_or_else(|_| fixtures::steward_account())
 }
 
 /// Ensures an active SNS name lease exists for the given account alias.
@@ -522,6 +525,17 @@ fn upgrade_legacy_default_namespace_policy(
             tier.label_regex = namespace.label_regex().to_owned();
             changed = true;
         }
+        if tier.tier_id == 0
+            && tier.label_regex == namespace.label_regex()
+            && matches!(
+                tier.base_price.amount,
+                LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE
+                    | LEGACY_MILLION_XOR_ALIAS_LEASE_PAYMENT_AMOUNT
+            )
+        {
+            tier.base_price.amount = DEFAULT_NAMESPACE_LEASE_PRICE;
+            changed = true;
+        }
     }
     if changed {
         policy.policy_version = policy.policy_version.saturating_add(1);
@@ -529,30 +543,35 @@ fn upgrade_legacy_default_namespace_policy(
     changed
 }
 
-fn resolve_registered_payment_asset_literal(world: &World, selector: &str) -> Option<String> {
+fn resolve_registered_payment_asset_literal(
+    world: &impl WorldReadOnly,
+    selector: &str,
+) -> Option<String> {
     let selector = selector.trim();
     if selector.is_empty() {
         return None;
     }
 
     if let Ok(definition_id) = AssetDefinitionId::parse_address_literal(selector)
-        && world.view().asset_definition(&definition_id).is_ok()
+        && world.asset_definition(&definition_id).is_ok()
     {
         return Some(selector.to_owned());
     }
 
     let alias = AssetDefinitionAlias::from_str(selector).ok()?;
-    let definition_id = world.view().asset_definition_id_by_alias_at(&alias, 0)?;
+    let definition_id = world.asset_definition_id_by_alias_at(&alias, 0)?;
     world
-        .view()
         .asset_definition(&definition_id)
         .is_ok()
         .then(|| definition_id.to_string())
 }
 
-fn namespace_policy_payment_asset_registered(world: &World, policy: &SuffixPolicyV1) -> bool {
+fn namespace_policy_payment_asset_registered(
+    world: &impl WorldReadOnly,
+    policy: &SuffixPolicyV1,
+) -> bool {
     payment_asset_definition_id(policy)
-        .is_ok_and(|definition_id| world.view().asset_definition(&definition_id).is_ok())
+        .is_ok_and(|definition_id| world.asset_definition(&definition_id).is_ok())
 }
 
 fn retarget_namespace_policy_payment_asset(
@@ -576,9 +595,55 @@ fn retarget_namespace_policy_payment_asset(
     changed
 }
 
+fn retarget_namespace_policy_to_registered_asset_if_needed(
+    world: &impl WorldReadOnly,
+    policy: &mut SuffixPolicyV1,
+    configured_payment_asset_id: &str,
+) -> bool {
+    let policy_asset_registered = namespace_policy_payment_asset_registered(world, policy);
+    let target_payment_asset_id = if policy_asset_registered
+        && policy.payment_asset_id != LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID
+    {
+        policy.payment_asset_id.clone()
+    } else {
+        configured_payment_asset_id.to_owned()
+    };
+    let tier_asset_mismatch = policy
+        .pricing
+        .iter()
+        .any(|tier| tier.base_price.asset_id != target_payment_asset_id);
+    if !policy_asset_registered
+        || policy.payment_asset_id == LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID
+        || tier_asset_mismatch
+    {
+        retarget_namespace_policy_payment_asset(policy, &target_payment_asset_id)
+    } else {
+        false
+    }
+}
+
+fn effective_quote_policy(
+    world: &impl WorldReadOnly,
+    namespace: SnsNamespace,
+    mut policy: SuffixPolicyV1,
+    configured_fee_asset_selector: &str,
+) -> SuffixPolicyV1 {
+    upgrade_legacy_default_namespace_policy(namespace, &mut policy);
+    if let Some(configured_payment_asset_id) =
+        resolve_registered_payment_asset_literal(world, configured_fee_asset_selector)
+    {
+        retarget_namespace_policy_to_registered_asset_if_needed(
+            world,
+            &mut policy,
+            &configured_payment_asset_id,
+        );
+    }
+    policy
+}
+
 /// Seed the fixed namespace policies required by the on-chain SNS model.
 pub fn seed_default_namespace_policies(world: &mut World) {
-    let steward = bootstrap_steward_for_world(world);
+    let steward = bootstrap_steward_for_world(&world.view());
     for namespace in [
         SnsNamespace::AccountAlias,
         SnsNamespace::Domain,
@@ -620,12 +685,12 @@ pub fn sync_default_namespace_policy_payment_asset(
     configured_fee_asset_selector: &str,
 ) -> bool {
     let Some(configured_payment_asset_id) =
-        resolve_registered_payment_asset_literal(world, configured_fee_asset_selector)
+        resolve_registered_payment_asset_literal(&world.view(), configured_fee_asset_selector)
     else {
         return false;
     };
 
-    let steward = bootstrap_steward_for_world(world);
+    let steward = bootstrap_steward_for_world(&world.view());
     let mut changed = false;
     for namespace in [
         SnsNamespace::AccountAlias,
@@ -652,28 +717,74 @@ pub fn sync_default_namespace_policy_payment_asset(
         };
 
         let mut policy_changed = upgrade_legacy_default_namespace_policy(namespace, &mut policy);
-        let policy_asset_registered = namespace_policy_payment_asset_registered(world, &policy);
-        let target_payment_asset_id = if policy_asset_registered
-            && policy.payment_asset_id != LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID
-        {
-            policy.payment_asset_id.clone()
-        } else {
-            configured_payment_asset_id.clone()
-        };
-        let tier_asset_mismatch = policy
-            .pricing
-            .iter()
-            .any(|tier| tier.base_price.asset_id != target_payment_asset_id);
-        if !policy_asset_registered
-            || policy.payment_asset_id == LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID
-            || tier_asset_mismatch
-        {
-            policy_changed |=
-                retarget_namespace_policy_payment_asset(&mut policy, &target_payment_asset_id);
-        }
+        policy_changed |= retarget_namespace_policy_to_registered_asset_if_needed(
+            &world.view(),
+            &mut policy,
+            &configured_payment_asset_id,
+        );
 
         if policy_changed {
             world.smart_contract_state.insert(key, policy.encode());
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Align default SNS namespace policy charges inside the current transaction.
+///
+/// The initial state seed can run before the deployment fee asset has been registered. Lease
+/// instructions call this lazily so the first post-genesis alias write does not keep billing the
+/// stale compile-time asset.
+pub fn sync_default_namespace_policy_payment_asset_in_transaction(
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> bool {
+    let configured_fee_asset_selector = state_transaction.nexus.fees.fee_asset_id.clone();
+    let Some(configured_payment_asset_id) = resolve_registered_payment_asset_literal(
+        state_transaction.world(),
+        &configured_fee_asset_selector,
+    ) else {
+        return false;
+    };
+
+    let steward = bootstrap_steward_for_world(state_transaction.world());
+    let mut changed = false;
+    for namespace in [
+        SnsNamespace::AccountAlias,
+        SnsNamespace::Domain,
+        SnsNamespace::Dataspace,
+    ] {
+        let key = policy_storage_key(namespace.suffix_id());
+        let existing_policy = state_transaction
+            .world
+            .smart_contract_state
+            .get(&key)
+            .and_then(|bytes| SuffixPolicyV1::decode(&mut bytes.as_slice()).ok());
+        let mut policy = match existing_policy {
+            Some(policy) => policy,
+            None => {
+                state_transaction.world.smart_contract_state.insert(
+                    key,
+                    default_namespace_policy(namespace, &steward, &configured_payment_asset_id)
+                        .encode(),
+                );
+                changed = true;
+                continue;
+            }
+        };
+
+        let mut policy_changed = upgrade_legacy_default_namespace_policy(namespace, &mut policy);
+        policy_changed |= retarget_namespace_policy_to_registered_asset_if_needed(
+            state_transaction.world(),
+            &mut policy,
+            &configured_payment_asset_id,
+        );
+
+        if policy_changed {
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(key, policy.encode());
             changed = true;
         }
     }
@@ -1130,6 +1241,49 @@ pub fn quote_account_alias_registration(
     lease_quote(selector, &policy, &tier, term_years, now_ms)
 }
 
+/// Quote account-alias registration, virtually retargeting stale default SNS policies to the
+/// configured fee asset when that asset is now registered.
+///
+/// This keeps Torii preflight quotes and auto-renew metadata aligned with the transaction-time
+/// policy convergence performed by [`sync_default_namespace_policy_payment_asset_in_transaction`].
+pub fn quote_account_alias_registration_with_fee_asset_fallback(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    owner: &AccountId,
+    term_years: u8,
+    pricing_class_hint: Option<u8>,
+    now_ms: u64,
+    configured_fee_asset_selector: &str,
+) -> Result<LeaseQuote, SnsError> {
+    let selector = selector_for_account_alias(alias, catalog)
+        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
+    ensure_selector_is_mutable(&selector)?;
+    let policy = policy_or_not_found(world, selector.suffix_id)?;
+    let policy = effective_quote_policy(
+        world,
+        SnsNamespace::AccountAlias,
+        policy,
+        configured_fee_asset_selector,
+    );
+    enforce_policy_active(&policy)?;
+    enforce_reserved_label_assignment(
+        SnsNamespace::AccountAlias,
+        &policy,
+        &selector,
+        owner,
+        now_ms,
+    )?;
+    if record_by_selector(world, &selector).is_some() {
+        return Err(SnsError::Conflict(format!(
+            "selector `{}` is already registered",
+            selector.normalized_label()
+        )));
+    }
+    let tier = pick_pricing_tier(&policy, &selector, pricing_class_hint)?;
+    lease_quote(selector, &policy, &tier, term_years, now_ms)
+}
+
 /// Quote the cost and resulting lifecycle for renewing an account-alias lease.
 ///
 /// # Errors
@@ -1147,6 +1301,47 @@ pub fn quote_account_alias_renewal(
         .map_err(|err| SnsError::BadRequest(err.to_string()))?;
     ensure_selector_is_mutable(&selector)?;
     let policy = policy_or_not_found(world, selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    let mut record = record_or_not_found(world, &selector)?;
+    refresh_lifecycle(&mut record, now_ms);
+    match record.status {
+        NameStatus::Tombstoned(_) => {
+            return Err(SnsError::Conflict(format!(
+                "registration `{}` is tombstoned",
+                selector.normalized_label()
+            )));
+        }
+        NameStatus::Frozen(_) => {
+            return Err(SnsError::Conflict(format!(
+                "registration `{}` is frozen",
+                selector.normalized_label()
+            )));
+        }
+        _ => {}
+    }
+    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
+    lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
+}
+
+/// Quote account-alias renewal with the same registered fee-asset fallback used by onboarding.
+pub fn quote_account_alias_renewal_with_fee_asset_fallback(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    term_years: u8,
+    now_ms: u64,
+    configured_fee_asset_selector: &str,
+) -> Result<LeaseQuote, SnsError> {
+    let selector = selector_for_account_alias(alias, catalog)
+        .map_err(|err| SnsError::BadRequest(err.to_string()))?;
+    ensure_selector_is_mutable(&selector)?;
+    let policy = policy_or_not_found(world, selector.suffix_id)?;
+    let policy = effective_quote_policy(
+        world,
+        SnsNamespace::AccountAlias,
+        policy,
+        configured_fee_asset_selector,
+    );
     enforce_policy_active(&policy)?;
     let mut record = record_or_not_found(world, &selector)?;
     refresh_lifecycle(&mut record, now_ms);
@@ -1797,7 +1992,7 @@ mod tests {
 
         assert_eq!(quote.selector.label, "treasury@banking");
         assert_eq!(quote.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
-        assert_eq!(quote.charge_amount, 240);
+        assert_eq!(quote.charge_amount, 1_000_000_000);
         assert_eq!(quote.expires_at_ms, 100 + years_to_ms(2));
     }
 
@@ -1856,7 +2051,46 @@ mod tests {
             quote.payment_asset_definition_id,
             payment_asset_definition_id
         );
-        assert_eq!(quote.charge_amount, 240);
+        assert_eq!(quote.charge_amount, 1_000_000_000);
+    }
+
+    #[test]
+    fn quote_account_alias_registration_with_fee_asset_fallback_uses_registered_fee_asset() {
+        let payment_asset_definition_id =
+            AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+                .expect("deployment XOR asset id");
+        let payment_asset_literal = payment_asset_definition_id.to_string();
+        let mut world = world_with_payment_asset(payment_asset_definition_id.clone());
+        seed_default_namespace_policies(&mut world);
+
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
+        let quote = quote_account_alias_registration_with_fee_asset_fallback(
+            &world.view(),
+            &catalog,
+            &alias,
+            &owner(),
+            2,
+            None,
+            100,
+            &payment_asset_literal,
+        )
+        .expect("registration quote");
+
+        assert_eq!(quote.payment_asset_id, payment_asset_literal);
+        assert_eq!(
+            quote.payment_asset_definition_id,
+            payment_asset_definition_id
+        );
+        assert_eq!(quote.charge_amount, 1_000_000_000);
+
+        let stored_policy =
+            policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("stored policy");
+        assert_eq!(
+            stored_policy.payment_asset_id, LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+            "fallback quotes must not mutate read-only Torii state"
+        );
     }
 
     #[test]
@@ -1922,7 +2156,7 @@ mod tests {
             quote_account_alias_renewal(&view, &catalog, &alias, 3, 4_000).expect("renewal quote");
 
         assert_eq!(quote.selector, selector);
-        assert_eq!(quote.charge_amount, 360);
+        assert_eq!(quote.charge_amount, 1_500_000_000);
         assert_eq!(quote.expires_at_ms, 5_000 + years_to_ms(3));
     }
 
@@ -2001,6 +2235,30 @@ mod tests {
 
         let updated = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
         assert_eq!(updated.pricing[0].label_regex, r"^[a-z0-9_@.-]{3,255}$");
+        assert_eq!(updated.policy_version, 2);
+    }
+
+    #[test]
+    fn seed_default_namespace_policies_upgrades_legacy_account_alias_price() {
+        let steward = owner();
+        let mut policy = default_namespace_policy(
+            SnsNamespace::AccountAlias,
+            &steward,
+            LEGACY_DEFAULT_NAMESPACE_PAYMENT_ASSET_ID,
+        );
+        policy.pricing[0].base_price.amount = LEGACY_DEFAULT_NAMESPACE_LEASE_PRICE;
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(policy_storage_key(ACCOUNT_ALIAS_SUFFIX_ID), policy.encode());
+
+        seed_default_namespace_policies(&mut world);
+
+        let updated = policy_by_id(&world.view(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
+        assert_eq!(
+            updated.pricing[0].base_price.amount,
+            DEFAULT_NAMESPACE_LEASE_PRICE
+        );
         assert_eq!(updated.policy_version, 2);
     }
 
@@ -2123,7 +2381,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2161,7 +2419,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2182,7 +2440,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2219,7 +2477,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2261,7 +2519,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2320,7 +2578,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2361,7 +2619,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2399,7 +2657,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2424,7 +2682,7 @@ mod tests {
                     controllers: vec![controller(&steward)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&steward, 120),
+                    payment: payment(&steward, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2582,7 +2840,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2687,7 +2945,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2724,7 +2982,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2773,7 +3031,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2815,7 +3073,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },
@@ -2872,7 +3130,7 @@ mod tests {
                     controllers: vec![controller(&owner)],
                     term_years: 1,
                     pricing_class_hint: None,
-                    payment: payment(&owner, 120),
+                    payment: payment(&owner, DEFAULT_NAMESPACE_LEASE_PRICE as u64),
                     governance: None,
                     metadata: Metadata::default(),
                 },

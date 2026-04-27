@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.math.BigInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class OfflineCashCodecTest {
 
@@ -15,6 +16,30 @@ class OfflineCashCodecTest {
         assertEquals("42.125", OfflineCashCodec.canonicalAmountString("42.125"))
         assertEquals("0.005", OfflineCashCodec.canonicalAmountString("0.005"))
         assertEquals("100.00", OfflineCashCodec.canonicalAmountString("100.00"))
+        assertEquals("1", OfflineCashCodec.canonicalAmountString("+1"))
+        assertEquals("0.5", OfflineCashCodec.canonicalAmountString(".5"))
+        assertEquals("1", OfflineCashCodec.canonicalAmountString("1."))
+        assertEquals("42", OfflineCashCodec.canonicalAmountString("00042"))
+        assertEquals("1.2300", OfflineCashCodec.canonicalAmountString("001.2300"))
+        assertEquals("0.00", OfflineCashCodec.canonicalAmountString("-0.00"))
+    }
+
+    @Test
+    fun canonicalAmountRejectsInvalidRustNumericForms() {
+        val invalid = listOf(
+            "1e3",
+            "",
+            ".",
+            "1.2.3",
+            "0.${"1".repeat(29)}",
+            BigInteger.ONE.shiftLeft(511).toString(),
+        )
+
+        for (amount in invalid) {
+            assertFailsWith<IllegalArgumentException>("expected invalid amount: $amount") {
+                OfflineCashCodec.canonicalAmountString(amount)
+            }
+        }
     }
 
     @Test
@@ -183,7 +208,4 @@ class OfflineCashCodecTest {
             createdAtMs = 0,
         )
 
-    // Silence unused warnings for BigInteger import in case future tests need it.
-    @Suppress("unused")
-    private val unused: BigInteger = BigInteger.ZERO
 }

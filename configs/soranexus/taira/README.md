@@ -41,7 +41,7 @@ redacted JSON receipt with `--json`.
 The shipped public Taira profile pins the first-release Torii posture in
 config rather than wrapper-local defaults:
 
-- `torii.max_content_len = 536_870_912`
+- `torii.max_content_len = 1_073_741_824`
 - `torii.deploy_rate_per_origin_per_sec = 4`
 - `torii.deploy_burst_per_origin = 8`
 - `torii.webhooks_enabled = false`
@@ -395,8 +395,9 @@ Soracloud runtime apps use the SoraDNS/Soracloud alias route instead of SoraFS
 CID hosts. For clients without native SoraDNS resolution, the public browser
 gateway is `<alias>.mon.taira.sora.net`, for example
 `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`. Keep
-`https://taira.sora.org/soradns/<alias>/...` available only as the legacy
-Torii compatibility path.
+`https://mon.taira.sora.net/soradns/<alias>/...` available as the Mon debug
+fallback and `https://taira.sora.org/soradns/<alias>/...` available only as the
+legacy Torii compatibility path.
 
 ### Default denylist packs
 
@@ -421,14 +422,17 @@ Parliament flow and the examples already shipped in the repo:
 Taira's public edge also needs to accept the storage payload upload that
 precedes root serving. The current SoraFS storage pin API sends the full staged
 site in one JSON request (`payload_b64`), so the nginx host serving
-the chosen public Torii hostname must keep `client_max_body_size 512m;` from
+the chosen public Torii hostname must keep `client_max_body_size 1g;` from
 `taira-explorer.nginx.conf`. Without that, `yarn taira:publish` fails at
 `POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
 the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
-`536_870_912`, and the local bootstrap overlay now rewrites the served
+`1_073_741_824`, and the local bootstrap overlay now rewrites the served
 `dist/taira-localnet/peer*.toml` files to keep that same cap live after every
-reset. Taira also overrides `[sorafs.quota] storage_pin_max_events = 64` so
+reset. Torii and the Rust client both reserve a 10 minute route/request budget
+for `POST /v1/sorafs/storage/pin`, because publish-sized base64 JSON envelopes
+can take longer than the generic 70 second Torii request window. Taira also
+overrides `[sorafs.quota] storage_pin_max_events = 64` so
 publish/retry loops on the public testnet do not immediately exhaust the
 generic `4/hour` storage-pin quota inherited from the global default.
 
@@ -831,13 +835,16 @@ From `../iroha2-block-explorer-web`:
     Keep those routes on the same convenience validator that receives
     `POST /v1/sorafs/storage/pin`; otherwise the shared host will flap between
     `200` and `404` depending on which validator answers the CID read.
-  - keep `client_max_body_size 512m;` intact on both TLS server blocks; the
-     native Hayahi runtime publish path now uploads about `300 MiB+` of JSON to
+  - keep `client_max_body_size 1g;` intact on both TLS server blocks; the
+     native Hayahi runtime publish path uploads large JSON envelopes to
      `/v1/sorafs/storage/pin` once the payload is base64-encoded.
-   - keep `torii.max_content_len = 536_870_912` in `config.toml`; otherwise
+   - keep `torii.max_content_len = 1_073_741_824` in `config.toml`; otherwise
      Torii rejects the storage-pin JSON body before the SoraFS handler sees it.
+   - keep the dedicated 10 minute route timeout for `/v1/sorafs/storage/pin`;
+     otherwise large Soracloud/SoraFS publishes can upload successfully through
+     nginx and still fail with Torii's outer `408 Request Timeout`.
    - after every local reset, confirm the served `dist/taira-localnet/peer*.toml`
-     copies still contain `max_content_len = 536870912`; the local bootstrap
+     copies still contain `max_content_len = 1073741824`; the local bootstrap
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
@@ -862,9 +869,14 @@ From `../iroha2-block-explorer-web`:
    - add wildcard edge routing for `*.sorafs.taira.sora.org` and preserve the
      incoming host header when proxying to Torii; the checked-in nginx example
      now includes that wildcard `server_name`.
-   - keep Mon gateway routing generic with the regex server block for
-     `<alias>.mon.taira.sora.net`; do not add per-service nginx files such as
-     `solswap-indexer.sora.conf`.
+   - keep Mon gateway routing generic with the apex `mon.taira.sora.net`
+     server block plus the regex alias server block for
+     `<alias>.mon.taira.sora.net`; do not add per-service path rewrites such as
+     `/solswap-indexer/...`.
+   - do not leave backup `.conf` files under the nginx `servers/` include
+     directory. Homebrew nginx deployments often include the whole directory,
+     so backup configs can create duplicate `server_name` entries and shadow
+     the intended Mon gateway block.
 4. Issue/refresh TLS certificates for the public hosts, direct validator names,
    CID-origin wildcard, and Mon gateway exact hosts:
    - `taira.sora.org`
@@ -874,6 +886,7 @@ From `../iroha2-block-explorer-web`:
    - `taira-validator-3.sora.org`
    - `taira-validator-4.sora.org`
    - `*.sorafs.taira.sora.org`
+   - `mon.taira.sora.net`
    - exact Mon hosts such as `solswap-indexer.sora.mon.taira.sora.net`
    - the convenience, explorer, and direct validator names can share one SAN
      certificate stored under `.../live/taira.sora.org/` if your ACME client
@@ -890,6 +903,12 @@ From `../iroha2-block-explorer-web`:
      validate local SNI routing on the edge host with `curl --resolve` plus
      `-k`, for example:
      `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/status | jq '.blocks, .sumeragi.commit_qc_height'`
+   - if a client network intercepts or blocks `sora.net`, HTTP may be replaced
+     before nginx and HTTPS may reset during the TLS ClientHello. This is stale
+     reputation filtering from `sora.net` prior ownership, not evidence that
+     current SORA content is pornographic. Confirm from the edge host or an
+     unfiltered external network before treating that as a Soracloud runtime
+     failure, and treat the durable fix as ISP/filter-vendor delisting.
 5. Validate and reload nginx:
    - `sudo nginx -t && sudo systemctl reload nginx`
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
