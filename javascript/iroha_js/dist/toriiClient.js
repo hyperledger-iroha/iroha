@@ -213,6 +213,8 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
   "offset",
   "signal",
 ]);
+const NORITO_FRAME_HEADER_LENGTH = 40;
+const VERSIONED_TRANSACTION_PAYLOAD_VERSION = 1;
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -229,6 +231,39 @@ const CRC64_TABLE = (() => {
   }
   return table;
 })();
+
+function isNrt0NoritoFrame(payload) {
+  return (
+    payload.length >= NORITO_FRAME_HEADER_LENGTH &&
+    payload.subarray(0, 4).toString("ascii") === "NRT0"
+  );
+}
+
+function unwrapNrt0NoritoFrame(payload) {
+  if (!isNrt0NoritoFrame(payload)) {
+    return payload;
+  }
+  if (payload[4] !== 0 || payload[5] !== 0) {
+    throw new Error("Unsupported NRT0 transaction frame version.");
+  }
+  const payloadLength = payload.readBigUInt64LE(23);
+  if (payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("NRT0 transaction frame payload is too large.");
+  }
+  const payloadStart = payload.length - Number(payloadLength);
+  if (payloadStart < NORITO_FRAME_HEADER_LENGTH) {
+    throw new Error("Malformed NRT0 transaction frame payload length.");
+  }
+  return payload.subarray(payloadStart);
+}
+
+function toVersionedTransactionPayload(payload) {
+  const rawPayload = unwrapNrt0NoritoFrame(payload);
+  return Buffer.concat([
+    Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
+    rawPayload,
+  ]);
+}
 
 function isSecureProtocol(protocol) {
   return protocol === "https:" || protocol === "wss:";
@@ -3559,12 +3594,13 @@ export class ToriiClient {
   async submitTransaction(payload) {
     await this._ensureDataModelValidation();
     const rawPayload = toBuffer(payload);
+    const pipelinePayload = toVersionedTransactionPayload(rawPayload);
     const requestOptions = {
       headers: {
         "Content-Type": "application/x-norito",
         Accept: "application/x-norito, application/json",
       },
-      body: rawPayload,
+      body: pipelinePayload,
       retryProfile: "pipeline",
     };
     let response = await this._request(
@@ -3573,13 +3609,9 @@ export class ToriiClient {
       requestOptions,
     );
     if (response.status === 404 || response.status === 405) {
-      const native = resolveNativeBinding();
-      if (!native || typeof native.encodeSignedTransactionNorito !== "function") {
-        throw new Error("native binding 'encodeSignedTransactionNorito' is unavailable");
-      }
       response = await this._request("POST", "/transaction", {
         ...requestOptions,
-        body: Buffer.from(native.encodeSignedTransactionNorito(rawPayload)),
+        body: pipelinePayload,
       });
     }
     await this._expectStatus(response, [200, 201, 202, 204]);
