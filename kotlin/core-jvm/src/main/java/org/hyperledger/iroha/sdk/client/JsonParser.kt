@@ -121,7 +121,11 @@ class JsonParser private constructor(private val input: String) {
         val token = input.substring(start, index)
         return try {
             if (!hasFraction && !hasExponent) {
-                token.toLong()
+                try {
+                    token.toLong()
+                } catch (_: NumberFormatException) {
+                    java.math.BigInteger(token)
+                }
             } else {
                 val value = token.toDouble()
                 check(value.isFinite()) { "Invalid number: $token" }

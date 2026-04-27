@@ -13,6 +13,7 @@ import java.util.Optional
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -442,6 +443,20 @@ class HttpClientTransport(
         @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)
         @JvmStatic fun withDefaultExecutor(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
+        /**
+         * Builds a transport whose underlying [UrlConnectionTransportExecutor] runs the synchronous
+         * HTTP work on [asyncExecutor]; pass `null` for behavior equivalent to [withDefaultExecutor].
+         * See [UrlConnectionTransportExecutor] for the full rationale (Android `StrictMode` /
+         * `TrafficStats` interaction).
+         */
+        @JvmStatic fun withDefaultExecutor(config: ClientConfig, asyncExecutor: Executor?): HttpClientTransport =
+            HttpClientTransport(
+                org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutor(
+                    config.requestTimeout(),
+                    asyncExecutor,
+                ),
+                config,
+            )
         @JvmStatic fun withOfflineJournalQueue(config: ClientConfig, journalPath: Path, key: OfflineJournalKey): ClientConfig = config.toBuilder().enableOfflineJournalQueue(journalPath, key).build()
         @JvmStatic fun withOfflineJournalQueue(config: ClientConfig, journalPath: Path, seed: ByteArray): ClientConfig = config.toBuilder().enableOfflineJournalQueue(journalPath, seed).build()
         @JvmStatic fun withOfflineJournalQueue(config: ClientConfig, journalPath: Path, passphrase: CharArray): ClientConfig = config.toBuilder().enableOfflineJournalQueue(journalPath, passphrase).build()
