@@ -9,7 +9,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - Promote the localnet inline `offline-note-v2-recursive-v1` verifier registration into the production genesis/config artifact flow with signed real Halo2 IPA VK/PK metadata and no debug fallback.
   - Add Rust four-peer localnet issue/redeem/audit e2e coverage that submits real Offline V2 proofs and validates replay/nullifier/accounting behavior across consensus.
-  - Add Swift Offline V2 transaction builders and real prover integration surfaces without exposing mock-proof helpers; readiness metadata decoding is in place.
   - Fold the new prover slice into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
 - Carry native asset escrow through the remaining Aitai application corridor.
   - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and the new Kotlin/Java/Swift helper surfaces, then subscribe through the numeric escrow query/event APIs.
