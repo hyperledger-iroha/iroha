@@ -5547,17 +5547,33 @@ impl Actor {
             .count()
     }
 
-    fn pending_block_is_commit_recovery_candidate(pending: &PendingBlock) -> bool {
-        pending.validation_status != ValidationStatus::Invalid
-            && ((!pending.is_consensus_inactive() && !pending.is_retired_same_height())
-                || pending.commit_qc_observed())
+    fn pending_block_is_commit_recovery_candidate(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        if pending.validation_status == ValidationStatus::Invalid {
+            return false;
+        }
+        if !pending.is_consensus_inactive() && !pending.is_retired_same_height() {
+            return true;
+        }
+        if pending.commit_qc_observed()
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view)
+        {
+            return true;
+        }
+        pending.is_retired_same_height()
+            && self.pending_block_has_commit_votes(block_hash, pending.height, pending.view)
     }
 
     fn commit_recovery_candidate_blocks_len(&self) -> usize {
         self.pending
             .pending_blocks
-            .values()
-            .filter(|pending| Self::pending_block_is_commit_recovery_candidate(pending))
+            .iter()
+            .filter(|(hash, pending)| {
+                self.pending_block_is_commit_recovery_candidate(**hash, pending)
+            })
             .count()
     }
 
@@ -6887,6 +6903,18 @@ impl Actor {
                             tip_hash,
                         )
                 });
+        let terminal_pending_without_commit_qc = self
+            .pending
+            .pending_blocks
+            .get(&slot.block_hash)
+            .is_some_and(|pending| {
+                pending.height == slot.height
+                    && pending.view == slot.view
+                    && (pending.aborted
+                        || pending.is_retired_same_height()
+                        || pending.validation_status == ValidationStatus::Invalid)
+                    && !pending.commit_qc_observed()
+            });
         let locally_voted = matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
         let local_vote_history = self.frontier_slot_has_local_vote_history_in_slot(slot);
         let competing_quorum_locked =
@@ -6900,11 +6928,11 @@ impl Actor {
             // conflicting candidate cannot mathematically reach quorum, keep exact-slot recovery
             // on that owner instead of reproposing new block hashes.
             || competing_quorum_locked
-            || locally_voted
+            || (locally_voted && !terminal_pending_without_commit_qc)
             // Once the local validator already voted for this same-height owner, later-view
             // reproposals become locally non-votable. Keep repair anchored to the voted branch
             // until stronger same-height evidence supersedes it.
-            || local_vote_history
+            || (local_vote_history && !terminal_pending_without_commit_qc)
     }
 
     fn frontier_slot_competing_quorum_locked_for_view(
@@ -15813,20 +15841,27 @@ impl Actor {
         }
     }
 
+    fn frontier_body_full_repair_targets(&self, slot: &FrontierSlot) -> Vec<PeerId> {
+        let mut roster = self.rbc_roster_for_session((slot.block_hash, slot.height, slot.view));
+        if roster.is_empty() {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(slot.height);
+            roster = self.roster_for_live_vote_with_mode(slot.height, consensus_mode);
+        }
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
+        roster
+            .into_iter()
+            .filter(|peer| peer != self.common_config.peer.id())
+            .collect()
+    }
+
     fn frontier_body_next_due(&self, now: Instant) -> Option<Instant> {
         let slot = self.frontier_slot.as_ref()?;
-        let committed_height = self.committed_height_snapshot();
-        let known_block_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
-            slot.block_hash,
-            slot.height,
-            slot.view,
-            committed_height,
-            now,
-        );
         if !slot.exact_fetch_armed || !matches!(slot.mode, FrontierSlotMode::Normal) {
             return None;
         }
-        if slot.body_present && !known_block_commit_qc_repair {
+        if slot.body_present || self.frontier_block_materialized_locally(slot.block_hash) {
             return None;
         }
         let mut has_targets = !Self::frontier_body_fetch_targets(slot).is_empty();
@@ -15944,20 +15979,24 @@ impl Actor {
             committed_height,
             now,
         );
-        if !known_block_commit_qc_repair
-            && (slot.body_present || self.frontier_block_materialized_locally(slot.block_hash))
-        {
+        if slot.body_present || self.frontier_block_materialized_locally(slot.block_hash) {
+            let block_hash = slot.block_hash;
             let actions = slot.step(
                 now,
                 FrontierSlotEvent::OnBodyAvailable {
-                    block_hash: slot.block_hash,
+                    block_hash,
                     view: slot.view,
                     sender: None,
                 },
                 self.frontier_slot_lag_window(),
             );
+            let needs_commit_work =
+                known_block_commit_qc_repair || slot.quorum_progress.commit_qc_observed;
             self.frontier_slot = Some(slot);
-            if let Some(block_hash) = actions.request_commit_pipeline_for {
+            if let Some(block_hash) = actions
+                .request_commit_pipeline_for
+                .or(needs_commit_work.then_some(block_hash))
+            {
                 self.request_commit_pipeline_for_pending(
                     block_hash,
                     super::status::RoundEventCauseTrace::BlockAvailable,
@@ -15989,6 +16028,16 @@ impl Actor {
         if targets.is_empty() && matches!(slot.fetch_stage, FrontierBodyFetchStage::Leader) {
             slot.fetch_stage = FrontierBodyFetchStage::Voters;
             targets = Self::frontier_body_fetch_targets(&slot);
+        }
+        let widen_exact_repair = self.config.resilience.enabled
+            && (bypass_ingress_grace
+                || slot.quorum_progress.commit_qc_observed
+                || now.saturating_duration_since(slot.lag_started_at())
+                    >= self.frontier_slot_lag_window());
+        if widen_exact_repair {
+            let mut widened_targets = targets.into_iter().collect::<BTreeSet<_>>();
+            widened_targets.extend(self.frontier_body_full_repair_targets(&slot));
+            targets = widened_targets.into_iter().collect();
         }
         if targets.is_empty() {
             self.frontier_slot = Some(slot);
@@ -35081,6 +35130,8 @@ enum ProposalDeferWarningKind {
     InsufficientOnlinePeers,
     EmptyCommitTopologyProposal,
     EmptyCommitTopologyFinalize,
+    FrontierRecoveryProposalDeferred,
+    FrontierOwnerYieldBlocked,
 }
 
 #[derive(Debug, Default)]
