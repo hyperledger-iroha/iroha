@@ -396,7 +396,6 @@ struct CollectorsResponse {
     view: u64,
     collectors_k: u64,
     redundant_send_r: u64,
-    #[norito(skip_serializing_if = "Option::is_none")]
     epoch_seed: Option<String>,
     collectors: Vec<CollectorEntry>,
     prf: PrfContext,
@@ -7577,11 +7576,32 @@ pub async fn handle_v1_sumeragi_collectors(
     );
     let (plan_height, plan_view) =
         collector_plan_context(snap.prf_height, snap.prf_view, current_height);
-    let mut epoch_seed = snap.prf_epoch_seed.or_else(|| {
+    let npos_collector_config = if matches!(mode, ConsensusMode::Npos) {
+        sumeragi::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+    } else {
+        None
+    };
+    let npos_param_seed = if matches!(mode, ConsensusMode::Npos) {
         world
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_seed())
-    });
+    } else {
+        None
+    };
+    let seed_from_mode = npos_collector_config
+        .map(|cfg| cfg.seed)
+        .or(npos_param_seed);
+    let prefer_snapshot_seed = snap.prf_height >= current_height;
+    let epoch_seed = match mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            if prefer_snapshot_seed {
+                snap.prf_epoch_seed.or(seed_from_mode)
+            } else {
+                seed_from_mode.or(snap.prf_epoch_seed)
+            }
+        }
+    };
     if peers.is_empty() {
         let consensus_mode_label = match mode {
             ConsensusMode::Permissioned => "Permissioned",
@@ -7617,20 +7637,17 @@ pub async fn handle_v1_sumeragi_collectors(
     let min_votes = topology.min_votes_for_commit();
     let tail = topology.proxy_tail_index();
     let available = n.saturating_sub(tail);
-    let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
+    let (mut k_raw, redundant_send_r) = match mode {
         ConsensusMode::Permissioned => {
             let params = world.parameters().sumeragi();
             (
                 params.collectors_k as usize,
                 params.collectors_redundant_send_r,
-                None,
             )
         }
         ConsensusMode::Npos => {
-            if let Some(cfg) =
-                sumeragi::load_npos_collector_config_from_world(&world, state.chain_id_ref())
-            {
-                (cfg.k, cfg.redundant_send_r, Some(cfg.seed))
+            if let Some(cfg) = npos_collector_config {
+                (cfg.k, cfg.redundant_send_r)
             } else {
                 let params = world.parameters().sumeragi();
                 iroha_logger::warn!(
@@ -7639,7 +7656,6 @@ pub async fn handle_v1_sumeragi_collectors(
                 (
                     params.collectors_k as usize,
                     params.collectors_redundant_send_r,
-                    None,
                 )
             }
         }
@@ -7654,17 +7670,6 @@ pub async fn handle_v1_sumeragi_collectors(
     };
     if k == 0 && available > 0 {
         k = available;
-    }
-    let prefer_snapshot_seed = snap.prf_height >= current_height;
-    epoch_seed = if prefer_snapshot_seed {
-        snap.prf_epoch_seed.or(seed_from_mode)
-    } else {
-        seed_from_mode.or(snap.prf_epoch_seed)
-    };
-    if epoch_seed.is_none() {
-        epoch_seed = world
-            .sumeragi_npos_parameters()
-            .map(|params| params.epoch_seed());
     }
     let collectors = sumeragi::collectors::deterministic_collectors(
         &topology,
