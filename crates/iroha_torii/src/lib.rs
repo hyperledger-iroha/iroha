@@ -5195,10 +5195,40 @@ async fn handler_repo_agreements_query(
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error> {
+    let verifier_key_id = json_object([
+        json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
+        json_entry(
+            "name",
+            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        ),
+    ]);
+    let schema_hash = hex::encode(
+        iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash(),
+    );
     json_ok(json_object([
         json_entry("offline_note_v2", true),
         json_entry("offline_one_use_keys", true),
         json_entry("offline_recursive_note_proof", true),
+        json_entry(
+            "offline_recursive_note_proof_backend",
+            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_circuit_id",
+            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_public_inputs_schema_hash",
+            schema_hash,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_public_instance_columns",
+            iroha_core::zk::OFFLINE_NOTE_V2_INSTANCE_COLUMNS as u64,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_verifier_key_id",
+            verifier_key_id,
+        ),
         json_entry("offline_fountain_qr_v1", true),
         json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),

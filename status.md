@@ -1,11 +1,41 @@
 # Status
 
-Last updated: 2026-04-26
+Last updated: 2026-04-27
+
+## 2026-04-27 Offline V2 real Halo2 IPA prover slice
+
+- Added the real `offline-note-v2-recursive-v1` Halo2 IPA semantic circuit. The circuit binds the Offline V2 public-instance schema, constrains redeem/audit mode, bounded input/output counts, unused amount slots, and normalized input/output amount conservation.
+- Added `prove_offline_note_v2_redeem`, `prove_offline_note_v2_audit`, and `derive_halo2_ipa_offline_note_v2_proving_key_bytes`. These paths generate real Halo2 IPA proofs against registered verifier-key material; no debug or mock prover backend is used.
+- Offline V2 ISI verification now compares proof-exposed public instances against the same semantic instance layout used by the prover instead of the old hash-only reserved-sentinel layout.
+- Added active WSV verifier-key registration for `offline-note-v2-recursive-v1` to Kagami-generated localnet genesis using the real inline Halo2 IPA verifier key and Offline V2 schema hash.
+- Torii Offline V2 readiness now advertises the canonical recursive-proof backend, circuit id, schema hash, instance-column count, and verifier key id. The Swift SDK has a typed `getOfflineV2Readiness` accessor for that metadata.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core offline_note_v2_real --lib -- --nocapture`
+  - `cargo test -p iroha_kagami generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
+  - `swift test --filter ToriiClientTests/testGetOfflineV2ReadinessParsesRecursiveVerifierMetadata`
+  - `cargo test -p iroha_core expected_public_instances_encode_semantic_columns --lib -- --nocapture`
+  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+
+## 2026-04-27 Offline audit replay and router ambiguity fix
+
+- Offline V2 audit bundles now carry issued input claims in their canonical public inputs. Core verifies those source claims were issued and unspent, consumes their normal spent-claim keys, and consumes normal redemption nullifier keys before publishing audited output claims as redeemable.
+- Nexus account-scoped routing no longer trusts the legacy single-binding `dataspace_for_account` shortcut. Account targets route to a non-universal dataspace only when the full account-scope hierarchy has exactly one dataspace; universal-plus-private and multi-private scopes fall back to the default route.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
+  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo test -p iroha_core audit_replay_keys_cover_input_spend_and_output_issue_domains --lib -- --nocapture`
+  - `cargo test -p iroha_core opaque_asset_transfer --lib -- --nocapture`
+  - `cargo test -p iroha_core untargeted_universal_authority_transaction_uses_default_lane_with_state --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib explorer -- --nocapture`
 
 ## 2026-04-26 Offline escrow self-account guard and localnet note seed fix
 
 - `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline V2 note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
-- `crates/iroha_kagami/src/localnet.rs` no longer writes the built-in offline-note asset escrow account as the localnet app authority. Generated peer configs keep an empty `settlement.offline.escrow_accounts` table, and localnet genesis marks the built-in offline-note asset `offline.enabled = true` so the deterministic escrow account path creates the vault.
+- `crates/iroha_kagami/src/localnet.rs` no longer writes the built-in offline-note asset escrow account as the localnet app authority. Generated peer configs record the deterministic escrow account for the built-in offline-note asset, and core also derives metadata-enabled escrows at enforcement points so stale or missing config bindings cannot bypass the vault protections.
 - Focused validation for this fix:
   - `cargo fmt --all`
   - `cargo test -p iroha_core escrow_self_reference`

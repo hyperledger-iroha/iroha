@@ -41,11 +41,8 @@ class UrlConnectionTransportExecutor(
     /** Creates an executor that applies the same timeout to connect and read operations. */
     constructor(timeout: Duration?) : this(timeout, timeout, null)
 
-    /**
-     * Creates an executor with a uniform timeout and a caller-supplied async executor;
-     * see the primary constructor for why [asyncExecutor] exists.
-     */
-    constructor(timeout: Duration?, asyncExecutor: Executor?) : this(timeout, timeout, asyncExecutor)
+    /** Creates an executor with distinct connect/read timeouts (nullable to use defaults). */
+    constructor(connectTimeout: Duration?, readTimeout: Duration?) : this(connectTimeout, readTimeout, null)
 
     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
         if (asyncExecutor != null) {

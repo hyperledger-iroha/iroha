@@ -17,7 +17,7 @@ pub mod isi {
         str::FromStr,
     };
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{
         ChainId, IntoKeyValue,
         account::{
@@ -42,8 +42,6 @@ pub mod isi {
         state::{WorldReadOnly as _, account_label_is_pii},
     };
 
-    /// Domain-separation tag for deterministic offline escrow derivation.
-    const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
 
@@ -389,13 +387,7 @@ pub mod isi {
         chain_id: &ChainId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
-        let seed_material = format!(
-            "{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}",
-            chain_id.as_str()
-        );
-        let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-        let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
-        AccountId::new(keypair.public_key().clone())
+        iroha_data_model::offline::offline_escrow_account_id(chain_id, definition_id)
     }
 
     pub(crate) fn ensure_offline_escrow_account(
@@ -1120,23 +1112,40 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((escrow_definition_id, _)) = state_transaction
-                .settlement
-                .offline
-                .escrow_accounts
-                .iter()
-                .find(|(definition_id, escrow_account)| {
-                    *escrow_account == &account_id
-                        && state_transaction
-                            .world
-                            .asset_definitions
-                            .get(*definition_id)
-                            .is_some()
-                })
+            let chain_id = state_transaction.chain_id().clone();
+            for (definition_id, asset_definition) in
+                state_transaction.world.asset_definitions.iter()
             {
+                if asset_definition_offline_enabled(asset_definition.metadata())? {
+                    let derived = offline_escrow_account_id(&chain_id, definition_id);
+                    if derived == account_id {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "cannot unregister account {account_id}: it is the deterministic offline escrow account for active asset definition {definition_id} (`offline.enabled` metadata); update asset definition metadata first"
+                            )
+                            .into(),
+                        )
+                        .into());
+                    }
+                }
+            }
+            for (definition_id, escrow_account) in
+                &state_transaction.settlement.offline.escrow_accounts
+            {
+                if escrow_account != &account_id {
+                    continue;
+                }
+                let Some(asset_definition) =
+                    state_transaction.world.asset_definitions.get(definition_id)
+                else {
+                    continue;
+                };
+                if asset_definition_offline_enabled(asset_definition.metadata())? {
+                    continue;
+                }
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is configured as offline escrow account for active asset definition {escrow_definition_id} (`settlement.offline.escrow_accounts`); update settlement config first"
+                        "cannot unregister account {account_id}: it is configured as offline escrow account for active asset definition {definition_id} (`settlement.offline.escrow_accounts`); update settlement config first"
                     )
                     .into(),
                 )
@@ -2933,9 +2942,9 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        IntoKeyValue,
+        ChainId, IntoKeyValue,
         account::{
-            AccountAddress, NewAccount, OpaqueAccountId,
+            Account, AccountAddress, NewAccount, OpaqueAccountId,
             controller::{MultisigMember, MultisigPolicy},
             rekey::AccountAlias,
         },
@@ -5688,6 +5697,60 @@ mod tests {
         );
         assert!(
             tx.world.accounts.get(&account_id).is_some(),
+            "account should remain after rejected unregister"
+        );
+    }
+
+    #[test]
+    fn unregister_account_rejects_metadata_derived_offline_escrow_without_config_binding() {
+        let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
+        let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        let asset_definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "usd".parse().expect("asset definition name"),
+        );
+        let escrow_account_id =
+            iroha_data_model::offline::offline_escrow_account_id(&chain_id, &asset_definition_id);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(true),
+        );
+        let mut asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string())
+            .build(&authority);
+        asset_definition.metadata = metadata;
+        let world = World::with_assets(
+            [Domain::new(domain_id).build(&authority)],
+            [Account::new(escrow_account_id.clone()).build(&authority)],
+            [asset_definition],
+            [],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query, chain_id);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        assert!(
+            tx.settlement.offline.escrow_accounts.is_empty(),
+            "test must exercise metadata-derived escrow without config binding"
+        );
+
+        let err = Unregister::account(escrow_account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("metadata-derived offline escrow account must not be unregistered");
+        let err_string = err.to_string();
+        assert!(
+            err_string.contains("deterministic offline escrow account"),
+            "error should explain metadata-derived offline escrow conflict: {err_string}"
+        );
+        assert!(
+            tx.world.accounts.get(&escrow_account_id).is_some(),
             "account should remain after rejected unregister"
         );
     }

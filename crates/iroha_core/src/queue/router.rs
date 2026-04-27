@@ -1194,9 +1194,6 @@ fn account_dataspace_target<W: WorldReadOnly>(
     account_id: &AccountId,
 ) -> Option<DataSpaceId> {
     let world = world?;
-    if let Some(dataspace) = world.dataspace_for_account(account_id) {
-        return (dataspace != DataSpaceId::UNIVERSAL).then_some(dataspace);
-    }
     let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
     if hierarchy.len() != 1 {
         return None;
@@ -3843,7 +3840,7 @@ mod tests {
     }
 
     #[test]
-    fn opaque_asset_transfer_prefers_uaid_binding_over_universal_fallback() {
+    fn opaque_asset_transfer_with_universal_and_private_account_scope_uses_default_route() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"router::uaid-bound-sender"));
@@ -3913,8 +3910,85 @@ mod tests {
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
-                .expect("UAID-bound transfer should route to the account dataspace"),
-            RoutingDecision::new(lane_id, dataspace_id)
+                .expect("ambiguous account scope should use the default route"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_transfer_with_multiple_private_account_bindings_uses_default_route() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"router::multi-private-uaid"));
+        let first_dataspace = DataSpaceId::new(10);
+        let second_dataspace = DataSpaceId::new(11);
+        let dataspace_catalog =
+            dataspace_catalog(&[(first_dataspace, "paynet"), (second_dataspace, "bankb")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), first_dataspace),
+            (LaneId::new(3), second_dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition, sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+
+        let mut state = blank_state();
+        state.nexus.write().dataspace_catalog = dataspace_catalog;
+        state.nexus.write().lane_catalog = lane_catalog;
+        let sender = Account::new(sender_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&sender_id);
+        let (account_id, account_value) = sender.into_key_value();
+        state
+            .world
+            .accounts
+            .insert(account_id.clone(), account_value);
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(first_dataspace);
+        scope_entry.ensure_dataspace(second_dataspace);
+        state
+            .world
+            .account_scope_directory
+            .insert(account_id.clone(), scope_entry);
+        let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+        bindings.bind_account(first_dataspace, account_id.clone());
+        bindings.bind_account(second_dataspace, account_id.clone());
+        state.world.uaid_dataspaces.insert(uaid, bindings);
+
+        assert_eq!(
+            state.view().world().dataspace_for_account(&account_id),
+            Some(first_dataspace)
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("multi-dataspace account should use the default route"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 

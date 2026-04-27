@@ -110,9 +110,7 @@ object RamLfeJsonParser {
     }
 
     private fun asLong(value: Any?, path: String): Long {
-        check(value is Number) { "$path must be a number" }
-        check(value !is Float && value !is Double) { "$path must be an integer" }
-        return value.toLong()
+        return JsonNumbers.asLong(value, path)
     }
 
     private fun asOptionalLong(value: Any?, path: String): Long? {
@@ -153,13 +151,13 @@ object RamLfeJsonParser {
                 asLong(parameters["polynomial_degree"], "$context.parameters.polynomial_degree"),
                 asLong(parameters["plaintext_modulus"], "$context.parameters.plaintext_modulus"),
                 asLong(parameters["ciphertext_modulus"], "$context.parameters.ciphertext_modulus"),
-                Math.toIntExact(asLong(parameters["decomposition_base_log"], "$context.parameters.decomposition_base_log"))
+                JsonNumbers.asInt(parameters["decomposition_base_log"], "$context.parameters.decomposition_base_log")
             ),
             IdentifierBfvPublicParameters.PublicKey(
                 asLongList(publicKey["b"], "$context.public_key.b"),
                 asLongList(publicKey["a"], "$context.public_key.a")
             ),
-            Math.toIntExact(asLong(root["max_input_bytes"], "$context.max_input_bytes"))
+            JsonNumbers.asInt(root["max_input_bytes"], "$context.max_input_bytes")
         )
     }
 

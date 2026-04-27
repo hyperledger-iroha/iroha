@@ -531,7 +531,9 @@ token id, observed nullifiers, output commitments, and certified key payload to 
 certified key must have been issued on-ledger first.
 Recursive proofs must name an active `offline_note_v2` verifier key in WSV, carry an
 `OpenVerifyEnvelope`, match `offline_note_v2_recursive_public_inputs_schema_hash()`, and expose the
-public-input hash limbs followed by the reserved sentinel limbs.
+semantic Offline V2 instance columns advertised by `/v1/offline/v2/readiness`. The readiness
+payload includes the canonical `halo2/ipa` verifier key id for `offline-note-v2-recursive-v1`;
+wallets should submit only real prover output for that verifier.
 
 Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
 backoff, retrying 429/5xx responses and transport errors). For example:
