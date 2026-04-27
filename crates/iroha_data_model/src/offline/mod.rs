@@ -68,8 +68,16 @@ mod model {
         pub device_id: String,
         /// Account authorized to control the note key.
         pub account_id: AccountId,
-        /// Ed25519 public key bytes for the certified one-use note key.
+        /// Ed25519 public key bytes for local note/proof signatures.
         pub public_key: Vec<u8>,
+        /// Hardware assertion scheme bound to this note key.
+        pub assertion_scheme: String,
+        /// Hardware assertion key algorithm, for example `ecdsa-p256-sha256`.
+        pub assertion_key_algorithm: String,
+        /// Hardware assertion public key bytes, for example SEC1 P-256.
+        pub assertion_public_key: Vec<u8>,
+        /// Hardware one-use limit when the platform exposes it.
+        pub assertion_usage_count_limit: Option<u32>,
         /// True when the issuer verified hardware one-use semantics.
         pub one_use: bool,
         /// Offline CA signature over the compact certificate payload.
@@ -95,8 +103,16 @@ mod model {
         pub device_id: String,
         /// Account authorized to control the note key.
         pub account_id: AccountId,
-        /// Ed25519 public key bytes for the certified one-use note key.
+        /// Ed25519 public key bytes for local note/proof signatures.
         pub public_key: Vec<u8>,
+        /// Hardware assertion scheme bound to this note key.
+        pub assertion_scheme: String,
+        /// Hardware assertion key algorithm, for example `ecdsa-p256-sha256`.
+        pub assertion_key_algorithm: String,
+        /// Hardware assertion public key bytes, for example SEC1 P-256.
+        pub assertion_public_key: Vec<u8>,
+        /// Hardware one-use limit when the platform exposes it.
+        pub assertion_usage_count_limit: Option<u32>,
         /// True when the issuer verified hardware one-use semantics.
         pub one_use: bool,
     }
@@ -288,6 +304,10 @@ impl From<&OfflineNoteKeyCertificateV2> for OfflineNoteKeyCertificatePayloadV2 {
             device_id: certificate.device_id.clone(),
             account_id: certificate.account_id.clone(),
             public_key: certificate.public_key.clone(),
+            assertion_scheme: certificate.assertion_scheme.clone(),
+            assertion_key_algorithm: certificate.assertion_key_algorithm.clone(),
+            assertion_public_key: certificate.assertion_public_key.clone(),
+            assertion_usage_count_limit: certificate.assertion_usage_count_limit,
             one_use: certificate.one_use,
         }
     }
@@ -524,6 +544,10 @@ mod offline_note_v2_tests {
             device_id: "device-1".to_owned(),
             account_id: account_id.clone(),
             public_key: note_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
             one_use: true,
             issuer_signature: sample_signature(0xAB),
         };

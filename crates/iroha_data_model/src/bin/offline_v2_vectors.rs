@@ -552,6 +552,10 @@ struct VectorCertificate {
     device_id: String,
     account_id: String,
     public_key_base64: String,
+    assertion_scheme: String,
+    assertion_key_algorithm: String,
+    assertion_public_key_base64: String,
+    assertion_usage_count_limit: Option<u32>,
     one_use: bool,
     issuer_signature_base64: String,
     issuer_signature_payload_base64: String,
@@ -567,6 +571,26 @@ fn signed_certificate(
 ) -> Result<VectorCertificate, Box<dyn Error>> {
     let (_algorithm, public_key) = note_key_pair.public_key().to_bytes();
     let public_key = public_key.to_vec();
+    let (
+        assertion_scheme,
+        assertion_key_algorithm,
+        assertion_public_key,
+        assertion_usage_count_limit,
+    ) = if platform == "android-keymint" || platform == "android" {
+        (
+            "android-keymint-ecdsa-p256-usage-limit-v1".to_owned(),
+            "ecdsa-p256-sha256".to_owned(),
+            vec![0x04; 65],
+            Some(1),
+        )
+    } else {
+        (
+            "apple-appattest-counter-v1".to_owned(),
+            "app-attest-p256".to_owned(),
+            public_key.clone(),
+            None,
+        )
+    };
     let unsigned_certificate = OfflineNoteKeyCertificateV2 {
         version: 2,
         platform: platform.to_owned(),
@@ -574,6 +598,10 @@ fn signed_certificate(
         device_id: device_id.to_owned(),
         account_id: account_id.clone(),
         public_key: public_key.clone(),
+        assertion_scheme: assertion_scheme.clone(),
+        assertion_key_algorithm: assertion_key_algorithm.clone(),
+        assertion_public_key: assertion_public_key.clone(),
+        assertion_usage_count_limit,
         one_use: true,
         issuer_signature: Signature::from_bytes(&[0_u8; 64]),
     };
@@ -586,17 +614,25 @@ fn signed_certificate(
         device_id: device_id.to_owned(),
         account_id: account_id.clone(),
         public_key: public_key.clone(),
+        assertion_scheme,
+        assertion_key_algorithm,
+        assertion_public_key,
+        assertion_usage_count_limit,
         one_use: true,
         issuer_signature: issuer_signature.clone(),
     };
     Ok(VectorCertificate {
-        model: certificate,
+        model: certificate.clone(),
         version: 2,
         platform: platform.to_owned(),
         key_id: key_id.to_owned(),
         device_id: device_id.to_owned(),
         account_id: account_id.to_string(),
         public_key_base64: BASE64_STANDARD.encode(&public_key),
+        assertion_scheme: certificate.assertion_scheme.clone(),
+        assertion_key_algorithm: certificate.assertion_key_algorithm.clone(),
+        assertion_public_key_base64: BASE64_STANDARD.encode(&certificate.assertion_public_key),
+        assertion_usage_count_limit: certificate.assertion_usage_count_limit,
         one_use: true,
         issuer_signature_base64: BASE64_STANDARD.encode(issuer_signature.payload()),
         issuer_signature_payload_base64: BASE64_STANDARD.encode(signing_bytes),
@@ -613,6 +649,26 @@ fn mobile_certificate_json(certificate: &VectorCertificate) -> Value {
         (
             "public_key",
             Value::from(certificate.public_key_base64.clone()),
+        ),
+        (
+            "assertion_scheme",
+            Value::from(certificate.assertion_scheme.clone()),
+        ),
+        (
+            "assertion_key_algorithm",
+            Value::from(certificate.assertion_key_algorithm.clone()),
+        ),
+        (
+            "assertion_public_key",
+            Value::from(certificate.assertion_public_key_base64.clone()),
+        ),
+        (
+            "assertion_usage_count_limit",
+            certificate
+                .assertion_usage_count_limit
+                .map(u64::from)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
         ),
         ("one_use", Value::from(certificate.one_use)),
         (

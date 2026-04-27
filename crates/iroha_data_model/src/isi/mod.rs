@@ -3367,6 +3367,10 @@ mod tests {
             device_id: "device-1".to_owned(),
             account_id: account_id.clone(),
             public_key: vec![0x01, 0x02, 0x03],
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
             one_use: true,
             issuer_signature: Signature::from_bytes(&[0xAB; 64]),
         };
