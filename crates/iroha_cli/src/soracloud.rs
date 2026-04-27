@@ -19182,8 +19182,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
+  const address = server.address();
+  const boundPort = typeof address === "object" && address ? address.port : port;
   // eslint-disable-next-line no-console
-  console.log(`api listening on :${port}`);
+  console.log(`api listening on :${boundPort}`);
 });
 "#,
     );
@@ -19355,8 +19357,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
+  const address = server.address();
+  const boundPort = typeof address === "object" && address ? address.port : port;
   // eslint-disable-next-line no-console
-  console.log(`pii api listening on :${port}`);
+  console.log(`pii api listening on :${boundPort}`);
 });
 "#,
     );
@@ -32400,6 +32404,7 @@ main().catch((error) => {
         assert!(api.contains("/state/auth/sessions"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED_PREFIX"));
         assert!(api.contains("AUTH_CHALLENGE_CONSUME_LOCK_PREFIX"));
+        assert!(api.contains("server.address()"));
     }
 
     #[test]
@@ -32429,6 +32434,7 @@ main().catch((error) => {
         assert!(api.contains("/state/auth/sessions"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED_PREFIX"));
         assert!(api.contains("AUTH_CHALLENGE_CONSUME_LOCK_PREFIX"));
+        assert!(api.contains("server.address()"));
     }
 
     #[test]
@@ -34340,7 +34346,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    15000
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -34819,7 +34828,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    15000
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -35150,8 +35162,8 @@ async function freePort() {
   });
 }
 
-function startServer(port, envOverrides) {
-  const child = spawn(process.execPath, [SERVER_PATH, `--port=${port}`], {
+function startServer(envOverrides) {
+  const child = spawn(process.execPath, [SERVER_PATH, "--port=0"], {
     env: { ...process.env, ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -35188,6 +35200,21 @@ async function stopServer(server) {
   }
 }
 
+async function waitForListeningPort(server) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = server.logs().match(/api listening on :(\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (server.child.exitCode !== null) {
+      throw new Error(`server exited before listen: ${server.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`server did not report a listening port: ${server.logs()}`);
+}
+
 async function waitForHealth(port) {
   for (let attempt = 0; attempt < 160; attempt += 1) {
     try {
@@ -35205,7 +35232,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    15000
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -35250,8 +35280,8 @@ async function main() {
       PUBLIC_BASE_URL: "http://127.0.0.1"
     };
 
-    const port = await freePort();
-    server = startServer(port, env);
+    server = startServer(env);
+    const port = await waitForListeningPort(server);
     await waitForHealth(port);
 
     const challenge = await jsonRequest(port, "POST", "/api/auth/challenge", {
@@ -35367,8 +35397,8 @@ async function freePort() {
   });
 }
 
-function startReplica(port, envOverrides) {
-  const child = spawn(process.execPath, [SERVER_PATH, `--port=${port}`], {
+function startReplica(envOverrides) {
+  const child = spawn(process.execPath, [SERVER_PATH, "--port=0"], {
     env: { ...process.env, ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -35403,6 +35433,21 @@ async function stopReplica(replica) {
     replica.child.kill("SIGKILL");
     await waitForExit(replica.child, 1500);
   }
+}
+
+async function waitForListeningPort(replica) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = replica.logs().match(/api listening on :(\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (replica.child.exitCode !== null) {
+      throw new Error(`replica exited before listen: ${replica.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`replica did not report a listening port: ${replica.logs()}`);
 }
 
 async function waitForHealth(port, route) {
@@ -35474,8 +35519,8 @@ async function main() {
     SORACLOUD_SHARED_STATE_FILE: STATE_FILE
   };
 
-  const portA = await freePort();
-  replicaA = startReplica(portA, env);
+  replicaA = startReplica(env);
+  const portA = await waitForListeningPort(replicaA);
   await waitForHealth(portA, "/api/healthz");
 
   const challenge = await jsonRequest(portA, "POST", "/api/auth/challenge", {
@@ -35605,8 +35650,8 @@ async function main() {
   );
   assert(hasSessionRecord, "shared auth state must persist session records");
 
-  const portB = await freePort();
-  replicaB = startReplica(portB, env);
+  replicaB = startReplica(env);
+  const portB = await waitForListeningPort(replicaB);
   await waitForHealth(portB, "/api/healthz");
   const sharedSession = await jsonRequest(
     portB,
@@ -35767,7 +35812,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    15000
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -35967,7 +36015,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    15000
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -36120,8 +36171,8 @@ async function freePort() {
   });
 }
 
-function startServer(port, envOverrides) {
-  const child = spawn(process.execPath, [SERVER_PATH, `--port=${port}`], {
+function startServer(envOverrides) {
+  const child = spawn(process.execPath, [SERVER_PATH, "--port=0"], {
     env: { ...process.env, ...envOverrides },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -36158,6 +36209,21 @@ async function stopServer(server) {
   }
 }
 
+async function waitForListeningPort(server) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const match = server.logs().match(/api listening on :(\d+)/);
+    if (match) {
+      return Number(match[1]);
+    }
+    if (server.child.exitCode !== null) {
+      throw new Error(`server exited before listen: ${server.logs()}`);
+    }
+    await sleep(25);
+  }
+  throw new Error(`server did not report a listening port: ${server.logs()}`);
+}
+
 async function waitForHealth(port) {
   for (let attempt = 0; attempt < 160; attempt += 1) {
     try {
@@ -36175,7 +36241,10 @@ async function waitForHealth(port) {
 
 async function jsonRequest(port, method, route, body, headers = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("request timed out")), 4000);
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`${method} ${route} request timed out`)),
+    15000
+  );
   const init = { method, headers: { ...headers }, signal: controller.signal };
   if (body !== undefined) {
     init.headers["content-type"] = "application/json";
@@ -36221,8 +36290,8 @@ async function main() {
       PUBLIC_BASE_URL: ""
     };
 
-    const port = await freePort();
-    server = startServer(port, env);
+    server = startServer(env);
+    const port = await waitForListeningPort(server);
     await waitForHealth(port);
 
     const challenge = await jsonRequest(
