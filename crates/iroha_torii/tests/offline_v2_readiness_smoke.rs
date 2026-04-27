@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::extract::connect_info::ConnectInfo;
-use axum::http::{Request, StatusCode, Uri};
+use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
@@ -20,7 +20,7 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 }
 
 #[tokio::test]
-async fn offline_v2_readiness_is_mounted() {
+async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -92,7 +92,23 @@ async fn offline_v2_readiness_is_mounted() {
     };
 
     let app = torii.api_router_for_tests();
+    let connect_info = ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+
     let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/offline/cash/readiness"))
+                .extension(connect_info)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::NOT_FOUND);
+
+    let readiness = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(Uri::from_static("/v1/offline/v2/readiness"))
@@ -111,4 +127,35 @@ async fn offline_v2_readiness_is_mounted() {
     assert!(body.contains("\"offline_fountain_qr_v1\":true"));
     assert!(body.contains("\"offline_sync_optional\":true"));
     assert!(body.contains("\"offline_telemetry\":true"));
+
+    for path in [
+        "/v1/offline/cash/setup",
+        "/v1/offline/cash/load",
+        "/v1/offline/cash/refresh",
+        "/v1/offline/cash/sync",
+        "/v1/offline/cash/redeem",
+        "/v1/offline/transfers",
+        "/v1/offline/transfers/query",
+        "/v1/offline/revocations",
+        "/v1/offline/revocations/bundle",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "legacy offline route should be absent: {path}"
+        );
+    }
 }

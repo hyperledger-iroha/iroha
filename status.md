@@ -2,6 +2,41 @@
 
 Last updated: 2026-04-26
 
+## 2026-04-26 Torii MCP Sumeragi collector empty-topology fix
+
+- Fixed `/v1/sumeragi/collectors` so the Torii/MCP test harness with no commit topology returns an empty collector snapshot instead of constructing a `Topology` from an empty peer list and panicking.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch -- --nocapture`
+
+## 2026-04-26 Sumeragi locked-chain precommit vote fix
+
+- Fixed local precommit emission so a validator with a known locked block refuses to precommit a different block at the same height, even when the candidate is in a newer view. Missing locked payloads still keep the existing newer-view override behavior.
+- Focused validation for this slice:
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::precommit_vote_skips_when_block_conflicts_with_locked_chain -- --nocapture --exact`
+  - `cargo test -p iroha_core --lib emit_precommit_vote -- --nocapture`
+  - `cargo fmt --all`
+
+## 2026-04-26 Nexus router default-lane reroute fix
+
+- Fixed state-aware queue rerouting so universal-only account scope is treated as fallback materialization, not as a dataspace routing target. Untargeted universal authority transactions now continue to use `nexus.routing_policy.default_lane`, while non-universal single-scope accounts still route to their dataspace lane.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::tests::apply_lane_lifecycle_reconfigures_router_and_limits -- --nocapture`
+  - `cargo test -p iroha_core untargeted_universal_authority_transaction_uses_default_lane_with_state -- --nocapture`
+
+## 2026-04-26 Sumeragi recovery and worker-loop test stabilization
+
+- Stabilized Sumeragi commit recovery around QC-backed pending blocks without proposal evidence: cached prepare/commit QCs now count as consensus evidence for validation and commit gating, and local precommit emission records and applies the vote synchronously before broadcast.
+- Tightened recovery scheduling for empty-frontier local vote evidence, authoritative RBC/body ingress, and snapshot-roster near-quorum reschedules.
+- Restored deterministic worker-loop budget tests by isolating queue-depth state and allowing one pre-tick drain before marking tiny drain budgets exhausted.
+- Focused validation for this slice:
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline_allows_tip_pending_with_cached_qc_without_proposal_evidence -- --nocapture --exact`
+  - Direct `target/debug/deps/iroha_core-afb8267c04707e87` runs for the Sumeragi main-loop and worker-loop failures listed in the test report.
+  - `target/debug/deps/iroha_core-afb8267c04707e87 sumeragi::main_loop::tests::reschedule_stale_pending_blocks_targets_snapshot_roster --exact --nocapture`
+  - `cargo fmt --all`
+  - `git diff --check`
+
 ## 2026-04-26 Offline V2 first-release replacement
 
 - Hardened Offline V2 note issuance so only `CanManageOfflineEscrow` operators can issue notes, and key certificates must verify against the issuing operator over the canonical certificate payload before escrow is reserved.

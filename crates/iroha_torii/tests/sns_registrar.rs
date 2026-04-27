@@ -39,7 +39,24 @@ use tower::util::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod torii_fixtures;
 
+#[cfg(feature = "telemetry")]
+type TestMetrics = Arc<iroha_telemetry::metrics::Metrics>;
+#[cfg(not(feature = "telemetry"))]
+type TestMetrics = ();
+
 fn test_router() -> Router {
+    #[cfg(feature = "telemetry")]
+    let metrics = torii_fixtures::shared_metrics();
+    #[cfg(not(feature = "telemetry"))]
+    let metrics = ();
+
+    test_router_with_metrics(metrics)
+}
+
+fn test_router_with_metrics(metrics: TestMetrics) -> Router {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = metrics;
+
     let cfg = test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -60,7 +77,6 @@ fn test_router() -> Router {
     #[cfg(feature = "telemetry")]
     let telemetry = {
         use iroha_core::telemetry as core_telemetry;
-        let metrics = torii_fixtures::shared_metrics();
         let (_mh, ts) =
             iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
         core_telemetry::start(
@@ -633,8 +649,8 @@ async fn sns_unfreeze_missing_name_returns_not_found() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sns_register_emits_status_metric() {
-    let metrics = torii_fixtures::reset_shared_metrics();
-    let app = test_router();
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let app = test_router_with_metrics(Arc::clone(&metrics));
     let counter = metrics
         .sns_registrar_status_total
         .with_label_values(&["ok", "domain"]);

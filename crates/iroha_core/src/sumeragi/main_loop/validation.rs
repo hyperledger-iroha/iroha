@@ -345,9 +345,9 @@ impl Actor {
 
         let validation_priority_reason =
             self.pending_block_validation_priority_reason(hash, &pending);
-        let has_commit_qc = pending.commit_qc_observed()
-            || self.pending_block_has_commit_qc(hash, pending.height, pending.view);
-        if !has_commit_qc
+        let has_qc = pending.commit_qc_observed()
+            || self.pending_block_has_qc(hash, pending.height, pending.view);
+        if !has_qc
             && !self.slot_has_proposal_evidence(pending.height, pending.view)
             && validation_priority_reason.is_none()
         {

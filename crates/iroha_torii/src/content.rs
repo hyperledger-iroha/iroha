@@ -697,7 +697,7 @@ mod tests {
         let guard = TEST_LOCK
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
-            .expect("test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::app_auth::configure(config);
         Guard(guard)
     }

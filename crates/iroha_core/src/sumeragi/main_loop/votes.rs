@@ -190,6 +190,11 @@ impl Actor {
         vote: &crate::sumeragi::consensus::Vote,
         signature_topology: &super::network_topology::Topology,
     ) -> bool {
+        let local_commit_vote_for_known_block = vote.phase == Phase::Commit
+            && self.block_known_locally(vote.block_hash)
+            && self
+                .local_validator_index_for_topology(signature_topology)
+                .is_some_and(|idx| idx == vote.signer);
         self.should_fast_path_new_view_vote(vote)
             || (self.should_fast_path_commit_vote(vote)
                 && signature_topology.as_ref().len() <= VOTE_VERIFY_INLINE_ROSTER_MAX
@@ -198,6 +203,7 @@ impl Actor {
                         .pending
                         .missing_block_requests
                         .contains_key(&vote.block_hash)))
+            || local_commit_vote_for_known_block
     }
 
     fn local_frontier_vote_validation_roster(
