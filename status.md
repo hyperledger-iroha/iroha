@@ -65,6 +65,17 @@ Last updated: 2026-04-27
   - Kotlin and Java Android focused Gradle tests were not runnable in this shell because `java` and `/usr/libexec/java_home -v 21` reported no installed Java runtime.
   - A broader `python3 ci/check_docs_i18n_metadata.py --paths docs/source docs/formal docs/portal --max-messages 10` run found existing `docs/source` and `docs/portal` metadata debt, including missing `source_hash` and `translation_last_reviewed` fields, so source/portal-wide gating remains open.
 
+## 2026-04-26 Offline escrow self-account guard and localnet note seed fix
+
+- `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline V2 note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
+- `crates/iroha_kagami/src/localnet.rs` no longer writes the built-in offline-note asset escrow account as the localnet app authority. Generated peer configs keep an empty `settlement.offline.escrow_accounts` table, and localnet genesis marks the built-in offline-note asset `offline.enabled = true` so the deterministic escrow account path creates the vault.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core escrow_self_reference`
+  - `cargo test -p iroha_kagami generated_localnet_bootstraps_builtin_offline_note_asset_and_permissions`
+  - `cargo test -p iroha_kagami generated_peer_config_enables_offline_note_bootstrap_services`
+  - `cargo test -p iroha_kagami localnet_readme_records_base_seed_when_present`
+
 ## 2026-04-26 Torii MCP Sumeragi collector empty-topology fix
 
 - Fixed `/v1/sumeragi/collectors` so the Torii/MCP test harness with no commit topology returns an empty collector snapshot instead of constructing a `Topology` from an empty peer list and panicking.
@@ -1038,3 +1049,28 @@ Last updated: 2026-04-27
 - Permission-cache replay: landed and green.
 - Integration failure sweep: the reported targeted regressions were fixed and covered by focused validation.
 - MCP writer-profile alignment: landed; mutation-capable MCP endpoint tests now opt into the documented writer profile and the targeted test file is green.
+
+## 2026-04-21 Follow-up: Kotlin SDK typed offline-cash redeem support
+- Added typed cash models and a redeem-proof builder under
+  `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/`.
+  After rebasing onto the Offline V2 Torii surface, `OfflineToriiClient`
+  remains scoped to `/v1/offline/v2/readiness`; the older cash-route client
+  overloads and route tests are not retained because Torii no longer exposes
+  those HTTP endpoints.
+- `OfflineStarkEnvelopeProver.kt` +
+  `OfflineSettlementProofs.buildRedeemRequestProof` port
+  `iroha_core::zk_stark::prove_stark_fri_{air,composition}_envelope_bytes`
+  to pure Kotlin, restricted to the `stark/fri/sha256-goldilocks` backend
+  used by the legacy offline cash payload shape. Parity is locked byte-for-byte
+  against committed Rust-generated fixtures at
+  `kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json`.
+- Temporary exception: `java/iroha_android` was intentionally left
+  untouched for this slice. The Kotlin↔Java mirror policy in
+  `AGENTS.md:69-70` remains repo policy; a follow-up task will mirror
+  the typed offline-cash API once the Kotlin surface stabilizes.
+- Focused validation:
+  - `cd kotlin && ./gradlew :core-jvm:compileKotlin` (pass)
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain --tests
+    'org.hyperledger.iroha.sdk.offline.OfflineSettlementProofsParityTest'
+    --tests 'org.hyperledger.iroha.sdk.offline.OfflineCashCodecTest'`
+    (pass — envelope byte-parity gate cleared against Rust fixtures).
