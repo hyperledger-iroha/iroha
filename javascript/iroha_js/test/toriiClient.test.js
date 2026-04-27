@@ -5513,7 +5513,7 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.equal(init.headers.Accept, "application/x-norito, application/json");
     assert.ok(Buffer.isBuffer(init.body));
-    assert.deepEqual([...init.body.values()], [0xde, 0xad]);
+    assert.deepEqual([...init.body.values()], [0x01, 0xde, 0xad]);
     return createResponse({
       status: 202,
       arrayData: new Uint8Array([0x01, 0x02, 0x03]),
@@ -5538,6 +5538,57 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
       globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
     }
   }
+});
+
+test("submitTransaction deframes NRT0 payloads before posting versioned pipeline bytes", async () => {
+  const rawPayload = Buffer.from([0x8a, 0x01, 0x88, 0x01]);
+  const header = Buffer.alloc(40);
+  header.write("NRT0", 0, "ascii");
+  header.writeBigUInt64LE(BigInt(rawPayload.length), 23);
+  const framedPayload = Buffer.concat([header, rawPayload]);
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    assert.ok(Buffer.isBuffer(init.body));
+    assert.deepEqual([...init.body.values()], [0x01, ...rawPayload]);
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const response = await client.submitTransaction(framedPayload);
+  assert.deepEqual(response, { ok: true });
 });
 
 test("submitTransaction retries transient failures via pipeline profile", async () => {
@@ -5697,8 +5748,10 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
   const seenUrls = [];
   const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  let nativeEncodeCalls = 0;
   globalThis.__IROHA_NATIVE_BINDING__ = {
     encodeSignedTransactionNorito: (buffer) => {
+      nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
       assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
       return Buffer.from([0xca, 0xfe]);
@@ -5753,6 +5806,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
       `${BASE_URL}/v1/pipeline/transactions`,
       `${BASE_URL}/transaction`,
     ]);
+    assert.equal(nativeEncodeCalls, 0);
   } finally {
     if (originalBinding === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
@@ -5766,8 +5820,10 @@ test("submitTransaction falls back to the public route when pipeline submit retu
   const payload = new Uint8Array([0xfa, 0xce]);
   const seenUrls = [];
   const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  let nativeEncodeCalls = 0;
   globalThis.__IROHA_NATIVE_BINDING__ = {
     encodeSignedTransactionNorito: (buffer) => {
+      nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
       assert.deepEqual([...buffer.values()], [0xfa, 0xce]);
       return Buffer.from([0xba, 0xdc, 0x0f, 0xfe]);
@@ -5813,7 +5869,7 @@ test("submitTransaction falls back to the public route when pipeline submit retu
       assert.equal(init.headers["Content-Type"], "application/x-norito");
       assert.equal(init.headers.Accept, "application/x-norito, application/json");
       assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [0xba, 0xdc, 0x0f, 0xfe]);
+      assert.deepEqual([...init.body.values()], [0x01, 0xfa, 0xce]);
       return createResponse({
         status: 202,
         jsonData: { ok: true, route: "public" },
@@ -5831,6 +5887,7 @@ test("submitTransaction falls back to the public route when pipeline submit retu
       `${BASE_URL}/v1/pipeline/transactions`,
       `${BASE_URL}/transaction`,
     ]);
+    assert.equal(nativeEncodeCalls, 0);
   } finally {
     if (originalBinding === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
