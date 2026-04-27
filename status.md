@@ -2,6 +2,16 @@
 
 Last updated: 2026-04-27
 
+## 2026-04-27 SNS alias auto-renew billing amount-scale fix
+
+- Fixed IVM subscription billing for SNS account-alias auto-renew so quote charges are compared, invoiced, and renewed as nano-XOR decimal `Numeric` values instead of raw scale-0 integers.
+- Reused the same SNS quote conversion for lease ISI transfers and the IVM host auto-renew path so the cap/balance check matches the actual renewal transfer amount.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core quote_charge_amount_to_numeric_uses_nano_xor_scale -- --nocapture`
+  - `cargo test -p iroha_core smartcontracts::ivm::host::tests::subscription_bill_account_alias_auto_renew_queues_renewal_and_reschedules -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-27 Iroha config minimal snapshot refresh
 
 - Refreshed `minimal_config_snapshot` so the expected Nexus fee defaults include the empty `successful_claim_fee_exempt_authorities` list.
