@@ -67,6 +67,12 @@ internal class SystemAndroidKeystoreBackend private constructor(
         } catch (ex: ProviderException) {
             throw KeyManagementException("Android Keystore generation failed", ex)
         } catch (ex: GeneralSecurityException) {
+            if (parameters.algorithm.equals("Ed25519", ignoreCase = true)) {
+                throw KeyManagementException(
+                    "Android Keystore does not support hardware Ed25519 key generation on this device",
+                    ex
+                )
+            }
             throw KeyManagementException("Android Keystore generation failed", ex)
         }
     }
