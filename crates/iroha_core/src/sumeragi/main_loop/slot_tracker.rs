@@ -531,8 +531,12 @@ impl FrontierSlot {
             } => {
                 if self.matches_candidate(block_hash, view) {
                     self.owner_kind = SlotOwnerKind::ExactSlotRepair;
+                    let body_missing = self.body_missing();
                     let fresh_vote_observation = !self.quorum_progress.votes_observed
-                        || !matches!(self.phase, FrontierSlotPhase::AwaitCommitQc)
+                        || !matches!(
+                            self.phase,
+                            FrontierSlotPhase::AwaitCommitQc | FrontierSlotPhase::AwaitBody
+                        )
                         || voter
                             .as_ref()
                             .is_some_and(|voter| self.candidate.voters.insert(voter.clone()));
@@ -542,7 +546,14 @@ impl FrontierSlot {
                     self.candidate.vote_state = FrontierVoteState::VotesObserved;
                     self.quorum_progress.votes_observed = true;
                     self.quorum_progress.last_vote_at = Some(now);
-                    self.phase = FrontierSlotPhase::AwaitCommitQc;
+                    if body_missing {
+                        self.candidate.exact_fetch_armed = true;
+                        self.phase = FrontierSlotPhase::AwaitBody;
+                        actions.fetch_block_body = true;
+                        actions.fetch_block_body_urgent = true;
+                    } else {
+                        self.phase = FrontierSlotPhase::AwaitCommitQc;
+                    }
                     if fresh_vote_observation {
                         self.record_progress(now);
                     } else {
@@ -577,12 +588,24 @@ impl FrontierSlot {
                     return actions;
                 }
                 self.owner_kind = SlotOwnerKind::ExactSlotRepair;
+                let body_missing = self.body_missing();
                 let fresh_commit_qc_observation = !self.quorum_progress.commit_qc_observed
-                    || !matches!(self.phase, FrontierSlotPhase::AwaitCommitQc);
+                    || !matches!(
+                        self.phase,
+                        FrontierSlotPhase::AwaitCommitQc | FrontierSlotPhase::AwaitBody
+                    );
                 self.candidate.vote_state = FrontierVoteState::CommitQcObserved;
                 self.quorum_progress.commit_qc_observed = true;
                 self.quorum_progress.last_commit_qc_at = Some(now);
-                self.phase = FrontierSlotPhase::AwaitCommitQc;
+                if body_missing {
+                    self.candidate.exact_fetch_armed = true;
+                    self.phase = FrontierSlotPhase::AwaitBody;
+                    actions.fetch_block_body = true;
+                    actions.fetch_block_body_urgent = true;
+                } else {
+                    self.phase = FrontierSlotPhase::AwaitCommitQc;
+                    actions.request_commit_pipeline_for = Some(block_hash);
+                }
                 if fresh_commit_qc_observation {
                     self.record_progress(now);
                 } else {

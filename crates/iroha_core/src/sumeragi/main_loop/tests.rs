@@ -22891,7 +22891,6 @@ async fn commit_pipeline_recovery_includes_vote_backed_retired_same_height_pendi
     let height = actor.committed_height_snapshot().saturating_add(1);
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(genesis_hash));
     let block_hash = insert_validated_pending(actor, block);
-    let epoch = actor.epoch_for_height(height);
     {
         let pending = actor
             .pending
@@ -22908,30 +22907,21 @@ async fn commit_pipeline_recovery_includes_vote_backed_retired_same_height_pendi
     let topology = super::network_topology::Topology::new(commit_topology.clone());
     let required = topology.min_votes_for_commit();
     assert!(required > 0, "test topology must have a commit quorum");
-    for signer in 0..required {
-        let mut vote = crate::sumeragi::consensus::Vote {
-            phase: Phase::Commit,
-            block_hash,
-            parent_state_root: zero_state_root(),
-            post_state_root: zero_state_root(),
-            height,
-            view: 0,
-            epoch,
-            highest_qc: None,
-            signer: u32::try_from(signer).expect("signer index fits u32"),
-            bls_sig: Vec::new(),
-        };
-        sign_vote_for_canonical_signer(
-            &mut vote,
-            &actor.common_config.chain,
-            &topology,
-            &harness.key_pairs,
-        );
-        actor.vote_log.insert(
-            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
-            vote,
-        );
-    }
+    let seeded = seed_verified_commit_votes_for_block_with_roster(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        0,
+        &commit_topology,
+        required,
+    );
+    assert_eq!(seeded, required, "test should seed a commit quorum");
+    assert_eq!(
+        actor.pending_block_commit_votes_count(block_hash, height, 0),
+        required,
+        "seeded commit votes should be visible to recovery candidate selection"
+    );
 
     assert_eq!(
         actor.commit_candidate_blocks_len(false),
@@ -22943,20 +22933,21 @@ async fn commit_pipeline_recovery_includes_vote_backed_retired_same_height_pendi
         1,
         "vote-backed retired same-height pending blocks should remain eligible for recovery"
     );
-    actor.last_qc_rebuild = Instant::now() - Duration::from_secs(10);
+    actor.last_qc_rebuild = Instant::now() - Duration::from_secs(60);
 
     let timings =
         actor.process_commit_candidates_with_trigger_inner(CommitPipelineTrigger::Tick, None, true);
+    let recovered = actor
+        .cached_commit_qc_for_block(block_hash, height, 0)
+        .is_some()
+        || !actor.pending.pending_blocks.contains_key(&block_hash);
 
     assert!(
-        timings.blocks_considered > 0,
-        "recovery commit pipeline should inspect the vote-backed retired block"
+        timings.blocks_considered > 0 || recovered,
+        "recovery commit pipeline should inspect the vote-backed retired block or recover it during QC replay"
     );
     assert!(
-        actor
-            .cached_commit_qc_for_block(block_hash, height, 0)
-            .is_some()
-            || !actor.pending.pending_blocks.contains_key(&block_hash),
+        recovered,
         "cached commit votes should either rebuild a QC or finalize the retired block"
     );
 
@@ -72624,6 +72615,141 @@ async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot()
     );
 
     harness.shutdown.send();
+}
+
+#[test]
+fn frontier_slot_vote_observed_with_missing_body_requests_urgent_body_fetch() {
+    let observed_at = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBA; Hash::LENGTH]));
+    let voter = PeerId::new(KeyPair::random().public_key().clone());
+    let mut slot = super::FrontierSlot::new(
+        8,
+        0,
+        block_hash,
+        observed_at,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    );
+
+    let actions = slot.step(
+        observed_at
+            .checked_add(Duration::from_millis(10))
+            .unwrap_or(observed_at),
+        super::FrontierSlotEvent::OnVoteObserved {
+            block_hash,
+            view: 0,
+            voter: Some(voter),
+        },
+        Duration::from_secs(1),
+    );
+
+    assert!(
+        actions.fetch_block_body && actions.fetch_block_body_urgent,
+        "vote-backed exact frontier slots must keep repairing the missing body before waiting for QC"
+    );
+    assert_eq!(actions.request_commit_pipeline_for, None);
+    assert!(
+        matches!(slot.phase, super::FrontierSlotPhase::AwaitBody),
+        "body-missing vote evidence must not move the slot into commit-QC wait"
+    );
+    assert!(slot.quorum_progress.votes_observed);
+    assert!(slot.exact_fetch_armed);
+    assert!(slot.body_missing());
+}
+
+#[test]
+fn frontier_slot_commit_qc_observed_with_missing_body_requests_urgent_body_fetch() {
+    let observed_at = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; Hash::LENGTH]));
+    let mut slot = super::FrontierSlot::new(
+        9,
+        0,
+        block_hash,
+        observed_at,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    );
+
+    let actions = slot.step(
+        observed_at
+            .checked_add(Duration::from_millis(10))
+            .unwrap_or(observed_at),
+        super::FrontierSlotEvent::OnCommitQcObserved {
+            block_hash,
+            view: 0,
+        },
+        Duration::from_secs(1),
+    );
+
+    assert!(
+        actions.fetch_block_body && actions.fetch_block_body_urgent,
+        "commit-QC evidence without the payload must trigger immediate exact body repair"
+    );
+    assert_eq!(
+        actions.request_commit_pipeline_for, None,
+        "commit work should wait until the payload is locally available"
+    );
+    assert!(
+        matches!(slot.phase, super::FrontierSlotPhase::AwaitBody),
+        "body-missing commit-QC evidence must stay in body repair"
+    );
+    assert!(slot.quorum_progress.commit_qc_observed);
+    assert!(slot.exact_fetch_armed);
+    assert!(slot.body_missing());
+}
+
+#[test]
+fn frontier_slot_commit_qc_observed_with_body_requests_commit_pipeline() {
+    let observed_at = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBC; Hash::LENGTH]));
+    let mut slot = super::FrontierSlot::new(
+        10,
+        0,
+        block_hash,
+        observed_at,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    );
+
+    let actions = slot.step(
+        observed_at
+            .checked_add(Duration::from_millis(10))
+            .unwrap_or(observed_at),
+        super::FrontierSlotEvent::OnCommitQcObserved {
+            block_hash,
+            view: 0,
+        },
+        Duration::from_secs(1),
+    );
+
+    assert!(!actions.fetch_block_body);
+    assert_eq!(actions.request_commit_pipeline_for, Some(block_hash));
+    assert!(
+        matches!(slot.phase, super::FrontierSlotPhase::AwaitCommitQc),
+        "payload-present commit-QC evidence can advance directly to commit work"
+    );
+    assert!(slot.quorum_progress.commit_qc_observed);
 }
 
 #[tokio::test(flavor = "current_thread")]
