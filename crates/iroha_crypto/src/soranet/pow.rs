@@ -1136,6 +1136,24 @@ mod tests {
         }
     }
 
+    fn invalid_solution_for(
+        binding: &ChallengeBinding<'_>,
+        client_nonce: [u8; 32],
+        expires_at: u64,
+        difficulty: u8,
+    ) -> [u8; 32] {
+        let challenge = derive_challenge(binding, client_nonce, expires_at);
+        for suffix in u8::MIN..=u8::MAX {
+            let mut solution = [0u8; 32];
+            solution[31] = suffix;
+            let digest = derive_solution_digest(&challenge, &solution);
+            if !leading_zero_bits_at_least(digest.as_bytes(), difficulty) {
+                return solution;
+            }
+        }
+        panic!("expected at least one invalid solution for difficulty {difficulty}");
+    }
+
     #[test]
     fn revocation_limits_require_positive_bounds() {
         assert!(
@@ -1181,20 +1199,22 @@ mod tests {
         let params = params();
         let descriptor = [0xAA; 32];
         let binding = binding(&descriptor);
+        let expires_at = SystemTime::now()
+            .checked_add(params.min_ticket_ttl())
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let client_nonce = [0x11; 32];
         let mut ticket = Ticket {
             version: 1,
             difficulty: params.difficulty(),
-            expires_at: SystemTime::now()
-                .checked_add(params.min_ticket_ttl())
-                .unwrap()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            client_nonce: [0x11; 32],
-            solution: [0x00; 32],
+            expires_at,
+            client_nonce,
+            solution: invalid_solution_for(&binding, client_nonce, expires_at, params.difficulty()),
         };
         let err = verify(&ticket, &binding, &params).expect_err("should fail");
-        matches!(err, Error::InvalidSolution);
+        assert!(matches!(err, Error::InvalidSolution));
 
         ticket.difficulty = 0;
         assert!(verify(&ticket, &binding, &params).is_err());
