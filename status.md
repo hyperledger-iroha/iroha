@@ -2,6 +2,12 @@
 
 Last updated: 2026-04-27
 
+## 2026-04-27 Iroha config minimal snapshot refresh
+
+- Refreshed `minimal_config_snapshot` so the expected Nexus fee defaults include the empty `successful_claim_fee_exempt_authorities` list.
+- Focused validation for this fix:
+  - `cargo test -p iroha_config --test fixtures`
+
 ## 2026-04-27 SNS suffix catalog price alignment
 
 - `docs/examples/sns/suffix_catalog_v1.json` now matches the `.sora` default price in `iroha_data_model::sns::fixtures::default_policy()` (`500000000` nano-XOR / 0.5 XOR), following the nano-XOR lease unit convention used by ledger-backed SNS pricing.
