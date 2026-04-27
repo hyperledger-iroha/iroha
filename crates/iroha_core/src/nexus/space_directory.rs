@@ -102,6 +102,24 @@ pub fn extract_lane_identity_metadata(
     Ok((Some(uaid), Vec::new()))
 }
 
+/// Resolve every dataspace-qualified account domain bound to an authority.
+///
+/// Lane-compliance policies operate on domain selectors, while production
+/// accounts are canonical domainless subjects with one or more alias labels.
+/// This helper maps those labels back to their concrete `DomainId` values.
+pub fn extract_authority_domains(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> Result<Vec<DomainId>, ParseError> {
+    let mut domains = BTreeSet::new();
+    for alias in world.bound_account_aliases(authority) {
+        if let Some(domain_id) = alias.domain_id(world.dataspace_catalog())? {
+            domains.insert(domain_id);
+        }
+    }
+    Ok(domains.into_iter().collect())
+}
+
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct UaidDataspaceBindings {

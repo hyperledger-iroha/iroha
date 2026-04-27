@@ -430,9 +430,12 @@ pub struct ReservedAssignmentRequestV1 {
 pub struct PaymentProofV1 {
     /// Asset identifier used for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_id: String,
-    /// Gross amount paid (base price + surcharges) expressed in the asset's native units.
+    /// Gross amount paid (base price + surcharges) in SNS payment units.
+    ///
+    /// Nexus XOR policies use nano-XOR so sub-XOR lease prices can be expressed
+    /// without changing this integer proof format.
     pub gross_amount: u64,
-    /// Net amount forwarded to the registry (after referral rebates).
+    /// Net amount forwarded to the registry (after referral rebates), in SNS payment units.
     pub net_amount: u64,
     /// Settlement transaction hash (canonical hex string or JSON hash encoding).
     pub settlement_tx: Json,
@@ -472,7 +475,7 @@ pub struct PriceTierV1 {
     pub tier_id: u8,
     /// RE2-compatible regex describing eligible labels.
     pub label_regex: String,
-    /// Base one-year price used for calculations.
+    /// Base one-year price used for calculations, in SNS payment units.
     pub base_price: TokenValue,
     /// Auction mode triggered by this tier.
     pub auction_kind: AuctionKind,
@@ -624,7 +627,7 @@ pub mod fixtures {
             pricing: vec![PriceTierV1 {
                 tier_id: 0,
                 label_regex: "^[a-z0-9]{3,}$".to_string(),
-                base_price: TokenValue::new(payment_asset_id, 120),
+                base_price: TokenValue::new(payment_asset_id, 500_000_000),
                 auction_kind: AuctionKind::VickreyCommitReveal,
                 dutch_floor: None,
                 min_duration_years: 1,

@@ -2824,6 +2824,7 @@ fn route_timeout_for_path(path: &str) -> Duration {
         "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" | "/v1/contracts/aliases" => {
             CONTRACT_DEPLOY_ROUTE_TIMEOUT
         }
+        "/v1/sorafs/storage/pin" => SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
         // Keep the outer HTTP timeout at least as large as the internal
         // read-fanout proxy budget so ingress does not emit a bare 408 while a
         // Nexus fanout request is still within its allowed route window.
@@ -29632,6 +29633,7 @@ pub mod zk_prover;
 
 const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
 const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
+const SORAFS_STORAGE_PIN_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
 const HEADER_API_TOKEN: &str = "x-api-token";
@@ -38087,6 +38089,11 @@ pub(crate) mod tests_runtime_handlers {
             super::route_timeout_for_path("/v1/contracts/deploy"),
             CONTRACT_DEPLOY_ROUTE_TIMEOUT,
             "deploy-specific timeout should keep its dedicated budget"
+        );
+        assert_eq!(
+            super::route_timeout_for_path("/v1/sorafs/storage/pin"),
+            SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
+            "SoraFS storage-pin uploads need a publish-sized HTTP route budget"
         );
     }
 

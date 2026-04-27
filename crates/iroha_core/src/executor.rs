@@ -25,7 +25,8 @@ use iroha_data_model::{
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
-        SetKeyValueBox, TransferBox, error::InstructionExecutionError, register::RegisterBox,
+        SetKeyValueBox, TransferBox, error::InstructionExecutionError, mint_burn::MintBox,
+        register::RegisterBox,
     },
     metadata::Metadata,
     parameter::{CustomParameter, CustomParameterId},
@@ -70,6 +71,8 @@ use crate::{
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const FIXTURE_LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
+const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
+const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
 const FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST: u64 = 31_000_000;
 const FIXTURE_DOMAIN_LIMITS_PARAMETER_ID: &str = "DomainLimits";
 const FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES: &str = "CanControlDomainLives";
@@ -457,6 +460,127 @@ fn parse_fee_sponsor(
     }
 }
 
+fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(|raw| raw.try_into_any_norito::<String>().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
+    let hex = value.strip_prefix("0x").unwrap_or(value);
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn account_literal_matches(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    literal: &str,
+    expected: &AccountId,
+) -> bool {
+    if let Ok(canonical) = AccountId::canonicalize(literal)
+        && expected
+            .canonical_i105()
+            .ok()
+            .as_deref()
+            .is_some_and(|expected| expected == canonical)
+    {
+        return true;
+    }
+
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .as_ref()
+        .is_some_and(|account| account == expected)
+}
+
+fn successful_claim_fee_authority_allowed(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    authority: &AccountId,
+) -> bool {
+    nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|literal| !literal.is_empty())
+        .any(|literal| {
+            account_literal_matches(world, world.dataspace_catalog(), literal, authority)
+        })
+}
+
+fn successful_claim_fee_exempt_instructions(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    authority: &AccountId,
+    metadata: &Metadata,
+    instructions: &[InstructionBox],
+    observation_time_ms: u64,
+) -> bool {
+    if !successful_claim_fee_authority_allowed(world, nexus, authority) {
+        return false;
+    }
+
+    let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY) else {
+        return false;
+    };
+    if !is_sora_v2_tx_hash_literal(&claim_tx_hash) {
+        return false;
+    }
+
+    let Some(recipient) = metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
+        .and_then(|literal| parse_account_id_literal(world, world.dataspace_catalog(), &literal))
+    else {
+        return false;
+    };
+
+    let Some(asset_def) = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &nexus.fees.fee_asset_id,
+        observation_time_ms,
+    ) else {
+        return false;
+    };
+
+    let [instruction] = instructions else {
+        return false;
+    };
+
+    let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() else {
+        return false;
+    };
+
+    match mint {
+        MintBox::Asset(mint) => {
+            mint.destination.account() == &recipient
+                && mint.destination.definition() == &asset_def
+                && mint.object.clone() > Numeric::zero()
+        }
+        MintBox::TriggerRepetitions(_) => false,
+    }
+}
+
+fn successful_claim_fee_exempt_transaction(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    transaction: &SignedTransaction,
+    observation_time_ms: u64,
+) -> bool {
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return false;
+    };
+    successful_claim_fee_exempt_instructions(
+        world,
+        nexus,
+        transaction.authority(),
+        transaction.metadata(),
+        instructions.as_ref(),
+        observation_time_ms,
+    )
+}
+
 fn parse_account_id_literal(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -800,6 +924,9 @@ pub(crate) fn check_external_nexus_fee_admission(
     if !nexus.enabled {
         return Ok(());
     }
+    if successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms) {
+        return Ok(());
+    }
 
     let metadata = transaction.metadata();
     let fee_sponsor = parse_fee_sponsor(world, world.dataspace_catalog(), metadata)
@@ -833,7 +960,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         transaction.authority().clone()
     };
 
-    crate::block::parse_account_literal_with_world(
+    let sink_account = crate::block::parse_account_literal_with_world(
         world,
         world.dataspace_catalog(),
         &nexus.fees.fee_sink_account_id,
@@ -858,6 +985,10 @@ pub(crate) fn check_external_nexus_fee_admission(
     })?;
 
     let payer_asset = AssetId::new(asset_def, payer.clone());
+    if payer == sink_account {
+        return Ok(());
+    }
+
     let Some(balance) = world.assets().get(&payer_asset) else {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "fee asset `{}` is missing for payer `{payer}`",
@@ -923,6 +1054,14 @@ pub(crate) fn charge_fees_for_applied_overlay(
         &state_transaction.nexus.dataspace_catalog,
         md,
     )?;
+    let skip_nexus_fee = successful_claim_fee_exempt_instructions(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        authority,
+        md,
+        overlay.instruction_slice(),
+        state_transaction.block_unix_timestamp_ms(),
+    );
 
     // Keep gas policy snapshots aligned with governance/custom parameter updates.
     Executor::refresh_gas_from_parameters(state_transaction);
@@ -1144,14 +1283,16 @@ pub(crate) fn charge_fees_for_applied_overlay(
         }
     }
 
-    Executor::charge_nexus_fees(
-        state_transaction,
-        authority,
-        fee_sponsor,
-        tx_bytes_len,
-        instruction_count,
-        gas_used,
-    )?;
+    if !skip_nexus_fee {
+        Executor::charge_nexus_fees(
+            state_transaction,
+            authority,
+            fee_sponsor,
+            tx_bytes_len,
+            instruction_count,
+            gas_used,
+        )?;
+    }
 
     Ok(())
 }
@@ -1320,6 +1461,15 @@ impl Executor {
         let payer_id = payer.to_string();
         let asset_label = payer_asset.definition().to_string();
         let sink_label = sink_account.to_string();
+        if payer == sink_account {
+            state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                payer_kind,
+                payer_id,
+                amount: fee,
+                asset_id: asset_label,
+            });
+            return Ok(());
+        }
         let transfer = iroha_data_model::isi::Transfer::<
             Asset,
             Numeric,
@@ -1451,6 +1601,7 @@ impl Executor {
         require_gas_limit: bool,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<AccountId>,
+        skip_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         if require_gas_limit && gas_limit_md.is_none() {
             return Err(ValidationFail::NotPermitted(
@@ -1642,14 +1793,16 @@ impl Executor {
             }
         }
 
-        Self::charge_nexus_fees(
-            state_transaction,
-            authority,
-            fee_sponsor,
-            tx_bytes_len,
-            instruction_count,
-            used,
-        )?;
+        if !skip_nexus_fee {
+            Self::charge_nexus_fees(
+                state_transaction,
+                authority,
+                fee_sponsor,
+                tx_bytes_len,
+                instruction_count,
+                used,
+            )?;
+        }
 
         Ok(())
     }
@@ -1734,6 +1887,12 @@ impl Executor {
         // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
         let gas_limit_md = parse_gas_limit(&md)?;
         configure_executor_fuel_budget(self, state_transaction, &md)?;
+        let skip_nexus_fee = successful_claim_fee_exempt_transaction(
+            &state_transaction.world,
+            &state_transaction.nexus,
+            &transaction,
+            state_transaction.block_unix_timestamp_ms(),
+        );
         let pipeline_gas = &state_transaction.pipeline.gas;
         if !pipeline_gas.accepted_assets.is_empty() {
             let Some(ref gas_asset_id_str) = gas_asset_opt else {
@@ -2022,6 +2181,7 @@ impl Executor {
                     false,
                     gas_asset_opt,
                     fee_sponsor,
+                    skip_nexus_fee,
                 ),
             (Self::Initial | Self::UserProvided(_), Executable::IvmProved(proved)) => {
                 let mut instructions = proved.overlay.into_vec();
@@ -2040,6 +2200,7 @@ impl Executor {
                     true,
                     gas_asset_opt,
                     fee_sponsor,
+                    false,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::ContractCall(call)) => {
@@ -6218,6 +6379,125 @@ mod tests {
             snap.last_payer,
             Some(crate::sumeragi::status::NexusFeePayer::Sponsor)
         );
+    }
+
+    #[test]
+    fn nexus_successful_claim_mint_bypasses_fee_admission_for_configured_authority() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let world = World::with(
+            [domain],
+            [authority_account, sink_account],
+            [asset_definition],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus
+                .fees
+                .successful_claim_fee_exempt_authorities
+                .push(authority_id.to_string());
+        }
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(SORA_V2_CLAIM_TX_HASH_METADATA_KEY).expect("static name"),
+            Json::new(format!("0x{}", "11".repeat(32))),
+        );
+        metadata.insert(
+            Name::from_str(SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY).expect("static name"),
+            Json::new(recipient_id.to_string()),
+        );
+        let instruction: InstructionBox =
+            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_metadata(metadata)
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(authority_kp.private_key());
+
+        let view = state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0)
+            .expect("configured successful claim mint should bypass fee admission");
+    }
+
+    #[test]
+    fn nexus_successful_claim_mint_requires_configured_authority() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let world = World::with(
+            [domain],
+            [authority_account, sink_account],
+            [asset_definition],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(SORA_V2_CLAIM_TX_HASH_METADATA_KEY).expect("static name"),
+            Json::new(format!("0x{}", "22".repeat(32))),
+        );
+        metadata.insert(
+            Name::from_str(SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY).expect("static name"),
+            Json::new(recipient_id.to_string()),
+        );
+        let instruction: InstructionBox =
+            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_metadata(metadata)
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(authority_kp.private_key());
+
+        let view = state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0)
+            .expect_err("unconfigured claim authority should still need fee balance");
+        assert!(matches!(err, NexusFeeAdmissionError::Rejected(_)));
     }
 
     #[test]
