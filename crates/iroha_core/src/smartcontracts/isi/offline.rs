@@ -101,6 +101,24 @@ pub(crate) fn is_offline_escrow_source_asset(
     Ok(&derived == source_id.account())
 }
 
+fn ensure_distinct_offline_escrow_account(
+    escrow_account: &AccountId,
+    participant_account: &AccountId,
+    participant_role: &str,
+    definition_id: &AssetDefinitionId,
+) -> Result<(), Error> {
+    if escrow_account == participant_account {
+        return Err(labeled_invariant(
+            "escrow_self_reference",
+            format!(
+                "offline escrow account for asset definition `{definition_id}` must be distinct from {participant_role} account `{participant_account}`",
+            ),
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn reserve_offline_note_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset: &AssetId,
@@ -119,6 +137,12 @@ fn reserve_offline_note_escrow(
     if amount.is_zero() {
         return Ok(());
     }
+    ensure_distinct_offline_escrow_account(
+        &escrow_account,
+        asset.account(),
+        "note",
+        asset.definition(),
+    )?;
     let escrow_asset = AssetId::new(asset.definition().clone(), escrow_account);
     state_transaction
         .world
@@ -162,6 +186,12 @@ fn credit_from_offline_note_escrow(
             .world
             .deposit_numeric_asset(&recipient_asset, amount);
     }
+    ensure_distinct_offline_escrow_account(
+        &escrow_account,
+        recipient,
+        "recipient",
+        &definition_id,
+    )?;
     let escrow_asset = AssetId::new(definition_id, escrow_account);
     state_transaction
         .world
@@ -988,8 +1018,24 @@ pub mod isi {
 
     #[cfg(test)]
     mod tests {
+        use std::sync::Arc;
+
         use super::*;
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
         use iroha_crypto::{KeyPair, Signature};
+        use iroha_data_model::{
+            Registrable,
+            account::Account,
+            asset::{Asset, AssetDefinition},
+            block::BlockHeader,
+            domain::{Domain, DomainId},
+        };
+        use iroha_primitives::numeric::NumericSpec;
+        use nonzero_ext::nonzero;
 
         fn sample_account(seed: u8) -> AccountId {
             let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -1018,6 +1064,91 @@ pub mod isi {
                 one_use: true,
                 issuer_signature: sample_signature(0x44),
             }
+        }
+
+        fn self_escrow_test_state(
+            balance: Numeric,
+        ) -> (State, AssetId, AccountId, AssetDefinitionId) {
+            let account_id = sample_account(0x01);
+            let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id.clone(),
+                "xor".parse().expect("asset definition name"),
+            );
+            let asset_id = AssetId::new(definition_id.clone(), account_id.clone());
+            let domain = Domain::new(domain_id).build(&account_id);
+            let account = Account::new(account_id.clone()).build(&account_id);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .with_name("xor".to_owned())
+                    .build(&account_id);
+            let asset = Asset::new(asset_id.clone(), balance);
+            let world = World::with_assets([domain], [account], [asset_definition], [asset], []);
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(world, Arc::clone(&kura), query);
+            state.settlement.offline.escrow_required = true;
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), account_id.clone());
+
+            (state, asset_id, account_id, definition_id)
+        }
+
+        #[test]
+        fn reserve_offline_note_escrow_rejects_escrow_self_reference() {
+            let (state, asset_id, _account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err =
+                reserve_offline_note_escrow(&mut transaction, &asset_id, &Numeric::new(25, 0))
+                    .expect_err("self-referenced escrow must reject note reservation");
+            assert!(
+                err.to_string().contains("escrow_self_reference"),
+                "unexpected error: {err}"
+            );
+
+            let balance = transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(balance, Numeric::new(100, 0));
+        }
+
+        #[test]
+        fn credit_from_offline_note_escrow_rejects_escrow_self_reference() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = credit_from_offline_note_escrow(
+                &mut transaction,
+                &asset_id,
+                &account_id,
+                &Numeric::new(25, 0),
+            )
+            .expect_err("self-referenced escrow must reject note credit");
+            assert!(
+                err.to_string().contains("escrow_self_reference"),
+                "unexpected error: {err}"
+            );
+
+            let balance = transaction
+                .world
+                .assets
+                .get(&asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(balance, Numeric::new(100, 0));
         }
 
         #[test]

@@ -7,26 +7,59 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
 
 /**
  * `HttpTransportExecutor` implementation backed by `HttpURLConnection`.
  *
  * This executor avoids `java.net.http` so it can serve JVM and Android targets with the same
  * canonical implementation.
+ *
+ * @param asyncExecutor optional [Executor] used to run the synchronous HTTP work for
+ *   [execute] and [openStream]. When `null`, falls back to `ForkJoinPool.commonPool()`
+ *   via [CompletableFuture.supplyAsync].
+ *
+ *   Why this parameter exists (it is not gratuitous):
+ *   - On Android, sockets opened on threads with no traffic-stats tag (default `0`) trip
+ *     `StrictMode.VmPolicy.detectUntaggedSockets`. With `penaltyDeath` the process is killed.
+ *   - `ForkJoinPool.commonPool()` worker threads cannot be retagged externally — the consumer
+ *     has no hook to influence what tag commonPool's threads carry.
+ *   - Supplying [asyncExecutor] lets the consumer provide its own pool whose `ThreadFactory`
+ *     pre-tags each worker via `TrafficStats.setThreadStatsTag(...)` before any socket is
+ *     created on that thread.
+ *   - Pure-JVM consumers can ignore the parameter (default `null` → `commonPool()`); the
+ *     parameter keeps `core-jvm` free of Android-only APIs while still giving Android callers
+ *     a clean injection point. The same hook also works for any other thread-local context
+ *     (auth MDC, tracing) the consumer wants set per request.
  */
 class UrlConnectionTransportExecutor(
     private val connectTimeout: Duration? = null,
     private val readTimeout: Duration? = null,
+    private val asyncExecutor: Executor? = null,
 ) : HttpTransportExecutor, StreamingTransportExecutor {
 
     /** Creates an executor that applies the same timeout to connect and read operations. */
-    constructor(timeout: Duration?) : this(timeout, timeout)
+    constructor(timeout: Duration?) : this(timeout, timeout, null)
+
+    /**
+     * Creates an executor with a uniform timeout and a caller-supplied async executor;
+     * see the primary constructor for why [asyncExecutor] exists.
+     */
+    constructor(timeout: Duration?, asyncExecutor: Executor?) : this(timeout, timeout, asyncExecutor)
 
     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> =
-        CompletableFuture.supplyAsync { executeSync(request) }
+        if (asyncExecutor != null) {
+            CompletableFuture.supplyAsync({ executeSync(request) }, asyncExecutor)
+        } else {
+            CompletableFuture.supplyAsync { executeSync(request) }
+        }
 
     override fun openStream(request: TransportRequest): CompletableFuture<TransportStreamResponse> =
-        CompletableFuture.supplyAsync { openStreamSync(request) }
+        if (asyncExecutor != null) {
+            CompletableFuture.supplyAsync({ openStreamSync(request) }, asyncExecutor)
+        } else {
+            CompletableFuture.supplyAsync { openStreamSync(request) }
+        }
 
     private fun executeSync(request: TransportRequest): TransportResponse {
         var connection: HttpURLConnection? = null
