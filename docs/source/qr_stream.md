@@ -151,7 +151,7 @@ Recommended defaults:
 Reliable ~3 KB/s profile (with parity enabled):
 
 - `chunk_size=336`
-- `parity_group=4`
+- `parity_group=3`
 - `fps=12`
 - Effective payload rate: around `3` KB/s on medium/large payloads (recorded in CLI manifests as `estimated_payload_bytes_per_second`, computed from payload bytes and rendered frame count)
 

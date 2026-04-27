@@ -25,6 +25,9 @@ use norito::{
     json::{self, Value},
     to_bytes,
 };
+use p256::ecdsa::{
+    Signature as P256Signature, SigningKey as P256SigningKey, signature::Signer as _,
+};
 use sha2::{Digest, Sha256};
 
 const FIXTURE_PATH: &str = concat!(
@@ -221,52 +224,13 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         )?,
     ];
 
-    let public_inputs_hash_hex = mobile_public_inputs_hash_hex(MobilePublicInputFields {
-        token_id: &token_id_string,
-        invoice_id: INVOICE_ID,
-        sender_account_id: &sender_account_id_string,
-        recipient_account_id: &recipient_account_id_string,
-        sender_certificate: &sender_certificate,
-        recipient_certificate: &recipient_certificate,
-        asset_definition_id: &asset_definition_id_string,
-        amount: AMOUNT,
-        change_amount: CHANGE_AMOUNT,
-        source_note_commitment: Some(&source_note_commitment_string),
-        input_nullifiers: &input_nullifiers,
-        input_claims: &input_claim_hashes,
-        output_commitments: &output_commitments,
-        output_claims: &[
-            MobileOutputClaim {
-                note_commitment: &recipient_commitment_string,
-                account_id: &recipient_account_id_string,
-                asset_definition_id: &asset_definition_id_string,
-                amount: AMOUNT,
-                key_certificate: &recipient_certificate,
-            },
-            MobileOutputClaim {
-                note_commitment: &change_commitment_string,
-                account_id: &sender_account_id_string,
-                asset_definition_id: &asset_definition_id_string,
-                amount: CHANGE_AMOUNT,
-                key_certificate: &sender_certificate,
-            },
-        ],
-    });
-    let one_use_signature = Signature::new(
-        sender_note_key_pair.private_key(),
+    let public_inputs_hash_hex = audit_public_inputs_hash.to_string();
+    let one_use_signature = sign_p256_assertion(
+        &sender_certificate.assertion_signing_key,
         public_inputs_hash_hex.as_bytes(),
     );
-    let one_use_signature_base64 = BASE64_STANDARD.encode(one_use_signature.payload());
-    let sender_public_key_base64 = public_key_base64(&sender_note_key_pair);
-    let proof_transcript = [
-        "offline-note-v2-proof-v1",
-        "ed25519",
-        &public_inputs_hash_hex,
-        &sender_public_key_base64,
-        &one_use_signature_base64,
-    ]
-    .join(":");
-    let proof_bytes_base64 = BASE64_STANDARD.encode(proof_transcript.as_bytes());
+    let one_use_signature_base64 = BASE64_STANDARD.encode(one_use_signature);
+    let proof_bytes_base64 = BASE64_STANDARD.encode(b"offline-v2-vector-audit-proof");
 
     let payment_token = payment_token_json(PaymentTokenJsonFields {
         token_id: &token_id_string,
@@ -340,7 +304,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
                 ),
                 ("payment_token", Value::from("wallet-offline-payment-v2:")),
                 ("receipt_ack", Value::from("wallet-offline-ack-v2:")),
-                ("fountain_qr", Value::from("fountainqr-v1:")),
+                ("fountain_qr", Value::from("iroha:qr1:")),
             ]),
         ),
         (
@@ -501,31 +465,6 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     ]))
 }
 
-struct MobilePublicInputFields<'a> {
-    token_id: &'a str,
-    invoice_id: &'a str,
-    sender_account_id: &'a str,
-    recipient_account_id: &'a str,
-    sender_certificate: &'a VectorCertificate,
-    recipient_certificate: &'a VectorCertificate,
-    asset_definition_id: &'a str,
-    amount: &'a str,
-    change_amount: &'a str,
-    source_note_commitment: Option<&'a str>,
-    input_nullifiers: &'a [String],
-    input_claims: &'a [String],
-    output_commitments: &'a [String],
-    output_claims: &'a [MobileOutputClaim<'a>],
-}
-
-struct MobileOutputClaim<'a> {
-    note_commitment: &'a str,
-    account_id: &'a str,
-    asset_definition_id: &'a str,
-    amount: &'a str,
-    key_certificate: &'a VectorCertificate,
-}
-
 struct PaymentTokenJsonFields<'a> {
     token_id: &'a str,
     sender_account_id: &'a str,
@@ -556,6 +495,7 @@ struct VectorCertificate {
     assertion_key_algorithm: String,
     assertion_public_key_base64: String,
     assertion_usage_count_limit: Option<u32>,
+    assertion_signing_key: P256SigningKey,
     one_use: bool,
     issuer_signature_base64: String,
     issuer_signature_payload_base64: String,
@@ -571,26 +511,22 @@ fn signed_certificate(
 ) -> Result<VectorCertificate, Box<dyn Error>> {
     let (_algorithm, public_key) = note_key_pair.public_key().to_bytes();
     let public_key = public_key.to_vec();
-    let (
-        assertion_scheme,
-        assertion_key_algorithm,
-        assertion_public_key,
-        assertion_usage_count_limit,
-    ) = if platform == "android-keymint" || platform == "android" {
-        (
-            "android-keymint-ecdsa-p256-usage-limit-v1".to_owned(),
-            "ecdsa-p256-sha256".to_owned(),
-            vec![0x04; 65],
-            Some(1),
-        )
-    } else {
-        (
-            "apple-appattest-counter-v1".to_owned(),
-            "app-attest-p256".to_owned(),
-            public_key.clone(),
-            None,
-        )
-    };
+    let assertion_signing_key = p256_assertion_signing_key(platform, key_id, device_id);
+    let assertion_public_key = p256_assertion_public_key(&assertion_signing_key);
+    let (assertion_scheme, assertion_key_algorithm, assertion_usage_count_limit) =
+        if platform == "android-keymint" || platform == "android" {
+            (
+                "android-keymint-ecdsa-p256-usage-limit-v1".to_owned(),
+                "ecdsa-p256-sha256".to_owned(),
+                Some(1),
+            )
+        } else {
+            (
+                "apple-appattest-counter-v1".to_owned(),
+                "app-attest-p256".to_owned(),
+                None,
+            )
+        };
     let unsigned_certificate = OfflineNoteKeyCertificateV2 {
         version: 2,
         platform: platform.to_owned(),
@@ -633,10 +569,49 @@ fn signed_certificate(
         assertion_key_algorithm: certificate.assertion_key_algorithm.clone(),
         assertion_public_key_base64: BASE64_STANDARD.encode(&certificate.assertion_public_key),
         assertion_usage_count_limit: certificate.assertion_usage_count_limit,
+        assertion_signing_key,
         one_use: true,
         issuer_signature_base64: BASE64_STANDARD.encode(issuer_signature.payload()),
         issuer_signature_payload_base64: BASE64_STANDARD.encode(signing_bytes),
     })
+}
+
+fn p256_assertion_signing_key(platform: &str, key_id: &str, device_id: &str) -> P256SigningKey {
+    let mut counter = 0_u32;
+    loop {
+        let mut hasher = Sha256::new();
+        hasher.update(b"iroha:offline-v2:assertion-key:p256:v1");
+        update_hash_field(&mut hasher, platform);
+        update_hash_field(&mut hasher, key_id);
+        update_hash_field(&mut hasher, device_id);
+        hasher.update(counter.to_be_bytes());
+        let secret = hasher.finalize();
+        if let Ok(signing_key) = P256SigningKey::from_slice(secret.as_ref()) {
+            return signing_key;
+        }
+        counter = counter
+            .checked_add(1)
+            .expect("P-256 fixture key derivation counter exhausted");
+    }
+}
+
+fn update_hash_field(hasher: &mut Sha256, value: &str) {
+    let bytes = value.as_bytes();
+    hasher.update((bytes.len() as u64).to_be_bytes());
+    hasher.update(bytes);
+}
+
+fn p256_assertion_public_key(signing_key: &P256SigningKey) -> Vec<u8> {
+    signing_key
+        .verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec()
+}
+
+fn sign_p256_assertion(signing_key: &P256SigningKey, message: &[u8]) -> Vec<u8> {
+    let signature: P256Signature = signing_key.sign(message);
+    signature.to_der().as_bytes().to_vec()
 }
 
 fn mobile_certificate_json(certificate: &VectorCertificate) -> Value {
@@ -782,66 +757,6 @@ fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<d
     ]))
 }
 
-fn mobile_public_inputs_hash_hex(fields: MobilePublicInputFields<'_>) -> String {
-    let mut transcript_fields = vec![
-        "offline-note-v2-public-inputs-v1".to_owned(),
-        format!("token_id={}", fields.token_id),
-        format!("invoice_id={}", fields.invoice_id),
-        format!("sender_account_id={}", fields.sender_account_id),
-        format!("recipient_account_id={}", fields.recipient_account_id),
-        format!("sender_key_id={}", fields.sender_certificate.key_id),
-        format!(
-            "sender_public_key={}",
-            fields.sender_certificate.public_key_base64
-        ),
-        format!("recipient_key_id={}", fields.recipient_certificate.key_id),
-        format!(
-            "recipient_public_key={}",
-            fields.recipient_certificate.public_key_base64
-        ),
-        format!("asset_definition_id={}", fields.asset_definition_id),
-        format!("amount={}", fields.amount),
-        format!("change_amount={}", fields.change_amount),
-    ];
-    if let Some(source_note_commitment) = fields.source_note_commitment {
-        if !source_note_commitment.trim().is_empty() {
-            transcript_fields.push(format!("source_note_commitment={source_note_commitment}"));
-        }
-    }
-    transcript_fields.push(format!(
-        "input_nullifiers={}",
-        fields.input_nullifiers.join(",")
-    ));
-    transcript_fields.push(format!("input_claims={}", fields.input_claims.join(",")));
-    transcript_fields.push(format!(
-        "output_commitments={}",
-        fields.output_commitments.join(",")
-    ));
-    transcript_fields.push(format!(
-        "output_claims={}",
-        fields
-            .output_claims
-            .iter()
-            .map(output_claim_transcript_field)
-            .collect::<Vec<_>>()
-            .join(",")
-    ));
-    let transcript = transcript_fields.join("|");
-    encode(Sha256::digest(transcript.as_bytes()))
-}
-
-fn output_claim_transcript_field(claim: &MobileOutputClaim<'_>) -> String {
-    [
-        claim.note_commitment,
-        claim.account_id,
-        claim.asset_definition_id,
-        claim.amount,
-        &claim.key_certificate.key_id,
-        &claim.key_certificate.public_key_base64,
-    ]
-    .join(":")
-}
-
 fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
     let options = QrStreamOptions {
         chunk_size: 360,
@@ -860,7 +775,7 @@ fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
         })
         .collect::<Vec<_>>();
     Ok(object(vec![
-        ("frame_prefix", Value::from("fountainqr-v1:")),
+        ("frame_prefix", Value::from("iroha:qr1:")),
         (
             "payload_sha256_hex",
             Value::from(encode(Sha256::digest(payload))),
@@ -932,6 +847,7 @@ fn write_fixture(path: &str, value: &Value, check_only: bool) -> Result<(), Box<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p256::ecdsa::{VerifyingKey as P256VerifyingKey, signature::Verifier as _};
 
     fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
         let Value::Object(map) = value else {
@@ -960,6 +876,15 @@ mod tests {
             panic!("expected number");
         };
         value.as_u64().expect("expected unsigned number")
+    }
+
+    fn assertion_verifying_key(certificate: &Value) -> P256VerifyingKey {
+        let public_key = BASE64_STANDARD
+            .decode(string(field(certificate, "assertion_public_key")))
+            .expect("decode assertion public key");
+        assert_eq!(public_key.len(), 65);
+        assert_eq!(public_key[0], 0x04);
+        P256VerifyingKey::from_sec1_bytes(&public_key).expect("valid SEC1 P-256 assertion key")
     }
 
     #[test]
@@ -1031,7 +956,7 @@ mod tests {
         );
 
         let fountain = field(&fixture, "fountain_qr_v1");
-        assert_eq!(string(field(fountain, "frame_prefix")), "fountainqr-v1:");
+        assert_eq!(string(field(fountain, "frame_prefix")), "iroha:qr1:");
         assert!(number(field(fountain, "required_unique_frames")) > 0);
         assert!(
             array(field(fountain, "frames")).len()
@@ -1039,6 +964,10 @@ mod tests {
         );
 
         let chain = field(&fixture, "chain_vectors");
+        assert_eq!(
+            string(field(proof, "public_inputs_hash_hex")),
+            string(field(field(chain, "audit"), "public_inputs_hash"))
+        );
         for section in ["issue", "audit", "redeem"] {
             assert!(
                 !string(field(field(chain, section), "norito_base64")).is_empty(),
@@ -1056,5 +985,77 @@ mod tests {
         assert!(!string(field(field(chain, "audit"), "public_inputs_hash")).is_empty());
         assert!(!string(field(field(chain, "redeem"), "public_inputs_hash")).is_empty());
         assert_eq!(array(field(&fixture, "bad_variants")).len(), 3);
+    }
+
+    #[test]
+    fn committed_interop_fixture_uses_valid_p256_assertions() {
+        let committed = fs::read_to_string(FIXTURE_PATH).expect("read committed fixture");
+        let fixture: Value = json::from_str(&committed).expect("parse committed fixture");
+        let token = field(&fixture, "payment_token");
+        let sender_certificate = field(token, "sender_key_certificate");
+        let recipient_certificate = field(token, "recipient_key_certificate");
+
+        assert_eq!(
+            string(field(sender_certificate, "assertion_key_algorithm")),
+            "app-attest-p256"
+        );
+        assert_eq!(
+            string(field(recipient_certificate, "assertion_key_algorithm")),
+            "app-attest-p256"
+        );
+        let sender_key = assertion_verifying_key(sender_certificate);
+        let _recipient_key = assertion_verifying_key(recipient_certificate);
+
+        let assertion = field(token, "one_use_assertion");
+        let signature_bytes = BASE64_STANDARD
+            .decode(string(field(assertion, "assertion_base64")))
+            .expect("decode one-use assertion");
+        let signature =
+            P256Signature::from_der(&signature_bytes).expect("valid DER P-256 assertion");
+        sender_key
+            .verify(
+                string(field(assertion, "challenge_hash_hex")).as_bytes(),
+                &signature,
+            )
+            .expect("assertion verifies against sender assertion key");
+    }
+
+    #[test]
+    fn android_keymint_certificate_uses_valid_p256_assertion_key() {
+        let issuer_key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let note_key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+        let account_id = AccountId::new(note_key_pair.public_key().clone());
+        let certificate = signed_certificate(
+            &issuer_key_pair,
+            &note_key_pair,
+            account_id,
+            "android-keymint",
+            "android-key-v2-1",
+            "android-device-v2-1",
+        )
+        .expect("android certificate");
+
+        assert_eq!(
+            certificate.model.assertion_scheme,
+            "android-keymint-ecdsa-p256-usage-limit-v1"
+        );
+        assert_eq!(
+            certificate.model.assertion_key_algorithm,
+            "ecdsa-p256-sha256"
+        );
+        assert_eq!(certificate.model.assertion_usage_count_limit, Some(1));
+        assert_eq!(certificate.model.assertion_public_key.len(), 65);
+        assert_eq!(certificate.model.assertion_public_key[0], 0x04);
+
+        let verifying_key =
+            P256VerifyingKey::from_sec1_bytes(&certificate.model.assertion_public_key)
+                .expect("valid Android assertion key");
+        let challenge = b"android-p256-assertion";
+        let signature_bytes = sign_p256_assertion(&certificate.assertion_signing_key, challenge);
+        let signature =
+            P256Signature::from_der(&signature_bytes).expect("valid DER Android assertion");
+        verifying_key
+            .verify(challenge, &signature)
+            .expect("Android assertion verifies against certificate key");
     }
 }

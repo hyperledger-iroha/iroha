@@ -48,7 +48,7 @@ public struct OfflineQrStreamOptions: Sendable, Equatable {
     public var chunkSize: Int
     public var parityGroup: Int
 
-    public init(chunkSize: Int = 360, parityGroup: Int = 0) {
+    public init(chunkSize: Int = 360, parityGroup: Int = 3) {
         self.chunkSize = chunkSize
         self.parityGroup = parityGroup
     }

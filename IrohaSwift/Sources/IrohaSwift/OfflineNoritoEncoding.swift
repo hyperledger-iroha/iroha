@@ -1119,8 +1119,8 @@ struct OfflineBigInt {
     }
 }
 
-enum IrohaHash {
-    static func hash(_ data: Data) -> Data {
+public enum IrohaHash {
+    public static func hash(_ data: Data) -> Data {
         var digest = Blake2b.hash256(data)
         if let last = digest.indices.last {
             digest[last] |= 1

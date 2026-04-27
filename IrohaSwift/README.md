@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline V2 models and readiness discovery through `/v1/offline/v2/readiness`
+- Offline V2 note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/v2/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -523,6 +523,11 @@ apps can decide how to remediate.
 Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
 issuance, redemption, and audit payloads are submitted as transaction instructions; the legacy
 non-V2 offline HTTP routes are no longer published.
+Swift exposes `OfflineNoteIssueV2`, `OfflineNoteRedeemV2`, and `OfflineNoteAuditBundleV2`
+models plus `buildIssueOfflineNoteV2`, `buildRedeemOfflineNoteV2`, and
+`buildAuditOfflineNoteV2` transaction builders on `IrohaSDK`. Redeem and audit builders verify
+that the recursive proof's public-input hash matches the canonical Swift/Rust Norito payload
+before signing, so callers pass real prover output instead of mock-proof placeholders.
 Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
 one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
 source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a

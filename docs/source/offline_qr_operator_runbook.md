@@ -26,7 +26,7 @@ iroha offline qr encode \
   --dimension 512 \
   --fps 12 \
   --chunk-size 336 \
-  --parity-group 4 \
+  --parity-group 3 \
   --in payload.bin \
   --out out_dir
 ```
@@ -36,7 +36,7 @@ iroha offline qr encode \
 Use the same transport profile across all capture paths:
 
 - `chunk_size=336`
-- `parity_group=4`
+- `parity_group=3`
 - `fps=12`
 - `style=sakura-storm`
 
