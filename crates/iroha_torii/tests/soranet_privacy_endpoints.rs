@@ -2,7 +2,7 @@
 //! Integration coverage for Torii `SoraNet` privacy ingestion endpoints.
 #![cfg(feature = "telemetry")]
 
-use std::str;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{http::StatusCode, response::IntoResponse};
 use http_body_util::BodyExt;
@@ -15,6 +15,16 @@ use iroha_torii::{
     MaybeTelemetry, NoritoJson, RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto,
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
 };
+use norito::json::Value;
+
+async fn norito_json_response_value(response: axum::response::Response) -> Value {
+    let body_bytes = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let body_json: String = norito::decode_from_bytes(&body_bytes).unwrap();
+    norito::json::from_str(&body_json).unwrap()
+}
 
 #[tokio::test]
 async fn privacy_event_endpoint_rejects_when_disabled() {
@@ -66,15 +76,8 @@ async fn privacy_event_endpoint_accepts_payload() {
         .into_response();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-    let body_bytes = BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let body_str = str::from_utf8(&body_bytes).unwrap();
-    assert!(
-        body_str.contains("\"status\":\"accepted\""),
-        "response must indicate acceptance: {body_str}"
-    );
+    let body = norito_json_response_value(response).await;
+    assert_eq!(body.get("status").and_then(Value::as_str), Some("accepted"));
     let bucket_secs = telemetry
         .telemetry()
         .unwrap()
@@ -82,9 +85,9 @@ async fn privacy_event_endpoint_accepts_payload() {
         .config()
         .bucket_secs;
     let bucket_start = (timestamp / bucket_secs) * bucket_secs;
-    assert!(
-        body_str.contains(&format!("\"bucket_start_unix\":{bucket_start}")),
-        "response should advertise computed bucket start: {body_str}"
+    assert_eq!(
+        body.get("bucket_start_unix").and_then(Value::as_u64),
+        Some(bucket_start)
     );
 }
 
@@ -109,20 +112,23 @@ fn make_share(
 #[tokio::test]
 async fn privacy_share_endpoint_combines_shares() {
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
-    let bucket_secs = u32::try_from(
-        telemetry
-            .telemetry()
-            .unwrap()
-            .soranet_privacy()
-            .config()
-            .bucket_secs,
-    )
-    .expect("bucket duration fits within u32");
-    let bucket_start = 1_720_000_000u64;
+    let privacy_config = telemetry.telemetry().unwrap().soranet_privacy().config();
+    let bucket_secs =
+        u32::try_from(privacy_config.bucket_secs).expect("bucket duration fits within u32");
+    let bucket_secs_u64 = u64::from(bucket_secs);
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after UNIX epoch")
+        .as_secs();
+    let bucket_start = (now_unix / bucket_secs_u64) * bucket_secs_u64;
+    let handshake_share = i64::try_from((privacy_config.min_contributors / 2).saturating_add(1))
+        .expect("minimum contributor threshold fits within i64");
+    let expected_accepted_total =
+        u64::try_from(handshake_share).expect("handshake share is non-negative") * 2;
     let mode = SoranetPrivacyModeV1::Middle;
 
-    let share_a = make_share(1, bucket_start, bucket_secs, mode, 6);
-    let share_b = make_share(2, bucket_start, bucket_secs, mode, 6);
+    let share_a = make_share(1, bucket_start, bucket_secs, mode, handshake_share);
+    let share_b = make_share(2, bucket_start, bucket_secs, mode, handshake_share);
 
     for (share, fwd) in [
         (share_a, Some("collector-a".to_string())),
@@ -157,7 +163,7 @@ async fn privacy_share_endpoint_combines_shares() {
         .get_metric_with_label_values(&["middle", bucket_label.as_str(), "accepted"])
         .unwrap()
         .get();
-    assert_eq!(accepted_total, 12);
+    assert_eq!(accepted_total, expected_accepted_total);
 
     let verified_bytes = metrics
         .soranet_privacy_verified_bytes_total
