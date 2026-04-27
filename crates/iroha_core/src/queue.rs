@@ -3891,13 +3891,31 @@ impl Queue {
         self.pressure_snapshot()
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_pressure_age_budget_for_tests(
-        &self,
-        budget: Duration,
-    ) -> QueuePressureSnapshot {
+    /// Set the age budget used by queue pressure snapshots in tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn set_pressure_age_budget_for_tests(&self, budget: Duration) -> QueuePressureSnapshot {
         self.pressure_age_budget_ms
             .store(Self::duration_to_millis(budget), Ordering::Relaxed);
+        self.refresh_backpressure_state(self.active_len(), None);
+        self.pressure_snapshot()
+    }
+
+    /// Backdate queued transaction residence timestamps in tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn backdate_queued_transactions_for_tests(&self, age: Duration) -> QueuePressureSnapshot {
+        let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let enqueued_at_ms = now_ms.saturating_sub(Self::duration_to_millis(age));
+        let queued_hashes: Vec<SignedTxHash> = self
+            .queued_tx_enqueued_at_ms
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+
+        for hash in queued_hashes {
+            self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        }
+
         self.refresh_backpressure_state(self.active_len(), None);
         self.pressure_snapshot()
     }
@@ -8149,6 +8167,26 @@ pub mod tests {
 
         let snapshot = queue.pressure_snapshot();
         assert!(!snapshot.saturated_by_count);
+        assert!(snapshot.saturated_by_age);
+        assert!(queue.current_backpressure().is_saturated());
+    }
+
+    #[tokio::test]
+    async fn backdate_queued_transactions_for_tests_updates_age_pressure() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue.set_pressure_age_budget_for_tests(Duration::from_millis(5));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let snapshot = queue.backdate_queued_transactions_for_tests(Duration::from_millis(6));
+
+        assert_eq!(snapshot.oldest_queued_tx_age_ms, 6);
         assert!(snapshot.saturated_by_age);
         assert!(queue.current_backpressure().is_saturated());
     }
