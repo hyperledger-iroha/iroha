@@ -1492,6 +1492,21 @@ where
     false
 }
 
+fn should_preserve_idle_view_budget_for_proposal(
+    queue_len: usize,
+    mode_flip_pending: bool,
+    commit_inflight: bool,
+    backpressure: propose::ProposalBackpressure,
+    proposal_deadline_due: bool,
+) -> bool {
+    queue_len > 0
+        && !mode_flip_pending
+        && !commit_inflight
+        && proposal_deadline_due
+        && !backpressure.active_pending
+        && (!backpressure.should_defer() || backpressure.only_pacing_backpressure())
+}
+
 fn rotate_topology_for_mode(
     topology: &mut super::network_topology::Topology,
     height: u64,
@@ -4764,6 +4779,30 @@ impl NewViewTracker {
         })
     }
 
+    fn select_with_quorum_at_or_above_height(
+        &mut self,
+        min_height: u64,
+        required: usize,
+        local: Option<&PeerId>,
+        roster: &[PeerId],
+    ) -> Option<NewViewSelection> {
+        if roster.is_empty() {
+            return None;
+        }
+        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+        self.highest_entry_mut(|entry_height, _, entry| {
+            entry_height >= min_height && entry.count_in_roster(&roster_set, local) >= required
+        })
+        .map(|(key, entry)| {
+            let quorum = entry.count_in_roster(&roster_set, local);
+            NewViewSelection {
+                key,
+                highest_qc: entry.highest_qc,
+                quorum,
+            }
+        })
+    }
+
     fn highest_quorum_view_for_height(
         &self,
         height: u64,
@@ -4899,6 +4938,7 @@ impl RbcBacklogSummary {
 #[derive(Debug, Clone, Copy, Default)]
 struct IdleBacklogSignals {
     existing_worker_backlog: bool,
+    worker_recovery_backlog: bool,
     queue_active_backlog: bool,
     residual_round_backlog: bool,
     unresolved_rbc_backlog: bool,
@@ -6151,11 +6191,6 @@ impl Actor {
             frontier_height,
             now,
             queue_depths,
-        ) || self.frontier_recovery_same_slot_ingress_active(
-            frontier_height,
-            frontier_view,
-            now,
-            queue_depths,
         ) || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
             || self.frontier_recovery_same_slot_missing_block_request_active(
                 frontier_height,
@@ -6513,7 +6548,7 @@ impl Actor {
                 && slot.active_view > view
                 && slot.timers.last_view_advance_at.is_some()
         });
-        if slot_requested_direct_view_advance && self.slot_has_authoritative_payload(height, view) {
+        if slot_requested_direct_view_advance {
             return false;
         }
 
@@ -8388,6 +8423,7 @@ impl Actor {
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> IdleBacklogSignals {
         let existing_worker_backlog = self.consensus_queue_backlog(queue_depths);
+        let worker_recovery_backlog = self.consensus_queue_recovery_backlog(queue_depths);
         let queue_active_backlog = self.queue.active_len() > 0;
         let residual_round_backlog = self.has_residual_round_backlog_for_height(evaluated_height);
         let near_quorum_queue_backlog_raw = existing_worker_backlog;
@@ -8402,6 +8438,7 @@ impl Actor {
 
         IdleBacklogSignals {
             existing_worker_backlog,
+            worker_recovery_backlog,
             queue_active_backlog,
             residual_round_backlog,
             unresolved_rbc_backlog,
@@ -8428,6 +8465,13 @@ impl Actor {
         fractional_threshold.max(floor)
     }
 
+    fn recovery_queue_depth_threshold(cap: usize) -> u64 {
+        let cap = u64::try_from(cap.max(1)).unwrap_or(u64::MAX);
+        let floor = RECOVERY_QUEUE_BACKLOG_DEPTH_FLOOR.min(cap);
+        let fractional_threshold = cap.div_ceil(RECOVERY_QUEUE_BACKLOG_DEPTH_DIVISOR);
+        fractional_threshold.max(floor).min(cap)
+    }
+
     fn consensus_queue_backlog_blocks_near_quorum_timeout(
         &self,
         queue_depths: super::status::WorkerQueueDepthSnapshot,
@@ -8440,6 +8484,24 @@ impl Actor {
         let block_threshold = Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
         let consensus_threshold =
             Self::near_quorum_queue_depth_threshold(self.config.queues.control);
+        queue_depths.vote_rx >= vote_threshold
+            || queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
+            || queue_depths.block_payload_rx >= block_payload_threshold
+            || queue_depths.block_rx >= block_threshold
+            || queue_depths.consensus_rx >= consensus_threshold
+    }
+
+    fn consensus_queue_recovery_backlog(
+        &self,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        let vote_threshold = Self::recovery_queue_depth_threshold(self.config.queues.votes);
+        let block_payload_threshold =
+            Self::recovery_queue_depth_threshold(self.config.queues.block_payload);
+        let rbc_chunk_threshold =
+            Self::recovery_queue_depth_threshold(self.config.queues.rbc_chunks);
+        let block_threshold = Self::recovery_queue_depth_threshold(self.config.queues.blocks);
+        let consensus_threshold = Self::recovery_queue_depth_threshold(self.config.queues.control);
         queue_depths.vote_rx >= vote_threshold
             || queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
             || queue_depths.block_payload_rx >= block_payload_threshold
@@ -8543,6 +8605,7 @@ const ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN: Duration = Duration::from_secs(5);
 const ROSTER_SIDECAR_MISMATCH_OBSOLETE_TTL: Duration = Duration::from_secs(5);
 const RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const QC_MISSING_PAYLOAD_RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON: &str = "future_new_view_frontier_reanchor";
 const SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const LOCK_LAG_PRUNE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const LOCK_LAG_FRONTIER_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
@@ -8551,6 +8614,8 @@ const MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
 const NO_PROPOSAL_STORM_FORCE_BREAK_STREAK: u32 = 4;
 const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 8;
 const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_DIVISOR: u64 = 16;
+const RECOVERY_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 64;
+const RECOVERY_QUEUE_BACKLOG_DEPTH_DIVISOR: u64 = 2;
 const ROUND_LIVENESS_STAGNATION_WINDOWS_TO_ISOLATE: u32 = 3;
 const ROUND_LIVENESS_GAP_TO_ISOLATE: u64 = 8;
 
@@ -9238,6 +9303,7 @@ enum RecoveryFsmReason {
     MissingBlockHeightHardCap,
     IdleMissingQcReacquire,
     LockLagHighestQcDefer,
+    FutureNewViewFrontierReanchor,
     LockLagFuturePrune,
     SidecarMismatch,
     HighestQcCommittedConflict,
@@ -9252,6 +9318,7 @@ impl RecoveryFsmReason {
             "missing_block_height_hard_cap" => Self::MissingBlockHeightHardCap,
             "idle_missing_qc_reacquire" => Self::IdleMissingQcReacquire,
             "lock_lag_highest_qc_defer" => Self::LockLagHighestQcDefer,
+            FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON => Self::FutureNewViewFrontierReanchor,
             "lock_lag_future_prune" => Self::LockLagFuturePrune,
             "sidecar_mismatch" => Self::SidecarMismatch,
             "highest_qc_committed_conflict" => Self::HighestQcCommittedConflict,
@@ -9266,10 +9333,11 @@ impl RecoveryFsmReason {
             Self::MissingBlockHeightHardCap => 2,
             Self::IdleMissingQcReacquire => 3,
             Self::LockLagHighestQcDefer => 4,
-            Self::LockLagFuturePrune => 5,
-            Self::SidecarMismatch => 6,
-            Self::HighestQcCommittedConflict => 7,
-            Self::Other => 8,
+            Self::FutureNewViewFrontierReanchor => 5,
+            Self::LockLagFuturePrune => 6,
+            Self::SidecarMismatch => 7,
+            Self::HighestQcCommittedConflict => 8,
+            Self::Other => 9,
         }
     }
 }
@@ -18370,10 +18438,38 @@ impl Actor {
             let progress = self.reschedule_stale_pending_blocks(tick_deadline);
             (progress, step_start.elapsed())
         };
+        let mode_flip_pending_before_idle =
+            self.config.mode_flip.enabled && self.pending_mode_flip.is_some();
+        let pre_idle_proposal_backpressure = {
+            let _view_ctx =
+                StateViewContextGuard::new("sumeragi.tick.pre_idle_proposal_backpressure");
+            self.proposal_backpressure_at(now)
+        };
+        let proposal_deadline_due = self.subsystems.propose.pacemaker.next_deadline <= now
+            || self.pacemaker_queue_nudge_due(now);
+        let preserve_idle_view_budget_for_proposal = should_preserve_idle_view_budget_for_proposal(
+            queue_len,
+            mode_flip_pending_before_idle,
+            self.subsystems.commit.inflight.is_some(),
+            pre_idle_proposal_backpressure,
+            proposal_deadline_due,
+        );
         let (idle_view_progress, idle_view_cost) = {
-            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.force_view_change_if_idle");
             let step_start = Instant::now();
-            let progress = self.force_view_change_if_idle(now);
+            let progress = if preserve_idle_view_budget_for_proposal {
+                trace!(
+                    queue_len,
+                    queue_saturated = pre_idle_proposal_backpressure.queue_state.is_saturated(),
+                    consensus_queue_backpressure =
+                        pre_idle_proposal_backpressure.consensus_queue_backpressure,
+                    "preserving tick budget for due proposal attempt before idle view repair"
+                );
+                false
+            } else {
+                let _view_ctx =
+                    StateViewContextGuard::new("sumeragi.tick.force_view_change_if_idle");
+                self.force_view_change_if_idle(now)
+            };
             (progress, step_start.elapsed())
         };
         let round_liveness_progress = {
@@ -18589,6 +18685,11 @@ impl Actor {
                         progress,
                         queue_ready,
                         backpressure_saturated = state.is_saturated(),
+                        proposal_active_pending = proposal_backpressure.active_pending,
+                        proposal_rbc_backlog = proposal_backpressure.rbc_backlog,
+                        proposal_relay_backpressure = proposal_backpressure.relay_backpressure,
+                        proposal_consensus_queue_backpressure =
+                            proposal_backpressure.consensus_queue_backpressure,
                         queue_len = queue_len_now,
                         pending_blocks,
                         committed_height,
@@ -23694,6 +23795,84 @@ impl Actor {
         })
     }
 
+    fn has_actionable_deferred_missing_payload_qc_for_height(&self, height: u64) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.deferred_missing_payload_qcs.values().any(|entry| {
+            entry.qc.height == height
+                && self.deferred_missing_payload_qc_has_actionable_dependency(
+                    entry,
+                    committed_height,
+                    now,
+                )
+        })
+    }
+
+    fn has_quorum_backed_missing_payload_recovery_for_height(
+        &self,
+        height: u64,
+        now: Instant,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        if self.has_actionable_deferred_missing_payload_qc_for_height(height) {
+            return true;
+        }
+
+        let commit_request_with_quorum =
+            self.pending
+                .missing_block_requests
+                .iter()
+                .any(|(block_hash, request)| {
+                    // A locally available payload makes the missing-payload request non-actionable,
+                    // but this cleanup path must still preserve that payload while quorum-backed
+                    // peers can fetch it for repair.
+                    request.height == height
+                        && matches!(request.phase, crate::sumeragi::consensus::Phase::Commit)
+                        && !self.missing_block_request_is_non_actionable_dependency(
+                            *block_hash,
+                            request,
+                            committed_height,
+                            now,
+                        )
+                        && (self
+                            .commit_vote_quorum_status_for_block_detail(
+                                *block_hash,
+                                request.height,
+                                request.view,
+                            )
+                            .quorum_reached
+                            || self.pending_block_has_commit_qc(
+                                *block_hash,
+                                request.height,
+                                request.view,
+                            ))
+                });
+        if commit_request_with_quorum {
+            return true;
+        }
+
+        self.pending
+            .pending_blocks
+            .iter()
+            .any(|(block_hash, pending)| {
+                pending.height == height
+                    && !pending.aborted
+                    && (pending.commit_qc_observed()
+                        || self.pending_block_has_commit_qc(
+                            *block_hash,
+                            pending.height,
+                            pending.view,
+                        )
+                        || self
+                            .commit_vote_quorum_status_for_block_detail(
+                                *block_hash,
+                                pending.height,
+                                pending.view,
+                            )
+                            .quorum_reached)
+            })
+    }
+
     fn has_contiguous_frontier_pressure_with_passive_slot_policy(
         &self,
         local_height: u64,
@@ -25773,53 +25952,56 @@ impl Actor {
     }
 
     fn reason_is_lock_lag_frontier_reanchor(reason: &'static str) -> bool {
-        matches!(
-            reason,
-            "lock_lag_highest_qc_defer"
-                | "lock_lag_future_prune"
-                | "frontier_gap_realign"
-                | "frontier_stall_reset"
-                | "frontier_stall_reset_fallback"
-                | "missing_block_height_hard_cap"
-                | "missing_block_range_pull_no_progress"
-                | "missing_block_attempt_streak"
-                | "missing_block_hash_miss_streak"
-                | "qc_missing_payload_quorum_fast_recovery"
-                | "sidecar_mismatch"
-                | "highest_qc_committed_conflict"
-        )
+        reason == FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON
+            || matches!(
+                reason,
+                "lock_lag_highest_qc_defer"
+                    | "lock_lag_future_prune"
+                    | "frontier_gap_realign"
+                    | "frontier_stall_reset"
+                    | "frontier_stall_reset_fallback"
+                    | "missing_block_height_hard_cap"
+                    | "missing_block_range_pull_no_progress"
+                    | "missing_block_attempt_streak"
+                    | "missing_block_hash_miss_streak"
+                    | "qc_missing_payload_quorum_fast_recovery"
+                    | "sidecar_mismatch"
+                    | "highest_qc_committed_conflict"
+            )
     }
 
     fn reason_is_canonical_frontier_reanchor(reason: &'static str) -> bool {
-        matches!(
-            reason,
-            "frontier_gap_realign"
-                | "frontier_stall_reset"
-                | "frontier_stall_reset_fallback"
-                | "missing_block_height_hard_cap"
-                | "missing_block_range_pull_no_progress"
-                | "missing_block_attempt_streak"
-                | "missing_block_hash_miss_streak"
-                | "lock_lag_highest_qc_defer"
-                | "no_roster_bootstrap"
-                | "no_roster_frontier_realign"
-                | "idle_missing_qc_reacquire"
-                | "qc_missing_payload_quorum_fast_recovery"
-                | "lock_lag_future_prune"
-                | "sidecar_mismatch"
-                | "highest_qc_committed_conflict"
-        )
+        reason == FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON
+            || matches!(
+                reason,
+                "frontier_gap_realign"
+                    | "frontier_stall_reset"
+                    | "frontier_stall_reset_fallback"
+                    | "missing_block_height_hard_cap"
+                    | "missing_block_range_pull_no_progress"
+                    | "missing_block_attempt_streak"
+                    | "missing_block_hash_miss_streak"
+                    | "lock_lag_highest_qc_defer"
+                    | "no_roster_bootstrap"
+                    | "no_roster_frontier_realign"
+                    | "idle_missing_qc_reacquire"
+                    | "qc_missing_payload_quorum_fast_recovery"
+                    | "lock_lag_future_prune"
+                    | "sidecar_mismatch"
+                    | "highest_qc_committed_conflict"
+            )
     }
 
     fn reason_is_missing_qc_stall_reanchor(reason: &'static str) -> bool {
-        matches!(
-            reason,
-            "idle_missing_qc_reacquire"
-                | "lock_lag_highest_qc_defer"
-                | "qc_missing_payload_quorum_fast_recovery"
-                | "missing_block_height_hard_cap"
-                | "highest_qc_committed_conflict"
-        )
+        reason == FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON
+            || matches!(
+                reason,
+                "idle_missing_qc_reacquire"
+                    | "lock_lag_highest_qc_defer"
+                    | "qc_missing_payload_quorum_fast_recovery"
+                    | "missing_block_height_hard_cap"
+                    | "highest_qc_committed_conflict"
+            )
     }
 
     fn reason_prefers_prev_committed_anchor(
@@ -25829,20 +26011,21 @@ impl Actor {
         if reason == "idle_missing_qc_reacquire" {
             return canonical_frontier_reanchor_active;
         }
-        matches!(
-            reason,
-            "frontier_gap_realign"
-                | "frontier_stall_reset"
-                | "frontier_stall_reset_fallback"
-                | "missing_block_height_hard_cap"
-                | "lock_lag_highest_qc_defer"
-                | "lock_lag_future_prune"
-                | "sidecar_mismatch"
-                | "highest_qc_committed_conflict"
-                | "no_roster_bootstrap"
-                | "no_roster_frontier_realign"
-                | "no_roster_fail_closed"
-        )
+        reason == FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON
+            || matches!(
+                reason,
+                "frontier_gap_realign"
+                    | "frontier_stall_reset"
+                    | "frontier_stall_reset_fallback"
+                    | "missing_block_height_hard_cap"
+                    | "lock_lag_highest_qc_defer"
+                    | "lock_lag_future_prune"
+                    | "sidecar_mismatch"
+                    | "highest_qc_committed_conflict"
+                    | "no_roster_bootstrap"
+                    | "no_roster_frontier_realign"
+                    | "no_roster_fail_closed"
+            )
     }
 
     fn range_pull_anchor_hashes(
@@ -25884,6 +26067,7 @@ impl Actor {
         if height == local_height.saturating_add(1)
             && reason != "lock_lag_highest_qc_defer"
             && reason != "frontier_stall_reset_fallback"
+            && reason != FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON
             && self.exact_frontier_body_repair_active_at_height(height)
             && !self.frontier_slot_allows_deep_catchup(height, reason)
         {
@@ -26464,10 +26648,11 @@ impl Actor {
             return false;
         }
         if height == local_height.saturating_add(1)
-            && matches!(
-                reason,
-                "frontier_stall_reset" | "frontier_stall_reset_fallback"
-            )
+            && (reason == FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON
+                || matches!(
+                    reason,
+                    "frontier_stall_reset" | "frontier_stall_reset_fallback"
+                ))
         {
             let _ = self.handoff_contiguous_frontier_to_passive_catchup(height, now, reason);
         }
@@ -30137,11 +30322,31 @@ impl Actor {
         now: Instant,
         source: &'static str,
     ) {
-        let preserve_live_frontier_state = source == "quorum_timeout"
+        let preserve_quorum_timeout_live_state = source == "quorum_timeout"
             && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
-        let preserve_same_height_rbc_state = source == "quorum_timeout"
+        let preserve_hard_cap_live_frontier_state = source == "missing_block_height_hard_cap"
+            && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
+        let preserve_quorum_payload_recovery_state = source == "missing_block_height_hard_cap"
             && frontier_height == self.committed_height_snapshot().saturating_add(1)
-            && self.phase_tracker.current_view(frontier_height) == Some(view);
+            && self.has_quorum_backed_missing_payload_recovery_for_height(frontier_height, now);
+        let preserve_live_frontier_state = preserve_quorum_timeout_live_state
+            || preserve_hard_cap_live_frontier_state
+            || preserve_quorum_payload_recovery_state;
+        let preserve_same_height_rbc_state = (source == "quorum_timeout"
+            && frontier_height == self.committed_height_snapshot().saturating_add(1)
+            && self.phase_tracker.current_view(frontier_height) == Some(view))
+            || preserve_quorum_payload_recovery_state;
+        let preserved_live_frontier_rbc_keys =
+            if preserve_hard_cap_live_frontier_state && !preserve_same_height_rbc_state {
+                self.collect_live_frontier_rbc_keys_for_cleanup(frontier_height)
+            } else {
+                BTreeSet::new()
+            };
+        let preserve_frontier_new_view_evidence = matches!(
+            source,
+            "missing_qc" | "missing_block_height_hard_cap" | "quorum_timeout"
+        ) && frontier_height
+            == self.committed_height_snapshot().saturating_add(1);
         let preserve_same_view_authoritative_owner =
             source != "quorum_timeout" || preserve_live_frontier_state;
         let preserved_frontier_owners: Vec<_> = self
@@ -30170,7 +30375,11 @@ impl Actor {
         let frontier_rbc_removed = if preserve_same_height_rbc_state {
             0
         } else {
-            self.purge_rbc_sessions_at_or_above_height(frontier_height, false)
+            self.purge_rbc_sessions_at_or_above_height_except(
+                frontier_height,
+                false,
+                &preserved_live_frontier_rbc_keys,
+            )
         };
         let (
             pending_removed,
@@ -30250,7 +30459,7 @@ impl Actor {
             .new_view_tracker
             .entries
             .retain(|(entry_height, _), _| {
-                if preserve_live_frontier_state {
+                if preserve_live_frontier_state || preserve_frontier_new_view_evidence {
                     *entry_height <= frontier_height
                 } else {
                     *entry_height < frontier_height
@@ -30258,7 +30467,9 @@ impl Actor {
             });
         let new_view_entries_removed = new_view_entries_before
             .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len());
-        let frontier_new_view_votes_removed = if preserve_live_frontier_state {
+        let frontier_new_view_votes_removed = if preserve_live_frontier_state
+            || preserve_frontier_new_view_evidence
+        {
             self.clear_new_view_vote_history_at_or_above_height(frontier_height.saturating_add(1))
         } else {
             self.clear_new_view_vote_history_at_or_above_height(frontier_height)
@@ -30321,6 +30532,10 @@ impl Actor {
             height = frontier_height,
             view,
             preserve_live_frontier_state,
+            preserve_hard_cap_live_frontier_state,
+            preserve_quorum_payload_recovery_state,
+            preserve_frontier_new_view_evidence,
+            preserved_live_frontier_rbc = preserved_live_frontier_rbc_keys.len(),
             pending_removed,
             missing_removed,
             future_pending_removed,
@@ -30374,9 +30589,23 @@ impl Actor {
         frontier_height: u64,
         future_only: bool,
     ) -> usize {
+        self.purge_rbc_sessions_at_or_above_height_except(
+            frontier_height,
+            future_only,
+            &BTreeSet::new(),
+        )
+    }
+
+    fn purge_rbc_sessions_at_or_above_height_except(
+        &mut self,
+        frontier_height: u64,
+        future_only: bool,
+        preserved_keys: &BTreeSet<super::rbc_store::SessionKey>,
+    ) -> usize {
         let stale_rbc: Vec<_> = self
             .collect_rbc_keys_for_height(frontier_height, future_only)
             .into_iter()
+            .filter(|key| !preserved_keys.contains(key))
             .collect();
         let mut rbc_removed = 0usize;
         for key in stale_rbc {
@@ -30384,6 +30613,24 @@ impl Actor {
             rbc_removed = rbc_removed.saturating_add(1);
         }
         rbc_removed
+    }
+
+    fn collect_live_frontier_rbc_keys_for_cleanup(
+        &self,
+        frontier_height: u64,
+    ) -> BTreeSet<super::rbc_store::SessionKey> {
+        self.collect_rbc_keys_for_height(frontier_height, false)
+            .into_iter()
+            .filter(|key| {
+                !self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(key)
+                    .is_some_and(RbcSession::is_invalid)
+            })
+            .collect()
     }
 
     fn collect_rbc_keys_for_height(
@@ -30699,6 +30946,14 @@ impl Actor {
         let exact_frontier_height = self.frontier_slot_is_exact_height(height);
         let exact_slot_owner_present =
             self.frontier_slot_has_active_owner_state_for_view(height, view);
+        let existing_recovery_windows = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == frontier_height)
+            .map_or(0, |state| {
+                self.frontier_recovery_window_index_at(state, now)
+            });
+        let same_slot_ingress_hard_cap_elapsed =
+            reason == "quorum_timeout" && existing_recovery_windows >= 2;
         let stale_exact_slot_owner_for_other_view =
             self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == height
@@ -30727,6 +30982,8 @@ impl Actor {
                 );
             }
             let queue_depths = super::status::worker_queue_depth_snapshot();
+            let same_height_dependency_backlog_active = self
+                .frontier_recovery_same_height_dependency_backlog_active(height, now, queue_depths);
             let same_slot_ingress_active =
                 self.frontier_recovery_same_slot_ingress_active(height, view, now, queue_depths);
             let same_slot_missing_payload_recovery_active =
@@ -30739,26 +30996,46 @@ impl Actor {
                 self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
             let same_height_rbc_sender_activity_active = reason == "quorum_timeout"
                 && self.frontier_recovery_same_height_rbc_sender_activity_active(height, now);
-            if same_slot_ingress_active
+            let suppress_same_slot_ingress =
+                same_slot_ingress_active && !same_slot_ingress_hard_cap_elapsed;
+            let suppress_same_slot_reassembly =
+                same_slot_reassembly_active && !same_slot_ingress_hard_cap_elapsed;
+            if same_height_dependency_backlog_active
+                || suppress_same_slot_ingress
                 || same_slot_missing_payload_recovery_active
                 || same_slot_missing_commit_qc_repair_active
                 || same_slot_vote_backed_recovery_active
-                || same_slot_reassembly_active
+                || suppress_same_slot_reassembly
                 || same_height_rbc_sender_activity_active
             {
                 debug!(
                     height,
                     view,
                     reason,
+                    same_height_dependency_backlog_active,
                     same_slot_ingress_active,
                     same_slot_missing_payload_recovery_active,
                     same_slot_missing_commit_qc_repair_active,
                     same_slot_vote_backed_recovery_active,
                     same_slot_reassembly_active,
                     same_height_rbc_sender_activity_active,
+                    existing_recovery_windows,
                     "suppressing exact-frontier recovery while live same-height recovery work remains active"
                 );
                 return FrontierRecoveryAdvance::None;
+            }
+            if same_slot_ingress_hard_cap_elapsed
+                && (same_slot_ingress_active || same_slot_reassembly_active)
+            {
+                debug!(
+                    height,
+                    view,
+                    reason,
+                    same_slot_ingress_active,
+                    same_slot_reassembly_active,
+                    existing_recovery_windows,
+                    "continuing exact-frontier recovery after same-slot ingress exceeded no-progress windows"
+                );
             }
             if reason == "quorum_timeout" {
                 return self.handle_frontier_slot_event(
@@ -30881,10 +31158,23 @@ impl Actor {
                 now,
                 queue_depths,
             );
+        let window = self.frontier_recovery_window();
+        let same_slot_ingress_recently_actionable =
+            same_slot_ingress_active && state.no_progress_windows < 2;
+        let same_slot_ingress_rotation_grace = same_slot_ingress_active
+            && matches!(state.phase, FrontierRecoveryPhase::RotateArmed)
+            && now.saturating_duration_since(state.entered_at) < window;
+        if same_slot_ingress_recently_actionable || same_slot_ingress_rotation_grace {
+            self.frontier_recovery = Some(state);
+            return FrontierRecoveryAdvance::None;
+        }
         if (same_height_dependency_backlog_active
             || same_slot_ingress_active
             || same_slot_missing_payload_recovery_active
             || quorum_timeout_same_height_recovery_active)
+            && (same_height_dependency_backlog_active
+                || same_slot_missing_payload_recovery_active
+                || quorum_timeout_same_height_recovery_active)
             && (state.no_progress_windows >= 2
                 || matches!(state.phase, FrontierRecoveryPhase::RotateArmed))
         {
@@ -30896,7 +31186,6 @@ impl Actor {
             return FrontierRecoveryAdvance::None;
         }
 
-        let window = self.frontier_recovery_window();
         match state.phase {
             FrontierRecoveryPhase::CatchUp => {
                 let all_peers = state.cleanup_done || state.no_progress_windows >= 2;
@@ -30937,11 +31226,16 @@ impl Actor {
                     no_progress_windows = state.no_progress_windows,
                     "frontier recovery exhausted catch-up windows; rotating view"
                 );
-                self.trigger_view_change_with_cause(
-                    frontier_height,
-                    view,
-                    Self::frontier_recovery_view_change_cause(reason),
-                );
+                let cause = Self::frontier_recovery_view_change_cause(reason);
+                if state.no_progress_windows >= 2 {
+                    self.apply_view_change_after_exhausted_frontier_recovery(
+                        frontier_height,
+                        view,
+                        cause,
+                    );
+                } else {
+                    self.trigger_view_change_with_cause(frontier_height, view, cause);
+                }
                 self.frontier_recovery = Some(FrontierRecoveryState {
                     frontier_height,
                     phase: FrontierRecoveryPhase::CatchUp,
@@ -31359,6 +31653,7 @@ impl Actor {
         let backlog_signals = self.idle_backlog_signals_for_height(evaluated_height, queue_depths);
         let IdleBacklogSignals {
             existing_worker_backlog,
+            worker_recovery_backlog,
             queue_active_backlog,
             residual_round_backlog,
             unresolved_rbc_backlog,
@@ -31370,7 +31665,7 @@ impl Actor {
             near_quorum_rbc_backlog,
         } = backlog_signals;
         let recovery_backlog_signals_active =
-            existing_worker_backlog || residual_round_backlog || unresolved_rbc_backlog;
+            worker_recovery_backlog || residual_round_backlog || unresolved_rbc_backlog;
         let near_quorum_fast_timeout_gate_open =
             Self::stalled_pending_near_quorum_fast_timeout_gate_open(backlog_signals);
         let near_quorum_recent_progress_grace =
@@ -31450,6 +31745,7 @@ impl Actor {
                     stall_age_ms = stall_age.as_millis(),
                     grace_ms = backlog_recent_progress_grace.as_millis(),
                     existing_worker_backlog,
+                    worker_recovery_backlog,
                     queue_active_backlog,
                     residual_round_backlog,
                     consensus_queue_backlog,
@@ -31719,6 +32015,7 @@ impl Actor {
             same_block_recovery_stalled,
             near_quorum_preemptive_escalations,
             existing_worker_backlog,
+            worker_recovery_backlog,
             queue_active_backlog,
             residual_round_backlog,
             consensus_queue_backlog,
@@ -31799,7 +32096,7 @@ impl Actor {
         let base_timeout = self.commit_quorum_timeout().max(Duration::from_millis(1));
         let near_quorum_timeout =
             reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown()).min(base_timeout);
-        let recovery_backlog_signals_active = backlog_signals.existing_worker_backlog
+        let recovery_backlog_signals_active = backlog_signals.worker_recovery_backlog
             || backlog_signals.residual_round_backlog
             || backlog_signals.unresolved_rbc_backlog;
         let backlog_timeout = self
@@ -31843,13 +32140,27 @@ impl Actor {
             pending.view,
             now,
         );
+        let validation_recovery_active = pending.validation_status == ValidationStatus::Pending
+            && self
+                .subsystems
+                .validation
+                .inflight
+                .contains_key(&block_hash);
+        let commit_pipeline_has_recovery_evidence = pending.commit_qc_observed()
+            || pending.validated_commit_artifact.is_some()
+            || near_commit_quorum;
+        let commit_pipeline_backlog_active = backlog_signals.queue_active_backlog
+            && pending.validation_status != ValidationStatus::Invalid
+            && commit_pipeline_has_recovery_evidence;
         let near_quorum_fast_timeout_allowed = near_commit_quorum
             && missing_local_data
             && Self::stalled_pending_near_quorum_fast_timeout_gate_open(backlog_signals)
             && !same_block_recovery_active;
-        let recovery_backlog_active = backlog_signals.existing_worker_backlog
+        let recovery_backlog_active = backlog_signals.worker_recovery_backlog
             || backlog_signals.residual_round_backlog
             || backlog_signals.unresolved_rbc_backlog
+            || validation_recovery_active
+            || commit_pipeline_backlog_active
             || same_block_recovery_active;
         let class = if near_quorum_fast_timeout_allowed {
             StalledPendingTimeoutClass::NearQuorumPayloadMissingFastTimeout
@@ -31947,6 +32258,7 @@ impl Actor {
         let backlog_signals = self.idle_backlog_signals_for_height(height, queue_depths);
         let IdleBacklogSignals {
             existing_worker_backlog: _existing_worker_backlog,
+            worker_recovery_backlog: _worker_recovery_backlog,
             queue_active_backlog,
             residual_round_backlog,
             unresolved_rbc_backlog,
@@ -32452,8 +32764,17 @@ impl Actor {
                 return false;
             }
         }
+        let contiguous_frontier_missing_proposal_force_allowed = height
+            == contiguous_frontier_height
+            && !frontier_pending_exists
+            && !same_height_actionable_dependency
+            && !contiguous_frontier_unresolved
+            && !self.has_actionable_missing_block_requests()
+            && !self.has_actionable_deferred_missing_payload_qcs()
+            && !self.proposal_gated_by_missing_dependencies(height);
         if !proposal_seen
-            && height != contiguous_frontier_height
+            && (height != contiguous_frontier_height
+                || contiguous_frontier_missing_proposal_force_allowed)
             && self.maybe_force_missing_qc_leader_proposal(height, current_view, age, now)
         {
             return false;
@@ -33241,6 +33562,27 @@ impl Actor {
         view: u64,
         cause: ViewChangeCause,
     ) {
+        self.apply_view_change_with_cause_for_height_impl(height, view, cause, false);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_view_change_after_exhausted_frontier_recovery(
+        &mut self,
+        height: u64,
+        view: u64,
+        cause: ViewChangeCause,
+    ) {
+        self.apply_view_change_with_cause_for_height_impl(height, view, cause, true);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_view_change_with_cause_for_height_impl(
+        &mut self,
+        height: u64,
+        view: u64,
+        cause: ViewChangeCause,
+        bypass_frontier_repair_suppression: bool,
+    ) {
         if let Some(current_height) = self.phase_tracker.round_height {
             if height < current_height {
                 debug!(
@@ -33317,13 +33659,15 @@ impl Actor {
             }
         }
         let queue_depths = super::status::worker_queue_depth_snapshot();
-        if self.suppress_quorum_view_change_while_frontier_repair_active(
-            height,
-            view,
-            cause,
-            now,
-            queue_depths,
-        ) {
+        if !bypass_frontier_repair_suppression
+            && self.suppress_quorum_view_change_while_frontier_repair_active(
+                height,
+                view,
+                cause,
+                now,
+                queue_depths,
+            )
+        {
             return;
         }
         let active_queue_len = self.queue.active_len();

@@ -7223,10 +7223,10 @@ impl Actor {
             matches!(backpressure_action, PacemakerBackpressureAction::First);
         let should_fire_now = pacemaker.should_fire(now);
         if deferring {
-            if backpressure.only_queue_saturation() {
+            if backpressure.only_pacing_backpressure() {
                 if should_fire_now {
-                    // Allow proposals to proceed once the pacemaker deadline elapses when queue
-                    // saturation is the only backpressure signal, but keep logging deferral.
+                    // Allow proposals to proceed once the pacemaker deadline elapses when only
+                    // pacing pressure is present; keep logging the deferral.
                     return (log_initial_deferral, true, true);
                 }
                 // Defer proposal assembly under backpressure, but still request a log on the first

@@ -232,12 +232,9 @@ impl ProposalBackpressure {
             || self.consensus_queue_backpressure
     }
 
-    pub(super) fn only_queue_saturation(self) -> bool {
-        self.queue_state.is_saturated()
-            && !(self.active_pending
-                || self.rbc_backlog
-                || self.relay_backpressure
-                || self.consensus_queue_backpressure)
+    pub(super) fn only_pacing_backpressure(self) -> bool {
+        (self.queue_state.is_saturated() || self.consensus_queue_backpressure)
+            && !(self.active_pending || self.rbc_backlog || self.relay_backpressure)
     }
 }
 
@@ -272,6 +269,41 @@ fn da_payload_budget(
 }
 
 impl Actor {
+    fn missing_qc_liveness_allows_frontier_self_proposal(
+        &self,
+        height: u64,
+        view: u64,
+        committed_height: u64,
+        pending_queue_len: usize,
+        precommit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        if pending_queue_len == 0 || height != committed_height.saturating_add(1) || view == 0 {
+            return None;
+        }
+        if !self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_some_and(|slot| {
+                slot.height == height
+                    && slot.view == view
+                    && matches!(
+                        slot.state,
+                        ProposalLivenessState::AwaitingProposalAfterMissingQc
+                            | ProposalLivenessState::RecoveryAcquireDependencies
+                    )
+            })
+        {
+            return None;
+        }
+        let qc = precommit_qc?;
+        if height == qc.height.saturating_add(1) {
+            Some(qc)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn internal_proposal_work(
         &mut self,
         proposal_height: u64,
@@ -599,9 +631,35 @@ impl Actor {
         Some((tx_count, requeued, failures, duplicate_failures))
     }
 
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn assemble_and_broadcast_proposal(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        topology: &mut super::network_topology::Topology,
+        leader_index: usize,
+        local_validator_index: u32,
+        view_snapshot: Option<StateView<'_>>,
+        now: Instant,
+    ) -> Result<bool> {
+        self.assemble_and_broadcast_proposal_with_recovery_heartbeat(
+            height,
+            view,
+            highest_qc,
+            topology,
+            leader_index,
+            local_validator_index,
+            view_snapshot,
+            now,
+            false,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
-    pub(super) fn assemble_and_broadcast_proposal(
+    fn assemble_and_broadcast_proposal_with_recovery_heartbeat(
         &mut self,
         height: u64,
         view: u64,
@@ -611,6 +669,7 @@ impl Actor {
         local_validator_index: u32,
         view_snapshot: Option<StateView<'_>>,
         now: Instant,
+        allow_recovery_heartbeat: bool,
     ) -> Result<bool> {
         if self.is_observer() {
             return Ok(false);
@@ -927,15 +986,31 @@ impl Actor {
         let mut internal_work = if transactions.is_empty() {
             let work = self.internal_proposal_work(proposal_height, prev_block.as_deref());
             if !work.has_work() {
-                info!(
-                    height,
-                    view,
-                    queue_len = queue_len_after_pop,
-                    "skipping empty proposal; empty blocks are disallowed"
-                );
-                return Ok(false);
+                if allow_recovery_heartbeat {
+                    let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
+                    let encoded_len = heartbeat.as_ref().encode().len();
+                    transactions.push(heartbeat);
+                    routing_decisions.push(RoutingDecision::default());
+                    tx_sizes.push(encoded_len);
+                    info!(
+                        height = proposal_height,
+                        view,
+                        queue_len = queue_len_after_pop,
+                        "injecting recovery heartbeat transaction for empty leader queue"
+                    );
+                    None
+                } else {
+                    info!(
+                        height,
+                        view,
+                        queue_len = queue_len_after_pop,
+                        "skipping empty proposal; empty blocks are disallowed"
+                    );
+                    return Ok(false);
+                }
+            } else {
+                Some(work)
             }
-            Some(work)
         } else {
             None
         };
@@ -1749,6 +1824,35 @@ impl Actor {
         Ok(true)
     }
 
+    fn build_recovery_heartbeat_transaction(
+        &self,
+        proposal_height: u64,
+    ) -> Result<AcceptedTransaction<'static>> {
+        let (max_clock_drift, tx_limits) = {
+            let world = self.state.world_view();
+            let params = world.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let time_source = iroha_primitives::time::TimeSource::new_system();
+        let signed = crate::tx::build_heartbeat_transaction_with_time_source(
+            self.state.chain_id_ref().clone(),
+            &self.common_config.key_pair,
+            &tx_limits,
+            proposal_height,
+            &time_source,
+        );
+        let crypto = self.state.crypto();
+        AcceptedTransaction::accept_with_time_source(
+            signed,
+            self.state.chain_id_ref(),
+            max_clock_drift,
+            tx_limits,
+            &crypto,
+            &time_source,
+        )
+        .map_err(|err| eyre!("failed to build recovery heartbeat transaction: {err}"))
+    }
+
     /// Enforce DA proof/commitment caps before embedding them into a block.
     ///
     /// The current `PoR` proof bundle is tracked by commitments only; we bound proof
@@ -2466,6 +2570,66 @@ impl Actor {
                     }
                 }
             }
+        }
+
+        if candidate.is_none()
+            && let Some(qc) = self.missing_qc_liveness_allows_frontier_self_proposal(
+                tracked_height,
+                tracked_view,
+                committed_height,
+                pending_queue_len,
+                precommit_qc,
+            )
+        {
+            candidate = Some(NewViewSelection {
+                key: (tracked_height, tracked_view),
+                quorum: required,
+                highest_qc: qc,
+            });
+            debug!(
+                height = tracked_height,
+                view = tracked_view,
+                committed_height,
+                qc_height = qc.height,
+                qc_view = qc.view,
+                "using committed-QC frontier candidate after missing-QC no-proposal liveness timeout"
+            );
+        }
+
+        if candidate.is_none()
+            && tracked_height < desired_height
+            && let Some(future_selection) = self
+                .subsystems
+                .propose
+                .new_view_tracker
+                .select_with_quorum_at_or_above_height(
+                    tracked_height.saturating_add(1),
+                    required,
+                    local_peer.as_ref(),
+                    topology.as_ref(),
+                )
+        {
+            let highest_qc_observed =
+                self.observe_new_view_highest_qc_exact_repair(future_selection.highest_qc);
+            let reanchor_requested = self.request_range_pull_from_anchor(
+                tracked_height,
+                FUTURE_NEW_VIEW_FRONTIER_REANCHOR_REASON,
+                now,
+            );
+            info!(
+                height = tracked_height,
+                desired_height,
+                future_height = future_selection.key.0,
+                future_view = future_selection.key.1,
+                future_quorum = future_selection.quorum,
+                future_highest_qc_height = future_selection.highest_qc.height,
+                future_highest_qc_view = future_selection.highest_qc.view,
+                highest_qc_observed,
+                reanchor_requested,
+                "deferring proposal: future NEW_VIEW quorum observed, reanchoring local frontier"
+            );
+            self.maybe_rebroadcast_new_view_votes(tracked_height, now);
+            return false;
         }
 
         let Some(selection) = candidate.or_else(|| {
@@ -3280,7 +3444,8 @@ impl Actor {
             self.internal_proposal_work(height, prev_block.as_deref())
                 .has_work()
         };
-        if !has_queue_work && !has_internal_work {
+        let allow_recovery_heartbeat = view_idx > 0 && height == committed_height.saturating_add(1);
+        if !has_queue_work && !has_internal_work && !allow_recovery_heartbeat {
             trace!(
                 height,
                 view = view_idx,
@@ -3313,7 +3478,7 @@ impl Actor {
         );
 
         let view_snapshot = None;
-        let assembled = match self.assemble_and_broadcast_proposal(
+        let assembled = match self.assemble_and_broadcast_proposal_with_recovery_heartbeat(
             height,
             view_idx,
             highest_qc,
@@ -3322,6 +3487,7 @@ impl Actor {
             local_idx_val,
             view_snapshot,
             now,
+            allow_recovery_heartbeat,
         ) {
             Ok(assembled) => assembled,
             Err(err) => {
@@ -3473,7 +3639,7 @@ mod tests {
             consensus_queue_backpressure: true,
         };
         assert!(backpressure.should_defer());
-        assert!(!backpressure.only_queue_saturation());
+        assert!(backpressure.only_pacing_backpressure());
     }
 
     #[test]
