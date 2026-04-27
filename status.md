@@ -935,3 +935,28 @@ Last updated: 2026-04-26
 - Permission-cache replay: landed and green.
 - Integration failure sweep: the reported targeted regressions were fixed and covered by focused validation.
 - MCP writer-profile alignment: landed; mutation-capable MCP endpoint tests now opt into the documented writer profile and the targeted test file is green.
+
+## 2026-04-21 Follow-up: Kotlin SDK typed offline-cash redeem support
+- Added typed cash models and a redeem-proof builder under
+  `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/`.
+  After rebasing onto the Offline V2 Torii surface, `OfflineToriiClient`
+  remains scoped to `/v1/offline/v2/readiness`; the older cash-route client
+  overloads and route tests are not retained because Torii no longer exposes
+  those HTTP endpoints.
+- `OfflineStarkEnvelopeProver.kt` +
+  `OfflineSettlementProofs.buildRedeemRequestProof` port
+  `iroha_core::zk_stark::prove_stark_fri_{air,composition}_envelope_bytes`
+  to pure Kotlin, restricted to the `stark/fri/sha256-goldilocks` backend
+  used by the legacy offline cash payload shape. Parity is locked byte-for-byte
+  against committed Rust-generated fixtures at
+  `kotlin/core-jvm/src/test/resources/offline/redeem_proof_fixtures.json`.
+- Temporary exception: `java/iroha_android` was intentionally left
+  untouched for this slice. The Kotlin↔Java mirror policy in
+  `AGENTS.md:69-70` remains repo policy; a follow-up task will mirror
+  the typed offline-cash API once the Kotlin surface stabilizes.
+- Focused validation:
+  - `cd kotlin && ./gradlew :core-jvm:compileKotlin` (pass)
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain --tests
+    'org.hyperledger.iroha.sdk.offline.OfflineSettlementProofsParityTest'
+    --tests 'org.hyperledger.iroha.sdk.offline.OfflineCashCodecTest'`
+    (pass — envelope byte-parity gate cleared against Rust fixtures).
