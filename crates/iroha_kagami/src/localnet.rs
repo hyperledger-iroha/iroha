@@ -26,6 +26,7 @@ use iroha_data_model::{
         verifying_keys,
     },
     nexus::DataSpaceId,
+    offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
     },
@@ -2187,11 +2188,7 @@ fn render_peer_config(
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
 
-    let mut settlement_offline_escrow_accounts = Table::new();
-    settlement_offline_escrow_accounts.insert(
-        localnet_offline_note_asset_literal(),
-        Value::String(localnet_client_account),
-    );
+    let settlement_offline_escrow_accounts = Table::new();
     let mut settlement_offline = Table::new();
     settlement_offline.insert(
         "escrow_accounts".into(),
@@ -2258,9 +2255,18 @@ fn extend_genesis(
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
+        let mut metadata = Metadata::default();
+        if asset.id == LOCALNET_OFFLINE_NOTE_ASSET_ID {
+            metadata.insert(
+                OFFLINE_ASSET_ENABLED_METADATA_KEY
+                    .parse()
+                    .expect("offline asset metadata key must parse"),
+                Json::new(true),
+            );
+        }
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
             .with_name(asset.name.clone())
-            .with_metadata(Metadata::default());
+            .with_metadata(metadata);
         builder = builder.append_instruction(Register::asset_definition(definition));
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
@@ -3210,7 +3216,8 @@ fn write_localnet_readme(
             "## Built-in App API bootstrap\n\n",
             "- Offline-note asset definition: `{offline_note_asset}`\n",
             "- Offline-note alias: `{offline_note_alias}`\n",
-            "- Localnet app authority / escrow account: `{client_account_id}`\n",
+            "- Localnet app authority: `{client_account_id}`\n",
+            "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
             "- Generated peer configs enable `torii.onboarding` and Offline V2 escrow routing\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
@@ -3492,6 +3499,9 @@ mod tests {
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
             AssetId::new(offline_asset_id.clone(), client_account_id.clone());
+        let offline_enabled_key: iroha_data_model::name::Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
+            .parse()
+            .expect("offline asset metadata key");
 
         let has_definition = manifest.instructions().any(|instruction| {
             instruction
@@ -3502,12 +3512,17 @@ mod tests {
                         register,
                         RegisterBox::AssetDefinition(register)
                             if register.object().id == offline_asset_id
+                                && register
+                                    .object()
+                                    .metadata
+                                    .get(&offline_enabled_key)
+                                    .is_some_and(|value| matches!(value.try_into_any::<bool>(), Ok(true)))
                     )
                 })
         });
         assert!(
             has_definition,
-            "localnet must register the built-in offline-note asset"
+            "localnet must register the built-in offline-note asset with offline.enabled=true"
         );
 
         let has_alias_binding = manifest.instructions().any(|instruction| {
@@ -3736,11 +3751,9 @@ mod tests {
             .get("escrow_accounts")
             .and_then(toml::Value::as_table)
             .expect("settlement.offline.escrow_accounts table");
-        assert_eq!(
-            escrow_accounts
-                .get(LOCALNET_OFFLINE_NOTE_ASSET_ID)
-                .and_then(toml::Value::as_str),
-            Some(client_account_id.as_str())
+        assert!(
+            escrow_accounts.is_empty(),
+            "generated peer config must not map offline-note escrow to the localnet app authority"
         );
     }
 
@@ -5862,6 +5875,13 @@ mod tests {
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
         assert!(contents.contains("- Base seed: `Iroha`"));
         assert!(contents.contains(LOCALNET_OFFLINE_NOTE_ASSET_ALIAS));
+        assert!(contents.contains("- Localnet app authority: `"));
+        assert!(
+            contents.contains(
+                "- Offline escrow account: deterministic account derived from the chain id and asset definition"
+            )
+        );
+        assert!(!contents.contains("Localnet app authority / escrow account"));
     }
 
     #[test]
