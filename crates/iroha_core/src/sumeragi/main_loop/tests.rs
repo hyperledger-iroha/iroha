@@ -14766,6 +14766,86 @@ async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_block_body_sends_plain_fallback_before_sidecar_response() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, None);
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    assert_eq!(insert_validated_pending(actor, block.clone()), block_hash);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .qc_cache
+        .insert((Phase::Commit, block_hash, height, view, epoch), qc);
+    assert!(
+        matches!(
+            actor.block_body_response_for_wire(&block).body,
+            super::message::BlockBodyData::BlockSyncUpdate(_)
+        ),
+        "test setup should build a sidecar-rich exact body response"
+    );
+
+    let requester = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote requester");
+
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_fetch_block_body(super::message::FetchBlockBody {
+            requester: requester.clone(),
+            block_hash,
+            height,
+            view,
+        })
+        .expect("fetch block body");
+
+    let responses = take_background_log(&background_log)
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockBodyResponse"),
+                    peer: Some(peer),
+                } if peer == &requester
+            )
+        })
+        .count();
+    assert!(
+        responses >= 2,
+        "exact body repair should send both a plain payload fallback and sidecar-rich repair data"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fetch_block_body_stashes_canonical_committed_block_until_commit_proof_available() {
     use crate::sumeragi::status;
 
@@ -15308,6 +15388,135 @@ async fn block_body_response_retains_same_height_repair_after_frontier_view_adva
     assert!(
         actor.commit_pipeline_wakeup_pending(),
         "same-height repair materialization must wake the commit pipeline so deferred QC replay can validate and emit the missing local vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_body_response_block_created_uses_deferred_commit_qc_for_same_height_repair() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 2_u64;
+    let repair_view = 0_u64;
+
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(parent_hash),
+    );
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    let now = Instant::now();
+    assert!(actor.update_frontier_slot(
+        owner_hash,
+        height,
+        owner_view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ true,
+        None,
+        None,
+        now,
+    ));
+
+    let repair_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        repair_view,
+        Some(parent_hash),
+    );
+    let repair_hash = repair_block.hash();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        repair_hash,
+        height,
+        repair_view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let qc_key = Actor::qc_tally_key(&qc);
+    actor.deferred_missing_payload_qcs.insert(
+        qc_key,
+        super::DeferredQcEntry {
+            qc,
+            first_seen: now,
+            last_attempt: now,
+            attempts: 0,
+            escalated_fetch: false,
+            reason: "test_body_response_deferred_qc",
+        },
+    );
+
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view: repair_view,
+        block_hash: repair_hash,
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash: repair_hash,
+                height,
+                view: repair_view,
+                body: super::message::BlockBodyData::BlockCreated(
+                    super::message::BlockCreated::from(&repair_block),
+                ),
+            },
+            Some(sender),
+        )
+        .expect("same-height BlockCreated body response handled");
+
+    assert!(
+        actor.local_signed_block_for_hash(repair_hash).is_some(),
+        "plain BlockCreated body repair with local deferred commit-QC evidence should preserve the recovered payload locally"
+    );
+    assert!(
+        actor.deferred_missing_payload_qcs.is_empty(),
+        "accepted same-height repair should consume deferred missing-payload QC evidence"
+    );
+    assert!(
+        actor.frontier_slot.as_ref().is_none_or(|slot| {
+            slot.block_hash != owner_hash || slot.height != height || slot.view != owner_view
+        }),
+        "commit-QC-backed body repair should clear the stale same-height owner"
+    );
+    assert!(
+        actor.commit_pipeline_wakeup_pending(),
+        "materialized commit-QC-backed body repair should wake the commit pipeline"
     );
 
     harness.shutdown.send();
@@ -34976,15 +35185,23 @@ async fn qc_missing_block_defer_widens_exact_body_repair_under_resilience_commit
         "missing payload should stay deferred while exact body repair is emitted"
     );
 
-    let repair_targets = take_background_log(&background_log)
-        .into_iter()
+    let repair_entries = take_background_log(&background_log);
+    let repair_targets = repair_entries
+        .iter()
         .filter(|entry| entry.msg_kind == Some("FetchBlockBody"))
-        .filter_map(|entry| entry.peer)
+        .filter_map(|entry| entry.peer.clone())
         .collect::<BTreeSet<_>>();
     assert_eq!(
         repair_targets.len(),
         expected_targets,
         "resilience commit-quorum repair should widen exact FetchBlockBody to every active non-local validator"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "resilience commit-quorum repair should record generic missing-block recovery as a fallback"
     );
 
     harness.shutdown.send();
@@ -74184,6 +74401,82 @@ async fn prune_stale_view_state_retires_old_view_frontier_pending_without_inflig
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn drop_stale_pending_block_retains_vote_backed_payload_for_exact_body_repair() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_local_commit_vote_emitted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert_eq!(
+        actor.drop_stale_pending_block(block_hash, height, view),
+        Some((0, 0, 0, 0)),
+        "vote-backed stale payload should be retained without requeueing transactions"
+    );
+    let retained = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("vote-backed stale payload should stay locally recoverable");
+    assert!(
+        retained.is_retired_same_height(),
+        "retained stale payload should become passive same-height data"
+    );
+    assert!(
+        actor.local_signed_block_for_hash(block_hash).is_some(),
+        "retired vote-backed payload should remain eligible for exact body fetch"
+    );
+    assert!(
+        actor
+            .slot_tracker
+            .retained_branches
+            .contains_key(&(height, view, block_hash)),
+        "retained branch metadata should track passive exact-body repair data"
+    );
+
+    let requester = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote requester");
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_fetch_block_body(super::message::FetchBlockBody {
+            requester: requester.clone(),
+            block_hash,
+            height,
+            view,
+        })
+        .expect("exact body fetch should be handled");
+
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .any(|entry| {
+                matches!(
+                    entry,
+                    super::BackgroundRequestLogEntry {
+                        kind: super::BackgroundRequestLogKind::Post,
+                        msg_kind: Some("BlockBodyResponse"),
+                        peer: Some(peer),
+                    } if peer == requester
+                )
+            }),
+        "retired stale vote-backed payload should answer exact body fetches"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn superseded_frontier_owner_with_commit_evidence_serves_exact_body_fetch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -86368,6 +86661,97 @@ async fn proposal_clears_no_pending_stale_frontier_owner_without_qc_lock() {
     assert!(
         actor.frontier_slot.is_none(),
         "yielding should clear the no-pending frontier owner blocker"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_repairs_no_pending_commit_qc_frontier_owner() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let owner_hash = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    )
+    .hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        owner_hash,
+        now,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        false,
+        false,
+        None,
+        None,
+    ));
+    actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot")
+        .quorum_progress
+        .commit_qc_observed = true;
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        !actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            owner_hash,
+            owner_view,
+            now,
+            actor.queue.queued_len(),
+        ),
+        "commit-QC protected owner must be repaired, not yielded to a conflicting proposal"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot retained");
+    assert_eq!(slot.block_hash, owner_hash);
+    assert_eq!(slot.height, frontier_height);
+    assert_eq!(slot.view, owner_view);
+    assert!(
+        slot.exact_fetch_armed,
+        "commit-QC protected owner without local pending body should arm exact body repair"
+    );
+    assert!(
+        !slot.body_present,
+        "test setup keeps the body absent so repair must fetch it from peers"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "commit-QC protected owner should immediately request exact block-body repair"
     );
 
     harness.shutdown.send();

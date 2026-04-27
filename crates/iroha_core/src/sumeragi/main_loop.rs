@@ -15782,8 +15782,18 @@ impl Actor {
         if !slot_routed {
             return false;
         }
+        let keep_resilience_consensus_fetch = self.config.resilience.enabled
+            && self
+                .pending
+                .missing_block_requests
+                .get(&block_hash)
+                .is_some_and(|request| {
+                    request.height == height
+                        && matches!(request.priority, MissingBlockPriority::Consensus)
+                });
         if !(self.frontier_recovery_exists_at_height(height)
             && self.frontier_recovery_owns_height_window(height, now))
+            && !keep_resilience_consensus_fetch
         {
             self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
         }

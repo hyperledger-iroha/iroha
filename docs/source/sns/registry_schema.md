@@ -164,7 +164,7 @@ Struct SuffixFeeSplitV1 {
 | `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
 | `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+All `TokenValue` fields use the settlement asset's native integer units. SNS policies for Nexus XOR use nano-XOR units so sub-XOR lease prices can be represented without floating-point arithmetic.
 
 ### 2.4 Registry Events
 
@@ -282,7 +282,7 @@ SuffixPolicyV1 {
     status: Active,
     payment_asset_id: "<base58-asset-definition-id>#<i105-account-id>",
     pricing: [
-        PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
+        PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"500000000 nano-XOR (0.5 XOR)", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }
     ],
     min_term_years: 1,

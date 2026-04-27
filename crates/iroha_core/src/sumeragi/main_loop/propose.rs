@@ -645,6 +645,52 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> Option<(usize, usize, usize, usize)> {
+        if self.should_retain_stale_pending_payload_for_body_repair(pending_hash, height, view) {
+            let mut pending = self
+                .pending
+                .pending_blocks
+                .remove(&pending_hash)
+                .expect("checked pending block exists");
+            if !pending.is_retired_same_height() {
+                pending.retire_same_height();
+            }
+            let frontier_info =
+                self.authoritative_slot_frontier_info(pending.height, pending.view, pending_hash);
+            self.slot_tracker.note_retained_branch(
+                pending.height,
+                pending.view,
+                pending_hash,
+                frontier_info,
+                true,
+                Instant::now(),
+            );
+            self.pending.pending_fetch_requests.remove(&pending_hash);
+            self.pending
+                .pending_block_body_requests
+                .remove(&pending_hash);
+            self.subsystems.validation.inflight.remove(&pending_hash);
+            self.subsystems
+                .validation
+                .superseded_results
+                .remove(&pending_hash);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view);
+            self.pending.pending_blocks.insert(pending_hash, pending);
+            debug!(
+                height,
+                view,
+                block = %pending_hash,
+                "retired stale vote-backed pending payload for exact body repair"
+            );
+            return Some((0, 0, 0, 0));
+        }
+
         let (tx_count, requeued, failures, duplicate_failures) =
             super::drop_pending_block_and_requeue(
                 &mut self.pending.pending_blocks,
@@ -670,6 +716,42 @@ impl Actor {
         let _ = self.clear_stale_commit_inflight_for_block(pending_hash, height, view, false);
 
         Some((tx_count, requeued, failures, duplicate_failures))
+    }
+
+    fn should_retain_stale_pending_payload_for_body_repair(
+        &self,
+        pending_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        if !self.runtime_da_enabled() || self.kura.get_block_height_by_hash(pending_hash).is_some()
+        {
+            return false;
+        }
+        let Some(pending) = self.pending.pending_blocks.get(&pending_hash) else {
+            return false;
+        };
+        if pending.height != height
+            || pending.view != view
+            || pending.is_retired_same_height()
+            || matches!(pending.validation_status, ValidationStatus::Invalid)
+        {
+            return false;
+        }
+        let committed_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        if !super::pending_extends_tip(
+            pending.height,
+            pending.block.header().prev_block_hash(),
+            committed_height,
+            tip_hash,
+        ) {
+            return false;
+        }
+        pending.local_commit_vote_emitted()
+            || pending.commit_qc_observed()
+            || self.pending_block_has_commit_votes(pending_hash, pending.height, pending.view)
+            || self.pending_block_has_qc(pending_hash, pending.height, pending.view)
     }
 
     fn clear_stale_commit_inflight_for_block(
@@ -754,6 +836,56 @@ impl Actor {
         Some((tx_count, requeued, failures, duplicate_failures))
     }
 
+    fn request_frontier_owner_body_repair(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if self.frontier_block_materialized_locally(block_hash) {
+            return false;
+        }
+
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut roster = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if roster.is_empty() {
+            roster = self.rbc_roster_for_session((block_hash, height, view));
+        }
+        if roster.is_empty() {
+            roster = self.roster_for_live_vote_with_mode(height, consensus_mode);
+        }
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
+        if roster.is_empty() {
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(roster);
+        let seeded = self.handle_frontier_body_gap_with_topology(
+            block_hash,
+            height,
+            view,
+            &BTreeSet::new(),
+            &topology,
+            true,
+            now,
+        );
+        let fetch_requested = self.emit_frontier_block_body_fetch_urgent(now);
+        if seeded || fetch_requested {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                seeded_frontier_body_repair = seeded,
+                fetch_requested,
+                "requested exact frontier body repair for protected owner"
+            );
+        }
+        seeded || fetch_requested
+    }
+
     pub(super) fn maybe_yield_stale_frontier_owner_for_fresh_proposal(
         &mut self,
         height: u64,
@@ -819,9 +951,17 @@ impl Actor {
                     && !pending.commit_qc_observed()
             })
         else {
+            let mut body_repair_requested = false;
             if let Some((owner_age, frontier_commit_qc_observed, competing_quorum_locked)) =
                 owner_slot_evidence
             {
+                let protected_owner = owner_commit_qc_cached
+                    || frontier_commit_qc_observed
+                    || local_vote_consensus_locked
+                    || competing_quorum_locked
+                    || commit_inflight_live;
+                body_repair_requested = protected_owner
+                    && self.request_frontier_owner_body_repair(owner_hash, height, owner_view, now);
                 let recovery_exhausted = owner_age >= hard_yield_age;
                 if recovery_exhausted
                     && !owner_commit_qc_cached
@@ -871,6 +1011,7 @@ impl Actor {
                     owner_commit_qc_cached,
                     local_vote_consensus_locked,
                     commit_inflight_live,
+                    body_repair_requested,
                     frontier_commit_qc_observed = owner_slot_evidence
                         .is_some_and(|(_, observed, _)| observed),
                     competing_quorum_locked = owner_slot_evidence

@@ -6138,6 +6138,10 @@ mod offline_note_v2_real_prover_tests {
             device_id: "device-1".to_owned(),
             account_id: account.clone(),
             public_key: public_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
             one_use: true,
             issuer_signature: sample_signature(seed.wrapping_add(1)),
         }
