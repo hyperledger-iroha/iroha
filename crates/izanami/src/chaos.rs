@@ -64,6 +64,10 @@ const IZANAMI_RBC_PENDING_MAX_BYTES: i64 = 32 * 1024 * 1024;
 const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 512;
 const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 12;
 const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 96;
+const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
+const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
+const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
+const IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP: i64 = 16_384;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
 const IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS: i64 = 300;
@@ -1563,6 +1567,7 @@ fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
         || message.contains("timeout")
         || message.contains("connection refused")
         || message.contains("connection reset")
+        || message.contains("connection closed before message completed")
         || message.contains("broken pipe")
         || contains_http_5xx_status(&message)
     {
@@ -2526,6 +2531,19 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             )
             .write(["telemetry_profile"], IZANAMI_TELEMETRY_PROFILE)
             .write(["kura", "fsync_mode"], IZANAMI_KURA_FSYNC_MODE.to_string())
+            .write(
+                ["network", "p2p_queue_cap_high"],
+                IZANAMI_P2P_QUEUE_CAP_HIGH,
+            )
+            .write(["network", "p2p_queue_cap_low"], IZANAMI_P2P_QUEUE_CAP_LOW)
+            .write(
+                ["network", "p2p_post_queue_cap"],
+                IZANAMI_P2P_POST_QUEUE_CAP,
+            )
+            .write(
+                ["network", "p2p_subscriber_queue_cap"],
+                IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP,
+            )
             .write(
                 ["sumeragi", "advanced", "queues", "block_payload"],
                 IZANAMI_BLOCK_PAYLOAD_QUEUE,
@@ -8332,6 +8350,15 @@ mod tests {
     }
 
     #[test]
+    fn ingress_failover_marks_closed_send_request_retryable() {
+        let err = eyre!("client error (SendRequest): connection closed before message completed");
+        assert!(
+            is_ingress_failover_retryable(&err),
+            "closed transport sends should trigger endpoint failover"
+        );
+    }
+
+    #[test]
     fn retryable_status_and_queue_pressure_failures_log_at_debug() {
         assert!(should_log_ingress_retry_at_debug(
             "query_confirmation",
@@ -10642,6 +10669,22 @@ mod tests {
         assert_eq!(
             lookup_string(&["kura", "fsync_mode"]),
             Some(IZANAMI_KURA_FSYNC_MODE.to_string())
+        );
+        assert_eq!(
+            lookup(&["network", "p2p_queue_cap_high"]),
+            Some(IZANAMI_P2P_QUEUE_CAP_HIGH)
+        );
+        assert_eq!(
+            lookup(&["network", "p2p_queue_cap_low"]),
+            Some(IZANAMI_P2P_QUEUE_CAP_LOW)
+        );
+        assert_eq!(
+            lookup(&["network", "p2p_post_queue_cap"]),
+            Some(IZANAMI_P2P_POST_QUEUE_CAP)
+        );
+        assert_eq!(
+            lookup(&["network", "p2p_subscriber_queue_cap"]),
+            Some(IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP)
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "queues", "block_payload"]),

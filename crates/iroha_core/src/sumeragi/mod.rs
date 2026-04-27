@@ -5812,13 +5812,13 @@ mod tests {
             drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
-            block_payload_rx_drain_max_messages: 32,
+            block_payload_rx_drain_max_messages: 64,
             vote_rx_drain_max_messages: 16,
             vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
             block_rx_drain_budget: Duration::from_secs(1),
-            block_rx_drain_max_messages: 32,
+            block_rx_drain_max_messages: 64,
             rbc_chunk_rx_drain_budget: Duration::from_secs(1),
-            rbc_chunk_rx_drain_max_messages: 32,
+            rbc_chunk_rx_drain_max_messages: 64,
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
@@ -5834,9 +5834,9 @@ mod tests {
         };
         apply_adaptive_drain_caps(&mut cfg, depths);
 
-        assert_eq!(cfg.block_rx_drain_max_messages, 16);
-        assert_eq!(cfg.block_payload_rx_drain_max_messages, 12);
-        assert_eq!(cfg.rbc_chunk_rx_drain_max_messages, 12);
+        assert_eq!(cfg.block_rx_drain_max_messages, 48);
+        assert_eq!(cfg.block_payload_rx_drain_max_messages, 36);
+        assert_eq!(cfg.rbc_chunk_rx_drain_max_messages, 36);
     }
 
     #[test]
@@ -11859,18 +11859,17 @@ const VOTE_BURST_CAP: usize = 32;
 #[cfg(test)]
 const VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG: usize =
     iroha_config::parameters::defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG;
-// Keep votes prioritized under block backlog, but bound burst size so block progress messages
-// are not starved behind long vote runs.
-const VOTE_BURST_CAP_WITH_BLOCKS: usize =
-    iroha_config::parameters::defaults::sumeragi::WORKER_VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG;
+// Keep votes prioritized under block backlog so near-quorum commits can finish from queued
+// votes before a view is rotated, while the mailbox still interleaves block repair afterwards.
+const VOTE_BURST_CAP_WITH_BLOCKS: usize = 32;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_DIVISOR: usize = 4;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_MIN: usize = 2;
 const BLOCK_RX_URGENT_FRACTION: u32 = 4;
 const BLOCK_RX_URGENT_FLOOR_MS: u64 = 200;
-const BLOCK_RX_BACKLOG_DRAIN_CAP_SMALL: usize = 4;
-const BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM: usize = 8;
-const BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE: usize = 16;
-const BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE: usize = 32;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_SMALL: usize = 8;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM: usize = 16;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE: usize = 48;
+const BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE: usize = 128;
 const BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP: usize = 8;
 // Keep the full healthy-path RBC session ingress chain together under parallel
 // ingress so BlockCreated/INIT/chunk/READY/DELIVER work is not delayed behind

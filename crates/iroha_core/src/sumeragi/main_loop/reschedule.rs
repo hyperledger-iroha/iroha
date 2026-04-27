@@ -674,12 +674,14 @@ impl Actor {
                     vote_queue_backlog,
                     rbc_availability_unresolved,
                 );
+            let vote_backed_retransmit_allowed_under_same_height_recovery =
+                !same_height_actionable_progress_active || consensus_queue_backlog;
             if let Some(fast_resend_window) = contiguous_frontier_fast_resend_window
                 && has_votes
                 && !has_qc
                 && !validation_inflight
                 && !missing_local_data
-                && !same_height_actionable_progress_active
+                && vote_backed_retransmit_allowed_under_same_height_recovery
                 && progress_stall_age >= fast_resend_window
                 && progress_stall_age < effective_quorum_timeout
                 && pending.precommit_rebroadcast_due(now, fast_resend_window)
@@ -1331,6 +1333,7 @@ impl Actor {
             &topology_peers,
             min_votes_for_commit,
             vote_count,
+            vote_count < min_votes_for_commit,
             now,
         );
         let action_taken = rebroadcast.votes > 0 || rebroadcast.block_sync || rebroadcast.block;
@@ -1834,6 +1837,9 @@ impl Actor {
             &topology_peers,
             min_votes_for_commit,
             reschedule_vote_count,
+            contiguous_frontier
+                && effective_has_reschedule_votes
+                && reschedule_vote_count < min_votes_for_commit,
             now,
         );
         let action_taken = drop_pending
@@ -2063,6 +2069,7 @@ impl Actor {
         topology_peers: &[PeerId],
         min_votes_for_commit: usize,
         vote_count: usize,
+        widen_repair_fanout: bool,
         now: Instant,
     ) -> RescheduleRebroadcast {
         let local_vote = if drop_pending || topology_peers.is_empty() {
@@ -2101,7 +2108,7 @@ impl Actor {
                 missing_block_fetch: false,
             };
         }
-        let retransmit_targets = self.quorum_retransmit_targets_for_missing_votes(
+        let mut retransmit_targets = self.quorum_retransmit_targets_for_missing_votes(
             block_hash,
             height,
             view,
@@ -2109,6 +2116,21 @@ impl Actor {
             min_votes_for_commit,
             current_vote_count,
         );
+        let force_full_repair_fanout = widen_repair_fanout
+            && !drop_pending
+            && observed_vote_backing
+            && current_vote_count < min_votes_for_commit;
+        if force_full_repair_fanout && current_vote_count.saturating_add(1) < min_votes_for_commit {
+            let local_peer_id = self.common_config.peer.id();
+            let all_non_local_targets: Vec<_> = topology_peers
+                .iter()
+                .filter(|peer| *peer != local_peer_id)
+                .cloned()
+                .collect();
+            if all_non_local_targets.len() > retransmit_targets.len() {
+                retransmit_targets = all_non_local_targets;
+            }
+        }
         if retransmit_targets.is_empty() {
             super::status::inc_retransmit_skip_no_targets();
             debug!(
@@ -2128,7 +2150,7 @@ impl Actor {
 
         let (target_limit, adaptive_cooldown, pressure_score) =
             self.retransmit_backlog_pacing(retransmit_targets.len());
-        if !pending.precommit_rebroadcast_due(now, adaptive_cooldown) {
+        if !force_full_repair_fanout && !pending.precommit_rebroadcast_due(now, adaptive_cooldown) {
             super::status::inc_retransmit_skip_cooldown();
             debug!(
                 height,
@@ -2147,7 +2169,7 @@ impl Actor {
             };
         }
 
-        if target_limit == 0 {
+        if !force_full_repair_fanout && target_limit == 0 {
             super::status::inc_retransmit_skip_backlog_pacing();
             debug!(
                 height,
@@ -2165,8 +2187,24 @@ impl Actor {
             };
         }
 
-        let retransmit_targets =
-            self.paced_retransmit_targets(retransmit_targets, height, view, target_limit);
+        let retransmit_targets = if force_full_repair_fanout {
+            let mut targets = retransmit_targets;
+            targets.sort();
+            targets.dedup();
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                targets = targets.len(),
+                pressure_score,
+                votes = current_vote_count,
+                min_votes = min_votes_for_commit,
+                "widening vote-backed quorum repair fanout"
+            );
+            targets
+        } else {
+            self.paced_retransmit_targets(retransmit_targets, height, view, target_limit)
+        };
         if retransmit_targets.is_empty() {
             super::status::inc_retransmit_skip_backlog_pacing();
             return RescheduleRebroadcast {

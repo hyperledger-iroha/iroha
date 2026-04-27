@@ -501,11 +501,24 @@ static POST_OVERFLOWS_LO_OTHER: AtomicU64 = AtomicU64::new(0);
 const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
 const INBOUND_PEER_HIGH_BUDGET: usize = 32;
+const NETWORK_HIGH_ACTOR_DRAIN_BASE: usize = 64;
+const NETWORK_HIGH_ACTOR_DRAIN_PRESSURED: usize = 512;
+const NETWORK_HIGH_ACTOR_DRAIN_SATURATED: usize = 2_048;
 /// Default hop limit for relay forwarding (origin hub hop + spoke hop).
 #[cfg(test)]
 const DEFAULT_RELAY_TTL: u8 = 8;
 // Stagger delay between multi-address dial attempts for the same peer.
 // Stagger for parallel dialing is configurable via node config per instance.
+
+fn high_actor_drain_limit(queue_len_after_first_recv: usize) -> usize {
+    if queue_len_after_first_recv > 256 {
+        NETWORK_HIGH_ACTOR_DRAIN_SATURATED
+    } else if queue_len_after_first_recv > 64 {
+        NETWORK_HIGH_ACTOR_DRAIN_PRESSURED
+    } else {
+        NETWORK_HIGH_ACTOR_DRAIN_BASE
+    }
+}
 
 #[derive(Clone, Debug, Encode, Decode)]
 enum RelayTarget {
@@ -830,6 +843,55 @@ pub fn dropped_broadcast_high_count() -> u64 {
 /// Returns the number of dropped broadcast messages for Low priority.
 pub fn dropped_broadcast_low_count() -> u64 {
     DROPPED_BROADCASTS_LO.load(Ordering::Relaxed)
+}
+
+fn record_network_actor_queue_drop(priority: Priority, broadcast: bool) {
+    if broadcast {
+        DROPPED_BROADCASTS.fetch_add(1, Ordering::Relaxed);
+        match priority {
+            Priority::High => DROPPED_BROADCASTS_HI.fetch_add(1, Ordering::Relaxed),
+            Priority::Low => DROPPED_BROADCASTS_LO.fetch_add(1, Ordering::Relaxed),
+        };
+    } else {
+        DROPPED_POSTS.fetch_add(1, Ordering::Relaxed);
+        match priority {
+            Priority::High => DROPPED_POSTS_HI.fetch_add(1, Ordering::Relaxed),
+            Priority::Low => DROPPED_POSTS_LO.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+}
+
+fn defer_high_priority_network_message<T: Pload>(
+    sender: net_channel::Sender<NetworkMessage<T>>,
+    message: NetworkMessage<T>,
+    broadcast: bool,
+    topic: message::Topic,
+) -> bool {
+    let kind = if broadcast { "broadcast" } else { "post" };
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        iroha_logger::debug!(
+            ?topic,
+            kind,
+            "Cannot defer high-priority network message because no Tokio runtime is active"
+        );
+        return false;
+    };
+    iroha_logger::debug!(
+        ?topic,
+        kind,
+        "High-priority network actor queue is full; deferring message until capacity is available"
+    );
+    handle.spawn(async move {
+        if sender.send(message).await.is_err() {
+            record_network_actor_queue_drop(Priority::High, broadcast);
+            iroha_logger::debug!(
+                ?topic,
+                kind,
+                "Network actor is closed, dropping deferred high-priority message"
+            );
+        }
+    });
+    true
 }
 
 /// Returns the last observed depth of the high-priority network queue.
@@ -2646,19 +2708,30 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         use tokio::sync::mpsc::error::TrySendError;
 
         let priority = msg.priority;
+        let topic = msg.data.topic();
         let sender = match priority {
             Priority::High => &self.network_message_high_sender,
             Priority::Low => &self.network_message_low_sender,
         };
         if let Err(e) = sender.try_send(NetworkMessage::Post(msg)) {
             match e {
-                TrySendError::Full(_) => {
-                    iroha_logger::warn!("Network message queue is full, dropping post");
-                    DROPPED_POSTS.fetch_add(1, Ordering::Relaxed);
-                    match priority {
-                        Priority::High => DROPPED_POSTS_HI.fetch_add(1, Ordering::Relaxed),
-                        Priority::Low => DROPPED_POSTS_LO.fetch_add(1, Ordering::Relaxed),
-                    };
+                TrySendError::Full(message) => {
+                    if matches!(priority, Priority::High)
+                        && defer_high_priority_network_message(
+                            sender.clone(),
+                            message,
+                            false,
+                            topic,
+                        )
+                    {
+                        return;
+                    }
+                    iroha_logger::warn!(
+                        ?priority,
+                        ?topic,
+                        "Network message queue is full, dropping post"
+                    );
+                    record_network_actor_queue_drop(priority, false);
                 }
                 TrySendError::Closed(_) => {
                     iroha_logger::debug!("Network actor is closed, dropping post");
@@ -2673,19 +2746,25 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         use tokio::sync::mpsc::error::TrySendError;
 
         let priority = msg.priority;
+        let topic = msg.data.topic();
         let sender = match priority {
             Priority::High => &self.network_message_high_sender,
             Priority::Low => &self.network_message_low_sender,
         };
         if let Err(e) = sender.try_send(NetworkMessage::Broadcast(msg)) {
             match e {
-                TrySendError::Full(_) => {
-                    iroha_logger::warn!("Network message queue is full, dropping broadcast");
-                    DROPPED_BROADCASTS.fetch_add(1, Ordering::Relaxed);
-                    match priority {
-                        Priority::High => DROPPED_BROADCASTS_HI.fetch_add(1, Ordering::Relaxed),
-                        Priority::Low => DROPPED_BROADCASTS_LO.fetch_add(1, Ordering::Relaxed),
-                    };
+                TrySendError::Full(message) => {
+                    if matches!(priority, Priority::High)
+                        && defer_high_priority_network_message(sender.clone(), message, true, topic)
+                    {
+                        return;
+                    }
+                    iroha_logger::warn!(
+                        ?priority,
+                        ?topic,
+                        "Network message queue is full, dropping broadcast"
+                    );
+                    record_network_actor_queue_drop(priority, true);
                 }
                 TrySendError::Closed(_) => {
                     iroha_logger::debug!("Network actor is closed, dropping broadcast");
@@ -2869,6 +2948,167 @@ mod handle_update_tests {
             _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         }
+    }
+
+    fn handle_with_network_receivers() -> (
+        NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305>,
+        net_channel::Receiver<NetworkMessage<Dummy>>,
+        net_channel::Receiver<NetworkMessage<Dummy>>,
+    ) {
+        let (subscribe_tx, _subscribe_rx) = mpsc::unbounded_channel::<Subscriber<Dummy>>();
+        let (update_topology_tx, update_topology_rx) =
+            mpsc::unbounded_channel::<message::UpdateTopology>();
+        let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
+            mpsc::unbounded_channel::<message::UpdatePeerCapabilities>();
+        let (update_trusted_tx, update_trusted_rx) =
+            mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
+        let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::unbounded_channel::<message::UpdateHandshake>();
+        let (update_consensus_caps_tx, update_consensus_caps_rx) =
+            mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
+        let (service_message_tx, _service_message_rx) =
+            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
+        let (network_message_high_sender, network_message_high_rx) =
+            net_channel::channel_with_capacity(1);
+        let (network_message_low_sender, network_message_low_rx) =
+            net_channel::channel_with_capacity(1);
+        let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
+        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
+            watch::channel(HashMap::new());
+
+        drop(update_topology_rx);
+        drop(update_peers_rx);
+        drop(update_peer_capabilities_rx);
+        drop(update_trusted_rx);
+        drop(update_acl_rx);
+        drop(update_handshake_rx);
+        drop(update_consensus_caps_rx);
+
+        let handle = NetworkBaseHandle {
+            subscribe_to_peers_messages_sender: subscribe_tx,
+            online_peers_receiver,
+            online_peer_capabilities_receiver,
+            update_topology_sender: update_topology_tx,
+            update_peers_sender: update_peers_tx,
+            update_peer_capabilities_sender: update_peer_capabilities_tx,
+            update_trusted_peers_sender: update_trusted_tx,
+            update_acl_sender: update_acl_tx,
+            update_handshake_sender: update_handshake_tx,
+            update_consensus_caps_sender: update_consensus_caps_tx,
+            service_message_sender: service_message_tx,
+            network_message_high_sender,
+            network_message_low_sender,
+            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
+            _key_exchange: core::marker::PhantomData,
+            _encryptor: core::marker::PhantomData,
+        };
+
+        (handle, network_message_high_rx, network_message_low_rx)
+    }
+
+    #[test]
+    fn high_actor_drain_limit_scales_with_queue_pressure() {
+        assert_eq!(high_actor_drain_limit(1), NETWORK_HIGH_ACTOR_DRAIN_BASE);
+        assert_eq!(
+            high_actor_drain_limit(65),
+            NETWORK_HIGH_ACTOR_DRAIN_PRESSURED
+        );
+        assert_eq!(
+            high_actor_drain_limit(257),
+            NETWORK_HIGH_ACTOR_DRAIN_SATURATED
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn high_priority_post_waits_for_actor_queue_capacity() {
+        let (handle, mut high_rx, _low_rx) = handle_with_network_receivers();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+
+        handle.post(Post {
+            data: Dummy,
+            peer_id: peer_id.clone(),
+            priority: Priority::High,
+        });
+        handle.post(Post {
+            data: Dummy,
+            peer_id: peer_id.clone(),
+            priority: Priority::High,
+        });
+
+        let first = high_rx.recv().await.expect("first post should be queued");
+        assert!(matches!(first, NetworkMessage::Post(_)));
+        let second = tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
+            .await
+            .expect("deferred high-priority post should enqueue after capacity opens")
+            .expect("deferred high-priority post should be present");
+        match second {
+            NetworkMessage::Post(post) => {
+                assert_eq!(post.peer_id, peer_id);
+                assert_eq!(post.priority, Priority::High);
+            }
+            NetworkMessage::Broadcast(_) => panic!("expected deferred post"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn high_priority_broadcast_waits_for_actor_queue_capacity() {
+        let (handle, mut high_rx, _low_rx) = handle_with_network_receivers();
+
+        handle.broadcast(Broadcast {
+            data: Dummy,
+            priority: Priority::High,
+        });
+        handle.broadcast(Broadcast {
+            data: Dummy,
+            priority: Priority::High,
+        });
+
+        let first = high_rx
+            .recv()
+            .await
+            .expect("first broadcast should be queued");
+        assert!(matches!(first, NetworkMessage::Broadcast(_)));
+        let second = tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
+            .await
+            .expect("deferred high-priority broadcast should enqueue after capacity opens")
+            .expect("deferred high-priority broadcast should be present");
+        match second {
+            NetworkMessage::Broadcast(broadcast) => {
+                assert_eq!(broadcast.priority, Priority::High);
+            }
+            NetworkMessage::Post(_) => panic!("expected deferred broadcast"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn low_priority_post_still_drops_when_actor_queue_is_full() {
+        let (handle, _high_rx, mut low_rx) = handle_with_network_receivers();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+
+        handle.post(Post {
+            data: Dummy,
+            peer_id: peer_id.clone(),
+            priority: Priority::Low,
+        });
+        handle.post(Post {
+            data: Dummy,
+            peer_id,
+            priority: Priority::Low,
+        });
+
+        let first = low_rx
+            .recv()
+            .await
+            .expect("first low-priority post should be queued");
+        assert!(matches!(first, NetworkMessage::Post(_)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), low_rx.recv())
+                .await
+                .is_err(),
+            "low-priority overflow should remain lossy"
+        );
     }
 
     #[test]
@@ -5728,16 +5968,33 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         iroha_logger::debug!("All handles to network actor are dropped. Shutting down...");
                         break;
                     };
+                    let queued_after_first_recv = self.network_message_high_receiver.len();
+                    let drain_limit = high_actor_drain_limit(queued_after_first_recv.saturating_add(1));
+                    let mut drained = 0usize;
+                    let mut network_message = Some(network_message);
+                    while let Some(message) = network_message {
+                        match message {
+                            NetworkMessage::Post(post) => self.post(post),
+                            NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
+                        }
+                        drained = drained.saturating_add(1);
+                        if drained >= drain_limit {
+                            break;
+                        }
+                        network_message = match self.network_message_high_receiver.try_recv() {
+                            Ok(message) => Some(message),
+                            Err(
+                                tokio::sync::mpsc::error::TryRecvError::Empty
+                                | tokio::sync::mpsc::error::TryRecvError::Disconnected,
+                            ) => None,
+                        };
+                    }
                     let len = self.network_message_high_receiver.len();
                     update_network_queue_depth_high(len);
                     if len > 100 {
                         if let Some(supp) = self.sampler_high_queue_warn.should_log(tokio::time::Duration::from_secs(1)) {
-                            iroha_logger::warn!(size=len, suppressed=supp, "High-priority messages are piling up in the queue");
+                            iroha_logger::warn!(size=len, drained, drain_limit, suppressed=supp, "High-priority messages are piling up in the queue");
                         }
-                    }
-                    match network_message {
-                        NetworkMessage::Post(post) => self.post(post),
-                        NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
                     }
                 }
                 // High-priority inbound peer messages (consensus/control)

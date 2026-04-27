@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-26
+Last updated: 2026-04-27
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -40,19 +40,15 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Consensus and Izanami
 
-- Close the exact-reproduction gaps in the Izanami communication vulnerability matrix.
+- Maintain Izanami communication vulnerability publication evidence.
   - The exact-injector 75% packet-loss 2026-04-26 paper-shaped run at `dist/izanami-exact-packet-paper-20260426` is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`; keep this as the current full-matrix resilience baseline.
-  - Native in-process P2P packet-drop injection is wired into `packet-loss` and leader-targeted `leader-isolation`; the matrix runner now supports the paper's 133s-266s timed fault window plus configurable packet-loss sweeps (`75%` quick, `25%/50%/75%` paper). The explicit 25%/50%/75% paper sweep still needs a dedicated rerun before publishing per-loss subrows.
-  - Keep any future quick-mode publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed.
-  - After the exact sweep rerun lands, record the per-loss Iroha classifications against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.
-- Rerun the permissioned preserved-peer stable envelope with fresh binaries from the current tree.
-  - Build fresh `izanami` / `iroha3d` binaries instead of reusing prior artifacts.
-  - Confirm the previously observed height-533 zero-local-vote `missing_qc` loop does not recur on the current branch.
-  - If the run is otherwise green but teardown still panics, preserve dirs/logs and split that into a separate reproducible follow-up.
-- Close the remaining Izanami stable-profile acceptance gates.
-  - Rerun the 4-peer `1 TPS`, `300s`, `200 blocks` gate with preserved artifacts.
-  - Once the short gate is green, rerun the longer `3600s` / `2000+` block acceptance pass.
-  - If a run fails, classify the first cause as execution-root divergence, consensus stall, endpoint instability, or workload-plan timeout before tuning again.
+  - Native in-process P2P packet-drop injection is wired into `packet-loss` and leader-targeted `leader-isolation`; the matrix runner now supports the paper's 133s-266s timed fault window plus configurable packet-loss sweeps (`75%` quick, `25%/50%/75%` paper). The explicit 25%/50%/75% paper packet-loss sweep at `dist/izanami-packet-sweep-paper-20260427-loss-only` is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`.
+  - The 2026-04-27 quick matrix at `dist/izanami-quick-both-20260427` is green for all ten permissioned/NPoS rows, and the post-ingress-hardening leader-isolation rerun at `dist/izanami-quick-leader-retry-20260427` keeps both modes resilient with zero acceptance markers.
+  - Keep any future publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed, and preserve per-loss packet-loss subrows when comparing against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline.
+- Recalibrate the Izanami stable-profile acceptance envelope for sustained workload targets.
+  - The fresh 4-peer permissioned `1 TPS` / `300s` / `100 blocks` gate at `dist/izanami-stable-gate-20260427-target100` is green and recorded in `status.md`.
+  - The matching `200`-block diagnostic at `dist/izanami-stable-gate-20260427-rerun` crossed the prior stall region and reached strict/quorum height `107` with zero submission or confirmation failures, but missed the target because the stable workload drained before `200` blocks.
+  - Before the longer `3600s` / `2000+` block acceptance pass, choose a sustained-workload gate or lower short-run target so the KPI measures liveness instead of exhaustion of submitted work.
 - Root-cause the remaining NPoS soak/localnet collapse instead of keeping it as a log-only symptom.
   - Reproduce with preserved peer dirs and `iroha_futures::supervisor=debug`.
   - Identify the first exiting supervised child before investigating downstream connection refusals.
