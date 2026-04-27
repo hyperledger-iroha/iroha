@@ -5547,6 +5547,29 @@ impl Actor {
             .count()
     }
 
+    fn pending_block_is_commit_recovery_candidate(pending: &PendingBlock) -> bool {
+        pending.validation_status != ValidationStatus::Invalid
+            && ((!pending.is_consensus_inactive() && !pending.is_retired_same_height())
+                || pending.commit_qc_observed())
+    }
+
+    fn commit_recovery_candidate_blocks_len(&self) -> usize {
+        self.pending
+            .pending_blocks
+            .values()
+            .filter(|pending| Self::pending_block_is_commit_recovery_candidate(pending))
+            .count()
+    }
+
+    fn commit_candidate_blocks_len(&self, include_recovery_candidates: bool) -> usize {
+        let active = self.active_pending_blocks_len();
+        if active > 0 || !include_recovery_candidates {
+            return active;
+        }
+
+        self.commit_recovery_candidate_blocks_len()
+    }
+
     fn has_active_pending_blocks(&self) -> bool {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
@@ -5651,6 +5674,17 @@ impl Actor {
 
     fn frontier_ingress_drain_grace(&self, _da_enabled: bool) -> Duration {
         saturating_mul_duration(self.rebroadcast_cooldown(), 5).max(Duration::from_millis(750))
+    }
+
+    fn frontier_proposal_starved_past_ingress_grace(
+        &self,
+        now: Instant,
+        ingress_grace: Duration,
+    ) -> bool {
+        self.subsystems
+            .propose
+            .last_successful_proposal
+            .is_some_and(|last| now.saturating_duration_since(last) >= ingress_grace)
     }
 
     fn same_height_dependency_backlog_active_in_frontier_window(
@@ -6224,6 +6258,85 @@ impl Actor {
                 now,
                 queue_depths,
             )
+    }
+
+    fn hard_cap_live_frontier_material_present(&self, frontier_height: u64) -> bool {
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let pending_frontier_material = self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending.validation_status != ValidationStatus::Invalid
+                && pending.height == frontier_height
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+        });
+        let inflight_frontier_material =
+            self.subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.validation_status != ValidationStatus::Invalid
+                        && inflight.pending.height == frontier_height
+                        && pending_extends_tip(
+                            inflight.pending.height,
+                            inflight.pending.block.header().prev_block_hash(),
+                            tip_height,
+                            tip_hash,
+                        )
+                });
+        let rbc_frontier_material = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .any(|(key, session)| key.1 == frontier_height && !session.is_invalid())
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .pending
+                .keys()
+                .any(|key| key.1 == frontier_height)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .ready_deferral
+                .keys()
+                .any(|key| key.1 == frontier_height)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .deliver_deferral
+                .keys()
+                .any(|key| key.1 == frontier_height);
+
+        self.frontier_slot_has_active_owner_state(frontier_height)
+            || pending_frontier_material
+            || inflight_frontier_material
+            || rbc_frontier_material
+            || self.has_residual_round_backlog_for_height(frontier_height)
+    }
+
+    fn should_preserve_hard_cap_live_contiguous_frontier_cleanup(
+        &self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now) {
+            return true;
+        }
+        frontier_height == self.committed_height_snapshot().saturating_add(1)
+            && self.hard_cap_live_frontier_material_present(frontier_height)
     }
 
     fn committed_edge_conflict_owner_shared_window_emission_token(
@@ -6950,7 +7063,7 @@ impl Actor {
             || (height == self.committed_height_snapshot().saturating_add(1)
                 && self
                     .local_same_height_vote(height, self.epoch_for_height(height))
-                    .is_some())
+                    .is_some_and(|vote| vote.view == view))
     }
 
     fn seed_frontier_slot_from_same_height_evidence(
@@ -15335,7 +15448,10 @@ impl Actor {
             advance = FrontierRecoveryAdvance::CatchUp;
         }
         if let Some((height, view, cause)) = actions.request_view_change {
-            self.apply_view_change_with_cause_for_height(height, view, cause);
+            // Slot-owned rotation is emitted only after the frontier slot has spent its
+            // bounded repair attempt or received an explicit advance request. Re-entering
+            // the generic repair suppression gate here can pin the same exact frontier.
+            self.apply_view_change_after_exhausted_frontier_recovery(height, view, cause);
             advance = FrontierRecoveryAdvance::Rotate;
         }
         advance
@@ -16040,6 +16156,58 @@ impl Actor {
             );
         }
         self.highest_qc
+    }
+
+    fn promote_committed_qc_for_frontier_selection(
+        &mut self,
+        proposal_height: u64,
+        selected_highest_qc: &mut crate::sumeragi::consensus::QcHeaderRef,
+        context: &'static str,
+    ) -> bool {
+        let Some(committed_qc) = self.latest_committed_qc() else {
+            return false;
+        };
+        if proposal_height != committed_qc.height.saturating_add(1)
+            || (selected_highest_qc.height, selected_highest_qc.view)
+                >= (committed_qc.height, committed_qc.view)
+        {
+            return false;
+        }
+
+        let previous = *selected_highest_qc;
+        *selected_highest_qc = committed_qc;
+        if self
+            .highest_qc
+            .is_none_or(|qc| (qc.height, qc.view) < (committed_qc.height, committed_qc.view))
+        {
+            self.highest_qc = Some(committed_qc);
+            status::set_highest_qc(committed_qc.height, committed_qc.view);
+            status::set_highest_qc_hash(committed_qc.subject_block_hash);
+        }
+        let lock_changed = self
+            .locked_qc
+            .is_none_or(|qc| (qc.height, qc.view) < (committed_qc.height, committed_qc.view));
+        if lock_changed {
+            self.locked_qc = Some(committed_qc);
+            status::set_locked_qc(
+                committed_qc.height,
+                committed_qc.view,
+                Some(committed_qc.subject_block_hash),
+            );
+            self.prune_precommit_votes_conflicting_with_lock(committed_qc);
+        }
+        info!(
+            context,
+            proposal_height,
+            previous_height = previous.height,
+            previous_view = previous.view,
+            previous_hash = %previous.subject_block_hash,
+            committed_height = committed_qc.height,
+            committed_view = committed_qc.view,
+            committed_hash = %committed_qc.subject_block_hash,
+            "promoting committed QC for frontier proposal selection"
+        );
+        true
     }
 
     fn observed_recovery_qc_head(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
@@ -18293,6 +18461,19 @@ impl Actor {
         matches!(tick_deadline, Some(deadline) if now >= deadline)
     }
 
+    fn commit_pipeline_tick_deadline(
+        tick_deadline: Option<Instant>,
+        active_pending_blocks: usize,
+        commit_wakeup: bool,
+        queue_saturated: bool,
+    ) -> Option<Instant> {
+        if active_pending_blocks > 0 && (commit_wakeup || queue_saturated) {
+            None
+        } else {
+            tick_deadline
+        }
+    }
+
     const TICK_HEARTBEAT_LOG_INTERVAL_ACTIVE: Duration = Duration::from_secs(10);
     const TICK_HEARTBEAT_LOG_INTERVAL_IDLE: Duration = Duration::from_secs(30);
     const TICK_EXPIRED_CULL_STRIDE: u64 = 4;
@@ -18502,14 +18683,27 @@ impl Actor {
             || rbc_outbound_progress
             || rbc_session_ttl_progress;
         let commit_wakeup = self.pending.commit_pipeline_wakeup;
-        if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
+        let queue_saturated_for_commit = self.queue_backpressure_state().is_saturated();
+        let include_recovery_candidates = commit_wakeup || queue_saturated_for_commit;
+        let candidate_blocks_for_commit =
+            self.commit_candidate_blocks_len(include_recovery_candidates);
+        let commit_pipeline_deadline = Self::commit_pipeline_tick_deadline(
+            tick_deadline,
+            candidate_blocks_for_commit,
+            commit_wakeup,
+            queue_saturated_for_commit,
+        );
+        if should_run_commit_pipeline_on_tick(candidate_blocks_for_commit)
             || self.subsystems.commit.inflight.is_some()
             || commit_wakeup
         {
             self.pending.commit_pipeline_wakeup = false;
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.commit_pipeline");
-            commit_pipeline_timings = self
-                .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, tick_deadline);
+            commit_pipeline_timings = self.process_commit_candidates_with_trigger_inner(
+                CommitPipelineTrigger::Tick,
+                commit_pipeline_deadline,
+                include_recovery_candidates,
+            );
             commit_pipeline_cost = commit_pipeline_timings.total;
             progress = true;
         }
@@ -26634,12 +26828,13 @@ impl Actor {
             );
             self.frontier_block_sync_hint
                 .record_direct_block_sync_response_permit(peer.clone(), now);
+            let priority = self.recovery_range_pull_priority(canonical_height, reason, false);
             self.network.post(Post {
                 data: NetworkMessage::BlockSync(Box::new(
                     crate::block_sync::message::Message::GetBlocksAfter(request),
                 )),
                 peer_id: peer,
-                priority: Priority::Low,
+                priority,
             });
             sent = sent.saturating_add(1);
         }
@@ -26756,6 +26951,24 @@ impl Actor {
         now: Instant,
     ) -> bool {
         self.request_range_pull_from_anchor_with_tier(height, reason, now, None)
+    }
+
+    fn recovery_range_pull_priority(
+        &self,
+        frontier_height: u64,
+        reason: &'static str,
+        all_peers: bool,
+    ) -> Priority {
+        if self.config.resilience.enabled
+            && frontier_height == self.committed_height_snapshot().saturating_add(1)
+            && (all_peers
+                || Self::reason_is_canonical_frontier_reanchor(reason)
+                || matches!(reason, "missing_qc" | "missing_payload" | "quorum_timeout"))
+        {
+            Priority::High
+        } else {
+            Priority::Low
+        }
     }
 
     fn active_consensus_round_height(&self) -> u64 {
@@ -29973,8 +30186,15 @@ impl Actor {
         }
         if proposal_seen {
             // After a proposal is observed, only explicit commit-phase missing-QC dependencies
-            // can justify a single bounded reacquire in this round.
-            return self.has_commit_phase_missing_qc_dependency_for_height(height);
+            // can justify a single bounded reacquire in this round. Resilience mode also treats
+            // same-height frontier catch-up dependencies as explicit repair work, because direct
+            // rotation alone can keep moving the view while the committed-edge payload/QC remains
+            // unresolved.
+            return self.has_commit_phase_missing_qc_dependency_for_height(height)
+                || (self.config.resilience.enabled
+                    && dependency_signals
+                    && (self.missing_qc_height_has_unresolved_dependency_at_height(height)
+                        || self.frontier_catchup_has_unresolved_dependency(height)));
         }
         if !dependency_signals {
             let stale_margin = self.recovery_missing_request_stale_height_margin();
@@ -30005,7 +30225,34 @@ impl Actor {
             height,
             current_view,
         );
-        dependency_signals || repeated_timeout_streak > 0
+        dependency_signals
+            || repeated_timeout_streak > 0
+            || (!proposal_seen
+                && height == self.committed_height_snapshot().saturating_add(1)
+                && self.pending_block_count_for_height(height) == 0)
+    }
+
+    fn maybe_reacquire_active_frontier_dependency(&mut self, now: Instant) -> bool {
+        if !self.config.resilience.enabled {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        let height = self
+            .active_consensus_round_height()
+            .min(committed_height.saturating_add(1));
+        if height != committed_height.saturating_add(1) {
+            return false;
+        }
+        let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let proposal_seen = self.slot_has_round_liveness(height, current_view);
+        let dependency_signals = self.has_commit_phase_missing_qc_dependency_for_height(height)
+            || self.missing_qc_height_has_unresolved_dependency_at_height(height)
+            || self.frontier_catchup_has_unresolved_dependency(height);
+        if !dependency_signals {
+            return false;
+        }
+        self.should_attempt_missing_qc_reacquire(height, current_view, proposal_seen, true, now)
+            && self.reacquire_missing_qc_dependencies(height, current_view, now, true)
     }
 
     fn has_commit_phase_missing_qc_dependency_for_height(&self, height: u64) -> bool {
@@ -30024,6 +30271,20 @@ impl Actor {
                         now,
                     )
             })
+            || self
+                .pending
+                .missing_commit_qc_requests
+                .iter()
+                .any(|(block_hash, request)| {
+                    request.phase == crate::sumeragi::consensus::Phase::Commit
+                        && request.height == height
+                        && self.missing_commit_qc_request_has_actionable_dependency(
+                            *block_hash,
+                            request,
+                            committed_height,
+                            now,
+                        )
+                })
             || self.deferred_missing_payload_qcs.values().any(|entry| {
                 entry.qc.phase == crate::sumeragi::consensus::Phase::Commit
                     && entry.qc.height == height
@@ -30260,6 +30521,7 @@ impl Actor {
         if targets.is_empty() {
             return false;
         }
+        let priority = self.recovery_range_pull_priority(frontier_height, reason, all_peers);
         let cooldown = self
             .frontier_recovery_window()
             .max(RANGE_PULL_DEDUP_COOLDOWN_FLOOR);
@@ -30289,7 +30551,7 @@ impl Actor {
                     crate::block_sync::message::Message::GetBlocksAfter(request),
                 )),
                 peer_id: peer,
-                priority: Priority::Low,
+                priority,
             });
             sent = sent.saturating_add(1);
         }
@@ -30325,7 +30587,11 @@ impl Actor {
         let preserve_quorum_timeout_live_state = source == "quorum_timeout"
             && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
         let preserve_hard_cap_live_frontier_state = source == "missing_block_height_hard_cap"
-            && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
+            && self.should_preserve_hard_cap_live_contiguous_frontier_cleanup(
+                frontier_height,
+                view,
+                now,
+            );
         let preserve_quorum_payload_recovery_state = source == "missing_block_height_hard_cap"
             && frontier_height == self.committed_height_snapshot().saturating_add(1)
             && self.has_quorum_backed_missing_payload_recovery_for_height(frontier_height, now);
@@ -32029,6 +32295,44 @@ impl Actor {
             max_pending_stall_ms = max_pending_stall.as_millis(),
             "active pending block stalled past quorum timeout; routing contiguous frontier through unified recovery"
         );
+        let frontier_repair_exhaustion_window = effective_timeout
+            .saturating_add(
+                self.frontier_slot_lag_window()
+                    .max(self.rebroadcast_cooldown())
+                    .max(Duration::from_millis(1)),
+            )
+            .max(effective_timeout);
+        let force_frontier_view_advance_after_repair = self.config.resilience.enabled
+            && height == frontier_height
+            && recovery_backlog_stalled
+            && queue_active_backlog
+            && max_pending_stall >= frontier_repair_exhaustion_window;
+        if force_frontier_view_advance_after_repair {
+            warn!(
+                height,
+                view,
+                stalled_pending,
+                max_pending_stall_ms = max_pending_stall.as_millis(),
+                repair_exhaustion_window_ms = frontier_repair_exhaustion_window.as_millis(),
+                "frontier active-pending repair exhausted under backlog; forcing explicit view advance"
+            );
+            if self.frontier_slot_is_exact_height(height) {
+                let _ = self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnViewAdvanceRequested {
+                        cause: ViewChangeCause::QuorumTimeout,
+                        requested_view: view,
+                    },
+                );
+            } else {
+                self.apply_view_change_after_exhausted_frontier_recovery(
+                    height,
+                    view,
+                    ViewChangeCause::QuorumTimeout,
+                );
+            }
+            return true;
+        }
         if height == frontier_height {
             self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
             return true;
@@ -32190,6 +32494,7 @@ impl Actor {
             return true;
         }
         if self.has_active_pending_blocks() {
+            let _ = self.maybe_reacquire_active_frontier_dependency(now);
             return false;
         }
         if self.subsystems.commit.inflight.is_some() {
@@ -32713,6 +33018,42 @@ impl Actor {
             || self.has_residual_round_backlog_for_height(height)
             || self.sidecar_quarantined_for_height(height);
         let contiguous_frontier_height = committed_height.saturating_add(1);
+        let contiguous_frontier_missing_proposal_can_self_propose = height
+            == contiguous_frontier_height
+            && !frontier_pending_exists
+            && !self.proposal_gated_by_missing_dependencies(height);
+        if !proposal_seen
+            && contiguous_frontier_missing_proposal_can_self_propose
+            && self.maybe_force_missing_qc_leader_proposal(height, current_view, age, now)
+        {
+            return false;
+        }
+        if height == contiguous_frontier_height
+            && !proposal_seen
+            && !frontier_pending_exists
+            && self.should_attempt_missing_qc_reacquire(
+                height,
+                current_view,
+                proposal_seen,
+                missing_qc_actionable_dependency_signals,
+                now,
+            )
+            && self.reacquire_missing_qc_dependencies(
+                height,
+                current_view,
+                now,
+                missing_qc_actionable_dependency_signals,
+            )
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                missing_qc_actionable_dependency_signals,
+                "deferred empty-frontier missing_qc rotation after committed-anchor reacquire request"
+            );
+            return false;
+        }
         if missing_qc_actionable_dependency_signals && height != contiguous_frontier_height {
             if reset_stalled_frontier_state {
                 debug!(
@@ -32764,14 +33105,20 @@ impl Actor {
                 return false;
             }
         }
+        let missing_qc_stall_allows_frontier_reproposal = height == contiguous_frontier_height
+            && !frontier_pending_exists
+            && self
+                .missing_qc_height_stall_snapshot(height, now)
+                .is_some_and(|stall| stall.mode_active && stall.height == height);
         let contiguous_frontier_missing_proposal_force_allowed = height
             == contiguous_frontier_height
             && !frontier_pending_exists
-            && !same_height_actionable_dependency
-            && !contiguous_frontier_unresolved
-            && !self.has_actionable_missing_block_requests()
-            && !self.has_actionable_deferred_missing_payload_qcs()
-            && !self.proposal_gated_by_missing_dependencies(height);
+            && contiguous_frontier_missing_proposal_can_self_propose
+            && (missing_qc_stall_allows_frontier_reproposal
+                || (!same_height_actionable_dependency
+                    && !contiguous_frontier_unresolved
+                    && !self.has_actionable_missing_block_requests()
+                    && !self.has_actionable_deferred_missing_payload_qcs()));
         if !proposal_seen
             && (height != contiguous_frontier_height
                 || contiguous_frontier_missing_proposal_force_allowed)
@@ -33102,6 +33449,40 @@ impl Actor {
                     );
                     return false;
                 }
+            }
+            let dependency_reacquire_before_frontier_timeout = self.config.resilience.enabled
+                && (proposal_seen_missing_qc_dependency_signals
+                    || same_height_actionable_dependency
+                    || contiguous_frontier_unresolved
+                    || frontier_pending_exists);
+            if dependency_reacquire_before_frontier_timeout
+                && self.should_attempt_missing_qc_reacquire(
+                    height,
+                    current_view,
+                    proposal_seen,
+                    missing_qc_actionable_dependency_signals,
+                    now,
+                )
+                && self.reacquire_missing_qc_dependencies(
+                    height,
+                    current_view,
+                    now,
+                    missing_qc_actionable_dependency_signals,
+                )
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    proposal_seen,
+                    proposal_seen_missing_qc_dependency_signals,
+                    same_height_actionable_dependency,
+                    contiguous_frontier_unresolved,
+                    frontier_pending_exists,
+                    frontier_matching_pending,
+                    "deferred contiguous-frontier dependency timeout after committed-anchor reacquire request"
+                );
+                return false;
             }
             if frontier_matching_pending {
                 debug!(
@@ -33605,7 +33986,8 @@ impl Actor {
         if matches!(
             cause,
             ViewChangeCause::QuorumTimeout | ViewChangeCause::StakeQuorumTimeout
-        ) {
+        ) && !bypass_frontier_repair_suppression
+        {
             let committed_height = self.committed_height_snapshot();
             if self.frontier_catchup_target_height(committed_height) == Some(height)
                 && self.frontier_catchup_has_unresolved_dependency(height)
