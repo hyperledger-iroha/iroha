@@ -213,6 +213,7 @@ internal class SystemAndroidKeystoreBackend private constructor(
             val purposes = KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
             val builder = KeyGenParameterSpec.Builder(alias, purposes)
                 .setDigests(KeyProperties.DIGEST_NONE)
+            setAlgorithmParameterSpecIfNeeded(builder, parameters.algorithm)
 
             if (parameters.userAuthenticationRequired) {
                 builder.setUserAuthenticationRequired(true)
@@ -234,7 +235,27 @@ internal class SystemAndroidKeystoreBackend private constructor(
                 builder.setAttestationChallenge(challenge.copyOf())
             }
 
+            val usageCountLimit = parameters.usageCountLimit
+            if (usageCountLimit != null) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    throw GeneralSecurityException("Usage count limits are not supported on this Android API level")
+                }
+                builder.setMaxUsageCount(usageCountLimit)
+            }
+
             return builder.build()
+        }
+
+        private fun setAlgorithmParameterSpecIfNeeded(
+            builder: KeyGenParameterSpec.Builder,
+            algorithm: String?,
+        ) {
+            if (!algorithm.equals("Ed25519", ignoreCase = true)) return
+            val namedParameterSpecClass = Class.forName("java.security.spec.NamedParameterSpec")
+            val namedParameterSpec = namedParameterSpecClass
+                .getConstructor(String::class.java)
+                .newInstance("Ed25519")
+            builder.setAlgorithmParameterSpec(namedParameterSpec as java.security.spec.AlgorithmParameterSpec)
         }
 
         private fun detectStrongBoxSupport(keyStore: KeyStore): Boolean {

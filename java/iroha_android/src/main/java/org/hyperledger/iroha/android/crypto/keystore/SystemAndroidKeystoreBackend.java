@@ -233,6 +233,8 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
               .getConstructor(String.class, int.class)
               .newInstance(alias, purposeSign | purposeVerify);
 
+      setAlgorithmParameterSpecIfNeeded(builder, parameters.algorithm());
+
       invoke(builder, "setDigests", new Class<?>[] {String[].class}, new Object[] {new String[] {
         keyPropertiesClass.getField("DIGEST_NONE").get(null).toString()
       }});
@@ -271,6 +273,16 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
         }
       }
 
+      final Integer usageCountLimit = parameters.usageCountLimit();
+      if (usageCountLimit != null) {
+        try {
+          invoke(builder, "setMaxUsageCount", new Class<?>[] {int.class}, usageCountLimit);
+        } catch (final NoSuchMethodException ex) {
+          throw new GeneralSecurityException(
+              "Usage count limits are not supported on this Android API level", ex);
+        }
+      }
+
       final Object spec = invoke(builder, "build", new Class<?>[0]);
       if (!(spec instanceof AlgorithmParameterSpec algorithmParameterSpec)) {
         throw new GeneralSecurityException("Android KeyGenParameterSpec build returned unexpected type");
@@ -290,6 +302,21 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
     final Class<?> clazz = target.getClass();
     final java.lang.reflect.Method method = clazz.getMethod(name, parameterTypes);
     return method.invoke(target, args);
+  }
+
+  private static void setAlgorithmParameterSpecIfNeeded(final Object builder, final String algorithm)
+      throws ReflectiveOperationException {
+    if (algorithm == null || !algorithm.equalsIgnoreCase("Ed25519")) {
+      return;
+    }
+    final Class<?> namedParameterSpecClass = Class.forName("java.security.spec.NamedParameterSpec");
+    final Object namedParameterSpec =
+        namedParameterSpecClass.getConstructor(String.class).newInstance("Ed25519");
+    invoke(
+        builder,
+        "setAlgorithmParameterSpec",
+        new Class<?>[] {AlgorithmParameterSpec.class},
+        namedParameterSpec);
   }
 
   private static void invokeIfPresent(
@@ -356,7 +383,7 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       }
       return buildAttestation(alias, chain);
     } catch (final NoSuchMethodException ignored) {
-      return Optional.empty();
+      return loadAttestationBundle(alias, keyStore);
     } catch (final ReflectiveOperationException ex) {
       throw new GeneralSecurityException("Android Keystore attestation invocation failed", ex);
     }
