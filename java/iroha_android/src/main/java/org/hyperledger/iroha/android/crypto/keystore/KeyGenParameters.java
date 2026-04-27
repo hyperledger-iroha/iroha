@@ -17,6 +17,7 @@ public final class KeyGenParameters {
   private final Duration userAuthenticationTimeout;
   private final String algorithm;
   private final byte[] attestationChallenge;
+  private final Integer usageCountLimit;
 
   private KeyGenParameters(final Builder builder) {
     this.requireStrongBox = builder.requireStrongBox;
@@ -26,6 +27,7 @@ public final class KeyGenParameters {
     this.algorithm = builder.algorithm;
     this.attestationChallenge =
         builder.attestationChallenge == null ? null : builder.attestationChallenge.clone();
+    this.usageCountLimit = builder.usageCountLimit;
   }
 
   public boolean requireStrongBox() {
@@ -56,6 +58,10 @@ public final class KeyGenParameters {
     return attestationChallenge == null ? null : attestationChallenge.clone();
   }
 
+  public Integer usageCountLimit() {
+    return usageCountLimit;
+  }
+
   public Builder toBuilder() {
     return new Builder()
         .setRequireStrongBox(requireStrongBox)
@@ -63,7 +69,8 @@ public final class KeyGenParameters {
         .setUserAuthenticationRequired(userAuthenticationRequired)
         .setUserAuthenticationTimeout(userAuthenticationTimeout)
         .setSigningAlgorithm(signingAlgorithm())
-        .setAttestationChallenge(attestationChallenge);
+        .setAttestationChallenge(attestationChallenge)
+        .setUsageCountLimit(usageCountLimit);
   }
 
   public static Builder builder() {
@@ -77,6 +84,7 @@ public final class KeyGenParameters {
     private Duration userAuthenticationTimeout = Duration.ZERO;
     private String algorithm = "Ed25519";
     private byte[] attestationChallenge = null;
+    private Integer usageCountLimit = null;
 
     public Builder setRequireStrongBox(final boolean requireStrongBox) {
       this.requireStrongBox = requireStrongBox;
@@ -119,6 +127,21 @@ public final class KeyGenParameters {
         this.attestationChallenge = attestationChallenge.clone();
       }
       return this;
+    }
+
+    public Builder setUsageCountLimit(final Integer usageCountLimit) {
+      if (usageCountLimit == null) {
+        this.usageCountLimit = null;
+      } else if (usageCountLimit <= 0) {
+        throw new IllegalArgumentException("usageCountLimit must be positive");
+      } else {
+        this.usageCountLimit = usageCountLimit;
+      }
+      return this;
+    }
+
+    public Builder setUsageCountLimit(final int usageCountLimit) {
+      return setUsageCountLimit(Integer.valueOf(usageCountLimit));
     }
 
     public KeyGenParameters build() {
