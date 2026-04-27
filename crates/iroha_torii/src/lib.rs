@@ -37160,7 +37160,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let _ = app
             .queue
-            .refresh_pressure_budget_from_block_time(Duration::ZERO);
+            .set_pressure_age_budget_for_tests(Duration::from_millis(1));
 
         let first = super::handler_post_transaction(
             State(app.clone()),
@@ -37173,7 +37173,13 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(first.status(), StatusCode::ACCEPTED);
         assert_eq!(app.queue.active_len(), 1);
 
-        std::thread::sleep(Duration::from_millis(2_100));
+        let snapshot = app
+            .queue
+            .backdate_queued_transactions_for_tests(Duration::from_millis(2));
+        assert!(
+            snapshot.saturated_by_age,
+            "test setup should make queue age saturation observable"
+        );
 
         assert!(
             app.queue.current_backpressure().is_saturated(),
