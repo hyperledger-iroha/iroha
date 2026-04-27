@@ -2,6 +2,17 @@
 
 Last updated: 2026-04-26
 
+## 2026-04-26 Offline escrow self-account guard and localnet note seed fix
+
+- `crates/iroha_core/src/smartcontracts/isi/offline.rs` now rejects non-zero Offline V2 note escrow movements when the resolved escrow account is the same account being debited or credited. The new `escrow_self_reference` invariant is checked before balance mutation on issue/reserve and redeem/credit paths.
+- `crates/iroha_kagami/src/localnet.rs` no longer writes the built-in offline-note asset escrow account as the localnet app authority. Generated peer configs keep an empty `settlement.offline.escrow_accounts` table, and localnet genesis marks the built-in offline-note asset `offline.enabled = true` so the deterministic escrow account path creates the vault.
+- Focused validation for this fix:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core escrow_self_reference`
+  - `cargo test -p iroha_kagami generated_localnet_bootstraps_builtin_offline_note_asset_and_permissions`
+  - `cargo test -p iroha_kagami generated_peer_config_enables_offline_note_bootstrap_services`
+  - `cargo test -p iroha_kagami localnet_readme_records_base_seed_when_present`
+
 ## 2026-04-26 Torii MCP Sumeragi collector empty-topology fix
 
 - Fixed `/v1/sumeragi/collectors` so the Torii/MCP test harness with no commit topology returns an empty collector snapshot instead of constructing a `Topology` from an empty peer list and panicking.
