@@ -17,6 +17,7 @@ class KeyGenParameters(
     @JvmField val userAuthenticationTimeout: Duration = Duration.ZERO,
     @JvmField val algorithm: String = "Ed25519",
     attestationChallenge: ByteArray? = null,
+    @JvmField val usageCountLimit: Int? = null,
 ) {
     private val _attestationChallenge: ByteArray? = attestationChallenge?.copyOf()
 
@@ -37,6 +38,7 @@ class KeyGenParameters(
         private var userAuthenticationTimeout: Duration = Duration.ZERO
         private var algorithm = "Ed25519"
         private var attestationChallenge: ByteArray? = null
+        private var usageCountLimit: Int? = null
 
         fun setRequireStrongBox(requireStrongBox: Boolean): Builder = apply {
             this.requireStrongBox = requireStrongBox
@@ -74,6 +76,15 @@ class KeyGenParameters(
             }
         }
 
+        fun setUsageCountLimit(usageCountLimit: Int?): Builder = apply {
+            if (usageCountLimit == null) {
+                this.usageCountLimit = null
+            } else {
+                require(usageCountLimit > 0) { "usageCountLimit must be positive" }
+                this.usageCountLimit = usageCountLimit
+            }
+        }
+
         fun build(): KeyGenParameters = KeyGenParameters(
             requireStrongBox = requireStrongBox,
             preferStrongBox = preferStrongBox,
@@ -81,6 +92,7 @@ class KeyGenParameters(
             userAuthenticationTimeout = userAuthenticationTimeout,
             algorithm = algorithm,
             attestationChallenge = attestationChallenge,
+            usageCountLimit = usageCountLimit,
         )
     }
 
@@ -91,4 +103,5 @@ class KeyGenParameters(
         .setUserAuthenticationTimeout(userAuthenticationTimeout)
         .setSigningAlgorithm(signingAlgorithm())
         .setAttestationChallenge(_attestationChallenge)
+        .setUsageCountLimit(usageCountLimit)
 }
