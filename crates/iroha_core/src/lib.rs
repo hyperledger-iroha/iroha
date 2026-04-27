@@ -317,13 +317,14 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::ConsensusParams(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
+                | BlockMessage::Proposal(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
-                BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::BlockBodyResponse(_)
-                | BlockMessage::Proposal(_) => T::ConsensusPayload,
+                BlockMessage::BlockSyncUpdate(_) | BlockMessage::BlockBodyResponse(_) => {
+                    T::ConsensusPayload
+                }
                 BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
@@ -556,7 +557,10 @@ mod tests {
             SoracloudLocalReadRequest,
         },
         sumeragi::{
-            consensus::{RbcChunk, RbcDeliver, RbcInit, RbcReady},
+            consensus::{
+                ConsensusBlockHeader, Phase, Proposal, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit,
+                RbcReady,
+            },
             message::{
                 BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate,
                 ConsensusParamsAdvert, FetchPendingBlock,
@@ -801,6 +805,30 @@ mod tests {
             BlockMessage::RbcChunk(chunk),
         )));
         assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash,
+        };
+        let proposal_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::Proposal(proposal),
+        )));
+        assert_eq!(proposal_msg.topic(), NetworkTopic::Consensus);
 
         let sync = BlockSyncUpdate::from(&block);
         let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
