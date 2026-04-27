@@ -42,8 +42,6 @@ object AccountAliasJsonParser {
 
     private fun asOptionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
-        check(value is Number) { "$path must be a number" }
-        check(value !is Float && value !is Double) { "$path must be an integer" }
-        return value.toLong()
+        return JsonNumbers.asLong(value, path)
     }
 }

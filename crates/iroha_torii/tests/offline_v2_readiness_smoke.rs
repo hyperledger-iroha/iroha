@@ -124,6 +124,14 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert!(body.contains("\"offline_note_v2\":true"));
     assert!(body.contains("\"offline_one_use_keys\":true"));
     assert!(body.contains("\"offline_recursive_note_proof\":true"));
+    assert!(body.contains("\"offline_recursive_note_proof_backend\":\"halo2/ipa\""));
+    assert!(
+        body.contains(
+            "\"offline_recursive_note_proof_circuit_id\":\"offline-note-v2-recursive-v1\""
+        )
+    );
+    assert!(body.contains("\"offline_recursive_note_proof_public_instance_columns\":16"));
+    assert!(body.contains("\"offline_recursive_note_proof_verifier_key_id\""));
     assert!(body.contains("\"offline_fountain_qr_v1\":true"));
     assert!(body.contains("\"offline_sync_optional\":true"));
     assert!(body.contains("\"offline_telemetry\":true"));

@@ -100,6 +100,8 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         asset: sender_asset_id.clone(),
         amount: Numeric::new(52, 0),
     };
+    let issue_claim = OfflineNoteIssuedClaimV2::from_issue(&issue)?;
+    let audit_input_claims = vec![issue_claim.clone()];
     let recipient_output_claim = OfflineNoteAuditOutputClaimV2 {
         note_commitment: recipient_commitment,
         key_certificate: recipient_certificate.model.clone(),
@@ -125,6 +127,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         token_id,
         sender_key_certificate: sender_certificate.model.clone(),
         input_nullifiers: vec![input_nullifier],
+        input_claims: audit_input_claims.clone(),
         output_commitments: vec![recipient_commitment, change_commitment],
         output_claims: audit_output_claims.clone(),
         recursive_proof: audit_proof,
@@ -134,6 +137,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         token_id,
         sender_key_certificate: sender_certificate.model.clone(),
         input_nullifiers: vec![input_nullifier],
+        input_claims: audit_input_claims.clone(),
         output_commitments: vec![recipient_commitment, change_commitment],
         output_claims: audit_output_claims.clone(),
         recursive_proof: OfflineNoteRecursiveProofV2 {
@@ -191,6 +195,14 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         change_commitment_string.clone(),
     ];
     let input_nullifiers = vec![input_nullifier_string.clone()];
+    let input_claim_hashes = audit_input_claims
+        .iter()
+        .map(|claim| Ok(claim.claim_hash()?.to_string()))
+        .collect::<Result<Vec<_>, norito::Error>>()?;
+    let input_claim_values = audit_input_claims
+        .iter()
+        .map(mobile_input_claim_json)
+        .collect::<Result<Vec<_>, _>>()?;
 
     let output_claim_values = vec![
         mobile_output_claim_json(
@@ -221,6 +233,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         change_amount: CHANGE_AMOUNT,
         source_note_commitment: Some(&source_note_commitment_string),
         input_nullifiers: &input_nullifiers,
+        input_claims: &input_claim_hashes,
         output_commitments: &output_commitments,
         output_claims: &[
             MobileOutputClaim {
@@ -262,6 +275,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         asset_definition_id: &asset_definition_id_string,
         source_note_commitment: &source_note_commitment_string,
         input_nullifiers: &input_nullifiers,
+        input_claims: &input_claim_values,
         output_commitments: &output_commitments,
         output_claims: &output_claim_values,
         sender_certificate: &sender_certificate,
@@ -303,7 +317,6 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
 
     let payment_token_payload = json::to_string(&payment_token)?;
     let fountain = fountain_qr_fixture(payment_token_payload.as_bytes())?;
-    let issue_claim = OfflineNoteIssuedClaimV2::from_issue(&issue)?;
     let audit_output_claim_hashes = audit_output_claims
         .iter()
         .map(|claim| Ok(OfflineNoteIssuedClaimV2::from_audit_output(claim)?.claim_hash()?))
@@ -404,6 +417,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
                             "input_nullifiers",
                             Value::Array(vec![Value::from(input_nullifier_string)]),
                         ),
+                        ("input_claim_hashes", string_array(&input_claim_hashes)),
                         ("output_commitments", string_array(&output_commitments)),
                         (
                             "output_claim_hashes",
@@ -499,6 +513,7 @@ struct MobilePublicInputFields<'a> {
     change_amount: &'a str,
     source_note_commitment: Option<&'a str>,
     input_nullifiers: &'a [String],
+    input_claims: &'a [String],
     output_commitments: &'a [String],
     output_claims: &'a [MobileOutputClaim<'a>],
 }
@@ -518,6 +533,7 @@ struct PaymentTokenJsonFields<'a> {
     asset_definition_id: &'a str,
     source_note_commitment: &'a str,
     input_nullifiers: &'a [String],
+    input_claims: &'a [Value],
     output_commitments: &'a [String],
     output_claims: &'a [Value],
     sender_certificate: &'a VectorCertificate,
@@ -626,6 +642,23 @@ fn mobile_output_claim_json(
     ]))
 }
 
+fn mobile_input_claim_json(claim: &OfflineNoteIssuedClaimV2) -> Result<Value, Box<dyn Error>> {
+    Ok(object(vec![
+        ("domain", Value::from(claim.domain.clone())),
+        (
+            "note_commitment",
+            Value::from(claim.note_commitment.to_string()),
+        ),
+        (
+            "key_certificate_payload_hash",
+            Value::from(claim.key_certificate_payload_hash.to_string()),
+        ),
+        ("asset_id", Value::from(claim.asset.to_string())),
+        ("amount", Value::from(claim.amount.to_string())),
+        ("claim_hash", Value::from(claim.claim_hash()?.to_string())),
+    ]))
+}
+
 fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<dyn Error>> {
     Ok(object(vec![
         ("version", Value::from(2_u64)),
@@ -648,6 +681,7 @@ fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<d
             Value::from(fields.source_note_commitment),
         ),
         ("input_nullifiers", string_array(fields.input_nullifiers)),
+        ("input_claims", Value::Array(fields.input_claims.to_vec())),
         (
             "output_commitments",
             string_array(fields.output_commitments),
@@ -722,6 +756,7 @@ fn mobile_public_inputs_hash_hex(fields: MobilePublicInputFields<'_>) -> String 
         "input_nullifiers={}",
         fields.input_nullifiers.join(",")
     ));
+    transcript_fields.push(format!("input_claims={}", fields.input_claims.join(",")));
     transcript_fields.push(format!(
         "output_commitments={}",
         fields.output_commitments.join(",")
@@ -923,6 +958,7 @@ mod tests {
         let token = field(&fixture, "payment_token");
         assert_eq!(string(field(token, "type")), "offline_payment_token_v2");
         assert_eq!(array(field(token, "input_nullifiers")).len(), 1);
+        assert_eq!(array(field(token, "input_claims")).len(), 1);
         assert_eq!(array(field(token, "output_commitments")).len(), 2);
         assert_eq!(array(field(token, "output_claims")).len(), 2);
         let proof = field(token, "recursive_proof");
@@ -953,6 +989,10 @@ mod tests {
                 "{section} chain vector must expose Norito bytes"
             );
         }
+        assert_eq!(
+            array(field(field(chain, "audit"), "input_claim_hashes")).len(),
+            1
+        );
         assert_eq!(
             array(field(field(chain, "audit"), "output_claim_hashes")).len(),
             2

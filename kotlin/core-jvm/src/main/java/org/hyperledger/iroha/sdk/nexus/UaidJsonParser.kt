@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.nexus
 
 import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 /** Minimal JSON parser for UAID responses. */
@@ -123,11 +124,7 @@ object UaidJsonParser {
     }
 
     private fun asLong(value: Any?, path: String): Long {
-        check(value is Number) { "$path is not a number" }
-        if (value is Float || value is Double) {
-            throw IllegalStateException("$path must be an integer")
-        }
-        return value.toLong()
+        return JsonNumbers.asLong(value, path)
     }
 
     private fun asOptionalLong(value: Any?, path: String): Long? =

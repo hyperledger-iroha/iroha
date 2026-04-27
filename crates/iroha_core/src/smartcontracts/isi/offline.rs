@@ -38,14 +38,6 @@ fn resolve_offline_escrow_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
 ) -> Result<Option<AccountId>, Error> {
-    if let Some(account) = state_transaction
-        .settlement
-        .offline
-        .escrow_accounts
-        .get(definition)
-    {
-        return Ok(Some(account.clone()));
-    }
     let asset_definition = state_transaction.world.asset_definition(definition)?;
     if crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
         asset_definition.metadata(),
@@ -61,6 +53,14 @@ fn resolve_offline_escrow_account(
         );
         return Ok(Some(derived));
     }
+    if let Some(account) = state_transaction
+        .settlement
+        .offline
+        .escrow_accounts
+        .get(definition)
+    {
+        return Ok(Some(account.clone()));
+    }
     if state_transaction.settlement.offline.escrow_required {
         return Err(labeled_invariant(
             "escrow_missing",
@@ -75,6 +75,20 @@ pub(crate) fn is_offline_escrow_source_asset(
     state_transaction: &StateTransaction<'_, '_>,
     source_id: &AssetId,
 ) -> Result<bool, Error> {
+    let asset_definition = state_transaction
+        .world
+        .asset_definition(source_id.definition())?;
+
+    if crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
+        asset_definition.metadata(),
+    )? {
+        let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+            state_transaction.chain_id(),
+            source_id.definition(),
+        );
+        return Ok(&derived == source_id.account());
+    }
+
     if let Some(account) = state_transaction
         .settlement
         .offline
@@ -83,22 +97,7 @@ pub(crate) fn is_offline_escrow_source_asset(
     {
         return Ok(account == source_id.account());
     }
-
-    let asset_definition = state_transaction
-        .world
-        .asset_definition(source_id.definition())?;
-
-    if !crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
-        asset_definition.metadata(),
-    )? {
-        return Ok(false);
-    }
-
-    let derived = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-        state_transaction.chain_id(),
-        source_id.definition(),
-    );
-    Ok(&derived == source_id.account())
+    Ok(false)
 }
 
 fn ensure_distinct_offline_escrow_account(
@@ -248,26 +247,6 @@ pub mod isi {
             )
         })?;
         Ok(())
-    }
-
-    fn offline_note_v2_expected_public_instances(public_inputs_hash: &Hash) -> Vec<Vec<[u8; 32]>> {
-        fn limb_columns(hash: &Hash) -> impl Iterator<Item = Vec<[u8; 32]>> + '_ {
-            let bytes: &[u8; Hash::LENGTH] = hash.as_ref();
-            (0..4).map(move |index| {
-                let mut scalar = [0u8; 32];
-                let start = index * 8;
-                scalar[..8].copy_from_slice(&bytes[start..start + 8]);
-                vec![scalar]
-            })
-        }
-
-        let reserved_sentinel = Hash::prehashed([0u8; Hash::LENGTH]);
-        let mut columns = Vec::with_capacity(16);
-        columns.extend(limb_columns(public_inputs_hash));
-        for _ in 0..3 {
-            columns.extend(limb_columns(&reserved_sentinel));
-        }
-        columns
     }
 
     fn offline_note_v2_public_instances_from_envelope(
@@ -464,6 +443,7 @@ pub mod isi {
     fn verify_offline_note_v2_recursive_proof(
         proof: &OfflineNoteRecursiveProofV2,
         expected_public_inputs_hash: &Hash,
+        expected_public_instances: Vec<Vec<[u8; 32]>>,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         if &proof.public_inputs_hash != expected_public_inputs_hash {
@@ -478,9 +458,7 @@ pub mod isi {
             offline_note_v2_resolve_verifier(proof, state_transaction)?;
         let actual_instances =
             offline_note_v2_public_instances_from_envelope(&proof.proof, &envelope)?;
-        let expected_instances =
-            offline_note_v2_expected_public_instances(expected_public_inputs_hash);
-        if actual_instances != expected_instances {
+        if actual_instances != expected_public_instances {
             return Err(labeled_invariant(
                 "proof_binding",
                 "offline V2 recursive proof public instances do not match expected public inputs",
@@ -813,6 +791,10 @@ pub mod isi {
                 )
                 .into());
             }
+            let expected_public_instances =
+                crate::zk::offline_note_v2_redeem_instance_values(&redemption)
+                    .map_err(|err| labeled_invariant("invalid_proof", err))?
+                    .public_instance_columns();
             let issued_claim_hash = offline_note_v2_issued_claim_hash(
                 OfflineNoteIssuedClaimV2::from_redemption(&redemption).map_err(|err| {
                     labeled_invariant(
@@ -869,6 +851,7 @@ pub mod isi {
             verify_offline_note_v2_recursive_proof(
                 &redemption.recursive_proof,
                 &expected_public_inputs_hash,
+                expected_public_instances,
                 state_transaction,
             )?;
             credit_from_offline_note_escrow(
@@ -912,6 +895,16 @@ pub mod isi {
                 return Err(labeled_invariant(
                     "invalid_proof",
                     "offline V2 audit requires 1 to 4 input nullifiers",
+                )
+                .into());
+            }
+            if audit.input_claims.is_empty()
+                || audit.input_claims.len() > 4
+                || audit.input_claims.len() != audit.input_nullifiers.len()
+            {
+                return Err(labeled_invariant(
+                    "invalid_proof",
+                    "offline V2 audit requires 1 to 4 input claims matching input nullifiers",
                 )
                 .into());
             }
@@ -1023,6 +1016,10 @@ pub mod isi {
                 )
                 .into());
             }
+            let expected_public_instances =
+                crate::zk::offline_note_v2_audit_instance_values(&audit)
+                    .map_err(|err| labeled_invariant("invalid_proof", err))?
+                    .public_instance_columns();
             let audit_token_key = offline_note_v2_audit_token_key(&audit.token_id);
             let audit_record_key = offline_note_v2_audit_record_key(&expected_public_inputs_hash);
             let issued_output_claim_keys = audit
@@ -1042,6 +1039,25 @@ pub mod isi {
                     ))
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
+            let input_claim_hashes = audit
+                .input_claims
+                .iter()
+                .cloned()
+                .map(offline_note_v2_issued_claim_hash)
+                .collect::<Result<Vec<_>, Error>>()?;
+            ensure_unique_hashes(
+                &input_claim_hashes,
+                "duplicate_redeem",
+                "offline V2 audit input claims must be unique",
+            )?;
+            let issued_input_claim_keys = input_claim_hashes
+                .iter()
+                .map(offline_note_v2_issued_claim_key)
+                .collect::<Vec<_>>();
+            let spent_input_claim_keys = input_claim_hashes
+                .iter()
+                .map(offline_note_v2_spent_claim_key)
+                .collect::<Vec<_>>();
             if state_transaction
                 .world
                 .offline_note_v2_replay_keys
@@ -1062,6 +1078,11 @@ pub mod isi {
                 )
                 .into());
             }
+            let consumed_nullifier_keys = audit
+                .input_nullifiers
+                .iter()
+                .map(offline_note_v2_nullifier_key)
+                .collect::<Vec<_>>();
             let observed_nullifier_keys = audit
                 .input_nullifiers
                 .iter()
@@ -1072,6 +1093,48 @@ pub mod isi {
                 .iter()
                 .map(offline_note_v2_audit_output_key)
                 .collect::<Vec<_>>();
+            for issued_claim_key in &issued_input_claim_keys {
+                if state_transaction
+                    .world
+                    .offline_note_v2_replay_keys
+                    .get(issued_claim_key)
+                    .is_none()
+                {
+                    return Err(labeled_invariant(
+                        "note_not_issued",
+                        "offline V2 audit input claim was not issued",
+                    )
+                    .into());
+                }
+            }
+            for spent_claim_key in &spent_input_claim_keys {
+                if state_transaction
+                    .world
+                    .offline_note_v2_replay_keys
+                    .get(spent_claim_key)
+                    .is_some()
+                {
+                    return Err(labeled_invariant(
+                        "duplicate_redeem",
+                        "offline V2 audit input claim is already redeemed",
+                    )
+                    .into());
+                }
+            }
+            for consumed_key in &consumed_nullifier_keys {
+                if state_transaction
+                    .world
+                    .offline_note_v2_replay_keys
+                    .get(consumed_key)
+                    .is_some()
+                {
+                    return Err(labeled_invariant(
+                        "duplicate_nullifier",
+                        "offline V2 audit nullifier is already redeemed",
+                    )
+                    .into());
+                }
+            }
             for observed_key in &observed_nullifier_keys {
                 if state_transaction
                     .world
@@ -1117,6 +1180,7 @@ pub mod isi {
             verify_offline_note_v2_recursive_proof(
                 &audit.recursive_proof,
                 &expected_public_inputs_hash,
+                expected_public_instances,
                 state_transaction,
             )?;
             state_transaction
@@ -1127,6 +1191,18 @@ pub mod isi {
                 .world
                 .offline_note_v2_replay_keys
                 .insert(audit_record_key, ());
+            for consumed_key in consumed_nullifier_keys {
+                state_transaction
+                    .world
+                    .offline_note_v2_replay_keys
+                    .insert(consumed_key, ());
+            }
+            for spent_claim_key in spent_input_claim_keys {
+                state_transaction
+                    .world
+                    .offline_note_v2_replay_keys
+                    .insert(spent_claim_key, ());
+            }
             for observed_key in observed_nullifier_keys {
                 state_transaction
                     .world
@@ -1162,7 +1238,7 @@ pub mod isi {
 
     #[cfg(test)]
     mod tests {
-        use std::sync::Arc;
+        use std::{collections::BTreeSet, sync::Arc};
 
         use super::*;
         use crate::{
@@ -1208,6 +1284,21 @@ pub mod isi {
                 one_use: true,
                 issuer_signature: sample_signature(0x44),
             }
+        }
+
+        fn sample_issued_claim() -> OfflineNoteIssuedClaimV2 {
+            let account_id = sample_account(0x01);
+            let definition_id = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("domain id"),
+                "xor".parse().expect("asset definition name"),
+            );
+            let issue = iroha_data_model::offline::OfflineNoteIssueV2 {
+                note_commitment: Hash::new(b"offline-note-v2-source-note"),
+                key_certificate: sample_certificate(),
+                asset: AssetId::new(definition_id, account_id),
+                amount: Numeric::new(10, 0),
+            };
+            OfflineNoteIssuedClaimV2::from_issue(&issue).expect("issued claim")
         }
 
         fn self_escrow_test_state(
@@ -1296,19 +1387,20 @@ pub mod isi {
         }
 
         #[test]
-        fn expected_public_instances_encode_hash_limbs_and_reserved_sentinel() {
-            let hash = Hash::prehashed([0x11; Hash::LENGTH]);
-            let instances = offline_note_v2_expected_public_instances(&hash);
+        fn expected_public_instances_encode_semantic_columns() {
+            let values = crate::zk::OfflineNoteV2InstanceValues {
+                public_values: [11, 22, 33, 44, 1, 1, 1, 10, 10, 55, 0, 66, 77, 88, 0, 0],
+                input_amounts: [10, 0, 0, 0],
+                output_amounts: [10, 0],
+            };
+            let instances = values.public_instance_columns();
 
-            assert_eq!(instances.len(), 16);
-            for index in 0..4 {
+            assert_eq!(instances.len(), crate::zk::OFFLINE_NOTE_V2_INSTANCE_COLUMNS);
+            for (index, value) in values.public_values.iter().copied().enumerate() {
                 let mut expected = [0u8; 32];
-                expected[..8].copy_from_slice(&hash.as_ref()[index * 8..index * 8 + 8]);
+                expected[..8].copy_from_slice(&value.to_le_bytes());
                 assert_eq!(instances[index], vec![expected]);
             }
-            let reserved =
-                offline_note_v2_expected_public_instances(&Hash::prehashed([0u8; Hash::LENGTH]));
-            assert_eq!(&instances[4..], &reserved[..12]);
         }
 
         #[test]
@@ -1333,6 +1425,51 @@ pub mod isi {
                 panic!("expected invariant violation");
             };
             assert!(message.contains("offline_reason::duplicate_hash:"));
+        }
+
+        #[test]
+        fn audit_replay_keys_cover_input_spend_and_output_issue_domains() {
+            let claim_hash =
+                offline_note_v2_issued_claim_hash(sample_issued_claim()).expect("claim hash");
+            let nullifier = Hash::new(b"offline-note-v2-input-nullifier");
+            let output_commitment = Hash::new(b"offline-note-v2-output-commitment");
+
+            let issued_claim_key = offline_note_v2_issued_claim_key(&claim_hash);
+            let spent_claim_key = offline_note_v2_spent_claim_key(&claim_hash);
+            let nullifier_key = offline_note_v2_nullifier_key(&nullifier);
+            let audit_nullifier_key = offline_note_v2_audit_nullifier_key(&nullifier);
+            let audit_output_key = offline_note_v2_audit_output_key(&output_commitment);
+
+            assert_eq!(
+                issued_claim_key,
+                offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_ISSUED_CLAIM_DOMAIN, &claim_hash)
+            );
+            assert_eq!(
+                spent_claim_key,
+                offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_SPENT_CLAIM_DOMAIN, &claim_hash)
+            );
+            assert_eq!(
+                nullifier_key,
+                offline_note_v2_replay_key(OFFLINE_NOTE_V2_REPLAY_NULLIFIER_DOMAIN, &nullifier)
+            );
+            assert_eq!(
+                audit_output_key,
+                offline_note_v2_replay_key(
+                    OFFLINE_NOTE_V2_REPLAY_AUDIT_OUTPUT_DOMAIN,
+                    &output_commitment,
+                )
+            );
+            assert_eq!(
+                BTreeSet::from([
+                    issued_claim_key,
+                    spent_claim_key,
+                    nullifier_key,
+                    audit_nullifier_key,
+                    audit_output_key,
+                ])
+                .len(),
+                5
+            );
         }
     }
 }
