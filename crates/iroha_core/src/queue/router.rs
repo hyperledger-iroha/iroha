@@ -1193,7 +1193,11 @@ fn account_dataspace_target<W: WorldReadOnly>(
     world: Option<&W>,
     account_id: &AccountId,
 ) -> Option<DataSpaceId> {
-    let hierarchy = world?.account_scope_hierarchy(account_id).ok()?;
+    let world = world?;
+    if let Some(dataspace) = world.dataspace_for_account(account_id) {
+        return Some(dataspace);
+    }
+    let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
     (hierarchy.len() == 1).then(|| *hierarchy.keys().next().expect("single dataspace"))
 }
 
@@ -2526,7 +2530,7 @@ mod tests {
             smart_contract_code::RegisterSmartContractBytes,
         },
         metadata::Metadata,
-        nexus::LaneConfig,
+        nexus::{LaneConfig, UniversalAccountId},
         permission::Permission,
         prelude::*,
         transaction::TransactionBuilder,
@@ -3792,6 +3796,82 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("opaque asset transfer should fall back to sender account scope"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_transfer_prefers_uaid_binding_over_universal_fallback() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"router::uaid-bound-sender"));
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition, sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+
+        let mut state = blank_state();
+        state.nexus.write().dataspace_catalog = dataspace_catalog;
+        state.nexus.write().lane_catalog = lane_catalog;
+        let sender = Account::new(sender_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&sender_id);
+        let (account_id, account_value) = sender.into_key_value();
+        state
+            .world
+            .accounts
+            .insert(account_id.clone(), account_value);
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
+        scope_entry.ensure_dataspace(dataspace_id);
+        state
+            .world
+            .account_scope_directory
+            .insert(account_id.clone(), scope_entry);
+        let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+        bindings.bind_account(dataspace_id, account_id);
+        state.world.uaid_dataspaces.insert(uaid, bindings);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque asset transfer should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("UAID-bound transfer should route to the account dataspace"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }

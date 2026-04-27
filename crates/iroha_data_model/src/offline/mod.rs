@@ -129,6 +129,23 @@ mod model {
         pub amount: Numeric,
     }
 
+    /// Redeemable note output observed during Offline V2 audit.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteAuditOutputClaimV2 {
+        /// Deterministic note commitment created by the audited transfer.
+        pub note_commitment: Hash,
+        /// Owner key certificate for this output note.
+        pub key_certificate: OfflineNoteKeyCertificateV2,
+        /// Asset held by this output note.
+        pub asset: AssetId,
+        /// Output amount reserved in offline escrow.
+        pub amount: Numeric,
+    }
+
     /// Redemption token submitted online after optional sync.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -190,6 +207,8 @@ mod model {
         pub input_nullifiers: Vec<Hash>,
         /// Output note commitments created by the token.
         pub output_commitments: Vec<Hash>,
+        /// Redeemable output claims created by the token.
+        pub output_claims: Vec<OfflineNoteAuditOutputClaimV2>,
         /// Optional recursive proof for audit/replay checks.
         pub recursive_proof: OfflineNoteRecursiveProofV2,
     }
@@ -211,6 +230,8 @@ mod model {
         pub input_nullifiers: Vec<Hash>,
         /// Output note commitments created by the token.
         pub output_commitments: Vec<Hash>,
+        /// Redeemable output claims created by the token.
+        pub output_claims: Vec<OfflineNoteIssuedClaimV2>,
     }
 }
 
@@ -297,6 +318,23 @@ impl OfflineNoteIssuedClaimV2 {
         })
     }
 
+    /// Build the claim recorded when an Offline V2 audited output is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_audit_output(
+        output: &OfflineNoteAuditOutputClaimV2,
+    ) -> Result<Self, norito::Error> {
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_ISSUED_CLAIM_DOMAIN.to_owned(),
+            note_commitment: output.note_commitment,
+            key_certificate_payload_hash: output.key_certificate.payload_hash()?,
+            asset: output.asset.clone(),
+            amount: output.amount.clone(),
+        })
+    }
+
     /// Deterministic hash of the issued-note claim.
     ///
     /// # Errors
@@ -342,12 +380,18 @@ impl OfflineNoteAuditPublicInputsV2 {
     ///
     /// Returns an error when the certificate payload cannot be serialized.
     pub fn from_audit(audit: &OfflineNoteAuditBundleV2) -> Result<Self, norito::Error> {
+        let output_claims = audit
+            .output_claims
+            .iter()
+            .map(OfflineNoteIssuedClaimV2::from_audit_output)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             domain: OFFLINE_NOTE_V2_AUDIT_PUBLIC_INPUTS_DOMAIN.to_owned(),
             token_id: audit.token_id,
             key_certificate_payload_hash: audit.sender_key_certificate.payload_hash()?,
             input_nullifiers: audit.input_nullifiers.clone(),
             output_commitments: audit.output_commitments.clone(),
+            output_claims,
         })
     }
 
@@ -481,9 +525,15 @@ mod offline_note_v2_tests {
 
         let mut audit = OfflineNoteAuditBundleV2 {
             token_id: Hash::new(b"offline-note-v2-audit-token"),
-            sender_key_certificate: certificate,
+            sender_key_certificate: certificate.clone(),
             input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
             output_commitments: vec![Hash::new(b"offline-note-v2-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"offline-note-v2-output-note"),
+                key_certificate: certificate,
+                asset,
+                amount: Numeric::new(10, 0),
+            }],
             recursive_proof: proof,
         };
         let audit_inputs = audit

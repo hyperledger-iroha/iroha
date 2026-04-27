@@ -1390,16 +1390,16 @@ fn localnet_dataspace_catalog(
     if localnet_uses_alias_multilane_catalog(sora_profile) {
         for (alias, id, description) in [
             (
-                "sbp",
+                "bpng",
                 i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64"),
-                "SBP / FI retail alias dataspace",
+                "BPNG private dataspace",
             ),
             (
-                "cbuae",
+                "nexus",
                 i64::try_from(LOCALNET_CBUAE_ALIAS_DATASPACE_ID)
                     .expect("CBUAE dataspace id fits i64"),
-                "CBUAE retail alias dataspace",
+                "Nexus service alias dataspace",
             ),
         ] {
             let mut entry = Table::new();
@@ -1446,16 +1446,16 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         ),
         (
             i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
-            "paynet",
-            "PAYNET / FI retail alias lane",
-            "sbp",
+            "bpng",
+            "BPNG private dataspace lane",
+            "bpng",
             "public",
         ),
         (
             i64::from(LOCALNET_CBUAE_ALIAS_LANE_INDEX),
-            "cbuae",
-            "CBUAE retail alias lane",
-            "cbuae",
+            "nexus",
+            "Nexus service alias lane",
+            "nexus",
             "public",
         ),
     ] {
@@ -4997,12 +4997,12 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            lanes_by_alias.get("paynet"),
-            Some(&("sbp".to_owned(), "public".to_owned()))
+            lanes_by_alias.get("bpng"),
+            Some(&("bpng".to_owned(), "public".to_owned()))
         );
         assert_eq!(
-            lanes_by_alias.get("cbuae"),
-            Some(&("cbuae".to_owned(), "public".to_owned()))
+            lanes_by_alias.get("nexus"),
+            Some(&("nexus".to_owned(), "public".to_owned()))
         );
 
         let dataspace_catalog = nexus
@@ -5026,14 +5026,14 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            dataspaces_by_alias.get("sbp"),
+            dataspaces_by_alias.get("bpng"),
             Some(
                 &i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64")
             )
         );
         assert_eq!(
-            dataspaces_by_alias.get("cbuae"),
+            dataspaces_by_alias.get("nexus"),
             Some(
                 &i64::try_from(LOCALNET_CBUAE_ALIAS_DATASPACE_ID)
                     .expect("CBUAE dataspace id fits i64")

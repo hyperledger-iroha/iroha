@@ -125,11 +125,19 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
 
     assert "server_name taira.sora.org taira-explorer.sora.org" in rendered
     assert "server_name *.sorafs.taira.sora.org;" in rendered
+    assert "map $host $taira_mon_alias_host" in rendered
+    assert "server_name mon.taira.sora.net;" in rendered
+    assert "Taira Soracloud Mon gateway" in rendered
+    assert "https://mon.taira.sora.net/soradns/<alias>/<path>" in rendered
+    assert "server_name *.mon.taira.sora.net ~^.+\\.mon\\.taira\\.sora\\.net$;" in rendered
+    assert "proxy_set_header Host $taira_mon_alias_host;" in rendered
+    assert "proxy_set_header X-Forwarded-Host $host;" in rendered
     assert "proxy_pass http://taira_public_edge_upstream;" in rendered
+    assert "proxy_pass http://taira_public_edge_upstream$soradns_target_path$is_args$args;" in rendered
     assert "proxy_pass http://taira_validator_1_upstream;" in rendered
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
-    assert "client_max_body_size 512m;" in rendered
+    assert "client_max_body_size 1g;" in rendered
 
 
 def test_main_writes_rendered_conf(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ DEFAULT_CERTBOT_ROOT = "/var/www/certbot"
 DEFAULT_EXPLORER_ROOT = "/var/www/iroha2-block-explorer-web/dist"
 DEFAULT_CID_HOST_SUFFIX = "sorafs.taira.sora.org"
 DEFAULT_MON_HOST_SUFFIX = "mon.taira.sora.net"
-DEFAULT_CLIENT_MAX_BODY_SIZE = "512m"
+DEFAULT_CLIENT_MAX_BODY_SIZE = "1g"
 DEFAULT_UPSTREAM_KEEPALIVE = 64
 DEFAULT_UPSTREAM_FAIL_TIMEOUT = "5s"
 MIN_VALIDATORS = 4
@@ -153,13 +153,16 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
     return validators
 
 
-def _render_proxy_headers(host_expr: str) -> list[str]:
-    return [
+def _render_proxy_headers(host_expr: str, *, forwarded_host_expr: str | None = None) -> list[str]:
+    lines = [
         f"    proxy_set_header Host {host_expr};",
         "    proxy_set_header X-Real-IP $remote_addr;",
         "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
         "    proxy_set_header X-Forwarded-Proto $scheme;",
     ]
+    if forwarded_host_expr is not None:
+        lines.insert(3, f"    proxy_set_header X-Forwarded-Host {forwarded_host_expr};")
+    return lines
 
 
 def _render_upstream(name: str, server_lines: list[str], keepalive: int) -> list[str]:
@@ -177,6 +180,7 @@ def _render_exact_proxy_location(
     host_expr: str,
     websocket: bool = False,
     retry_non_idempotent: bool = False,
+    forwarded_host_expr: str | None = None,
 ) -> list[str]:
     lines = [f"  location = {path} {{", f"    proxy_pass http://{upstream};", "    proxy_http_version 1.1;"]
     if websocket:
@@ -186,7 +190,7 @@ def _render_exact_proxy_location(
                 '    proxy_set_header Connection "upgrade";',
             ]
         )
-    lines.extend(_render_proxy_headers(host_expr))
+    lines.extend(_render_proxy_headers(host_expr, forwarded_host_expr=forwarded_host_expr))
     if retry_non_idempotent:
         lines.extend(
             [
@@ -211,9 +215,10 @@ def _render_prefix_proxy_location(
     *,
     host_expr: str,
     retry_non_idempotent: bool = False,
+    forwarded_host_expr: str | None = None,
 ) -> list[str]:
     lines = [f"  location ^~ {path} {{", f"    proxy_pass http://{upstream};", "    proxy_http_version 1.1;"]
-    lines.extend(_render_proxy_headers(host_expr))
+    lines.extend(_render_proxy_headers(host_expr, forwarded_host_expr=forwarded_host_expr))
     if retry_non_idempotent:
         lines.extend(
             [
@@ -232,6 +237,30 @@ def _render_prefix_proxy_location(
     return lines
 
 
+def _render_soradns_proxy_location(upstream: str) -> list[str]:
+    return [
+        "  location ~ ^/soradns/(?<soradns_alias>[^/]+)(?<soradns_rest>/.*)?$ {",
+        "    set $soradns_target_path $soradns_rest;",
+        "    if ($soradns_target_path = \"\") {",
+        "      set $soradns_target_path /;",
+        "    }",
+        "",
+        f"    proxy_pass http://{upstream}$soradns_target_path$is_args$args;",
+        "    proxy_http_version 1.1;",
+        "    proxy_set_header Host $soradns_alias;",
+        "    proxy_set_header X-Real-IP $remote_addr;",
+        "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "    proxy_set_header X-Forwarded-Host $host;",
+        "    proxy_set_header X-Forwarded-Proto $scheme;",
+        "    proxy_next_upstream error timeout http_502 http_503 http_504 invalid_header non_idempotent;",
+        "    proxy_next_upstream_tries 4;",
+        "    proxy_read_timeout 3600;",
+        "    proxy_send_timeout 3600;",
+        "    proxy_buffering off;",
+        "  }",
+    ]
+
+
 def render_edge_nginx_conf(
     validators: list[EdgeValidator],
     *,
@@ -248,6 +277,7 @@ def render_edge_nginx_conf(
 ) -> str:
     escaped_mon_host_suffix = mon_host_suffix.replace(".", r"\.")
     mon_host_pattern = f"~^.+\\.{escaped_mon_host_suffix}$"
+    mon_alias_host_var = "$taira_mon_alias_host"
     server_names = [
         public_host,
         explorer_host,
@@ -264,6 +294,11 @@ def render_edge_nginx_conf(
         "# - validator-specific public Torii hostnames from the roster",
         f"# - *.{cid_host_suffix} (origin-isolated SoraFS site hosts)",
         f"# - <alias>.{mon_host_suffix} (public Soracloud browser gateway hosts)",
+        "",
+        "map $host $taira_mon_alias_host {",
+        '  default "";',
+        f"  ~^(?<taira_mon_alias_host_capture>.+)\\.{escaped_mon_host_suffix}$ $taira_mon_alias_host_capture;",
+        "}",
         "",
     ]
 
@@ -345,29 +380,9 @@ def render_edge_nginx_conf(
         )
         lines.append("")
     lines.extend(
-        [
-            "  location ~ ^/soradns/(?<soradns_alias>[^/]+)(?<soradns_rest>/.*)?$ {",
-            "    set $soradns_target_path $soradns_rest;",
-            "    if ($soradns_target_path = \"\") {",
-            "      set $soradns_target_path /;",
-            "    }",
-            "",
-            "    proxy_pass http://taira_public_edge_upstream$soradns_target_path$is_args$args;",
-            "    proxy_http_version 1.1;",
-            "    proxy_set_header Host $soradns_alias;",
-            "    proxy_set_header X-Real-IP $remote_addr;",
-            "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-            "    proxy_set_header X-Forwarded-Host $host;",
-            "    proxy_set_header X-Forwarded-Proto $scheme;",
-            "    proxy_next_upstream error timeout http_502 http_503 http_504 invalid_header non_idempotent;",
-            "    proxy_next_upstream_tries 4;",
-            "    proxy_read_timeout 3600;",
-            "    proxy_send_timeout 3600;",
-            "    proxy_buffering off;",
-            "  }",
-            "",
-        ]
+        _render_soradns_proxy_location("taira_public_edge_upstream")
     )
+    lines.append("")
     lines.extend(
         _render_prefix_proxy_location(
             "/",
@@ -384,7 +399,39 @@ def render_edge_nginx_conf(
             "  listen 443 ssl;",
             "  listen [::]:443 ssl;",
             "  http2 on;",
-            f"  server_name {mon_host_pattern};",
+            f"  server_name {mon_host_suffix};",
+            f"  client_max_body_size {client_max_body_size};",
+            "",
+            f"  ssl_certificate /etc/letsencrypt/live/{mon_host_suffix}/fullchain.pem;",
+            f"  ssl_certificate_key /etc/letsencrypt/live/{mon_host_suffix}/privkey.pem;",
+            "  include /etc/letsencrypt/options-ssl-nginx.conf;",
+            "  ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;",
+            "",
+            "  location = /health {",
+            '    default_type "text/plain";',
+            "    return 200 \"Healthy\\n\";",
+            "  }",
+            "",
+            "  location = / {",
+            '    default_type "text/plain";',
+            "    return 200 \"Taira Soracloud Mon gateway\\n\\nUse https://<alias>."
+            f"{mon_host_suffix}/<path> for browser clients.\\nExample: "
+            f"https://solswap-indexer.sora.{mon_host_suffix}/api/indexer/v1/health\\nDebug "
+            f"fallback: https://{mon_host_suffix}/soradns/<alias>/<path>\\n\";",
+            "  }",
+            "",
+        ]
+    )
+    lines.extend(_render_soradns_proxy_location("taira_public_edge_upstream"))
+    lines.extend(
+        [
+            "}",
+            "",
+            "server {",
+            "  listen 443 ssl;",
+            "  listen [::]:443 ssl;",
+            "  http2 on;",
+            f"  server_name *.{mon_host_suffix} {mon_host_pattern};",
             f"  client_max_body_size {client_max_body_size};",
             "",
             "  # Each pretty host receives an exact certificate at Soracloud alias bind time.",
@@ -401,7 +448,8 @@ def render_edge_nginx_conf(
         _render_prefix_proxy_location(
             "/",
             "taira_public_edge_upstream",
-            host_expr="$host",
+            host_expr=mon_alias_host_var,
+            forwarded_host_expr="$host",
             retry_non_idempotent=True,
         )
     )

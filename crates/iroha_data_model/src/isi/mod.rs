@@ -3382,15 +3382,21 @@ mod tests {
             input_nullifiers: vec![Hash::new(b"input-nullifier")],
             sender_key_certificate: key_certificate.clone(),
             recipient: account_id,
-            asset: asset_id,
+            asset: asset_id.clone(),
             amount: Numeric::new(10, 0),
             recursive_proof: proof.clone(),
         });
         let audit = crate::isi::offline::AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
             token_id: Hash::new(b"token"),
-            sender_key_certificate: key_certificate,
+            sender_key_certificate: key_certificate.clone(),
             input_nullifiers: vec![Hash::new(b"audit-nullifier")],
             output_commitments: vec![Hash::new(b"output-note")],
+            output_claims: vec![crate::offline::OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"output-note"),
+                key_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            }],
             recursive_proof: proof,
         });
 

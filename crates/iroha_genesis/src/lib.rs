@@ -24,7 +24,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::LazyLock,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::Engine as _;
@@ -4568,6 +4568,12 @@ impl RawGenesisTransaction {
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
 
+        let genesis_creation_base_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .wrap_err("system clock is before UNIX_EPOCH")?
+            .as_millis()
+            .try_into()
+            .wrap_err("current UNIX timestamp does not fit into u64 milliseconds")?;
         let mut transactions = Vec::new();
         for (tx_index, instructions) in instruction_batches.into_iter().enumerate() {
             #[cfg(debug_assertions)]
@@ -4582,9 +4588,9 @@ impl RawGenesisTransaction {
             let mut builder = TransactionBuilder::new(chain.clone(), genesis_account.clone())
                 .with_instructions(instructions);
             builder.set_creation_time(Duration::from_millis(
-                u64::try_from(tx_index)
-                    .expect("too many genesis transactions")
-                    .saturating_add(1),
+                genesis_creation_base_ms.saturating_add(
+                    u64::try_from(tx_index).expect("too many genesis transactions"),
+                ),
             ));
             let transaction = builder.sign(genesis_key_pair.private_key());
             transactions.push(transaction);

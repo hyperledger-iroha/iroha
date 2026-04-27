@@ -78,6 +78,7 @@ use crate::{
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
     nexus::space_directory::{
         LaneIdentityMetadataError,
+        extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     prelude::*,
@@ -696,6 +697,19 @@ impl Queue {
                         ),
                     }
                 }
+            }
+        })
+    }
+
+    fn extract_lane_authority_domains(
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+        extract_directory_authority_domains(world, authority).map_err(|err| {
+            Error::LaneComplianceDenied {
+                alias: lane_alias.to_string(),
+                reason: format!("authority alias domain resolution failed: {err}"),
             }
         })
     }
@@ -1989,10 +2003,18 @@ impl Queue {
             (lane_compliance.as_ref(), checked.as_ref().authority_opt())
         {
             let (uaid_value, capability_tags) = lane_identity;
+            let authority_domains =
+                Self::extract_lane_authority_domains(world, authority, &lane_alias).map_err(
+                    |err| Failure {
+                        tx: Box::new(checked.as_accepted().clone()),
+                        err,
+                    },
+                )?;
             let ctx = LaneComplianceContext {
                 lane_id,
                 dataspace_id,
                 authority,
+                authority_domains: authority_domains.as_slice(),
                 uaid: uaid_value.as_ref(),
                 capability_tags: capability_tags.as_slice(),
                 lane_privacy_registry,
