@@ -692,8 +692,14 @@ impl TransactionGossiper {
             .network
             .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_PUBLIC_DOMAIN);
+        let public_target_cap = Self::effective_public_target_cap(
+            self.dataspace_cfg.public_target_cap,
+            self.gossip_size,
+            self.queue.active_len(),
+            self.queue.current_backpressure().is_saturated(),
+        );
         let (targets, total_online) =
-            Self::select_targets_with_seed(targets, self.dataspace_cfg.public_target_cap, seed);
+            Self::select_targets_with_seed(targets, public_target_cap, seed);
         let (targets, suppressed_targets) =
             self.filter_targets_by_peer_recent_suppression(targets, &sent_hashes);
 
@@ -721,7 +727,7 @@ impl TransactionGossiper {
         }
 
         let message = Arc::new(message);
-        if self.dataspace_cfg.public_target_cap.is_some() {
+        if public_target_cap.is_some() {
             iroha_logger::debug!(
                 tx_count = batch_txs,
                 size_bytes = encoded_len,
@@ -744,7 +750,7 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 &targets,
-                self.dataspace_cfg.public_target_cap,
+                public_target_cap,
                 batch_txs,
                 frame_bytes,
                 false,
@@ -792,7 +798,7 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 &targets,
-                self.dataspace_cfg.public_target_cap,
+                public_target_cap,
                 batch_txs,
                 frame_bytes,
                 false,
@@ -1064,6 +1070,27 @@ impl TransactionGossiper {
         match plane {
             GossipPlane::Public => self.dataspace_cfg.public_target_cap,
             GossipPlane::Restricted => self.dataspace_cfg.restricted_target_cap,
+        }
+    }
+
+    fn effective_public_target_cap(
+        configured_cap: Option<NonZeroUsize>,
+        gossip_size: NonZeroU32,
+        queue_active_len: usize,
+        queue_saturated: bool,
+    ) -> Option<NonZeroUsize> {
+        let configured_cap = configured_cap?;
+        if queue_saturated {
+            return None;
+        }
+
+        let backlog_threshold = (gossip_size.get() as usize)
+            .max(configured_cap.get())
+            .saturating_mul(2);
+        if queue_active_len >= backlog_threshold {
+            None
+        } else {
+            Some(configured_cap)
         }
     }
 
@@ -3788,6 +3815,42 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             first, second,
             "selection should be stable for the same seed"
         );
+    }
+
+    #[test]
+    fn public_gossip_fanout_keeps_cap_without_backlog() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 7, false);
+
+        assert_eq!(effective, Some(cap));
+    }
+
+    #[test]
+    fn public_gossip_fanout_widens_under_targeted_backlog() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 16, false);
+
+        assert_eq!(
+            effective, None,
+            "backlogged public ingress should feed the whole online validator set"
+        );
+    }
+
+    #[test]
+    fn public_gossip_fanout_widens_when_queue_is_saturated() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 1, true);
+
+        assert_eq!(effective, None);
     }
 
     #[test]

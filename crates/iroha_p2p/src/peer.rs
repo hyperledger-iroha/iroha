@@ -3730,6 +3730,11 @@ mod run {
             None
         }
 
+        fn availability_repair_pending(&self) -> bool {
+            !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+        }
+
         fn high_queue_len(&self, class: HighBatchClass) -> usize {
             match class {
                 HighBatchClass::Control => self.queue_high_control.front().map_or(0, BytesMut::len),
@@ -3817,7 +3822,9 @@ mod run {
             let mut hi_burst = 0usize;
 
             while frames_added < Self::MAX_BATCH_FRAMES {
-                let force_low = hi_burst >= Self::MAX_BATCH_HI_BURST && !self.queue_low.is_empty();
+                let force_low = hi_burst >= Self::MAX_BATCH_HI_BURST
+                    && !self.queue_low.is_empty()
+                    && !self.availability_repair_pending();
                 let next_high = if force_low {
                     None
                 } else {
@@ -4000,6 +4007,7 @@ mod run {
             Consensus(u8),
             ConsensusPayload(u8),
             ConsensusChunk(u8),
+            TxGossip(u8),
         }
 
         impl ClassifyTopic for RoutedMsg {
@@ -4009,6 +4017,7 @@ mod run {
                     Self::Consensus(_) => Topic::Consensus,
                     Self::ConsensusPayload(_) => Topic::ConsensusPayload,
                     Self::ConsensusChunk(_) => Topic::ConsensusChunk,
+                    Self::TxGossip(_) => Topic::TxGossip,
                 }
             }
         }
@@ -4439,6 +4448,74 @@ mod run {
                     RoutedMsg::Consensus(8),
                     RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(9),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_defers_low_when_availability_repair_is_pending() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for id in 1..=4 {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+                sender.flush_plain_high().expect("flush consensus");
+            }
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::TxGossip(90)), Priority::Low)
+                .expect("prepare low gossip");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusPayload(10)),
+                    Priority::High,
+                )
+                .expect("prepare payload");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusChunk(11)),
+                    Priority::High,
+                )
+                .expect("prepare chunk");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::TxGossip(90),
                 ]
             );
         }
