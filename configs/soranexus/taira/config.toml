@@ -30,7 +30,7 @@ max_frame_bytes_tx_gossip = 1048576
 
 [torii]
 address = "addr:0.0.0.0:18080#B922"
-max_content_len = 536_870_912
+max_content_len = 1_073_741_824
 deploy_rate_per_origin_per_sec = 4
 deploy_burst_per_origin = 8
 webhooks_enabled = false

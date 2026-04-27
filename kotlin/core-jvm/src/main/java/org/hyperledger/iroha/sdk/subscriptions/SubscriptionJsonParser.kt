@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.subscriptions
 
+import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 /** JSON parser for subscription Torii endpoints. */
@@ -107,13 +108,7 @@ object SubscriptionJsonParser {
     }
 
     private fun asLong(value: Any?, path: String): Long {
-        check(value is Number) { "$path is not a number" }
-        if (value is Double || value is Float) {
-            val numeric = value.toDouble()
-            check(numeric % 1 == 0.0) { "$path must be an integer" }
-            return numeric.toLong()
-        }
-        return value.toLong()
+        return JsonNumbers.asLongAllowingIntegralFloat(value, path)
     }
 
     private fun asLongOrDefault(value: Any?, path: String, defaultValue: Long): Long =

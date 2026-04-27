@@ -446,14 +446,17 @@ class HttpClientTransport(
         /**
          * Builds a transport whose underlying [UrlConnectionTransportExecutor] runs the synchronous
          * HTTP work on [asyncExecutor]; pass `null` for behavior equivalent to [withDefaultExecutor].
+         * The injected executor changes scheduling only and leaves URLConnection timeout defaults
+         * unchanged for requests that do not specify their own timeout.
          * See [UrlConnectionTransportExecutor] for the full rationale (Android `StrictMode` /
          * `TrafficStats` interaction).
          */
         @JvmStatic fun withDefaultExecutor(config: ClientConfig, asyncExecutor: Executor?): HttpClientTransport =
-            HttpClientTransport(
+            if (asyncExecutor == null) withDefaultExecutor(config) else HttpClientTransport(
                 org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutor(
-                    config.requestTimeout(),
-                    asyncExecutor,
+                    connectTimeout = null,
+                    readTimeout = null,
+                    asyncExecutor = asyncExecutor,
                 ),
                 config,
             )

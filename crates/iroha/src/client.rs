@@ -107,6 +107,7 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
+const SORAFS_STORAGE_PIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const HEADER_API_VERSION: &str = iroha_torii_shared::HEADER_API_VERSION;
 const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
@@ -119,6 +120,22 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+fn sorafs_pin_register_gas_asset_id() -> Option<String> {
+    [
+        "IROHA_SORAFS_GAS_ASSET_ID",
+        "IROHA_SORACLOUD_GAS_ASSET_ID",
+        "IROHA_GAS_ASSET_ID",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
+}
+
 // Integration scenarios involving DA/RBC can legitimately spend a few seconds
 // in the mempool before proposal assembly starts; keep the queue grace period
 // generous enough to avoid spurious timeouts.
@@ -4367,6 +4384,63 @@ mod evidence_http_tests {
     fn alias_proof_base64(bundle: &AliasProofBundleV1) -> String {
         let bytes = norito::to_bytes(bundle).expect("encode alias proof");
         base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn storage_pin_request_sets_publish_sized_timeout_headers_and_body() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = respond_with(&store, empty_response(StatusCode::OK));
+        let file_path = vec!["sites".to_owned(), "index.html".to_owned()];
+        let files = [SorafsStorageFileEntry {
+            path: file_path.as_slice(),
+            size: 42,
+        }];
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client
+                .post_sorafs_storage_pin(b"manifest bytes", b"payload bytes", Some(&files))
+                .expect("storage pin request");
+        });
+
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/sorafs/storage/pin");
+        assert_eq!(snapshot.timeout, Some(SORAFS_STORAGE_PIN_REQUEST_TIMEOUT));
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("content-type")
+                    && value == APPLICATION_JSON),
+            "content-type header missing"
+        );
+
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("storage pin body JSON");
+        let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(b"manifest bytes");
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(b"payload bytes");
+        assert_eq!(
+            body.get("manifest_b64").and_then(Value::as_str),
+            Some(manifest_b64.as_str())
+        );
+        assert_eq!(
+            body.get("payload_b64").and_then(Value::as_str),
+            Some(payload_b64.as_str())
+        );
+        let files = body
+            .get("files")
+            .and_then(Value::as_array)
+            .expect("files array");
+        let first_file = files[0].as_object().expect("file entry object");
+        let path = first_file
+            .get("path")
+            .and_then(Value::as_array)
+            .expect("path array");
+        assert_eq!(path[0].as_str(), Some("sites"));
+        assert_eq!(path[1].as_str(), Some("index.html"));
+        assert_eq!(first_file.get("size").and_then(Value::as_u64), Some(42));
     }
 
     #[test]
@@ -9021,6 +9095,12 @@ impl Client {
             "submitted_epoch".into(),
             norito::json::Value::from(submitted_epoch),
         );
+        if let Some(gas_asset_id) = sorafs_pin_register_gas_asset_id() {
+            map.insert(
+                "gas_asset_id".into(),
+                norito::json::Value::from(gas_asset_id),
+            );
+        }
 
         if let Some(alias) = alias {
             let mut alias_map = norito::json::Map::new();
@@ -9217,6 +9297,7 @@ impl Client {
             "files": (files_json.unwrap_or(norito::json::Value::Null)),
         }))?;
         self.default_request(HttpMethod::POST, url)
+            .timeout(SORAFS_STORAGE_PIN_REQUEST_TIMEOUT)
             .header("Content-Type", APPLICATION_JSON)
             .body(body)
             .build()?

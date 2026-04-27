@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.sorafs
 
+import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 /**
@@ -119,8 +120,11 @@ class GatewayFetchSummary private constructor(
         private fun requireLong(map: Map<String, Any>, key: String): Long {
             val value = map[key]
             if (value is Number) {
-                if (value is Float || value is Double) throw SorafsStorageException("Expected integer for `$key`")
-                return value.toLong()
+                return try {
+                    JsonNumbers.asLong(value, key)
+                } catch (ex: IllegalStateException) {
+                    throw SorafsStorageException("Expected integer for `$key`", ex)
+                }
             }
             throw SorafsStorageException("Expected number for `$key`")
         }

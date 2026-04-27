@@ -4,7 +4,7 @@
 //! allowance, witness-lineage, plaintext receipt, and aggregate proof models are
 //! intentionally absent from this module.
 
-use iroha_crypto::{Hash, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
@@ -14,7 +14,13 @@ use norito::{
 };
 
 pub use self::model::*;
-use crate::{account::AccountId, asset::AssetId, proof::ProofBox, proof::VerifyingKeyId};
+use crate::{
+    ChainId,
+    account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
+    proof::ProofBox,
+    proof::VerifyingKeyId,
+};
 
 /// Prefix embedded into offline instruction rejection messages.
 ///
@@ -23,6 +29,23 @@ use crate::{account::AccountId, asset::AssetId, proof::ProofBox, proof::Verifyin
 pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 /// Asset-definition metadata key that enables Offline V2 escrow tracking.
 pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
+/// Domain-separation tag for deterministic offline escrow derivation.
+pub const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow.v1";
+
+/// Derive the deterministic Offline V2 escrow account for an asset definition.
+#[must_use]
+pub fn offline_escrow_account_id(
+    chain_id: &ChainId,
+    definition_id: &AssetDefinitionId,
+) -> AccountId {
+    let seed_material = format!(
+        "{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}",
+        chain_id.as_str()
+    );
+    let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
+    let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+    AccountId::new(keypair.public_key().clone())
+}
 
 #[model]
 mod model {
@@ -129,6 +152,23 @@ mod model {
         pub amount: Numeric,
     }
 
+    /// Redeemable note output observed during Offline V2 audit.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteAuditOutputClaimV2 {
+        /// Deterministic note commitment created by the audited transfer.
+        pub note_commitment: Hash,
+        /// Owner key certificate for this output note.
+        pub key_certificate: OfflineNoteKeyCertificateV2,
+        /// Asset held by this output note.
+        pub asset: AssetId,
+        /// Output amount reserved in offline escrow.
+        pub amount: Numeric,
+    }
+
     /// Redemption token submitted online after optional sync.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -188,8 +228,12 @@ mod model {
         pub sender_key_certificate: OfflineNoteKeyCertificateV2,
         /// Input nullifiers observed in the token.
         pub input_nullifiers: Vec<Hash>,
+        /// Issued input claims consumed by the token.
+        pub input_claims: Vec<OfflineNoteIssuedClaimV2>,
         /// Output note commitments created by the token.
         pub output_commitments: Vec<Hash>,
+        /// Redeemable output claims created by the token.
+        pub output_claims: Vec<OfflineNoteAuditOutputClaimV2>,
         /// Optional recursive proof for audit/replay checks.
         pub recursive_proof: OfflineNoteRecursiveProofV2,
     }
@@ -209,8 +253,12 @@ mod model {
         pub key_certificate_payload_hash: Hash,
         /// Input nullifiers observed in the token.
         pub input_nullifiers: Vec<Hash>,
+        /// Issued input claims consumed by the token.
+        pub input_claims: Vec<OfflineNoteIssuedClaimV2>,
         /// Output note commitments created by the token.
         pub output_commitments: Vec<Hash>,
+        /// Redeemable output claims created by the token.
+        pub output_claims: Vec<OfflineNoteIssuedClaimV2>,
     }
 }
 
@@ -222,7 +270,7 @@ const OFFLINE_NOTE_V2_REDEEM_PUBLIC_INPUTS_DOMAIN: &str =
 const OFFLINE_NOTE_V2_AUDIT_PUBLIC_INPUTS_DOMAIN: &str =
     "iroha:offline-note-v2:audit-public-inputs:v1";
 /// Canonical public-input schema descriptor for Offline V2 recursive note proofs.
-pub const OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"offline_note_v2_recursive_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","reserved_sentinel_limb0","reserved_sentinel_limb1","reserved_sentinel_limb2","reserved_sentinel_limb3","reserved_sentinel_limb4","reserved_sentinel_limb5","reserved_sentinel_limb6","reserved_sentinel_limb7","reserved_sentinel_limb8","reserved_sentinel_limb9","reserved_sentinel_limb10","reserved_sentinel_limb11"]}"#;
+pub const OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"offline_note_v2_recursive_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#;
 
 /// Return the registry schema hash required for Offline V2 recursive note verifiers.
 #[must_use]
@@ -297,6 +345,23 @@ impl OfflineNoteIssuedClaimV2 {
         })
     }
 
+    /// Build the claim recorded when an Offline V2 audited output is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_audit_output(
+        output: &OfflineNoteAuditOutputClaimV2,
+    ) -> Result<Self, norito::Error> {
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_ISSUED_CLAIM_DOMAIN.to_owned(),
+            note_commitment: output.note_commitment,
+            key_certificate_payload_hash: output.key_certificate.payload_hash()?,
+            asset: output.asset.clone(),
+            amount: output.amount.clone(),
+        })
+    }
+
     /// Deterministic hash of the issued-note claim.
     ///
     /// # Errors
@@ -342,12 +407,19 @@ impl OfflineNoteAuditPublicInputsV2 {
     ///
     /// Returns an error when the certificate payload cannot be serialized.
     pub fn from_audit(audit: &OfflineNoteAuditBundleV2) -> Result<Self, norito::Error> {
+        let output_claims = audit
+            .output_claims
+            .iter()
+            .map(OfflineNoteIssuedClaimV2::from_audit_output)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             domain: OFFLINE_NOTE_V2_AUDIT_PUBLIC_INPUTS_DOMAIN.to_owned(),
             token_id: audit.token_id,
             key_certificate_payload_hash: audit.sender_key_certificate.payload_hash()?,
             input_nullifiers: audit.input_nullifiers.clone(),
+            input_claims: audit.input_claims.clone(),
             output_commitments: audit.output_commitments.clone(),
+            output_claims,
         })
     }
 
@@ -408,6 +480,31 @@ mod offline_note_v2_tests {
         let key = sample_public_key(seed);
         let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         AccountId::new(key)
+    }
+
+    #[test]
+    fn offline_escrow_account_derivation_binds_chain_and_asset_definition() {
+        let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
+        let other_chain_id: ChainId = "offline-escrow-mainnet".parse().expect("chain id");
+        let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+        let definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "usd".parse().expect("asset definition name"),
+        );
+        let other_definition_id =
+            AssetDefinitionId::new(domain_id, "eur".parse().expect("asset definition name"));
+
+        let escrow = offline_escrow_account_id(&chain_id, &definition_id);
+
+        assert_eq!(escrow, offline_escrow_account_id(&chain_id, &definition_id));
+        assert_ne!(
+            escrow,
+            offline_escrow_account_id(&other_chain_id, &definition_id)
+        );
+        assert_ne!(
+            escrow,
+            offline_escrow_account_id(&chain_id, &other_definition_id)
+        );
     }
 
     #[test]
@@ -481,9 +578,18 @@ mod offline_note_v2_tests {
 
         let mut audit = OfflineNoteAuditBundleV2 {
             token_id: Hash::new(b"offline-note-v2-audit-token"),
-            sender_key_certificate: certificate,
+            sender_key_certificate: certificate.clone(),
             input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
+            input_claims: vec![
+                OfflineNoteIssuedClaimV2::from_issue(&issue).expect("audit input claim"),
+            ],
             output_commitments: vec![Hash::new(b"offline-note-v2-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"offline-note-v2-output-note"),
+                key_certificate: certificate,
+                asset,
+                amount: Numeric::new(10, 0),
+            }],
             recursive_proof: proof,
         };
         let audit_inputs = audit
@@ -495,6 +601,14 @@ mod offline_note_v2_tests {
             audit
                 .public_inputs_hash()
                 .expect("changed audit public inputs hash")
+        );
+        audit.output_commitments = vec![Hash::new(b"offline-note-v2-output-note")];
+        audit.input_claims[0].amount = Numeric::new(9, 0);
+        assert_ne!(
+            audit_inputs,
+            audit
+                .public_inputs_hash()
+                .expect("changed audit input claim public inputs hash")
         );
     }
 }

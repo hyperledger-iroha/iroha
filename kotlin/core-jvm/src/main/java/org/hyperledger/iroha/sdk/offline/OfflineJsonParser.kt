@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigInteger
 import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 object OfflineJsonParser {
@@ -158,7 +159,7 @@ object OfflineJsonParser {
         OfflineTransparentZkProof(
             asString(obj["backend"], "$path.backend"),
             asString(obj["circuit_id"], "$path.circuit_id"),
-            asLong(obj["recursion_depth"], "$path.recursion_depth").toInt(),
+            JsonNumbers.asInt(obj["recursion_depth"], "$path.recursion_depth"),
             asString(obj["public_inputs_hex"], "$path.public_inputs_hex"),
             parseStarkEnvelopeObject(expectObject(obj["envelope"], "$path.envelope"), "$path.envelope"),
         )
@@ -170,7 +171,7 @@ object OfflineJsonParser {
         OfflineRedeemRequestProof(
             asString(obj["backend"], "$path.backend"),
             asString(obj["circuit_id"], "$path.circuit_id"),
-            asLong(obj["recursion_depth"], "$path.recursion_depth").toInt(),
+            JsonNumbers.asInt(obj["recursion_depth"], "$path.recursion_depth"),
             asString(obj["public_inputs_hex"], "$path.public_inputs_hex"),
             parseStarkEnvelopeObject(expectObject(obj["envelope"], "$path.envelope"), "$path.envelope"),
         )
@@ -190,13 +191,13 @@ object OfflineJsonParser {
         path: String,
     ): OfflineStarkFriParamsV1 =
         OfflineStarkFriParamsV1(
-            asLong(obj["version"], "$path.version").toInt(),
-            asLong(obj["n_log2"], "$path.n_log2").toInt(),
-            asLong(obj["blowup_log2"], "$path.blowup_log2").toInt(),
-            asLong(obj["fold_arity"], "$path.fold_arity").toInt(),
-            asLong(obj["queries"], "$path.queries").toInt(),
-            asLong(obj["merkle_arity"], "$path.merkle_arity").toInt(),
-            asLong(obj["hash_fn"], "$path.hash_fn").toInt(),
+            JsonNumbers.asInt(obj["version"], "$path.version"),
+            JsonNumbers.asInt(obj["n_log2"], "$path.n_log2"),
+            JsonNumbers.asInt(obj["blowup_log2"], "$path.blowup_log2"),
+            JsonNumbers.asInt(obj["fold_arity"], "$path.fold_arity"),
+            JsonNumbers.asInt(obj["queries"], "$path.queries"),
+            JsonNumbers.asInt(obj["merkle_arity"], "$path.merkle_arity"),
+            JsonNumbers.asInt(obj["hash_fn"], "$path.hash_fn"),
             asString(obj["domain_tag"], "$path.domain_tag"),
         )
 
@@ -219,7 +220,7 @@ object OfflineJsonParser {
         }
         val air = obj["air"]?.let { parseStarkAirProofObject(expectObject(it, "$path.air"), "$path.air") }
         return OfflineStarkProofV1(
-            asLong(obj["version"], "$path.version").toInt(),
+            JsonNumbers.asInt(obj["version"], "$path.version"),
             parseStarkCommitmentsObject(expectObject(obj["commits"], "$path.commits"), "$path.commits"),
             queries,
             compValues,
@@ -235,7 +236,7 @@ object OfflineJsonParser {
         val roots = rootsRaw.indices.map { i -> asBytes(rootsRaw[i], "$path.roots[$i]") }
         val compRoot = obj["comp_root"]?.let { asBytes(it, "$path.comp_root") }
         return OfflineStarkCommitmentsV1(
-            asLong(obj["version"], "$path.version").toInt(),
+            JsonNumbers.asInt(obj["version"], "$path.version"),
             roots,
             compRoot,
         )
@@ -298,12 +299,12 @@ object OfflineJsonParser {
             parseStarkAirOpeningObject(expectObject(openingsRaw[i], "$path.openings[$i]"), "$path.openings[$i]")
         }
         return OfflineStarkAirProofV1(
-            asLong(obj["version"], "$path.version").toInt(),
+            JsonNumbers.asInt(obj["version"], "$path.version"),
             asString(obj["circuit_id"], "$path.circuit_id"),
             asBytes(obj["public_digest"], "$path.public_digest"),
             asBytes(obj["trace_root"], "$path.trace_root"),
             asBytes(obj["composition_root"], "$path.composition_root"),
-            asLong(obj["trace_width"], "$path.trace_width").toInt(),
+            JsonNumbers.asInt(obj["trace_width"], "$path.trace_width"),
             openings,
         )
     }
@@ -371,9 +372,7 @@ object OfflineJsonParser {
     }
 
     private fun asLong(value: Any?, path: String): Long {
-        check(value is Number) { "$path is not a number" }
-        check(value !is Float && value !is Double) { "$path must be an integer" }
-        return value.toLong()
+        return JsonNumbers.asLong(value, path)
     }
 
     private fun asBoolean(value: Any?, path: String): Boolean {

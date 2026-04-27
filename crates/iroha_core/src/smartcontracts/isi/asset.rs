@@ -2839,7 +2839,12 @@ pub mod query {
             );
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
-            let state = State::new_with_chain(world, kura, query_store, chain_id);
+            let mut state = State::new_with_chain(world, kura, query_store, chain_id);
+            state
+                .settlement
+                .offline
+                .escrow_accounts
+                .insert(asset_def_id.clone(), BOB_ID.clone());
 
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);

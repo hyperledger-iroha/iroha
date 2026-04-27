@@ -55,8 +55,9 @@ use iroha_core::{
     query::store::LiveQueryStoreHandle,
     queue::RoutingDecision,
     sns::{
-        LeaseQuote, SnsNamespace, get_name_record, quote_account_alias_registration,
-        quote_account_alias_renewal,
+        LeaseQuote, SnsNamespace, get_name_record,
+        quote_account_alias_registration_with_fee_asset_fallback,
+        quote_account_alias_renewal_with_fee_asset_fallback,
     },
     state::{
         AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
@@ -23395,6 +23396,9 @@ pub struct RegisterPinManifestDto {
     pub chunk_digest_sha3_256_hex: String,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
+    /// Optional gas asset id to attach to the server-built registration transaction.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
     /// Optional alias binding to associate with the manifest.
     #[norito(default)]
     pub alias: Option<PinAliasDto>,
@@ -25280,7 +25284,17 @@ pub async fn handle_post_sorafs_register_manifest(
         successor_of: successor_digest,
     };
 
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state.as_ref(), req.gas_asset_id.as_deref())?;
+    let mut metadata = Metadata::default();
+    if let Some(asset_id) = gas_asset_id {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
+    }
+
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+        .with_metadata(metadata)
         .with_instructions([dm::InstructionBox::from(isi)])
         .sign(&req.private_key.0);
 
@@ -27903,6 +27917,7 @@ mod sorafs_pin_tests {
             manifest_digest_hex,
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
             submitted_epoch: 5,
+            gas_asset_id: None,
             alias: None,
             successor_of_hex: None,
         };
@@ -27973,6 +27988,7 @@ mod sorafs_pin_tests {
             manifest_digest_hex,
             chunk_digest_sha3_256_hex: hex::encode([0xCD; 32]),
             submitted_epoch: 5,
+            gas_asset_id: None,
             alias: Some(PinAliasDto {
                 namespace: "sora".into(),
                 name: "docs".into(),
@@ -55259,7 +55275,7 @@ pub async fn handle_v1_accounts_onboard(
     }
 
     let lease_term_years = signer.alias_lease_term_years.max(1);
-    let lease_quote = quote_account_alias_registration(
+    let lease_quote = quote_account_alias_registration_with_fee_asset_fallback(
         &app.state.world_view(),
         &nexus.dataspace_catalog,
         &alias_label,
@@ -55267,6 +55283,7 @@ pub async fn handle_v1_accounts_onboard(
         lease_term_years,
         None,
         network_time_ms()?,
+        &nexus.fees.fee_asset_id,
     )
     .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
 
@@ -55732,7 +55749,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let lease_term_years = signer.alias_lease_term_years.max(1);
-    let lease_quote = quote_account_alias_registration(
+    let lease_quote = quote_account_alias_registration_with_fee_asset_fallback(
         &app.state.world_view(),
         &nexus.dataspace_catalog,
         &alias_label,
@@ -55740,6 +55757,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
         lease_term_years,
         None,
         network_time_ms()?,
+        &nexus.fees.fee_asset_id,
     )
     .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
@@ -56097,12 +56115,13 @@ pub async fn handle_post_v1_account_alias_auto_renew(
             .as_ref()
             .map_or(1, |signer| signer.alias_lease_term_years.max(1))
     });
-    let quote = quote_account_alias_renewal(
+    let quote = quote_account_alias_renewal_with_fee_asset_fallback(
         &app.state.world_view(),
         &nexus.dataspace_catalog,
         &alias,
         term_years,
         now_ms,
+        &nexus.fees.fee_asset_id,
     )
     .map_err(|err| conversion_error(err.to_string()))?;
     let max_charge_amount = req.max_charge_amount.unwrap_or(quote.charge_amount);

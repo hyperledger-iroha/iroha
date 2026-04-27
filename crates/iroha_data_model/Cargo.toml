@@ -67,6 +67,7 @@ iroha_schema = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 iroha_zkp_halo2 = { workspace = true }
 hex = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 
 derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
 norito = {workspace = true}
@@ -133,3 +134,8 @@ required-features = ["test-fixtures"]
 name = "qr_stream_fixtures"
 path = "src/bin/qr_stream_fixtures.rs"
 required-features = ["test-fixtures"]
+
+[[bin]]
+name = "offline_v2_vectors"
+path = "src/bin/offline_v2_vectors.rs"
+required-features = ["test-fixtures", "transparent_api"]

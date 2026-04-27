@@ -10,10 +10,14 @@ use iroha_data_model::{
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
     sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1},
 };
+use iroha_primitives::numeric::Numeric;
 use iroha_telemetry::metrics;
 
 use super::prelude::*;
 use crate::{alias::authority_can_manage_account_alias, prelude::ValidSingularQuery};
+
+// SNS quote amounts are nano-XOR; Iroha asset transfers use decimal Numeric.
+const XOR_NANOS_SCALE: u32 = 9;
 
 impl ValidSingularQuery for FindDataspaceNameOwnerById {
     #[metrics(+"find_dataspace_name_owner_by_id")]
@@ -54,6 +58,10 @@ fn account_controller_for(
         })
 }
 
+fn xor_nanos_to_numeric(nanos: u64) -> Numeric {
+    Numeric::new(i128::from(nanos), XOR_NANOS_SCALE)
+}
+
 impl Execute for AcquireAccountAliasLease {
     #[metrics(+"acquire_account_alias_lease")]
     fn execute(
@@ -85,6 +93,7 @@ impl Execute for AcquireAccountAliasLease {
             ));
         }
 
+        crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(state_transaction);
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let quote = crate::sns::quote_account_alias_registration(
             state_transaction.world(),
@@ -98,7 +107,7 @@ impl Execute for AcquireAccountAliasLease {
         .map_err(alias_lease_instruction_error)?;
         Transfer::asset_numeric(
             AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
-            quote.charge_amount,
+            xor_nanos_to_numeric(quote.charge_amount),
             quote.collector_account.clone(),
         )
         .execute(authority, state_transaction)?;
@@ -166,6 +175,7 @@ impl Execute for RenewAccountAliasLease {
             ));
         }
 
+        crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(state_transaction);
         let quote = crate::sns::quote_account_alias_renewal(
             state_transaction.world(),
             &state_transaction.nexus.dataspace_catalog,
@@ -176,7 +186,7 @@ impl Execute for RenewAccountAliasLease {
         .map_err(alias_lease_instruction_error)?;
         Transfer::asset_numeric(
             AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
-            quote.charge_amount,
+            xor_nanos_to_numeric(quote.charge_amount),
             quote.collector_account.clone(),
         )
         .execute(authority, state_transaction)?;
@@ -216,7 +226,10 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        sns::{SnsNamespace, get_name_record, seed_default_namespace_policies},
+        sns::{
+            ACCOUNT_ALIAS_SUFFIX_ID, SnsNamespace, get_name_record, policy_by_id,
+            seed_default_namespace_policies,
+        },
         state::{State, World},
     };
 
@@ -395,6 +408,70 @@ mod tests {
             renewed.expires_at_ms > initial_expiry,
             "renewal must extend the alias expiry"
         );
+    }
+
+    #[test]
+    fn acquire_account_alias_lease_syncs_stale_default_payment_asset() {
+        let authority = owner();
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            .parse()
+            .expect("deployment payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
+
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Mint::asset_numeric(
+                1_000_u64,
+                AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
+            )
+            .execute(&authority, &mut stx)
+            .expect("mint payment balance");
+            stx.apply();
+            block.commit().expect("mint block commits");
+        }
+
+        let alias =
+            AccountAlias::domainless("retail".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
+                .execute(&authority, &mut stx)
+                .expect("acquire lease with deployment payment asset");
+            stx.apply();
+            block.commit().expect("acquire block commits");
+        }
+
+        let view = state.view();
+        let policy = policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
+        assert_eq!(
+            policy.payment_asset_id,
+            payment_asset_definition_id.to_string()
+        );
+        let acquired = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "retail@universal",
+            0,
+        )
+        .expect("acquired alias lease");
+        assert_eq!(acquired.owner, authority);
     }
 
     #[test]

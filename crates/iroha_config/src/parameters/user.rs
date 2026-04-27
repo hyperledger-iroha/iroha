@@ -11631,6 +11631,9 @@ pub struct NexusFees {
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
     #[config(default = "defaults::nexus::fees::sponsor_max_fee()")]
     pub sponsor_max_fee: Numeric,
+    /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
+    #[config(default = "Vec::new()")]
+    pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
 
 /// User-level configuration container for shared Hugging Face lease policy.
@@ -11816,6 +11819,7 @@ impl Default for NexusFees {
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
             sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
+            successful_claim_fee_exempt_authorities: Vec::new(),
         }
     }
 }
@@ -11849,6 +11853,12 @@ impl NexusFees {
             per_gas_unit_fee: self.per_gas_unit_fee,
             sponsorship_enabled: self.sponsorship_enabled,
             sponsor_max_fee: self.sponsor_max_fee,
+            successful_claim_fee_exempt_authorities: self
+                .successful_claim_fee_exempt_authorities
+                .into_iter()
+                .map(|authority| authority.trim().to_string())
+                .filter(|authority| !authority.is_empty())
+                .collect(),
         })
     }
 }

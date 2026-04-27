@@ -68,6 +68,11 @@ const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
 const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
 const IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP: i64 = 16_384;
+const IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS: i64 = 250;
+const IZANAMI_TRANSACTION_GOSSIP_SIZE: i64 = 1024;
+const IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS: i64 = 1;
+const IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP: i64 = 64;
+const IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS: i64 = 512;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
 const IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS: i64 = 300;
@@ -2543,6 +2548,26 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["network", "p2p_subscriber_queue_cap"],
                 IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP,
+            )
+            .write(
+                ["network", "transaction_gossip_period_ms"],
+                IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS,
+            )
+            .write(
+                ["network", "transaction_gossip_size"],
+                IZANAMI_TRANSACTION_GOSSIP_SIZE,
+            )
+            .write(
+                ["network", "transaction_gossip_resend_ticks"],
+                IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS,
+            )
+            .write(
+                ["network", "transaction_gossip_public_target_cap"],
+                IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP,
+            )
+            .write(
+                ["sumeragi", "block", "max_transactions"],
+                IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             )
             .write(
                 ["sumeragi", "advanced", "queues", "block_payload"],
@@ -10685,6 +10710,26 @@ mod tests {
         assert_eq!(
             lookup(&["network", "p2p_subscriber_queue_cap"]),
             Some(IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP)
+        );
+        assert_eq!(
+            lookup(&["network", "transaction_gossip_period_ms"]),
+            Some(IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS)
+        );
+        assert_eq!(
+            lookup(&["network", "transaction_gossip_size"]),
+            Some(IZANAMI_TRANSACTION_GOSSIP_SIZE)
+        );
+        assert_eq!(
+            lookup(&["network", "transaction_gossip_resend_ticks"]),
+            Some(IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS)
+        );
+        assert_eq!(
+            lookup(&["network", "transaction_gossip_public_target_cap"]),
+            Some(IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "block", "max_transactions"]),
+            Some(IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS)
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "queues", "block_payload"]),

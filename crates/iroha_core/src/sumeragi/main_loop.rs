@@ -32351,11 +32351,14 @@ impl Actor {
                     .max(Duration::from_millis(1)),
             )
             .max(effective_timeout);
+        let resilience_ingress_backlog_active =
+            self.config.resilience.enabled && Self::frontier_consensus_ingress_queued(queue_depths);
         let force_frontier_view_advance_after_repair = self.config.resilience.enabled
             && height == frontier_height
             && recovery_backlog_stalled
             && queue_active_backlog
-            && max_pending_stall >= frontier_repair_exhaustion_window;
+            && max_pending_stall >= frontier_repair_exhaustion_window
+            && !resilience_ingress_backlog_active;
         if force_frontier_view_advance_after_repair {
             warn!(
                 height,
@@ -32381,6 +32384,26 @@ impl Actor {
                 );
             }
             return true;
+        }
+        if self.config.resilience.enabled
+            && height == frontier_height
+            && recovery_backlog_stalled
+            && queue_active_backlog
+            && resilience_ingress_backlog_active
+        {
+            debug!(
+                height,
+                view,
+                stalled_pending,
+                max_pending_stall_ms = max_pending_stall.as_millis(),
+                repair_exhaustion_window_ms = frontier_repair_exhaustion_window.as_millis(),
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "deferring frontier view advance while consensus ingress drains under resilience"
+            );
+            return false;
         }
         if height == frontier_height {
             self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
@@ -32454,8 +32477,19 @@ impl Actor {
             || backlog_signals.unresolved_rbc_backlog;
         let backlog_timeout = self
             .backlog_extended_view_change_timeout(base_timeout, recovery_backlog_signals_active);
+        let consensus_ingress_backlog_active = self.config.resilience.enabled
+            && backlog_signals.consensus_queue_backlog
+            && (backlog_signals.queue_active_backlog
+                || backlog_signals.near_quorum_queue_backlog_raw
+                || backlog_signals.near_quorum_rbc_backlog_raw);
+        let deferred_qc_multiplier = if consensus_ingress_backlog_active {
+            4
+        } else {
+            2
+        };
         let frontier_pending_timeout =
-            saturating_mul_duration(self.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+            saturating_mul_duration(self.recovery_deferred_qc_ttl(), deferred_qc_multiplier)
+                .max(backlog_timeout);
         let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
         let mut commit_roster = self.roster_for_vote_with_mode(
             block_hash,
