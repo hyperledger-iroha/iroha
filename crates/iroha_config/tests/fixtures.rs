@@ -1483,6 +1483,7 @@ fn minimal_config_snapshot() {
                         mantissa: 0,
                         scale: 0,
                     },
+                    successful_claim_fee_exempt_authorities: [],
                 },
                 hf_shared_leases: NexusHfSharedLeases {
                     drain_grace: 5s,
