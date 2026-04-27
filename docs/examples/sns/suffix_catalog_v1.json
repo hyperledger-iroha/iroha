@@ -30,7 +30,7 @@
           "label_regex": "^[a-z0-9]{3,}$",
           "base_price": {
             "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            "amount": 120
+            "amount": 500000000
           },
           "auction_kind": "vickrey_commit_reveal",
           "dutch_floor": null,

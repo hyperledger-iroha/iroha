@@ -2,6 +2,15 @@
 
 Last updated: 2026-04-27
 
+## 2026-04-27 SNS suffix catalog price alignment
+
+- `docs/examples/sns/suffix_catalog_v1.json` now matches the `.sora` default price in `iroha_data_model::sns::fixtures::default_policy()` (`500000000` nano-XOR / 0.5 XOR), following the nano-XOR lease unit convention used by ledger-backed SNS pricing.
+- Refreshed the catalog checksum and the English SNS catalog/schema docs so they no longer advertise the legacy `120` payment unit as the current `.sora` policy price.
+- Focused validation for this fix:
+  - `cargo test -p iroha_cli catalog_entry_matches_default_policy -- --nocapture`
+  - `sha256sum -c docs/examples/sns/suffix_catalog_v1.sha256`
+  - `cargo test -p iroha_cli catalog_detects_price_mismatch -- --nocapture`
+
 ## 2026-04-27 Offline V2 real Halo2 IPA prover slice
 
 - Added the real `offline-note-v2-recursive-v1` Halo2 IPA semantic circuit. The circuit binds the Offline V2 public-instance schema, constrains redeem/audit mode, bounded input/output counts, unused amount slots, and normalized input/output amount conservation.
