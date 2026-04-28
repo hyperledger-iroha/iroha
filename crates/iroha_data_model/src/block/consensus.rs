@@ -1785,6 +1785,36 @@ pub struct SumeragiNposTimeoutsStatus {
     pub witness_ms: u64,
 }
 
+/// Observational NPoS repair fanout stake-coverage snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiNposRepairCoverageStatus {
+    /// Last height for which a repair fanout selection was recorded.
+    #[norito(default)]
+    pub last_repair_height: u64,
+    /// Last view for which a repair fanout selection was recorded.
+    #[norito(default)]
+    pub last_repair_view: u64,
+    /// Operator-facing reason label for the latest repair selection.
+    #[norito(default)]
+    pub reason: String,
+    /// Number of peers selected for the latest repair fanout.
+    #[norito(default)]
+    pub selected_repair_peer_count: u64,
+    /// Required stake quorum threshold in basis points.
+    #[norito(default)]
+    pub required_stake_quorum_bps: u16,
+    /// Selected repair fanout stake coverage in basis points.
+    #[norito(default)]
+    pub selected_stake_coverage_bps: u16,
+    /// Whether the latest selected fanout reached the stake quorum threshold.
+    #[norito(default)]
+    pub reached_stake_quorum_coverage: bool,
+}
+
 /// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2049,6 +2079,10 @@ pub struct SumeragiStatusWire {
     /// DELIVER-to-next-proposal gap snapshot.
     #[norito(default)]
     pub round_gap: SumeragiRoundGapStatus,
+    /// Observational NPoS repair fanout coverage, present only when locally recorded.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub npos_repair_coverage: Option<SumeragiNposRepairCoverageStatus>,
 }
 
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.

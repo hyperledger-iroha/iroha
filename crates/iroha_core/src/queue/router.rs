@@ -1394,9 +1394,15 @@ fn asset_definition_dataspace_target(
                     .ok()
                     .and_then(|definition| {
                         definition
-                            .id
-                            .try_domain()
-                            .map(|domain| domain.dataspace().as_ref().to_owned())
+                            .alias
+                            .as_ref()
+                            .map(|alias| alias.dataspace_segment().to_owned())
+                            .or_else(|| {
+                                definition
+                                    .id
+                                    .try_domain()
+                                    .map(|domain| domain.dataspace().as_ref().to_owned())
+                            })
                     })
             })
         })?;
@@ -1422,9 +1428,15 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
                 .ok()
                 .and_then(|definition| {
                     definition
-                        .id
-                        .try_domain()
-                        .map(|domain| domain.dataspace().as_ref().to_owned())
+                        .alias
+                        .as_ref()
+                        .map(|alias| alias.dataspace_segment().to_owned())
+                        .or_else(|| {
+                            definition
+                                .id
+                                .try_domain()
+                                .map(|domain| domain.dataspace().as_ref().to_owned())
+                        })
                 })
         })?;
     if dataspace_alias.eq_ignore_ascii_case("universal") {
@@ -1692,6 +1704,7 @@ fn canonical_dataspace_route(
         .filter(|lane| lane.dataspace_id == dataspace_id)
         .map(|lane| lane.id)
         .min()
+        .or_else(|| legacy_single_lane_for_dataspace(dataspace_id, lane_catalog))
         .ok_or(RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
 
     resolve_routing_decision(
@@ -1791,6 +1804,12 @@ pub fn resolve_routing_decision(
     }
 
     if lane.dataspace_id != decision.dataspace_id {
+        if lane.id == LaneId::SINGLE
+            && lane.dataspace_id == DataSpaceId::UNIVERSAL
+            && legacy_single_lane_for_dataspace(decision.dataspace_id, lane_catalog).is_some()
+        {
+            return Ok(decision);
+        }
         return Err(RoutingResolveError::LaneDataspaceMismatch {
             lane_id: lane.id,
             lane_dataspace_id: lane.dataspace_id,
@@ -1799,6 +1818,27 @@ pub fn resolve_routing_decision(
     }
 
     Ok(decision)
+}
+
+fn legacy_single_lane_for_dataspace(
+    dataspace_id: DataSpaceId,
+    lane_catalog: &LaneCatalog,
+) -> Option<LaneId> {
+    if dataspace_id == DataSpaceId::UNIVERSAL {
+        return None;
+    }
+    let has_dataspace_lane = lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| lane.dataspace_id == dataspace_id);
+    if has_dataspace_lane {
+        return None;
+    }
+    lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == LaneId::SINGLE && lane.dataspace_id == DataSpaceId::UNIVERSAL)
+        .map(|lane| lane.id)
 }
 
 fn rule_matches(
@@ -3775,6 +3815,144 @@ mod tests {
                 .try_route_with_view(&tx, &state.view())
                 .expect("opaque asset transfer route must resolve with state"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_transfer_uses_stored_asset_alias_dataspace() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(opaque_asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), opaque_asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            opaque_asset_definition.clone(),
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("opaque asset transfer route must resolve with alias"),
+            RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn opaque_asset_transfer_uses_single_lane_legacy_dataspace_fallback() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog =
+            catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(opaque_asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), opaque_asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            opaque_asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("legacy single-lane route must preserve dataspace target"),
+            RoutingDecision::new(LaneId::SINGLE, dataspace_id)
         );
     }
 

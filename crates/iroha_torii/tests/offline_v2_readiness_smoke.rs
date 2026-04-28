@@ -9,7 +9,9 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
-use iroha_data_model::{ChainId, peer::PeerId};
+use iroha_data_model::{
+    ChainId, offline::offline_note_v2_recursive_public_inputs_schema_hash, peer::PeerId,
+};
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -130,8 +132,14 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
             "\"offline_recursive_note_proof_circuit_id\":\"offline-note-v2-recursive-v1\""
         )
     );
+    let schema_hash = hex::encode(offline_note_v2_recursive_public_inputs_schema_hash());
+    assert!(body.contains(&format!(
+        "\"offline_recursive_note_proof_public_inputs_schema_hash\":\"{schema_hash}\""
+    )));
     assert!(body.contains("\"offline_recursive_note_proof_public_instance_columns\":16"));
-    assert!(body.contains("\"offline_recursive_note_proof_verifier_key_id\""));
+    assert!(body.contains(
+        "\"offline_recursive_note_proof_verifier_key_id\":{\"backend\":\"halo2/ipa\",\"name\":\"offline-note-v2-recursive-v1\"}"
+    ));
     assert!(body.contains("\"offline_fountain_qr_v1\":true"));
     assert!(body.contains("\"offline_sync_optional\":true"));
     assert!(body.contains("\"offline_telemetry\":true"));

@@ -66,8 +66,10 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let sender_account_id_string = sender_account_id.to_string();
     let recipient_account_id_string = recipient_account_id.to_string();
 
-    let asset_definition_id =
-        AssetDefinitionId::new(DomainId::try_new("sbp", "universal")?, "pk_cbdc".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("paynet", "universal")?,
+        "pk_cbdc".parse()?,
+    );
     let asset_definition_id_string = asset_definition_id.canonical_address();
     let sender_asset_id = AssetId::new(asset_definition_id.clone(), sender_account_id.clone());
     let recipient_asset_id =

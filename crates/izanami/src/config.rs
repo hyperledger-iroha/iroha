@@ -57,6 +57,9 @@ pub struct IzanamiArgs {
     /// Maximum time without block progress before failing when a target is set.
     #[arg(long, default_value = "120s", value_parser = parse_duration)]
     pub progress_timeout: Duration,
+    /// Bounded grace period for draining spawned submission tasks after workload shutdown.
+    #[arg(long, default_value = "15s", value_parser = parse_duration)]
+    pub shutdown_drain_timeout: Duration,
     /// Optional p95 block-interval threshold enforced when `target_blocks` is set.
     #[arg(long, value_parser = parse_duration)]
     pub latency_p95_threshold: Option<Duration>,
@@ -120,6 +123,7 @@ pub enum WorkloadProfile {
 
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 /// Minimum pipeline time accepted by the test-network builder (must stay in sync).
 pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 
@@ -379,6 +383,7 @@ pub struct ChaosConfig {
     pub target_blocks: Option<u64>,
     pub progress_interval: Duration,
     pub progress_timeout: Duration,
+    pub shutdown_drain_timeout: Duration,
     pub latency_p95_threshold: Option<Duration>,
     pub fault_window_start: Option<Duration>,
     pub fault_window_end: Option<Duration>,
@@ -434,6 +439,9 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         }
         if args.progress_timeout.is_zero() {
             return Err(eyre!("progress_timeout must be greater than zero"));
+        }
+        if args.shutdown_drain_timeout.is_zero() {
+            return Err(eyre!("shutdown_drain_timeout must be greater than zero"));
         }
         if args.progress_interval > args.progress_timeout {
             return Err(eyre!(
@@ -527,6 +535,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             target_blocks,
             progress_interval,
             progress_timeout,
+            shutdown_drain_timeout,
             latency_p95_threshold,
             fault_window_start,
             fault_window_end,
@@ -559,6 +568,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             target_blocks,
             progress_interval,
             progress_timeout,
+            shutdown_drain_timeout,
             latency_p95_threshold,
             fault_window_start,
             fault_window_end,
@@ -601,6 +611,7 @@ impl IzanamiArgs {
             target_blocks: cfg.target_blocks,
             progress_interval: cfg.progress_interval,
             progress_timeout: cfg.progress_timeout,
+            shutdown_drain_timeout: cfg.shutdown_drain_timeout,
             latency_p95_threshold: cfg.latency_p95_threshold,
             fault_window_start: cfg.fault_window_start,
             fault_window_end: cfg.fault_window_end,
@@ -1066,6 +1077,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1106,6 +1118,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1138,6 +1151,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1175,6 +1189,7 @@ mod tests {
             target_blocks: Some(0),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1210,6 +1225,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1298,6 +1314,7 @@ mod tests {
             target_blocks: Some(5),
             progress_interval: Duration::from_secs(10),
             progress_timeout: Duration::from_secs(5),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1335,6 +1352,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1372,6 +1390,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1409,6 +1428,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1446,6 +1466,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: Some(Duration::from_millis(900)),
             fault_window_start: None,
             fault_window_end: None,
@@ -1483,6 +1504,7 @@ mod tests {
             target_blocks: Some(5),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: Some(Duration::ZERO),
             fault_window_start: None,
             fault_window_end: None,
@@ -1565,6 +1587,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -1602,6 +1625,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
