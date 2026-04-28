@@ -356,9 +356,30 @@ impl Actor {
             {
                 return None;
             }
-            self.vote_signer_peer(existing)
-                .filter(|peer| peer == local_peer)
-                .map(|_| existing.clone())
+            let signer_matches_local = match self.vote_signer_peer(existing) {
+                Some(peer) => peer == *local_peer,
+                None => {
+                    let (consensus_mode, mode_tag, prf_seed) =
+                        self.consensus_context_for_height(existing.height);
+                    let live_roster =
+                        self.roster_for_live_vote_with_mode(existing.height, consensus_mode);
+                    if live_roster.is_empty() {
+                        false
+                    } else {
+                        let topology = super::network_topology::Topology::new(live_roster);
+                        let signature_topology = topology_for_view(
+                            &topology,
+                            existing.height,
+                            existing.view,
+                            mode_tag,
+                            prf_seed,
+                        );
+                        self.local_validator_index_for_topology(&signature_topology)
+                            == Some(existing.signer)
+                    }
+                }
+            };
+            signer_matches_local.then(|| existing.clone())
         })
     }
 
@@ -941,7 +962,7 @@ impl Actor {
                     .get(idx)
                     .cloned()
             });
-            let _ = self.handle_frontier_slot_event(
+            let _ = self.apply_frontier_slot_event(
                 now,
                 super::FrontierSlotEvent::OnVoteObserved {
                     block_hash: vote.block_hash,
