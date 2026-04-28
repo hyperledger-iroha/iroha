@@ -321,6 +321,14 @@ static EFFECTIVE_NPOS_TIMEOUTS_DA_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_NPOS_TIMEOUTS_AGGREGATOR_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_NPOS_TIMEOUTS_EXEC_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_NPOS_TIMEOUTS_WITNESS_MS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_SET: AtomicBool = AtomicBool::new(false);
+static NPOS_REPAIR_COVERAGE_HEIGHT: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_VIEW: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_PEERS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_REQUIRED_BPS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_SELECTED_BPS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_REACHED: AtomicBool = AtomicBool::new(false);
+static NPOS_REPAIR_COVERAGE_REASON: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 #[allow(dead_code)]
 static MODE_FLIP_KILL_SWITCH: AtomicBool = AtomicBool::new(true);
 #[allow(dead_code)]
@@ -2005,6 +2013,75 @@ fn effective_npos_timeouts_snapshot() -> Option<NposTimeoutsSnapshot> {
     })
 }
 
+/// Record the latest local NPoS repair fanout coverage selection.
+pub fn record_npos_repair_coverage(
+    height: u64,
+    view: u64,
+    reason: &str,
+    selected_peer_count: usize,
+    required_stake_quorum_bps: u16,
+    selected_stake_coverage_bps: u16,
+    reached_stake_quorum_coverage: bool,
+) {
+    NPOS_REPAIR_COVERAGE_HEIGHT.store(height, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_VIEW.store(view, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_PEERS.store(selected_peer_count as u64, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REQUIRED_BPS
+        .store(u64::from(required_stake_quorum_bps), Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_SELECTED_BPS
+        .store(u64::from(selected_stake_coverage_bps), Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REACHED.store(reached_stake_quorum_coverage, Ordering::Relaxed);
+    if let Ok(mut slot) = NPOS_REPAIR_COVERAGE_REASON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *slot = Some(reason.to_owned());
+    }
+    NPOS_REPAIR_COVERAGE_SET.store(true, Ordering::Release);
+}
+
+fn npos_repair_coverage_snapshot() -> Option<NposRepairCoverageSnapshot> {
+    if !NPOS_REPAIR_COVERAGE_SET.load(Ordering::Acquire) {
+        return None;
+    }
+    let reason = NPOS_REPAIR_COVERAGE_REASON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_default();
+    Some(NposRepairCoverageSnapshot {
+        last_repair_height: NPOS_REPAIR_COVERAGE_HEIGHT.load(Ordering::Relaxed),
+        last_repair_view: NPOS_REPAIR_COVERAGE_VIEW.load(Ordering::Relaxed),
+        reason,
+        selected_repair_peer_count: NPOS_REPAIR_COVERAGE_PEERS.load(Ordering::Relaxed),
+        required_stake_quorum_bps: NPOS_REPAIR_COVERAGE_REQUIRED_BPS
+            .load(Ordering::Relaxed)
+            .min(u64::from(u16::MAX)) as u16,
+        selected_stake_coverage_bps: NPOS_REPAIR_COVERAGE_SELECTED_BPS
+            .load(Ordering::Relaxed)
+            .min(u64::from(u16::MAX)) as u16,
+        reached_stake_quorum_coverage: NPOS_REPAIR_COVERAGE_REACHED.load(Ordering::Relaxed),
+    })
+}
+
+#[cfg(test)]
+fn reset_npos_repair_coverage_for_tests() {
+    NPOS_REPAIR_COVERAGE_SET.store(false, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_HEIGHT.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_VIEW.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_PEERS.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REQUIRED_BPS.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_SELECTED_BPS.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REACHED.store(false, Ordering::Relaxed);
+    if let Ok(mut slot) = NPOS_REPAIR_COVERAGE_REASON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *slot = None;
+    }
+}
+
 /// Record the latest deterministic membership view hash snapshot.
 pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u64) {
     MEMBERSHIP_HEIGHT.store(height, Ordering::Relaxed);
@@ -3245,6 +3322,25 @@ pub struct NposTimeoutsSnapshot {
     pub witness_ms: u64,
 }
 
+/// Observational NPoS repair fanout stake coverage.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NposRepairCoverageSnapshot {
+    /// Last height for which a repair fanout selection was recorded.
+    pub last_repair_height: u64,
+    /// Last view for which a repair fanout selection was recorded.
+    pub last_repair_view: u64,
+    /// Operator-facing reason label for the latest repair selection.
+    pub reason: String,
+    /// Number of peers selected for the latest repair fanout.
+    pub selected_repair_peer_count: u64,
+    /// Required stake quorum threshold in basis points.
+    pub required_stake_quorum_bps: u16,
+    /// Selected repair fanout stake coverage in basis points.
+    pub selected_stake_coverage_bps: u16,
+    /// Whether the latest selected fanout reached the stake quorum threshold.
+    pub reached_stake_quorum_coverage: bool,
+}
+
 /// Snapshot of the most recent commit certificate (summary only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QcSnapshot {
@@ -3552,6 +3648,8 @@ pub struct StatusSnapshot {
     pub effective_pacemaker_interval_ms: u64,
     /// Effective NPoS timeouts for the active mode (ms).
     pub effective_npos_timeouts: Option<NposTimeoutsSnapshot>,
+    /// Observational NPoS repair fanout coverage.
+    pub npos_repair_coverage: Option<NposRepairCoverageSnapshot>,
     /// Effective collector count (K) for the active mode.
     pub effective_collectors_k: u64,
     /// Effective redundant send fanout (r) for the active mode.
@@ -4515,6 +4613,11 @@ pub fn snapshot() -> StatusSnapshot {
         epoch_commit_deadline_offset = 0;
         epoch_reveal_deadline_offset = 0;
     }
+    let npos_repair_coverage = if mode_tag == crate::sumeragi::consensus::NPOS_TAG {
+        npos_repair_coverage_snapshot()
+    } else {
+        None
+    };
     let recent_evictions = recent_rbc_evictions();
     let pending_rbc = pending_rbc_snapshot();
     let (lane_governance_sealed_total, lane_governance_sealed_aliases, lane_governance_entries) =
@@ -4583,6 +4686,7 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         effective_pacemaker_interval_ms: EFFECTIVE_PACEMAKER_INTERVAL_MS.load(Ordering::Relaxed),
         effective_npos_timeouts: effective_npos_timeouts_snapshot(),
+        npos_repair_coverage,
         effective_collectors_k: EFFECTIVE_COLLECTORS_K.load(Ordering::Relaxed),
         effective_redundant_send_r: EFFECTIVE_REDUNDANT_SEND_R.load(Ordering::Relaxed),
         mode_activation_lag_blocks,
@@ -8159,7 +8263,7 @@ mod tests {
         ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
-    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase, QcAggregate};
+    use crate::sumeragi::consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate};
 
     #[test]
     fn locked_qc_updates_monotonically() {
@@ -8274,6 +8378,33 @@ mod tests {
 
         super::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, 0, None);
         assert!(super::snapshot().effective_npos_timeouts.is_none());
+    }
+
+    #[test]
+    fn npos_repair_coverage_snapshot_is_npos_only() {
+        let _guard = super::mode_tags_test_guard();
+        super::reset_npos_repair_coverage_for_tests();
+        super::set_mode_tags(PERMISSIONED_TAG, None, None);
+        super::record_npos_repair_coverage(12, 3, "missing_commit_votes", 2, 6_667, 7_500, true);
+        assert!(
+            super::snapshot().npos_repair_coverage.is_none(),
+            "permissioned status must not surface NPoS repair coverage"
+        );
+
+        super::set_mode_tags(NPOS_TAG, None, None);
+        let coverage = super::snapshot()
+            .npos_repair_coverage
+            .expect("npos repair coverage should be present");
+        assert_eq!(coverage.last_repair_height, 12);
+        assert_eq!(coverage.last_repair_view, 3);
+        assert_eq!(coverage.reason, "missing_commit_votes");
+        assert_eq!(coverage.selected_repair_peer_count, 2);
+        assert_eq!(coverage.required_stake_quorum_bps, 6_667);
+        assert_eq!(coverage.selected_stake_coverage_bps, 7_500);
+        assert!(coverage.reached_stake_quorum_coverage);
+
+        super::reset_npos_repair_coverage_for_tests();
+        super::set_mode_tags("", None, None);
     }
 
     #[test]

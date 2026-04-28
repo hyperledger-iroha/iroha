@@ -90,6 +90,9 @@ fn merge_with_overrides(
     if is_cli_source(matches, "progress_timeout") {
         base.progress_timeout = overrides.progress_timeout;
     }
+    if is_cli_source(matches, "shutdown_drain_timeout") {
+        base.shutdown_drain_timeout = overrides.shutdown_drain_timeout;
+    }
     if is_cli_source(matches, "latency_p95_threshold") {
         base.latency_p95_threshold = overrides.latency_p95_threshold;
     }
@@ -215,6 +218,7 @@ mod tests {
         persisted.target_blocks = Some(256);
         persisted.progress_interval = Duration::from_secs(9);
         persisted.progress_timeout = Duration::from_secs(90);
+        persisted.shutdown_drain_timeout = Duration::from_secs(17);
         persisted.fault_window_start = Some(Duration::from_secs(13));
         persisted.fault_window_end = Some(Duration::from_secs(26));
         persisted.seed = Some(13);
@@ -243,6 +247,10 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+        assert_eq!(
+            merged.shutdown_drain_timeout,
+            persisted.shutdown_drain_timeout
+        );
         assert_eq!(merged.fault_window_start, persisted.fault_window_start);
         assert_eq!(merged.fault_window_end, persisted.fault_window_end);
         assert_eq!(merged.seed, persisted.seed);
@@ -264,6 +272,7 @@ mod tests {
         persisted.target_blocks = Some(42);
         persisted.progress_interval = Duration::from_secs(5);
         persisted.progress_timeout = Duration::from_secs(50);
+        persisted.shutdown_drain_timeout = Duration::from_secs(31);
         persisted.fault_window_start = Some(Duration::from_secs(5));
         persisted.fault_window_end = Some(Duration::from_secs(10));
 
@@ -284,6 +293,10 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+        assert_eq!(
+            merged.shutdown_drain_timeout,
+            persisted.shutdown_drain_timeout
+        );
         assert_eq!(merged.fault_window_start, persisted.fault_window_start);
         assert_eq!(merged.fault_window_end, persisted.fault_window_end);
     }
@@ -331,6 +344,23 @@ mod tests {
             merged.latency_p95_threshold,
             Some(Duration::from_millis(900))
         );
+    }
+
+    #[test]
+    fn cli_overrides_shutdown_drain_timeout() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.shutdown_drain_timeout = Duration::from_secs(9);
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--tui".to_string(),
+            "--shutdown-drain-timeout".to_string(),
+            "60s".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+        assert_eq!(merged.shutdown_drain_timeout, Duration::from_secs(60));
     }
 
     #[test]

@@ -747,9 +747,9 @@ test("buildRegisterAccountInstruction defaults metadata and validates", () => {
 test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
   const instruction = buildRegisterAssetDefinitionInstruction({
     assetDefinitionId: ASSET_DEFINITION_ID,
-    name: "shekel",
-    description: "Bank of Israel PoC asset",
-    alias: "shekel#boi.main",
+    name: "demo",
+    description: "Demo settlement PoC asset",
+    alias: "demo#settlement.main",
     scale: 2,
     metadata: { purpose: "poc" },
   });
@@ -757,9 +757,9 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
     Register: {
       AssetDefinition: {
         id: ASSET_DEFINITION_ID,
-        name: "shekel",
-        description: "Bank of Israel PoC asset",
-        alias: "shekel#boi.main",
+        name: "demo",
+        description: "Demo settlement PoC asset",
+        alias: "demo#settlement.main",
         spec: { scale: 2 },
         mintable: "Infinitely",
         logo: null,

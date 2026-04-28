@@ -3308,6 +3308,7 @@ impl IzanamiRunner {
             IngressEndpointPoolConfig::default(),
             Arc::clone(&ingress_stats),
         ));
+        let sumeragi_status_start = sample_sumeragi_status_digest(&self.peers).await.ok();
         if uses_sumeragi_leader_fault_targeting(&self.config) {
             info!(
                 target: "izanami::faults",
@@ -3362,6 +3363,8 @@ impl IzanamiRunner {
 
         let soft_target_kpi =
             self.config.target_blocks.is_some() && is_shared_host_stable_soak(&self.config);
+        let fault_start_at = fault_window_start_at(&self.config, run_started_at, deadline);
+        let fault_end_at = fault_window_end_at(&self.config, run_started_at, deadline);
         let target_result = if let Some(target_blocks) = self.config.target_blocks {
             wait_for_target_blocks(
                 &self.peers,
@@ -3374,6 +3377,8 @@ impl IzanamiRunner {
                 Some(ingress_pool.as_ref()),
                 Some(metrics.as_ref()),
                 soft_target_kpi,
+                fault_start_at,
+                fault_end_at,
             )
             .await
         } else {
@@ -3382,13 +3387,17 @@ impl IzanamiRunner {
                 &self.peers,
                 self.config.faulty_peers,
                 Some(ingress_pool.as_ref()),
+                fault_start_at,
+                fault_end_at,
             )
             .await
         };
 
         let mut run_error = None;
+        let mut progress_snapshot = None;
         match target_result {
             Ok(target_progress) => {
+                progress_snapshot = Some(target_progress);
                 if soft_target_kpi && let Some(target_blocks) = self.config.target_blocks {
                     if target_progress.target_reached {
                         info!(
@@ -3438,6 +3447,17 @@ impl IzanamiRunner {
             await_worker_shutdown_with_timeout(vec![handle], "audit", shutdown_timeout).await;
         }
         await_worker_shutdown_with_timeout(faulty_handles, "fault", shutdown_timeout).await;
+        let sumeragi_status_delta = if run_error.is_none() {
+            match (
+                sumeragi_status_start,
+                sample_sumeragi_status_digest(&self.peers).await.ok(),
+            ) {
+                (Some(start), Some(end)) => Some(end.delta_from(start)),
+                _ => None,
+            }
+        } else {
+            None
+        };
         if run_error.is_none() {
             self.network.shutdown().await;
         }
@@ -3459,6 +3479,14 @@ impl IzanamiRunner {
                 confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
                 confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
                 confirmation_shutdown_noise = snapshot.confirmation_shutdown_noise,
+                submit_plans_started = snapshot.submit_plans_started,
+                submit_plans_shutdown_skipped = snapshot.submit_plans_shutdown_skipped,
+                submit_tasks_shutdown_aborted = snapshot.submit_tasks_shutdown_aborted,
+                submit_latency_samples = snapshot.submit_latency_samples,
+                submit_latency_p50_ms = snapshot.submit_latency_p50_ms,
+                submit_latency_p95_ms = snapshot.submit_latency_p95_ms,
+                submit_latency_p99_ms = snapshot.submit_latency_p99_ms,
+                submit_latency_max_ms = snapshot.submit_latency_max_ms,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
@@ -3470,6 +3498,12 @@ impl IzanamiRunner {
                 submitters = snapshot.submitters,
                 izanami_ingress_failover_total = ingress_snapshot.failover_total,
                 izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                final_quorum_min_height = progress_snapshot.map(|progress| progress.quorum_min_height),
+                final_strict_min_height = progress_snapshot.map(|progress| progress.strict_min_height),
+                final_max_peer_height_skew = progress_snapshot.map(|progress| progress.max_peer_height_skew),
+                first_progress_after_fault_start_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_start_height),
+                first_progress_after_fault_end_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_end_height),
+                ?sumeragi_status_delta,
                 ?ingress_endpoint_stats,
                 ?err,
                 "izanami run finished with errors"
@@ -3489,6 +3523,14 @@ impl IzanamiRunner {
                 confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
                 confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
                 confirmation_shutdown_noise = snapshot.confirmation_shutdown_noise,
+                submit_plans_started = snapshot.submit_plans_started,
+                submit_plans_shutdown_skipped = snapshot.submit_plans_shutdown_skipped,
+                submit_tasks_shutdown_aborted = snapshot.submit_tasks_shutdown_aborted,
+                submit_latency_samples = snapshot.submit_latency_samples,
+                submit_latency_p50_ms = snapshot.submit_latency_p50_ms,
+                submit_latency_p95_ms = snapshot.submit_latency_p95_ms,
+                submit_latency_p99_ms = snapshot.submit_latency_p99_ms,
+                submit_latency_max_ms = snapshot.submit_latency_max_ms,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
@@ -3500,6 +3542,12 @@ impl IzanamiRunner {
                 submitters = snapshot.submitters,
                 izanami_ingress_failover_total = ingress_snapshot.failover_total,
                 izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                final_quorum_min_height = progress_snapshot.map(|progress| progress.quorum_min_height),
+                final_strict_min_height = progress_snapshot.map(|progress| progress.strict_min_height),
+                final_max_peer_height_skew = progress_snapshot.map(|progress| progress.max_peer_height_skew),
+                first_progress_after_fault_start_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_start_height),
+                first_progress_after_fault_end_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_end_height),
+                ?sumeragi_status_delta,
                 ?ingress_endpoint_stats,
                 "izanami run complete"
             );
@@ -3766,6 +3814,7 @@ impl IzanamiRunner {
         let backlog_limit = submission_backlog_limit(submission_max_inflight);
         let per_submitter_interval =
             Duration::from_secs_f64(self.config.submitters as f64 / submission_tps);
+        let shutdown_drain_timeout = self.config.shutdown_drain_timeout;
         (0..self.config.submitters)
             .map(|submitter_idx| {
                 let mut load_rng = StdRng::seed_from_u64(rng.next_u64());
@@ -3784,17 +3833,34 @@ impl IzanamiRunner {
                     let start = Instant::now();
                     let mut next_tick = start + phase_delay;
                     let mut submissions = JoinSet::new();
+                    let mut shutdown_skip_recorded = false;
                     while !run_control.should_stop() {
                         tokio::select! {
                             () = time::sleep_until(next_tick.into()) => {},
-                            () = stop_notify.notified() => break,
-                            () = time::sleep_until(deadline.into()) => break,
+                            () = stop_notify.notified() => {
+                                record_submit_plan_shutdown_skip_once(
+                                    &metrics,
+                                    &mut shutdown_skip_recorded,
+                                );
+                                break;
+                            },
+                            () = time::sleep_until(deadline.into()) => {
+                                record_submit_plan_shutdown_skip_once(
+                                    &metrics,
+                                    &mut shutdown_skip_recorded,
+                                );
+                                break;
+                            },
                         }
                         next_tick = next_tick
                             .checked_add(per_submitter_interval)
                             .unwrap_or(deadline);
                         drain_ready_submissions(&mut submissions);
                         if run_control.should_stop() {
+                            record_submit_plan_shutdown_skip_once(
+                                &metrics,
+                                &mut shutdown_skip_recorded,
+                            );
                             break;
                         }
                         if !wait_for_submission_capacity(
@@ -3805,9 +3871,19 @@ impl IzanamiRunner {
                         )
                         .await
                         {
+                            if run_control.should_stop() || Instant::now() >= deadline {
+                                record_submit_plan_shutdown_skip_once(
+                                    &metrics,
+                                    &mut shutdown_skip_recorded,
+                                );
+                            }
                             break;
                         }
                         if run_control.should_stop() {
+                            record_submit_plan_shutdown_skip_once(
+                                &metrics,
+                                &mut shutdown_skip_recorded,
+                            );
                             break;
                         }
                         if !submission_has_deadline_budget(
@@ -3815,6 +3891,10 @@ impl IzanamiRunner {
                             deadline,
                             submission_confirmation,
                         ) {
+                            record_submit_plan_shutdown_skip_once(
+                                &metrics,
+                                &mut shutdown_skip_recorded,
+                            );
                             debug!(
                                 target: "izanami::workload",
                                 submitter_idx,
@@ -3834,8 +3914,20 @@ impl IzanamiRunner {
                             );
                             tokio::select! {
                                 () = time::sleep(retry_after) => {},
-                                () = stop_notify.notified() => break,
-                                () = time::sleep_until(deadline.into()) => break,
+                                () = stop_notify.notified() => {
+                                    record_submit_plan_shutdown_skip_once(
+                                        &metrics,
+                                        &mut shutdown_skip_recorded,
+                                    );
+                                    break;
+                                },
+                                () = time::sleep_until(deadline.into()) => {
+                                    record_submit_plan_shutdown_skip_once(
+                                        &metrics,
+                                        &mut shutdown_skip_recorded,
+                                    );
+                                    break;
+                                },
                             }
                             continue;
                         }
@@ -3855,6 +3947,10 @@ impl IzanamiRunner {
                             deadline,
                             effective_submission_confirmation,
                         ) {
+                            record_submit_plan_shutdown_skip_once(
+                                &metrics,
+                                &mut shutdown_skip_recorded,
+                            );
                             debug!(
                                 target: "izanami::workload",
                                 submitter_idx,
@@ -3864,7 +3960,7 @@ impl IzanamiRunner {
                             wait_until_deadline_or_stop(stop_notify.as_ref(), deadline).await;
                             break;
                         }
-                        metrics.record_offered();
+                        metrics.record_submit_plan_started();
                         metrics.record_backlog_spawn();
                         let metrics = Arc::clone(&metrics);
                         let ingress_pool = Arc::clone(&ingress_pool);
@@ -3889,9 +3985,18 @@ impl IzanamiRunner {
                             .await;
                         });
                     }
-                    submissions.abort_all();
-                    while let Some(result) = submissions.join_next().await {
-                        let _ = result;
+                    let aborted =
+                        drain_submissions_for_shutdown(&mut submissions, shutdown_drain_timeout)
+                            .await;
+                    if aborted > 0 {
+                        metrics.record_submit_tasks_shutdown_aborted(aborted);
+                        warn!(
+                            target: "izanami::workload",
+                            submitter_idx,
+                            aborted,
+                            ?shutdown_drain_timeout,
+                            "submission drain timeout expired; aborted leftover tasks"
+                        );
                     }
                 })
             })
@@ -3988,6 +4093,44 @@ fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
     while let Some(result) = submissions.try_join_next() {
         let _ = result;
     }
+}
+
+fn record_submit_plan_shutdown_skip_once(metrics: &Metrics, recorded: &mut bool) {
+    if !*recorded {
+        metrics.record_submit_plan_shutdown_skipped();
+        *recorded = true;
+    }
+}
+
+async fn drain_submissions_for_shutdown(submissions: &mut JoinSet<()>, timeout: Duration) -> u64 {
+    if submissions.is_empty() {
+        return 0;
+    }
+    let deadline = Instant::now() + timeout;
+    while !submissions.is_empty() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default();
+        if remaining.is_zero() {
+            break;
+        }
+        match time::timeout(remaining, submissions.join_next()).await {
+            Ok(Some(result)) => {
+                let _ = result;
+                drain_ready_submissions(submissions);
+            }
+            Ok(None) => return 0,
+            Err(_) => break,
+        }
+    }
+    let aborted = submissions.len() as u64;
+    if aborted > 0 {
+        submissions.abort_all();
+        while let Some(result) = submissions.join_next().await {
+            let _ = result;
+        }
+    }
+    aborted
 }
 
 fn submission_backlog_limit(max_inflight: usize) -> usize {
@@ -4298,6 +4441,134 @@ async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSn
     .map_err(|err| format!("phase sampling task failed: {err}"))?
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SumeragiStatusDigest {
+    view_change_install_total: u64,
+    view_change_cause_total: u64,
+    commit_pipeline_last_total_ms: u64,
+    commit_pipeline_ema_total_ms: u64,
+    missing_block_fetch_total: u64,
+    rbc_store_pressure_level: u64,
+    rbc_store_evictions_total: u64,
+    rbc_store_backpressure_deferrals_total: u64,
+    rbc_store_persist_drops_total: u64,
+    pending_rbc_drops_total: u64,
+    pending_rbc_evicted_total: u64,
+    block_sync_roster_source_total: u64,
+    npos_repair_selected_stake_coverage_bps: u64,
+    npos_repair_reached_stake_quorum_coverage: bool,
+}
+
+impl SumeragiStatusDigest {
+    fn from_wire(wire: &iroha_data_model::block::consensus::SumeragiStatusWire) -> Self {
+        let view_change_cause_total = wire
+            .view_change_causes
+            .commit_failure_total
+            .saturating_add(wire.view_change_causes.quorum_timeout_total)
+            .saturating_add(wire.view_change_causes.stake_quorum_timeout_total)
+            .saturating_add(wire.view_change_causes.da_gate_total)
+            .saturating_add(wire.view_change_causes.censorship_evidence_total)
+            .saturating_add(wire.view_change_causes.missing_payload_total)
+            .saturating_add(wire.view_change_causes.missing_qc_total)
+            .saturating_add(wire.view_change_causes.validation_reject_total);
+        let block_sync_roster_source_total = wire
+            .block_sync_roster
+            .commit_qc_hint_total
+            .saturating_add(wire.block_sync_roster.checkpoint_hint_total)
+            .saturating_add(wire.block_sync_roster.commit_qc_history_total)
+            .saturating_add(wire.block_sync_roster.checkpoint_history_total)
+            .saturating_add(wire.block_sync_roster.roster_sidecar_total)
+            .saturating_add(wire.block_sync_roster.commit_roster_journal_total);
+        Self {
+            view_change_install_total: wire.view_change_install_total,
+            view_change_cause_total,
+            commit_pipeline_last_total_ms: wire.commit_pipeline.last_total_ms,
+            commit_pipeline_ema_total_ms: wire.commit_pipeline.ema_total_ms,
+            missing_block_fetch_total: wire.missing_block_fetch.total,
+            rbc_store_pressure_level: u64::from(wire.rbc_store.pressure_level),
+            rbc_store_evictions_total: wire.rbc_store.evictions_total,
+            rbc_store_backpressure_deferrals_total: wire.rbc_store.backpressure_deferrals_total,
+            rbc_store_persist_drops_total: wire.rbc_store.persist_drops_total,
+            pending_rbc_drops_total: wire.pending_rbc.drops_total,
+            pending_rbc_evicted_total: wire.pending_rbc.evicted_total,
+            block_sync_roster_source_total,
+            npos_repair_selected_stake_coverage_bps: wire
+                .npos_repair_coverage
+                .as_ref()
+                .map_or(0, |coverage| {
+                    u64::from(coverage.selected_stake_coverage_bps)
+                }),
+            npos_repair_reached_stake_quorum_coverage: wire
+                .npos_repair_coverage
+                .as_ref()
+                .is_some_and(|coverage| coverage.reached_stake_quorum_coverage),
+        }
+    }
+
+    fn delta_from(self, start: Self) -> Self {
+        Self {
+            view_change_install_total: self
+                .view_change_install_total
+                .saturating_sub(start.view_change_install_total),
+            view_change_cause_total: self
+                .view_change_cause_total
+                .saturating_sub(start.view_change_cause_total),
+            commit_pipeline_last_total_ms: self.commit_pipeline_last_total_ms,
+            commit_pipeline_ema_total_ms: self.commit_pipeline_ema_total_ms,
+            missing_block_fetch_total: self
+                .missing_block_fetch_total
+                .saturating_sub(start.missing_block_fetch_total),
+            rbc_store_pressure_level: self.rbc_store_pressure_level,
+            rbc_store_evictions_total: self
+                .rbc_store_evictions_total
+                .saturating_sub(start.rbc_store_evictions_total),
+            rbc_store_backpressure_deferrals_total: self
+                .rbc_store_backpressure_deferrals_total
+                .saturating_sub(start.rbc_store_backpressure_deferrals_total),
+            rbc_store_persist_drops_total: self
+                .rbc_store_persist_drops_total
+                .saturating_sub(start.rbc_store_persist_drops_total),
+            pending_rbc_drops_total: self
+                .pending_rbc_drops_total
+                .saturating_sub(start.pending_rbc_drops_total),
+            pending_rbc_evicted_total: self
+                .pending_rbc_evicted_total
+                .saturating_sub(start.pending_rbc_evicted_total),
+            block_sync_roster_source_total: self
+                .block_sync_roster_source_total
+                .saturating_sub(start.block_sync_roster_source_total),
+            npos_repair_selected_stake_coverage_bps: self.npos_repair_selected_stake_coverage_bps,
+            npos_repair_reached_stake_quorum_coverage: self
+                .npos_repair_reached_stake_quorum_coverage,
+        }
+    }
+}
+
+async fn sample_sumeragi_status_digest(
+    peers: &[NetworkPeer],
+) -> Result<SumeragiStatusDigest, String> {
+    if peers.is_empty() {
+        return Err("no peers available for status sampling".to_owned());
+    }
+    let peers = peers.to_vec();
+    spawn_blocking(move || {
+        let mut last_error = None;
+        for peer in peers {
+            let mut client = peer.client();
+            client.set_operator_key_pair(sumeragi_phase_operator_keypair());
+            match client.get_sumeragi_status() {
+                Ok(status) => return Ok(SumeragiStatusDigest::from_wire(&status)),
+                Err(err) => {
+                    last_error = Some(format!("failed to fetch sumeragi status snapshot: {err}"));
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| "no peers available for status sampling".to_owned()))
+    })
+    .await
+    .map_err(|err| format!("status sampling task failed: {err}"))?
+}
+
 impl BlockIntervalTracker {
     fn record(&mut self, blocks_advanced: u64, elapsed: Duration) -> Option<u64> {
         if blocks_advanced == 0 {
@@ -4386,6 +4657,21 @@ struct TargetProgressResult {
     target_reached: bool,
     quorum_min_height: u64,
     strict_min_height: u64,
+    max_peer_height_skew: u64,
+    first_progress_after_fault_start_height: Option<u64>,
+    first_progress_after_fault_end_height: Option<u64>,
+}
+
+fn max_peer_height_skew_from_samples(heights: &[u64]) -> u64 {
+    let Some(min_height) = heights.iter().copied().min() else {
+        return 0;
+    };
+    heights
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(min_height)
+        .saturating_sub(min_height)
 }
 
 async fn wait_for_duration_deadline(
@@ -4393,6 +4679,8 @@ async fn wait_for_duration_deadline(
     peers: &[NetworkPeer],
     configured_faulty_peers: usize,
     ingress_pool: Option<&IngressEndpointPool>,
+    fault_start_at: Instant,
+    fault_end_at: Instant,
 ) -> Result<TargetProgressResult> {
     if run_control.stop_requested() {
         return Err(eyre!("izanami run stopped before duration completed"));
@@ -4408,17 +4696,26 @@ async fn wait_for_duration_deadline(
             let quorum_min_height =
                 quorum_min_height_from_samples(heights.clone(), tolerated_failures);
             let strict_min_height = heights.iter().copied().min().unwrap_or(0);
+            let max_peer_height_skew = max_peer_height_skew_from_samples(&heights);
+            let now = Instant::now();
+            let first_progress_after_fault_start_height =
+                (now >= fault_start_at && quorum_min_height > 0).then_some(quorum_min_height);
+            let first_progress_after_fault_end_height =
+                (now >= fault_end_at && quorum_min_height > 0).then_some(quorum_min_height);
             if let Some(ingress_pool) = ingress_pool {
                 ingress_pool.update_lag_snapshot(
                     quorum_min_height,
                     sampled_heights.as_slice(),
-                    Instant::now(),
+                    now,
                 );
             }
             info!(
                 target: "izanami::progress",
                 quorum_min_height,
                 strict_min_height,
+                max_peer_height_skew,
+                first_progress_after_fault_start_height,
+                first_progress_after_fault_end_height,
                 tolerated_failures,
                 sampled_peers = heights.len(),
                 "duration deadline reached with sampled block heights"
@@ -4427,6 +4724,9 @@ async fn wait_for_duration_deadline(
                 target_reached: false,
                 quorum_min_height,
                 strict_min_height,
+                max_peer_height_skew,
+                first_progress_after_fault_start_height,
+                first_progress_after_fault_end_height,
             })
         },
     }
@@ -4493,6 +4793,8 @@ async fn wait_for_target_blocks(
     ingress_pool: Option<&IngressEndpointPool>,
     metrics: Option<&Metrics>,
     target_blocks_soft_kpi: bool,
+    fault_start_at: Instant,
+    fault_end_at: Instant,
 ) -> Result<TargetProgressResult> {
     let start = Instant::now();
     let mut progress = ProgressState::new(start);
@@ -4502,6 +4804,9 @@ async fn wait_for_target_blocks(
     let mut block_intervals = BlockIntervalTracker::default();
     let mut strict_block_intervals = BlockIntervalTracker::default();
     let mut target_reached = false;
+    let mut max_peer_height_skew = 0u64;
+    let mut first_progress_after_fault_start_height = None;
+    let mut first_progress_after_fault_end_height = None;
     let tolerated_failures =
         effective_tolerated_peer_failures(peers.len(), configured_faulty_peers);
     let strict_divergence_window =
@@ -4513,6 +4818,8 @@ async fn wait_for_target_blocks(
         let now = Instant::now();
         let sampled_heights = sampled_peer_heights_with_ids(peers);
         let heights: Vec<_> = sampled_heights.iter().map(|(_, height)| *height).collect();
+        max_peer_height_skew =
+            max_peer_height_skew.max(max_peer_height_skew_from_samples(&heights));
         let strict_min_height = heights.iter().copied().min().unwrap_or(0);
         let min_height = quorum_min_height_from_samples(heights.clone(), tolerated_failures);
         if let Some(ingress_pool) = ingress_pool {
@@ -4542,6 +4849,9 @@ async fn wait_for_target_blocks(
                     target_reached,
                     quorum_min_height: min_height,
                     strict_min_height,
+                    max_peer_height_skew,
+                    first_progress_after_fault_start_height,
+                    first_progress_after_fault_end_height,
                 });
             }
             return Err(eyre!(
@@ -4590,6 +4900,28 @@ async fn wait_for_target_blocks(
                 target_blocks,
                 tolerated_failures
             ));
+        }
+        if min_height > progress.last_height {
+            if now >= fault_start_at && first_progress_after_fault_start_height.is_none() {
+                first_progress_after_fault_start_height = Some(min_height);
+                info!(
+                    target: "izanami::progress",
+                    quorum_min_height = min_height,
+                    strict_min_height,
+                    fault_start_elapsed = ?now.saturating_duration_since(fault_start_at),
+                    "first block height progress after fault window start"
+                );
+            }
+            if now >= fault_end_at && first_progress_after_fault_end_height.is_none() {
+                first_progress_after_fault_end_height = Some(min_height);
+                info!(
+                    target: "izanami::progress",
+                    quorum_min_height = min_height,
+                    strict_min_height,
+                    fault_end_elapsed = ?now.saturating_duration_since(fault_end_at),
+                    "first block height progress after fault window end"
+                );
+            }
         }
         if min_height >= target_blocks && !target_reached {
             target_reached = true;
@@ -4699,6 +5031,9 @@ async fn wait_for_target_blocks(
                     target_reached: true,
                     quorum_min_height: min_height,
                     strict_min_height,
+                    max_peer_height_skew,
+                    first_progress_after_fault_start_height,
+                    first_progress_after_fault_end_height,
                 });
             }
             info!(
@@ -4800,6 +5135,26 @@ async fn wait_for_target_blocks(
         }
 
         if let Some((blocks_advanced, elapsed)) = progress.update(now, min_height) {
+            if now >= fault_start_at && first_progress_after_fault_start_height.is_none() {
+                first_progress_after_fault_start_height = Some(min_height);
+                info!(
+                    target: "izanami::progress",
+                    quorum_min_height = min_height,
+                    strict_min_height,
+                    fault_start_elapsed = ?now.saturating_duration_since(fault_start_at),
+                    "first block height progress after fault window start"
+                );
+            }
+            if now >= fault_end_at && first_progress_after_fault_end_height.is_none() {
+                first_progress_after_fault_end_height = Some(min_height);
+                info!(
+                    target: "izanami::progress",
+                    quorum_min_height = min_height,
+                    strict_min_height,
+                    fault_end_elapsed = ?now.saturating_duration_since(fault_end_at),
+                    "first block height progress after fault window end"
+                );
+            }
             let interval_ms = block_intervals
                 .record(blocks_advanced, elapsed)
                 .unwrap_or_default();
@@ -4851,6 +5206,9 @@ async fn wait_for_target_blocks(
                     target_reached,
                     quorum_min_height: min_height,
                     strict_min_height,
+                    max_peer_height_skew,
+                    first_progress_after_fault_start_height,
+                    first_progress_after_fault_end_height,
                 });
             }
             return Err(eyre!(
@@ -5886,10 +6244,12 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
+    let started_at = Instant::now();
     let result = match spawn_blocking(blocking).await {
         Ok(result) => result,
         Err(err) => Err(err.into()),
     };
+    metrics.record_submit_latency(started_at.elapsed());
     let succeeded = result.is_ok();
     debug!(
         target: "izanami::workload",
@@ -5948,6 +6308,10 @@ where
 #[derive(Default)]
 struct Metrics {
     offered: AtomicU64,
+    submit_plans_started: AtomicU64,
+    submit_plans_shutdown_skipped: AtomicU64,
+    submit_tasks_shutdown_aborted: AtomicU64,
+    submit_latency_ms: StdMutex<Vec<u64>>,
     ingress_accepted: AtomicU64,
     blocking_applied_success: AtomicU64,
     confirmation_sampled: AtomicU64,
@@ -5974,8 +6338,26 @@ impl Metrics {
         self.submitters.store(count as u64, Ordering::Relaxed);
     }
 
-    fn record_offered(&self) {
+    fn record_submit_plan_started(&self) {
+        self.submit_plans_started.fetch_add(1, Ordering::Relaxed);
         self.offered.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_submit_plan_shutdown_skipped(&self) {
+        self.submit_plans_shutdown_skipped
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_submit_tasks_shutdown_aborted(&self, count: u64) {
+        self.submit_tasks_shutdown_aborted
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    fn record_submit_latency(&self, latency: Duration) {
+        let latency_ms = u64::try_from(latency.as_millis()).unwrap_or(u64::MAX);
+        if let Ok(mut samples) = self.submit_latency_ms.lock() {
+            samples.push(latency_ms);
+        }
     }
 
     fn record_ingress_accepted(&self) {
@@ -6057,8 +6439,26 @@ impl Metrics {
     }
 
     fn snapshot(&self) -> MetricsSnapshot {
+        let submit_latency = self
+            .submit_latency_ms
+            .lock()
+            .ok()
+            .map(|samples| LatencySummary::from_samples(&samples))
+            .unwrap_or_default();
         MetricsSnapshot {
             offered: self.offered.load(Ordering::Relaxed),
+            submit_plans_started: self.submit_plans_started.load(Ordering::Relaxed),
+            submit_plans_shutdown_skipped: self
+                .submit_plans_shutdown_skipped
+                .load(Ordering::Relaxed),
+            submit_tasks_shutdown_aborted: self
+                .submit_tasks_shutdown_aborted
+                .load(Ordering::Relaxed),
+            submit_latency_samples: submit_latency.samples,
+            submit_latency_p50_ms: submit_latency.p50_ms,
+            submit_latency_p95_ms: submit_latency.p95_ms,
+            submit_latency_p99_ms: submit_latency.p99_ms,
+            submit_latency_max_ms: submit_latency.max_ms,
             ingress_accepted: self.ingress_accepted.load(Ordering::Relaxed),
             blocking_applied_success: self.blocking_applied_success.load(Ordering::Relaxed),
             confirmation_sampled: self.confirmation_sampled.load(Ordering::Relaxed),
@@ -6124,9 +6524,51 @@ impl Drop for InflightGuard {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LatencySummary {
+    samples: u64,
+    p50_ms: u64,
+    p95_ms: u64,
+    p99_ms: u64,
+    max_ms: u64,
+}
+
+impl LatencySummary {
+    fn from_samples(samples: &[u64]) -> Self {
+        if samples.is_empty() {
+            return Self::default();
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        Self {
+            samples: sorted.len() as u64,
+            p50_ms: percentile_from_sorted(&sorted, 0.50),
+            p95_ms: percentile_from_sorted(&sorted, 0.95),
+            p99_ms: percentile_from_sorted(&sorted, 0.99),
+            max_ms: *sorted.last().unwrap_or(&0),
+        }
+    }
+}
+
+fn percentile_from_sorted(sorted: &[u64], percentile: f64) -> u64 {
+    debug_assert!(!sorted.is_empty());
+    debug_assert!((0.0..=1.0).contains(&percentile));
+    let len = sorted.len() as f64;
+    let rank = (len * percentile).ceil().clamp(1.0, len) as usize;
+    sorted[rank.saturating_sub(1)]
+}
+
 #[derive(Clone, Copy, Default)]
 struct MetricsSnapshot {
     offered: u64,
+    submit_plans_started: u64,
+    submit_plans_shutdown_skipped: u64,
+    submit_tasks_shutdown_aborted: u64,
+    submit_latency_samples: u64,
+    submit_latency_p50_ms: u64,
+    submit_latency_p95_ms: u64,
+    submit_latency_p99_ms: u64,
+    submit_latency_max_ms: u64,
     ingress_accepted: u64,
     blocking_applied_success: u64,
     confirmation_sampled: u64,
@@ -6162,8 +6604,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles, IzanamiArgs,
-        NexusProfile, WorkloadProfile,
+        DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+        FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
     };
     use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
@@ -6366,6 +6808,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6436,6 +6879,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6509,6 +6953,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6581,6 +7026,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6617,6 +7063,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6666,6 +7113,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6719,6 +7167,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6788,6 +7237,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -6871,6 +7321,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7045,6 +7496,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7141,6 +7593,7 @@ mod tests {
             target_blocks: Some(2_000),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7192,6 +7645,7 @@ mod tests {
             target_blocks: Some(2_000),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7252,6 +7706,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7292,6 +7747,7 @@ mod tests {
             target_blocks: Some(600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7329,6 +7785,7 @@ mod tests {
             target_blocks: Some(2_000),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7386,6 +7843,7 @@ mod tests {
             target_blocks: Some(200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7419,6 +7877,7 @@ mod tests {
             target_blocks: Some(200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7458,6 +7917,7 @@ mod tests {
             target_blocks: Some(200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7500,6 +7960,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7545,6 +8006,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7586,6 +8048,7 @@ mod tests {
             target_blocks: Some(200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7868,6 +8331,7 @@ mod tests {
             target_blocks: Some(1_200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7903,6 +8367,7 @@ mod tests {
             target_blocks: Some(1_200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7938,6 +8403,7 @@ mod tests {
             target_blocks: Some(600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -7970,6 +8436,7 @@ mod tests {
             target_blocks: Some(1_200),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -8063,6 +8530,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: Some(Duration::from_secs(2)),
             fault_window_start: None,
             fault_window_end: None,
@@ -8103,6 +8571,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -8433,6 +8902,27 @@ mod tests {
         )
         .await
         .expect("worker shutdown should return after aborting hung tasks");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_submission_drain_counts_aborted_tasks() {
+        let mut submissions = JoinSet::new();
+        submissions.spawn(async {});
+        submissions.spawn(async {
+            loop {
+                time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+
+        let aborted = timeout(
+            Duration::from_secs(1),
+            drain_submissions_for_shutdown(&mut submissions, Duration::from_millis(10)),
+        )
+        .await
+        .expect("submission drain should return after aborting hung submissions");
+
+        assert_eq!(aborted, 1);
+        assert!(submissions.is_empty());
     }
 
     #[test]
@@ -9586,6 +10076,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -9642,6 +10133,8 @@ mod tests {
             None,
             None,
             false,
+            Instant::now(),
+            Instant::now(),
         )
         .await?;
         assert!(progress.target_reached);
@@ -9668,6 +10161,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -9725,6 +10219,8 @@ mod tests {
             None,
             None,
             true,
+            Instant::now(),
+            Instant::now(),
         )
         .await?;
         assert!(
@@ -9757,6 +10253,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -9814,6 +10311,8 @@ mod tests {
             None,
             None,
             true,
+            Instant::now(),
+            Instant::now(),
         )
         .await;
         network.shutdown().await;
@@ -9845,6 +10344,8 @@ mod tests {
             None,
             None,
             true,
+            Instant::now(),
+            Instant::now(),
         )
         .await
         .expect_err("explicit stop must terminate target monitoring");
@@ -9866,6 +10367,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -10050,7 +10552,12 @@ mod tests {
     fn metrics_snapshot_accumulates_counts() {
         let metrics = Metrics::default();
         metrics.set_submitters(3);
-        metrics.record_offered();
+        metrics.record_submit_plan_started();
+        metrics.record_submit_plan_shutdown_skipped();
+        metrics.record_submit_tasks_shutdown_aborted(2);
+        metrics.record_submit_latency(Duration::from_millis(10));
+        metrics.record_submit_latency(Duration::from_millis(20));
+        metrics.record_submit_latency(Duration::from_millis(30));
         metrics.record_ingress_accepted();
         metrics.record_blocking_applied_success();
         metrics.record_confirmation_audit_sampled();
@@ -10073,6 +10580,14 @@ mod tests {
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.offered, 1);
+        assert_eq!(snapshot.submit_plans_started, 1);
+        assert_eq!(snapshot.submit_plans_shutdown_skipped, 1);
+        assert_eq!(snapshot.submit_tasks_shutdown_aborted, 2);
+        assert_eq!(snapshot.submit_latency_samples, 3);
+        assert_eq!(snapshot.submit_latency_p50_ms, 20);
+        assert_eq!(snapshot.submit_latency_p95_ms, 30);
+        assert_eq!(snapshot.submit_latency_p99_ms, 30);
+        assert_eq!(snapshot.submit_latency_max_ms, 30);
         assert_eq!(snapshot.ingress_accepted, 1);
         assert_eq!(snapshot.blocking_applied_success, 1);
         assert_eq!(snapshot.confirmation_sampled, 1);
@@ -10092,6 +10607,17 @@ mod tests {
         assert_eq!(snapshot.backlog_depth, 0);
         assert_eq!(snapshot.backlog_peak, 1);
         assert_eq!(snapshot.submitters, 3);
+    }
+
+    #[test]
+    fn latency_summary_uses_ceil_rank_percentiles() {
+        let summary = LatencySummary::from_samples(&[100, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+
+        assert_eq!(summary.samples, 10);
+        assert_eq!(summary.p50_ms, 50);
+        assert_eq!(summary.p95_ms, 100);
+        assert_eq!(summary.p99_ms, 100);
+        assert_eq!(summary.max_ms, 100);
     }
 
     #[test]
@@ -10187,6 +10713,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -10399,9 +10926,10 @@ mod tests {
     #[tokio::test]
     async fn wait_for_duration_deadline_completes_when_no_target_blocks_are_set() {
         let run_control = RunControl::new(Instant::now() + Duration::from_millis(5));
-        let result = wait_for_duration_deadline(&run_control, &[], 0, None)
-            .await
-            .expect("duration wait should complete normally");
+        let result =
+            wait_for_duration_deadline(&run_control, &[], 0, None, Instant::now(), Instant::now())
+                .await
+                .expect("duration wait should complete normally");
         assert!(!result.target_reached);
         assert_eq!(result.quorum_min_height, 0);
         assert_eq!(result.strict_min_height, 0);
@@ -10411,9 +10939,10 @@ mod tests {
     async fn wait_for_duration_deadline_reports_explicit_stop() {
         let run_control = RunControl::new(Instant::now() + Duration::from_secs(60));
         run_control.stop();
-        let err = wait_for_duration_deadline(&run_control, &[], 0, None)
-            .await
-            .expect_err("explicit stop should end duration wait with an error");
+        let err =
+            wait_for_duration_deadline(&run_control, &[], 0, None, Instant::now(), Instant::now())
+                .await
+                .expect_err("explicit stop should end duration wait with an error");
         assert!(
             err.to_string().contains("before duration completed"),
             "unexpected duration wait error: {err}"
@@ -10554,6 +11083,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -10996,6 +11526,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -11076,6 +11607,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -11188,6 +11720,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -11249,6 +11782,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -11305,6 +11839,7 @@ mod tests {
             target_blocks: Some(2_000),
             progress_interval: Duration::from_secs(10),
             progress_timeout: Duration::from_secs(600),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -11388,6 +11923,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
@@ -11437,6 +11973,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
             fault_window_start: None,
             fault_window_end: None,
