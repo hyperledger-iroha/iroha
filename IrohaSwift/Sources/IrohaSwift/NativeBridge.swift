@@ -2646,6 +2646,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return secp256k1Supported && hasAlgorithmEncoders
         case .mlDsa:
             return mldsaSupported && hasAlgorithmEncoders
+        case .blsNormal, .blsSmall,
+             .gost2012_256A, .gost2012_256B, .gost2012_256C,
+             .gost2012_512A, .gost2012_512B:
+            return publicKeyFromPrivateFn != nil
+                && signDetachedFn != nil
+                && verifyDetachedFn != nil
+                && hasAlgorithmEncoders
         }
         #else
         return false

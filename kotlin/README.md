@@ -140,6 +140,7 @@ import org.hyperledger.iroha.sdk.crypto.keystore.KeyGenParameters
 
 val ed25519Manager = IrohaKeyManager.withSoftwareProvider()
 val mlDsaManager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA)
+val gostManager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.GOST_2012_256_A)
 
 val tunedManager = IrohaKeyManager.withDefaultProviders(
     KeyGenParameters.Builder()
@@ -148,9 +149,10 @@ val tunedManager = IrohaKeyManager.withDefaultProviders(
 )
 ```
 
-`ED25519` remains the default. `ML_DSA` currently uses the shared native bridge
-and is software-only in this SDK pass, so hardware/StrongBox preferences fail
-fast instead of silently downgrading.
+`ED25519` remains the default. `SECP256K1`, `BLS_NORMAL`, `BLS_SMALL`,
+`ML_DSA`, the five `GOST_2012_*` variants, and `SM2` use the shared native
+bridge and are software-only in this SDK pass, so hardware/StrongBox
+preferences fail fast instead of silently downgrading.
 
 ## Resolving Account Aliases
 

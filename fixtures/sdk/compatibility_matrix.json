@@ -1,0 +1,347 @@
+{
+  "source": {
+    "repo": "hyperledger-iroha/iroha",
+    "repo_url": "https://github.com/hyperledger-iroha/iroha",
+    "branch": "i23-features",
+    "branch_url": "https://github.com/hyperledger-iroha/iroha/tree/i23-features",
+    "commit": "b530168a7468",
+    "generated_at": "2026-04-28"
+  },
+  "included_sdks": [
+    {
+      "name": "Rust"
+    },
+    {
+      "name": "Python"
+    },
+    {
+      "name": "JavaScript / TypeScript"
+    },
+    {
+      "name": "Kotlin / Android"
+    },
+    {
+      "name": "Java / Android"
+    },
+    {
+      "name": "Swift"
+    },
+    {
+      "name": "C# / .NET"
+    }
+  ],
+  "stories": [
+    {
+      "name": "Account address and I105 rendering",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Canonical Torii request signing",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Norito payload encoding and fixture parity",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Torii read, query, and RPC clients",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Transaction build, sign, submit, and status polling",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Core ledger flow builders",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Event, SSE, and subscription streams",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Multisig and policy TTL helpers",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Offline V2 and wallet readiness",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "SoraFS and gateway helpers",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "RWA/NFT explorer and instruction helpers",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "name": "Live testnet smoke lane",
+      "results": [
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        },
+        {
+          "status": "ok"
+        }
+      ]
+    }
+  ]
+}

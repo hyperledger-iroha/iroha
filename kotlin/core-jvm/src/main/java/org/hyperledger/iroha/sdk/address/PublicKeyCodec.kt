@@ -53,6 +53,9 @@ fun encodePublicKeyMultihash(curveId: Int, keyBytes: ByteArray): String {
 fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
     0x01 -> "ed25519"
     0x02 -> "ml-dsa"
+    0x03 -> "bls_normal"
+    0x04 -> "secp256k1"
+    0x05 -> "bls_small"
     0x0A -> "gost256a"
     0x0B -> "gost256b"
     0x0C -> "gost256c"
@@ -64,6 +67,9 @@ fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
 
 private fun curveIdForMultihashCode(code: Long): Int = when (code) {
     0xedL -> 0x01
+    0xeaL -> 0x03
+    0xebL -> 0x05
+    0xe7L -> 0x04
     0xeeL -> 0x02
     0x1200L -> 0x0A
     0x1201L -> 0x0B
@@ -77,6 +83,9 @@ private fun curveIdForMultihashCode(code: Long): Int = when (code) {
 private fun multihashCodeForCurveId(curveId: Int): Long = when (curveId) {
     0x01 -> 0xedL
     0x02 -> 0xeeL
+    0x03 -> 0xeaL
+    0x04 -> 0xe7L
+    0x05 -> 0xebL
     0x0A -> 0x1200L
     0x0B -> 0x1201L
     0x0C -> 0x1202L

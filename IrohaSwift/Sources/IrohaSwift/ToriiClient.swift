@@ -1841,6 +1841,20 @@ private enum ToriiIdentifierReceiptVerifier {
                 prefixedAlgorithm = .secp256k1
             case "ml-dsa", "mldsa":
                 prefixedAlgorithm = .mlDsa
+            case "bls_normal", "bls-normal", "blsnormal":
+                prefixedAlgorithm = .blsNormal
+            case "bls_small", "bls-small", "blssmall":
+                prefixedAlgorithm = .blsSmall
+            case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
+                prefixedAlgorithm = .gost2012_256A
+            case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
+                prefixedAlgorithm = .gost2012_256B
+            case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
+                prefixedAlgorithm = .gost2012_256C
+            case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
+                prefixedAlgorithm = .gost2012_512A
+            case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
+                prefixedAlgorithm = .gost2012_512B
             case "sm2":
                 prefixedAlgorithm = .sm2
             default:
@@ -1876,8 +1890,22 @@ private enum ToriiIdentifierReceiptVerifier {
             algorithm = .ed25519
         case 0xe7:
             algorithm = .secp256k1
+        case 0xea:
+            algorithm = .blsNormal
+        case 0xeb:
+            algorithm = .blsSmall
         case 0xee:
             algorithm = .mlDsa
+        case 0x1200:
+            algorithm = .gost2012_256A
+        case 0x1201:
+            algorithm = .gost2012_256B
+        case 0x1202:
+            algorithm = .gost2012_256C
+        case 0x1203:
+            algorithm = .gost2012_512A
+        case 0x1204:
+            algorithm = .gost2012_512B
         case 0x1306:
             algorithm = .sm2
         default:
@@ -1972,6 +2000,18 @@ private enum ToriiIdentifierReceiptVerifier {
                 throw ToriiClientError.invalidPayload("ML-DSA receipt verification is unavailable.")
             }
             return verified
+        case .blsNormal, .blsSmall,
+             .gost2012_256A, .gost2012_256B, .gost2012_256C,
+             .gost2012_512A, .gost2012_512B:
+            if let verified = NoritoNativeBridge.shared.verifyDetached(
+                algorithm: algorithm,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) {
+                return verified
+            }
+            throw ToriiClientError.invalidPayload("\(algorithm.wireName) receipt verification is unavailable.")
         }
     }
 

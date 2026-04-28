@@ -88,6 +88,12 @@ public final class PublicKeyCodec {
         return "ed25519";
       case 0x02:
         return "ml-dsa";
+      case 0x03:
+        return "bls_normal";
+      case 0x04:
+        return "secp256k1";
+      case 0x05:
+        return "bls_small";
       case 0x0A:
         return "gost256a";
       case 0x0B:
@@ -108,6 +114,15 @@ public final class PublicKeyCodec {
   private static int curveIdForMultihashCode(final long code) {
     if (code == 0xedL) {
       return 0x01;
+    }
+    if (code == 0xeaL) {
+      return 0x03;
+    }
+    if (code == 0xe7L) {
+      return 0x04;
+    }
+    if (code == 0xebL) {
+      return 0x05;
     }
     if (code == 0xeeL) {
       return 0x02;
@@ -139,6 +154,12 @@ public final class PublicKeyCodec {
         return 0xedL;
       case 0x02:
         return 0xeeL;
+      case 0x03:
+        return 0xeaL;
+      case 0x04:
+        return 0xe7L;
+      case 0x05:
+        return 0xebL;
       case 0x0A:
         return 0x1200L;
       case 0x0B:

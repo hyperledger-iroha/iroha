@@ -331,17 +331,23 @@ private extension CurveId {
         case .mldsa:
             return "mldsa"
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return "bls_normal"
+        case .blsSmall:
+            return "bls_small"
+        #endif
         #if IROHASWIFT_ENABLE_GOST
         case .gost256A:
-            return "gost3410_2012_256_paramset_a"
+            return "gost3410-2012-256-paramset-a"
         case .gost256B:
-            return "gost3410_2012_256_paramset_b"
+            return "gost3410-2012-256-paramset-b"
         case .gost256C:
-            return "gost3410_2012_256_paramset_c"
+            return "gost3410-2012-256-paramset-c"
         case .gost512A:
-            return "gost3410_2012_512_paramset_a"
+            return "gost3410-2012-512-paramset-a"
         case .gost512B:
-            return "gost3410_2012_512_paramset_b"
+            return "gost3410-2012-512-paramset-b"
         #endif
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
@@ -362,9 +368,23 @@ private extension CurveId {
         case .mldsa:
             return .mlDsa
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return .blsNormal
+        case .blsSmall:
+            return .blsSmall
+        #endif
         #if IROHASWIFT_ENABLE_GOST
-        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
-            return nil
+        case .gost256A:
+            return .gost2012_256A
+        case .gost256B:
+            return .gost2012_256B
+        case .gost256C:
+            return .gost2012_256C
+        case .gost512A:
+            return .gost2012_512A
+        case .gost512B:
+            return .gost2012_512B
         #endif
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
@@ -729,6 +749,10 @@ private enum CurveId: UInt8 {
     #if IROHASWIFT_ENABLE_MLDSA
     case mldsa = 2
     #endif
+    #if IROHASWIFT_ENABLE_BLS
+    case blsNormal = 3
+    case blsSmall = 5
+    #endif
     #if IROHASWIFT_ENABLE_GOST
     case gost256A = 10
     case gost256B = 11
@@ -751,6 +775,12 @@ private enum CurveId: UInt8 {
         #if IROHASWIFT_ENABLE_MLDSA
         case CurveId.mldsa.rawValue:
             return .mldsa
+        #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case CurveId.blsNormal.rawValue:
+            return .blsNormal
+        case CurveId.blsSmall.rawValue:
+            return .blsSmall
         #endif
         #if IROHASWIFT_ENABLE_GOST
         case CurveId.gost256A.rawValue:
@@ -786,17 +816,27 @@ private enum CurveId: UInt8 {
         case "ml-dsa", "mldsa", "ml_dsa":
             return .mldsa
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case "bls_normal", "bls-normal", "blsnormal", "bls12-381-g1":
+            return .blsNormal
+        case "bls_small", "bls-small", "blssmall", "bls12-381-g2":
+            return .blsSmall
+        #endif
         #if IROHASWIFT_ENABLE_GOST
-        case "gost256a", "gost-256-a":
+        case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
             return .gost256A
-        case "gost256b", "gost-256-b":
+        case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
             return .gost256B
-        case "gost256c", "gost-256-c":
+        case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
             return .gost256C
-        case "gost512a", "gost-512-a":
+        case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
             return .gost512A
-        case "gost512b", "gost-512-b":
+        case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
             return .gost512B
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case "sm2", "sm-2":
+            return .sm2
         #endif
         default:
             throw AccountAddressError.unsupportedAlgorithm(algorithm)
@@ -810,6 +850,22 @@ private enum CurveId: UInt8 {
         #if IROHASWIFT_ENABLE_SECP256K1
         case .secp256k1:
             return 33
+        #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return 48
+        case .blsSmall:
+            return 96
+        #endif
+        #if IROHASWIFT_ENABLE_GOST
+        case .gost256A, .gost256B, .gost256C:
+            return 64
+        case .gost512A, .gost512B:
+            return 128
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case .sm2:
+            return 65
         #endif
         default:
             return nil
@@ -1314,9 +1370,23 @@ extension AccountAddress {
         case .mldsa:
             return .mlDsa
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return .blsNormal
+        case .blsSmall:
+            return .blsSmall
+        #endif
         #if IROHASWIFT_ENABLE_GOST
-        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
-            throw OfflineNoritoError.invalidAccountId("unsupported GOST account controller")
+        case .gost256A:
+            return .gost2012_256A
+        case .gost256B:
+            return .gost2012_256B
+        case .gost256C:
+            return .gost2012_256C
+        case .gost512A:
+            return .gost2012_512A
+        case .gost512B:
+            return .gost2012_512B
         #endif
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
@@ -1440,6 +1510,48 @@ public final class MultisigPolicyBuilder {
         case .mlDsa:
             #if IROHASWIFT_ENABLE_MLDSA
             return .mldsa
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .blsNormal:
+            #if IROHASWIFT_ENABLE_BLS
+            return .blsNormal
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .blsSmall:
+            #if IROHASWIFT_ENABLE_BLS
+            return .blsSmall
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_256A:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost256A
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_256B:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost256B
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_256C:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost256C
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_512A:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost512A
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_512B:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost512B
             #else
             throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
             #endif

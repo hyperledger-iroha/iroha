@@ -27,6 +27,8 @@ public final class AccountAddressTests {
     i105RejectsInvalidCharacters();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
+    fullCryptoCurveRegistry();
+    longGostLabelsAcceptedWhenEnabled();
     singleKeyPayloadExtraction();
     System.out.println("[IrohaAndroid] Account address tests passed.");
   }
@@ -252,6 +254,50 @@ public final class AccountAddressTests {
     final AccountAddress roundTripped = AccountAddress.fromI105(address.toI105(1), 1);
     assert Arrays.equals(address.canonicalBytes(), roundTripped.canonicalBytes())
         : "ML-DSA enablement round-trip mismatch";
+    AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
+  }
+
+  private static void fullCryptoCurveRegistry() throws Exception {
+    assert "secp256k1".equals(PublicKeyCodec.algorithmForCurveId(0x04));
+    assert "bls_normal".equals(PublicKeyCodec.algorithmForCurveId(0x03));
+    assert "bls_small".equals(PublicKeyCodec.algorithmForCurveId(0x05));
+
+    final byte[] secpKey = new byte[33];
+    Arrays.fill(secpKey, (byte) 0x02);
+    final AccountAddress secpAddress = AccountAddress.fromAccount(secpKey, "secp256k1");
+    assert secpAddress.singleKeyPayload().orElseThrow().curveId() == 0x04;
+
+    final byte[] blsKey = new byte[48];
+    Arrays.fill(blsKey, (byte) 0x03);
+    boolean threw = false;
+    try {
+      AccountAddress.fromAccount(blsKey, "bls_normal");
+    } catch (final AccountAddress.AccountAddressException ex) {
+      threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM;
+    }
+    assert threw : "expected BLS to be disabled by default";
+
+    AccountAddress.configureCurveSupport(
+        AccountAddress.CurveSupportConfig.builder().allowBls(true).build());
+    final AccountAddress blsAddress = AccountAddress.fromAccount(blsKey, "bls-normal");
+    assert blsAddress.singleKeyPayload().orElseThrow().curveId() == 0x03;
+    AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
+
+    final String encoded = PublicKeyCodec.encodePublicKeyMultihash(0x04, secpKey);
+    final PublicKeyCodec.PublicKeyPayload decoded =
+        Objects.requireNonNull(PublicKeyCodec.decodePublicKeyLiteral(encoded));
+    assert decoded.curveId() == 0x04;
+    assert Arrays.equals(secpKey, decoded.keyBytes());
+  }
+
+  private static void longGostLabelsAcceptedWhenEnabled() throws Exception {
+    final byte[] key = new byte[64];
+    Arrays.fill(key, (byte) 0x0A);
+    AccountAddress.configureCurveSupport(
+        AccountAddress.CurveSupportConfig.builder().allowGost(true).build());
+    final AccountAddress address =
+        AccountAddress.fromAccount(key, "gost3410-2012-256-paramset-a");
+    assert address.singleKeyPayload().orElseThrow().curveId() == 0x0A;
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
   }
 

@@ -16,6 +16,62 @@ export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 
+export const CRYPTO_ALGORITHMS = Object.freeze({
+  ED25519: "ed25519",
+  SECP256K1: "secp256k1",
+  ML_DSA: "ml-dsa",
+  BLS_NORMAL: "bls_normal",
+  BLS_SMALL: "bls_small",
+  GOST_2012_256_A: "gost3410-2012-256-paramset-a",
+  GOST_2012_256_B: "gost3410-2012-256-paramset-b",
+  GOST_2012_256_C: "gost3410-2012-256-paramset-c",
+  GOST_2012_512_A: "gost3410-2012-512-paramset-a",
+  GOST_2012_512_B: "gost3410-2012-512-paramset-b",
+  SM2: "sm2",
+});
+
+export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
+  CRYPTO_ALGORITHMS.ED25519,
+  CRYPTO_ALGORITHMS.SECP256K1,
+  CRYPTO_ALGORITHMS.BLS_NORMAL,
+  CRYPTO_ALGORITHMS.BLS_SMALL,
+  CRYPTO_ALGORITHMS.ML_DSA,
+  CRYPTO_ALGORITHMS.GOST_2012_256_A,
+  CRYPTO_ALGORITHMS.GOST_2012_256_B,
+  CRYPTO_ALGORITHMS.GOST_2012_256_C,
+  CRYPTO_ALGORITHMS.GOST_2012_512_A,
+  CRYPTO_ALGORITHMS.GOST_2012_512_B,
+  CRYPTO_ALGORITHMS.SM2,
+]);
+
+const CRYPTO_ALGORITHM_ALIASES = new Map([
+  ["ed25519", CRYPTO_ALGORITHMS.ED25519],
+  ["ed", CRYPTO_ALGORITHMS.ED25519],
+  ["eddsa", CRYPTO_ALGORITHMS.ED25519],
+  ["secp256k1", CRYPTO_ALGORITHMS.SECP256K1],
+  ["secp", CRYPTO_ALGORITHMS.SECP256K1],
+  ["secpk1", CRYPTO_ALGORITHMS.SECP256K1],
+  ["mldsa", CRYPTO_ALGORITHMS.ML_DSA],
+  ["mldsa65", CRYPTO_ALGORITHMS.ML_DSA],
+  ["mldsa44", CRYPTO_ALGORITHMS.ML_DSA],
+  ["mldsa87", CRYPTO_ALGORITHMS.ML_DSA],
+  ["blsnormal", CRYPTO_ALGORITHMS.BLS_NORMAL],
+  ["bls12381g1", CRYPTO_ALGORITHMS.BLS_NORMAL],
+  ["blssmall", CRYPTO_ALGORITHMS.BLS_SMALL],
+  ["bls12381g2", CRYPTO_ALGORITHMS.BLS_SMALL],
+  ["gost256a", CRYPTO_ALGORITHMS.GOST_2012_256_A],
+  ["gost34102012256paramseta", CRYPTO_ALGORITHMS.GOST_2012_256_A],
+  ["gost256b", CRYPTO_ALGORITHMS.GOST_2012_256_B],
+  ["gost34102012256paramsetb", CRYPTO_ALGORITHMS.GOST_2012_256_B],
+  ["gost256c", CRYPTO_ALGORITHMS.GOST_2012_256_C],
+  ["gost34102012256paramsetc", CRYPTO_ALGORITHMS.GOST_2012_256_C],
+  ["gost512a", CRYPTO_ALGORITHMS.GOST_2012_512_A],
+  ["gost34102012512paramseta", CRYPTO_ALGORITHMS.GOST_2012_512_A],
+  ["gost512b", CRYPTO_ALGORITHMS.GOST_2012_512_B],
+  ["gost34102012512paramsetb", CRYPTO_ALGORITHMS.GOST_2012_512_B],
+  ["sm2", CRYPTO_ALGORITHMS.SM2],
+]);
+
 const SM2_FIXTURE_REFERENCE = Object.freeze({
   distid: "1234567812345678",
   seedHex: "1111111111111111111111111111111111111111111111111111111111111111",
@@ -49,12 +105,64 @@ function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
+function cryptoAlgorithmAliasKey(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export function supportedCryptoAlgorithms() {
+  const native = resolveNativeBinding();
+  if (typeof native.supportedCryptoAlgorithms === "function") {
+    return native.supportedCryptoAlgorithms().map((algorithm) =>
+      normalizeCryptoAlgorithm(algorithm),
+    );
+  }
+  return [...SUPPORTED_CRYPTO_ALGORITHMS];
+}
+
+export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
+  if (algorithm === undefined || algorithm === null || algorithm === "") {
+    return CRYPTO_ALGORITHMS.ED25519;
+  }
+  const normalized = CRYPTO_ALGORITHM_ALIASES.get(cryptoAlgorithmAliasKey(algorithm));
+  if (!normalized) {
+    throw new Error(`unsupported crypto algorithm: ${algorithm}`);
+  }
+  return normalized;
+}
+
+function ensureGenericCryptoNative(native, operation) {
+  if (!native || typeof native[operation] !== "function") {
+    throw new Error(
+      `${operation} requires the iroha_js_host native binding built with full crypto support`,
+    );
+  }
+  return native;
+}
+
+function normalizeNativeKeyPair(result, algorithm) {
+  return {
+    algorithm: normalizeCryptoAlgorithm(result.algorithm ?? algorithm),
+    publicKey: Buffer.from(result.publicKey),
+    privateKey: Buffer.from(result.privateKey),
+    distid: typeof result.distid === "string" ? result.distid : null,
+  };
+}
+
 /**
- * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
- * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
- * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
+ * Generate a key pair. Ed25519 remains available in all Node builds; other algorithms require the native binding.
+ * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
+ * @returns {{algorithm: string, publicKey: Buffer, privateKey: Buffer, distid?: string | null}}
  */
 export function generateKeyPair(options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
+    const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypair");
+    const seed = options.seed ? toBuffer(options.seed, "seed") : undefined;
+    return normalizeNativeKeyPair(native.cryptoKeypair(algorithm, seed), algorithm);
+  }
   const seed = options.seed ? normalizeSeed(options.seed) : undefined;
   const native = resolveNativeBinding();
   if (typeof native.ed25519Keypair !== "function") {
@@ -71,15 +179,41 @@ export function generateKeyPair(options = {}) {
 /**
  * Derive the public key for a given private key (32-byte seed or 64-byte seed+public concatenation).
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @param {{algorithm?: string}} [options]
  * @returns {Buffer}
  */
-export function publicKeyFromPrivate(privateKey) {
+export function publicKeyFromPrivate(privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
+    const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPublicKeyFromPrivate");
+    return Buffer.from(
+      native.cryptoPublicKeyFromPrivate(algorithm, toBuffer(privateKey, "privateKey")),
+    );
+  }
   const buffer = toBuffer(privateKey, "privateKey");
   const native = resolveNativeBinding();
   if (typeof native.ed25519PublicKeyFromPrivate !== "function") {
     throw new Error("Native binding does not expose ed25519PublicKeyFromPrivate");
   }
   return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
+}
+
+export function loadKeyPair(privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
+    const privateKeyBuffer = toBuffer(privateKey, "privateKey");
+    return {
+      algorithm,
+      publicKey: publicKeyFromPrivate(privateKeyBuffer),
+      privateKey: extractSeed(privateKeyBuffer),
+      distid: null,
+    };
+  }
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypairFromPrivate");
+  return normalizeNativeKeyPair(
+    native.cryptoKeypairFromPrivate(algorithm, toBuffer(privateKey, "privateKey")),
+    algorithm,
+  );
 }
 
 /**
@@ -112,6 +246,49 @@ export function verifyEd25519(message, signature, publicKey) {
     type: "spki",
   });
   return verifyRaw(null, messageBuffer, publicKeyObject, signatureBuffer);
+}
+
+export function sign(message, privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
+    return signEd25519(message, privateKey);
+  }
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoSign");
+  return Buffer.from(
+    native.cryptoSign(
+      algorithm,
+      toBuffer(privateKey, "privateKey"),
+      toBuffer(message, "message"),
+    ),
+  );
+}
+
+export function verify(message, signature, publicKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
+    return verifyEd25519(message, signature, publicKey);
+  }
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoVerify");
+  return Boolean(
+    native.cryptoVerify(
+      algorithm,
+      toBuffer(publicKey, "publicKey"),
+      toBuffer(message, "message"),
+      toBuffer(signature, "signature"),
+    ),
+  );
+}
+
+export function publicKeyMultihash(publicKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPublicKeyMultihash");
+  return native.cryptoPublicKeyMultihash(algorithm, toBuffer(publicKey, "publicKey"));
+}
+
+export function privateKeyMultihash(privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPrivateKeyMultihash");
+  return native.cryptoPrivateKeyMultihash(algorithm, toBuffer(privateKey, "privateKey"));
 }
 
 function normalizeSm2Distid(distid, native) {

@@ -140,6 +140,16 @@ class SoftwareKeyProvider(
                 throw KeyManagementException("ML-DSA key generation is not supported on this runtime", ex)
             }
         }
+        if (NativeSigningKeyMaterial.supports(signingAlgorithm)) {
+            return try {
+                NativeSigningKeyMaterial.generate(signingAlgorithm, secureRandom)
+            } catch (ex: RuntimeException) {
+                throw KeyManagementException(
+                    "${signingAlgorithm.providerName} key generation is not supported on this runtime",
+                    ex,
+                )
+            }
+        }
         val generator = newKeyPairGenerator()
         val keyPair = generateWithGenerator(generator)
         if (isExportable(keyPair)) return keyPair
@@ -227,8 +237,13 @@ class SoftwareKeyProvider(
 
     private fun ensureExpectedSigningAlgorithm(keyPair: KeyPair) {
         val matches = when (signingAlgorithm) {
-            SigningAlgorithm.ED25519 -> keyPair.private !is MlDsaPrivateKey && keyPair.public !is MlDsaPublicKey
+            SigningAlgorithm.ED25519 ->
+                keyPair.private !is MlDsaPrivateKey &&
+                    keyPair.public !is MlDsaPublicKey &&
+                    keyPair.private !is NativeSigningPrivateKey &&
+                    keyPair.public !is NativeSigningPublicKey
             SigningAlgorithm.ML_DSA -> keyPair.private is MlDsaPrivateKey && keyPair.public is MlDsaPublicKey
+            else -> NativeSigningKeyMaterial.validate(signingAlgorithm, keyPair).valid
         }
         if (!matches) {
             throw KeyManagementException(
