@@ -1,9 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  SUPPORTED_CRYPTO_ALGORITHMS,
   generateKeyPair,
+  loadKeyPair,
+  normalizeCryptoAlgorithm,
+  privateKeyMultihash,
   publicKeyFromPrivate,
+  publicKeyMultihash,
+  sign,
   signEd25519,
+  supportedCryptoAlgorithms,
+  verify,
   verifyEd25519,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,
@@ -34,6 +42,20 @@ const nativeTest = makeNativeTest(test, { require: sm2RequiredMethods });
 const kaigiNativeTest = makeNativeTest(test, {
   require: "buildKaigiRosterJoinProof",
 });
+
+function withNativeBinding(binding, fn) {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = binding;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+}
 
 test("generateKeyPair produces unique keys and valid lengths", () => {
   const kp1 = generateKeyPair();
@@ -101,6 +123,93 @@ test("invalid key lengths throw helpful errors", () => {
   const mismatched = Buffer.concat([privateKey, Buffer.alloc(32, 0x00)]);
   assert.throws(() => publicKeyFromPrivate(mismatched), /mismatched public key/);
   assert.throws(() => verifyEd25519(MESSAGE, Buffer.alloc(64), Buffer.alloc(10)), /public key must be 32 bytes/);
+});
+
+test("crypto algorithm labels cover Rust signing algorithms", () => {
+  assert.deepEqual(SUPPORTED_CRYPTO_ALGORITHMS, [
+    "ed25519",
+    "secp256k1",
+    "bls_normal",
+    "bls_small",
+    "ml-dsa",
+    "gost3410-2012-256-paramset-a",
+    "gost3410-2012-256-paramset-b",
+    "gost3410-2012-256-paramset-c",
+    "gost3410-2012-512-paramset-a",
+    "gost3410-2012-512-paramset-b",
+    "sm2",
+  ]);
+  assert.equal(normalizeCryptoAlgorithm("ML_DSA-65"), "ml-dsa");
+  assert.equal(
+    normalizeCryptoAlgorithm("GOST3410-2012-512-PARAMSET-B"),
+    "gost3410-2012-512-paramset-b",
+  );
+  assert.equal(normalizeCryptoAlgorithm("bls-small"), "bls_small");
+});
+
+test("generic crypto helpers delegate non-Ed25519 algorithms to native binding", () => {
+  const privateKey = Buffer.from("native-private");
+  const publicKey = Buffer.from("native-public");
+  const signature = Buffer.from("native-signature");
+  const binding = {
+    supportedCryptoAlgorithms: () => ["ed25519", "gost3410-2012-256-paramset-a"],
+    cryptoKeypair: (algorithm, seed) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(seed), Buffer.from("seed"));
+      return { algorithm, privateKey, publicKey };
+    },
+    cryptoKeypairFromPrivate: (algorithm, rawPrivateKey) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(rawPrivateKey), privateKey);
+      return { algorithm, privateKey, publicKey };
+    },
+    cryptoPublicKeyFromPrivate: (algorithm, rawPrivateKey) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(rawPrivateKey), privateKey);
+      return publicKey;
+    },
+    cryptoSign: (algorithm, rawPrivateKey, message) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(rawPrivateKey), privateKey);
+      assert.deepEqual(Buffer.from(message), MESSAGE);
+      return signature;
+    },
+    cryptoVerify: (algorithm, rawPublicKey, message, rawSignature) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(rawPublicKey), publicKey);
+      assert.deepEqual(Buffer.from(message), MESSAGE);
+      assert.deepEqual(Buffer.from(rawSignature), signature);
+      return true;
+    },
+    cryptoPublicKeyMultihash: (algorithm, rawPublicKey) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(rawPublicKey), publicKey);
+      return "gost-pub-mh";
+    },
+    cryptoPrivateKeyMultihash: (algorithm, rawPrivateKey) => {
+      assert.equal(algorithm, "gost3410-2012-256-paramset-a");
+      assert.deepEqual(Buffer.from(rawPrivateKey), privateKey);
+      return "gost-priv-mh";
+    },
+  };
+
+  withNativeBinding(binding, () => {
+    assert.deepEqual(supportedCryptoAlgorithms(), [
+      "ed25519",
+      "gost3410-2012-256-paramset-a",
+    ]);
+    const keyPair = generateKeyPair({ algorithm: "gost256a", seed: Buffer.from("seed") });
+    assert.equal(keyPair.algorithm, "gost3410-2012-256-paramset-a");
+    assert.deepEqual(keyPair.privateKey, privateKey);
+    assert.deepEqual(keyPair.publicKey, publicKey);
+    assert.equal(keyPair.distid, null);
+    assert.deepEqual(loadKeyPair(privateKey, { algorithm: "gost256a" }).publicKey, publicKey);
+    assert.deepEqual(publicKeyFromPrivate(privateKey, { algorithm: "gost256a" }), publicKey);
+    assert.deepEqual(sign(MESSAGE, privateKey, { algorithm: "gost256a" }), signature);
+    assert.equal(verify(MESSAGE, signature, publicKey, { algorithm: "gost256a" }), true);
+    assert.equal(publicKeyMultihash(publicKey, { algorithm: "gost256a" }), "gost-pub-mh");
+    assert.equal(privateKeyMultihash(privateKey, { algorithm: "gost256a" }), "gost-priv-mh");
+  });
 });
 
 nativeTest("generateSm2KeyPair produces valid keys and signatures", () => {
@@ -247,13 +356,3 @@ kaigiNativeTest("buildKaigiRosterJoinProof returns a native proof envelope", () 
   assert.equal(proof.rosterRoot.length, 32);
   assert.ok(proof.proof.length > 0);
 });
-
-function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
-}

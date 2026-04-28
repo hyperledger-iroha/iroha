@@ -24,6 +24,9 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
+import org.hyperledger.iroha.android.crypto.NativeSigningKeyMaterial;
+import org.hyperledger.iroha.android.crypto.NativeSigningPrivateKey;
+import org.hyperledger.iroha.android.crypto.NativeSigningPublicKey;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 
@@ -132,10 +135,25 @@ public final class DeterministicKeyExporter {
       }
       return SigningAlgorithm.ML_DSA;
     }
+    if (privateKey instanceof NativeSigningPrivateKey nativePrivate
+        && publicKey instanceof NativeSigningPublicKey nativePublic) {
+      final SigningAlgorithm algorithm = nativePrivate.signingAlgorithm();
+      if (nativePublic.signingAlgorithm() != algorithm) {
+        throw new KeyExportException("Native key material has mismatched algorithms");
+      }
+      final byte[] expected =
+          NativeSignerBridge.publicKeyFromPrivate(algorithm, privateKey.getEncoded());
+      if (!Arrays.equals(expected, publicKey.getEncoded())) {
+        throw new KeyExportException(
+            algorithm.providerName() + " key material is internally inconsistent");
+      }
+      return algorithm;
+    }
     if (isEd25519PrivateKey(privateKey) && isEd25519PublicKey(publicKey)) {
       return SigningAlgorithm.ED25519;
     }
-    throw new KeyExportException("Deterministic export supports Ed25519 and ML-DSA keys only");
+    throw new KeyExportException(
+        "Deterministic export supports Ed25519, ML-DSA, and native-backed Iroha signing keys only");
   }
 
   private static boolean isEd25519PrivateKey(final PrivateKey privateKey) {
@@ -489,6 +507,11 @@ public final class DeterministicKeyExporter {
             new MlDsaPrivateKey(privateKeyBytes, publicKeyBytes),
             new MlDsaPublicKey(publicKeyBytes),
             SigningAlgorithm.ML_DSA);
+      }
+      default -> {
+        final java.security.KeyPair pair =
+            NativeSigningKeyMaterial.fromRaw(algorithm, privateKeyBytes, publicKeyBytes);
+        yield new KeyPairData(pair.getPrivate(), pair.getPublic(), algorithm);
       }
     };
   }

@@ -8,19 +8,37 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export interface KeyPair {
-  algorithm: "ed25519";
+export type CryptoAlgorithm =
+  | "ed25519"
+  | "secp256k1"
+  | "bls_normal"
+  | "bls_small"
+  | "ml-dsa"
+  | "gost3410-2012-256-paramset-a"
+  | "gost3410-2012-256-paramset-b"
+  | "gost3410-2012-256-paramset-c"
+  | "gost3410-2012-512-paramset-a"
+  | "gost3410-2012-512-paramset-b"
+  | "sm2";
+
+export interface CryptoKeyPair {
+  algorithm: CryptoAlgorithm;
   publicKey: Buffer;
   privateKey: Buffer;
+  distid?: string | null;
 }
 
-export interface Sm2KeyPair {
+export interface KeyPair extends CryptoKeyPair {
+  algorithm: "ed25519";
+}
+
+export interface Sm2KeyPair extends CryptoKeyPair {
   algorithm: "sm2";
   distid: string;
-  publicKey: Buffer;
-  privateKey: Buffer;
 }
 
+export const CRYPTO_ALGORITHMS: Readonly<Record<string, CryptoAlgorithm>>;
+export const SUPPORTED_CRYPTO_ALGORITHMS: readonly CryptoAlgorithm[];
 export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
@@ -7712,11 +7730,47 @@ export declare class NoritoRpcError extends Error {
   readonly body: string;
 }
 
+export function supportedCryptoAlgorithms(): CryptoAlgorithm[];
+
+export function normalizeCryptoAlgorithm(algorithm?: string | null): CryptoAlgorithm;
+
 export function generateKeyPair(options?: {
   seed?: ArrayBufferView | ArrayBuffer | Buffer;
-}): KeyPair;
+  algorithm?: string | null;
+}): CryptoKeyPair;
 
-export function publicKeyFromPrivate(privateKey: ArrayBufferView | ArrayBuffer | Buffer): Buffer;
+export function loadKeyPair(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { algorithm?: string | null },
+): CryptoKeyPair;
+
+export function publicKeyFromPrivate(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { algorithm?: string | null },
+): Buffer;
+
+export function sign(
+  message: ArrayBufferView | ArrayBuffer | Buffer | string,
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { algorithm?: string | null },
+): Buffer;
+
+export function verify(
+  message: ArrayBufferView | ArrayBuffer | Buffer | string,
+  signature: ArrayBufferView | ArrayBuffer | Buffer,
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { algorithm?: string | null },
+): boolean;
+
+export function publicKeyMultihash(
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { algorithm?: string | null },
+): string;
+
+export function privateKeyMultihash(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: { algorithm?: string | null },
+): string;
 
 export function generateSm2KeyPair(options?: { distid?: string }): Sm2KeyPair;
 

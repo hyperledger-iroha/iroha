@@ -10,7 +10,7 @@ Features:
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
-- Ed25519 and ML-DSA signing, with Ed25519 CryptoKit helpers plus native-bridge ML-DSA support
+- Ed25519 signing with CryptoKit plus native-bridge secp256k1, ML-DSA, GOST R 34.10-2012, BLS normal/small, and SM2 support
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
@@ -72,14 +72,16 @@ import IrohaSwift
 let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
 let sdk = IrohaSDK(baseURL: torii.baseURL)
 let pqSDK = IrohaSDK(baseURL: torii.baseURL, defaultSigningAlgorithm: .mlDsa)
+let gostSDK = IrohaSDK(baseURL: torii.baseURL, defaultSigningAlgorithm: .gost2012_256A)
 
 // Generate a signing key using the SDK default (Ed25519 unless overridden)
 let signingKey = try sdk.generateSigningKey()
 let accountId = AccountId.make(publicKey: try signingKey.publicKey())
 let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
-// Or opt into ML-DSA explicitly for post-quantum transaction/offline signing.
+// Or opt into any native-bridge signing algorithm explicitly.
 let pqSigningKey = try pqSDK.generateSigningKey()
+let gostSigningKey = try gostSDK.signingKey(fromSeed: Data("seed".utf8))
 
 // Fetch balances
 sdk.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
@@ -120,7 +122,7 @@ sdk.submitAndWait(envelope: envelope) { result in
 `TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
-`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only.
+`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
 
 ### Subscriptions
 

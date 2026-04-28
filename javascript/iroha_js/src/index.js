@@ -35,10 +35,19 @@ export {
 } from "./toriiClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
+  CRYPTO_ALGORITHMS,
+  SUPPORTED_CRYPTO_ALGORITHMS,
+  supportedCryptoAlgorithms,
+  normalizeCryptoAlgorithm,
   generateKeyPair,
+  loadKeyPair,
   publicKeyFromPrivate,
+  sign,
+  verify,
   signEd25519,
   verifyEd25519,
+  publicKeyMultihash,
+  privateKeyMultihash,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,
   deriveConfidentialDiversifierV2,

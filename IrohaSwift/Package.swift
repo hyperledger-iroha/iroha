@@ -69,6 +69,8 @@ var swiftSettings: [SwiftSetting] = [
     .define("IROHA_SWIFT"),
     .define("IROHASWIFT_ENABLE_SECP256K1"),
     .define("IROHASWIFT_ENABLE_MLDSA"),
+    .define("IROHASWIFT_ENABLE_BLS"),
+    .define("IROHASWIFT_ENABLE_GOST"),
     .define("IROHASWIFT_ENABLE_SM"),
     .define("IROHASWIFT_BRIDGE_REQUIRED"),
     .define("IROHASWIFT_BRIDGE_PRESENT")
