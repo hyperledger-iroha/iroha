@@ -4662,6 +4662,23 @@ struct TargetProgressResult {
     first_progress_after_fault_end_height: Option<u64>,
 }
 
+fn duration_deadline_progress_result(
+    heights: &[u64],
+    tolerated_failures: usize,
+) -> TargetProgressResult {
+    let quorum_min_height = quorum_min_height_from_samples(heights.to_vec(), tolerated_failures);
+    let strict_min_height = heights.iter().copied().min().unwrap_or(0);
+    let max_peer_height_skew = max_peer_height_skew_from_samples(heights);
+    TargetProgressResult {
+        target_reached: false,
+        quorum_min_height,
+        strict_min_height,
+        max_peer_height_skew,
+        first_progress_after_fault_start_height: None,
+        first_progress_after_fault_end_height: None,
+    }
+}
+
 fn max_peer_height_skew_from_samples(heights: &[u64]) -> u64 {
     let Some(min_height) = heights.iter().copied().min() else {
         return 0;
@@ -4679,8 +4696,8 @@ async fn wait_for_duration_deadline(
     peers: &[NetworkPeer],
     configured_faulty_peers: usize,
     ingress_pool: Option<&IngressEndpointPool>,
-    fault_start_at: Instant,
-    fault_end_at: Instant,
+    _fault_start_at: Instant,
+    _fault_end_at: Instant,
 ) -> Result<TargetProgressResult> {
     if run_control.stop_requested() {
         return Err(eyre!("izanami run stopped before duration completed"));
@@ -4693,41 +4710,27 @@ async fn wait_for_duration_deadline(
             let heights: Vec<_> = sampled_heights.iter().map(|(_, height)| *height).collect();
             let tolerated_failures =
                 effective_tolerated_peer_failures(peers.len(), configured_faulty_peers);
-            let quorum_min_height =
-                quorum_min_height_from_samples(heights.clone(), tolerated_failures);
-            let strict_min_height = heights.iter().copied().min().unwrap_or(0);
-            let max_peer_height_skew = max_peer_height_skew_from_samples(&heights);
+            let progress = duration_deadline_progress_result(&heights, tolerated_failures);
             let now = Instant::now();
-            let first_progress_after_fault_start_height =
-                (now >= fault_start_at && quorum_min_height > 0).then_some(quorum_min_height);
-            let first_progress_after_fault_end_height =
-                (now >= fault_end_at && quorum_min_height > 0).then_some(quorum_min_height);
             if let Some(ingress_pool) = ingress_pool {
                 ingress_pool.update_lag_snapshot(
-                    quorum_min_height,
+                    progress.quorum_min_height,
                     sampled_heights.as_slice(),
                     now,
                 );
             }
             info!(
                 target: "izanami::progress",
-                quorum_min_height,
-                strict_min_height,
-                max_peer_height_skew,
-                first_progress_after_fault_start_height,
-                first_progress_after_fault_end_height,
+                quorum_min_height = progress.quorum_min_height,
+                strict_min_height = progress.strict_min_height,
+                max_peer_height_skew = progress.max_peer_height_skew,
+                first_progress_after_fault_start_height = progress.first_progress_after_fault_start_height,
+                first_progress_after_fault_end_height = progress.first_progress_after_fault_end_height,
                 tolerated_failures,
                 sampled_peers = heights.len(),
                 "duration deadline reached with sampled block heights"
             );
-            Ok(TargetProgressResult {
-                target_reached: false,
-                quorum_min_height,
-                strict_min_height,
-                max_peer_height_skew,
-                first_progress_after_fault_start_height,
-                first_progress_after_fault_end_height,
-            })
+            Ok(progress)
         },
     }
 }
@@ -10933,6 +10936,20 @@ mod tests {
         assert!(!result.target_reached);
         assert_eq!(result.quorum_min_height, 0);
         assert_eq!(result.strict_min_height, 0);
+        assert_eq!(result.first_progress_after_fault_start_height, None);
+        assert_eq!(result.first_progress_after_fault_end_height, None);
+    }
+
+    #[test]
+    fn duration_deadline_progress_result_does_not_infer_post_fault_progress() {
+        let result = duration_deadline_progress_result(&[5, 7, 8, 8], 1);
+
+        assert!(!result.target_reached);
+        assert_eq!(result.quorum_min_height, 7);
+        assert_eq!(result.strict_min_height, 5);
+        assert_eq!(result.max_peer_height_skew, 3);
+        assert_eq!(result.first_progress_after_fault_start_height, None);
+        assert_eq!(result.first_progress_after_fault_end_height, None);
     }
 
     #[tokio::test]
