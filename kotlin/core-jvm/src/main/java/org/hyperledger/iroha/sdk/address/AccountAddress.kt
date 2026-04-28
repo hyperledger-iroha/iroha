@@ -28,6 +28,8 @@ private val I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 @Volatile
 private var allowMlDsa = false
 @Volatile
+private var allowBls = false
+@Volatile
 private var allowGost = false
 @Volatile
 private var allowSm2 = false
@@ -299,6 +301,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
         @JvmStatic
         fun configureCurveSupport(config: CurveSupportConfig) {
             allowMlDsa = config.allowMlDsa
+            allowBls = config.allowBls
             allowGost = config.allowGost
             allowSm2 = config.allowSm2
         }
@@ -594,11 +597,19 @@ private fun curveIdForAlgorithm(algorithm: String): Byte {
     val curveId = when (normalized) {
         "ed25519", "ed" -> 0x01
         "ml-dsa", "mldsa", "ml_dsa" -> 0x02
+        "bls_normal", "bls-normal", "blsnormal", "bls12-381-g1" -> 0x03
+        "secp256k1", "secp-256k1", "secp" -> 0x04
+        "bls_small", "bls-small", "blssmall", "bls12-381-g2" -> 0x05
         "gost256a", "gost-256-a" -> 0x0A
+        "gost3410-2012-256-paramset-a" -> 0x0A
         "gost256b", "gost-256-b" -> 0x0B
+        "gost3410-2012-256-paramset-b" -> 0x0B
         "gost256c", "gost-256-c" -> 0x0C
+        "gost3410-2012-256-paramset-c" -> 0x0C
         "gost512a", "gost-512-a" -> 0x0D
+        "gost3410-2012-512-paramset-a" -> 0x0D
         "gost512b", "gost-512-b" -> 0x0E
+        "gost3410-2012-512-paramset-b" -> 0x0E
         "sm2", "sm-2" -> 0x0F
         else -> throw AccountAddressException(
             AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -624,19 +635,24 @@ private fun ensureCurveEnabled(curveId: Int, context: String) {
 private fun isCurveEnabled(curveId: Int): Boolean = when (curveId and 0xFF) {
     0x01 -> true
     0x02 -> allowMlDsa
+    0x03, 0x05 -> allowBls
+    0x04 -> true
     0x0A, 0x0B, 0x0C, 0x0D, 0x0E -> allowGost
     0x0F -> allowSm2
     else -> false
 }
 
 private fun isKnownCurveId(curveId: Int): Boolean = when (curveId and 0xFF) {
-    0x01, 0x02, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F -> true
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F -> true
     else -> false
 }
 
 private fun curveName(curveId: Int): String = when (curveId and 0xFF) {
     0x01 -> "ed25519"
     0x02 -> "ml-dsa"
+    0x03 -> "bls_normal"
+    0x04 -> "secp256k1"
+    0x05 -> "bls_small"
     0x0A -> "gost256a"
     0x0B -> "gost256b"
     0x0C -> "gost256c"

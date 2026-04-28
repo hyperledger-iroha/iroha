@@ -1202,7 +1202,14 @@ impl Actor {
         now: Instant,
         block_active_tip_owner: bool,
     ) -> bool {
-        if existing_vote.view >= proposal_view || !self.config.resilience.enabled {
+        if existing_vote.view > proposal_view {
+            return true;
+        }
+        if existing_vote.view == proposal_view {
+            return self.local_same_height_vote_has_hard_lock(proposal_height, existing_vote)
+                || self.block_known_locally(existing_vote.block_hash);
+        }
+        if !self.config.resilience.enabled {
             return true;
         }
         if self.local_same_height_vote_has_hard_lock(proposal_height, existing_vote) {

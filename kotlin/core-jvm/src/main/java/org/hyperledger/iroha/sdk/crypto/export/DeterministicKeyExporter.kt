@@ -20,6 +20,9 @@ import javax.crypto.spec.SecretKeySpec
 import org.hyperledger.iroha.sdk.crypto.MlDsaKeyMaterial
 import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
+import org.hyperledger.iroha.sdk.crypto.NativeSigningKeyMaterial
+import org.hyperledger.iroha.sdk.crypto.NativeSigningPrivateKey
+import org.hyperledger.iroha.sdk.crypto.NativeSigningPublicKey
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 
@@ -153,10 +156,21 @@ object DeterministicKeyExporter {
             }
             return SigningAlgorithm.ML_DSA
         }
+        if (privateKey is NativeSigningPrivateKey && publicKey is NativeSigningPublicKey) {
+            val algorithm = privateKey.signingAlgorithm
+            if (publicKey.signingAlgorithm != algorithm) {
+                throw KeyExportException("Native key material has mismatched algorithms")
+            }
+            val expected = NativeSignerBridge.publicKeyFromPrivate(algorithm, privateKey.encoded)
+            if (!expected.contentEquals(publicKey.encoded)) {
+                throw KeyExportException("${algorithm.providerName} key material is internally inconsistent")
+            }
+            return algorithm
+        }
         if (isEd25519PrivateKey(privateKey) && isEd25519PublicKey(publicKey)) {
             return SigningAlgorithm.ED25519
         }
-        throw KeyExportException("Deterministic export supports Ed25519 and ML-DSA keys only")
+        throw KeyExportException("Deterministic export supports Ed25519, ML-DSA, and native-backed Iroha signing keys only")
     }
 
     private fun isEd25519PrivateKey(privateKey: PrivateKey): Boolean {
@@ -224,6 +238,10 @@ object DeterministicKeyExporter {
             SigningAlgorithm.ML_DSA -> {
                 val pair = MlDsaKeyMaterial.fromRaw(privateKeyBytes, publicKeyBytes)
                 KeyPairData(pair.private, pair.public, SigningAlgorithm.ML_DSA)
+            }
+            else -> {
+                val pair = NativeSigningKeyMaterial.fromRaw(algorithm, privateKeyBytes, publicKeyBytes)
+                KeyPairData(pair.private, pair.public, algorithm)
             }
         }
 

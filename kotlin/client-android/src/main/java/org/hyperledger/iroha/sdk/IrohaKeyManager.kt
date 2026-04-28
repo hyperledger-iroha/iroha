@@ -9,6 +9,9 @@ import org.hyperledger.iroha.sdk.crypto.KeyProviderMetadata
 import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
 import org.hyperledger.iroha.sdk.crypto.MlDsaSigner
+import org.hyperledger.iroha.sdk.crypto.NativeSigningPrivateKey
+import org.hyperledger.iroha.sdk.crypto.NativeSigningPublicKey
+import org.hyperledger.iroha.sdk.crypto.NativeSigningSigner
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.crypto.SigningException
@@ -176,6 +179,13 @@ class IrohaKeyManager private constructor(
                 val publicKey = keyPair.public as? MlDsaPublicKey
                     ?: throw SigningException("Expected an ML-DSA public key for alias=$alias")
                 MlDsaSigner(privateKey, publicKey)
+            }
+            else -> {
+                val privateKey = keyPair.private as? NativeSigningPrivateKey
+                    ?: throw SigningException("Expected a ${signingAlgorithm.providerName} private key for alias=$alias")
+                val publicKey = keyPair.public as? NativeSigningPublicKey
+                    ?: throw SigningException("Expected a ${signingAlgorithm.providerName} public key for alias=$alias")
+                NativeSigningSigner(signingAlgorithm, privateKey, publicKey)
             }
         }
     }
@@ -425,6 +435,7 @@ class IrohaKeyManager private constructor(
             when (signingAlgorithm) {
                 SigningAlgorithm.ED25519 -> validateEd25519KeyPair(keyPair)
                 SigningAlgorithm.ML_DSA -> validateMlDsaKeyPair(keyPair)
+                else -> validateNativeSigningKeyPair(signingAlgorithm, keyPair)
             }
 
         private fun validateEd25519KeyPair(keyPair: KeyPair?): KeyMaterialValidation {
@@ -482,6 +493,56 @@ class IrohaKeyManager private constructor(
                     expected.size,
                     toHex(encodedPublic, minOf(12, encodedPublic.size)),
                     "mldsa_public_key_mismatch",
+                )
+            }
+            return KeyMaterialValidation.valid(
+                encodedPublic.size,
+                expected.size,
+                toHex(encodedPublic, minOf(12, encodedPublic.size)),
+            )
+        }
+
+        private fun validateNativeSigningKeyPair(
+            signingAlgorithm: SigningAlgorithm,
+            keyPair: KeyPair?,
+        ): KeyMaterialValidation {
+            if (keyPair?.public !is NativeSigningPublicKey ||
+                keyPair.public.signingAlgorithm != signingAlgorithm
+            ) {
+                return KeyMaterialValidation.invalid(
+                    0,
+                    0,
+                    "",
+                    "${signingAlgorithm.wireName}_public_key_missing",
+                )
+            }
+            if (keyPair.private !is NativeSigningPrivateKey ||
+                keyPair.private.signingAlgorithm != signingAlgorithm
+            ) {
+                return KeyMaterialValidation.invalid(
+                    keyPair.public.encoded.size,
+                    keyPair.public.encoded.size,
+                    toHex(keyPair.public.encoded, minOf(12, keyPair.public.encoded.size)),
+                    "${signingAlgorithm.wireName}_private_key_missing",
+                )
+            }
+            val encodedPublic = keyPair.public.encoded
+            val expected = try {
+                NativeSignerBridge.publicKeyFromPrivate(signingAlgorithm, keyPair.private.encoded)
+            } catch (_: RuntimeException) {
+                return KeyMaterialValidation.invalid(
+                    encodedPublic.size,
+                    encodedPublic.size,
+                    toHex(encodedPublic, minOf(12, encodedPublic.size)),
+                    "${signingAlgorithm.wireName}_public_key_derivation_failed",
+                )
+            }
+            if (!expected.contentEquals(encodedPublic)) {
+                return KeyMaterialValidation.invalid(
+                    encodedPublic.size,
+                    expected.size,
+                    toHex(encodedPublic, minOf(12, encodedPublic.size)),
+                    "${signingAlgorithm.wireName}_public_key_mismatch",
                 )
             }
             return KeyMaterialValidation.valid(

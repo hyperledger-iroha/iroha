@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-28
 
+## 2026-04-28 SDK compatibility matrix gap closure
+
+- Added `fixtures/sdk/compatibility_matrix.json` as the canonical public SDK compatibility matrix fixture for the `i23-features` branch, with every SDK/story cell populated.
+- Added a focused pytest guard that rejects malformed rows, private/local source metadata, and any reintroduced `no-data` cells.
+- Focused validation for this slice:
+  - `python3 scripts/tests/sdk_compatibility_matrix_test.py`
+
+## 2026-04-28 SDK crypto parity for JS, Swift, Kotlin, and Java
+
+- Added full signing-algorithm parity across the JavaScript SDK, Swift SDK, Kotlin SDK, and Java Android SDK for Ed25519, secp256k1, ML-DSA, all supported GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.
+- JS now exposes generic native-backed key generation/import, signing, verification, and multihash helpers; Swift and JVM/Android SDKs now carry the same Rust bridge discriminants, address curve IDs, and native-backed software key paths.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_js_host`
+  - `cargo check -p connect_norito_bridge`
+  - `npm --prefix javascript/iroha_js run build:native`
+  - `npm --prefix javascript/iroha_js run build:dist`
+  - `cd javascript/iroha_js && node --test test/crypto.test.js test/crypto.browser.test.js`
+  - Node one-off JS generic crypto smoke with a stubbed native binding
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest --tests org.hyperledger.iroha.sdk.address.AccountAddressTest --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.crypto.SigningAlgorithmTests --tests org.hyperledger.iroha.android.address.AccountAddressTests --console=plain`
+  - `cd IrohaSwift && swift test --filter IrohaSDKSigningAlgorithmTests/testSigningAlgorithmsMatchRustBridgeDiscriminants`
+  - `git diff --check`
+- Rebuilt `javascript/iroha_js/native/iroha_js_host.node` and its checksum manifest so the Node SDK loads the new generic crypto exports locally.
+
 ## 2026-04-28 Python SDK all-algorithm crypto bridge
 
 - Extended the Python SDK crypto bridge beyond Ed25519/raw SM2 helpers to expose generic `CryptoKeyPair`, key generation/import, signing, verification, and multihash import/export for every compiled `iroha_crypto` signature suite: Ed25519, secp256k1, ML-DSA-65, TC26 GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.

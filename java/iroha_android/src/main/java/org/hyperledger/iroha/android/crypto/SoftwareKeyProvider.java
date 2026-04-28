@@ -193,6 +193,14 @@ public final class SoftwareKeyProvider implements KeyProvider {
         Arrays.fill(seed, (byte) 0);
       }
     }
+    if (NativeSigningKeyMaterial.supports(signingAlgorithm)) {
+      try {
+        return NativeSigningKeyMaterial.generate(signingAlgorithm, secureRandom);
+      } catch (final RuntimeException ex) {
+        throw new KeyManagementException(
+            signingAlgorithm.providerName() + " key generation is not supported on this runtime", ex);
+      }
+    }
     final KeyPairGenerator generator = newKeyPairGenerator();
     final KeyPair keyPair = generateWithGenerator(generator);
     if (isExportable(keyPair)) {
@@ -303,10 +311,19 @@ public final class SoftwareKeyProvider implements KeyProvider {
         switch (signingAlgorithm) {
           case ED25519 ->
               !(keyPair.getPrivate() instanceof MlDsaPrivateKey)
-                  && !(keyPair.getPublic() instanceof MlDsaPublicKey);
+                  && !(keyPair.getPublic() instanceof MlDsaPublicKey)
+                  && !(keyPair.getPrivate() instanceof NativeSigningPrivateKey)
+                  && !(keyPair.getPublic() instanceof NativeSigningPublicKey);
           case ML_DSA ->
               keyPair.getPrivate() instanceof MlDsaPrivateKey
                   && keyPair.getPublic() instanceof MlDsaPublicKey;
+          default ->
+              keyPair.getPrivate() instanceof NativeSigningPrivateKey
+                  && keyPair.getPublic() instanceof NativeSigningPublicKey
+                  && ((NativeSigningPrivateKey) keyPair.getPrivate()).signingAlgorithm()
+                      == signingAlgorithm
+                  && ((NativeSigningPublicKey) keyPair.getPublic()).signingAlgorithm()
+                      == signingAlgorithm;
         };
     if (!matches) {
       throw new KeyManagementException(

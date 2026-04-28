@@ -814,6 +814,8 @@ flows, select the signing algorithm up front:
 IrohaKeyManager ed25519Manager = IrohaKeyManager.withSoftwareProvider();
 IrohaKeyManager mlDsaManager =
     IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA);
+IrohaKeyManager gostManager =
+    IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.GOST_2012_256_A);
 
 KeyGenParameters params =
     new KeyGenParameters.Builder()
@@ -822,9 +824,11 @@ KeyGenParameters params =
 IrohaKeyManager tunedManager = IrohaKeyManager.withDefaultProviders(params);
 ```
 
-`ED25519` remains the default. `ML_DSA` is software-only in this pass, so
-`HARDWARE_*` and `STRONGBOX_*` preferences fail fast instead of silently
-falling back to an unexpected provider.
+`ED25519` remains the default. `SECP256K1`, `BLS_NORMAL`, `BLS_SMALL`,
+`ML_DSA`, the five `GOST_2012_*` variants, and `SM2` use the shared native
+bridge and are software-only in this pass, so `HARDWARE_*` and `STRONGBOX_*`
+preferences fail fast instead of silently falling back to an unexpected
+provider.
 
 The manager validates Ed25519 SPKI output and skips providers that return a
 different algorithm (common on emulators), falling back to the next configured

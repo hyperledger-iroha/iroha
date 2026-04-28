@@ -298,7 +298,10 @@ when you want the JSON form before Norito encoding.
 import {
   ToriiClient,
   NoritoRpcClient,
+  SUPPORTED_CRYPTO_ALGORITHMS,
   generateKeyPair,
+  sign,
+  verify,
   signEd25519,
   verifyEd25519,
   deriveConfidentialKeyset,
@@ -345,6 +348,13 @@ const vaultLotId = normalizeRwaId(
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
 console.log(verifyEd25519(message, signature, publicKey)); // true
+console.log(SUPPORTED_CRYPTO_ALGORITHMS);
+
+// Native builds also expose generic helpers for secp256k1, ML-DSA,
+// GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.
+const pqKeys = generateKeyPair({ algorithm: "ml-dsa" });
+const pqSignature = sign(message, pqKeys.privateKey, { algorithm: pqKeys.algorithm });
+console.log(verify(message, pqSignature, pqKeys.publicKey, { algorithm: pqKeys.algorithm }));
 
 const confidential = deriveConfidentialKeyset(Buffer.alloc(32, 0x42));
 console.log(confidential.nkHex); // cb7149cc...

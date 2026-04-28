@@ -856,8 +856,22 @@ public enum OfflineNorito {
             return .ed25519
         case 0xe7:
             return .secp256k1
+        case 0xea:
+            return .blsNormal
+        case 0xeb:
+            return .blsSmall
         case 0xee:
             return .mlDsa
+        case 0x1200:
+            return .gost2012_256A
+        case 0x1201:
+            return .gost2012_256B
+        case 0x1202:
+            return .gost2012_256C
+        case 0x1203:
+            return .gost2012_512A
+        case 0x1204:
+            return .gost2012_512B
         case 0x1306:
             return .sm2
         default:
@@ -871,8 +885,22 @@ public enum OfflineNorito {
             return 0xed
         case .secp256k1:
             return 0xe7
+        case .blsNormal:
+            return 0xea
+        case .blsSmall:
+            return 0xeb
         case .mlDsa:
             return 0xee
+        case .gost2012_256A:
+            return 0x1200
+        case .gost2012_256B:
+            return 0x1201
+        case .gost2012_256C:
+            return 0x1202
+        case .gost2012_512A:
+            return 0x1203
+        case .gost2012_512B:
+            return 0x1204
         case .sm2:
             return 0x1306
         }
@@ -891,6 +919,20 @@ public enum OfflineNorito {
             return .secp256k1
         case "ml-dsa", "mldsa", "ml_dsa":
             return .mlDsa
+        case "bls_normal", "bls-normal", "blsnormal":
+            return .blsNormal
+        case "bls_small", "bls-small", "blssmall":
+            return .blsSmall
+        case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
+            return .gost2012_256A
+        case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
+            return .gost2012_256B
+        case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
+            return .gost2012_256C
+        case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
+            return .gost2012_512A
+        case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
+            return .gost2012_512B
         case "sm2":
             return .sm2
         default:
