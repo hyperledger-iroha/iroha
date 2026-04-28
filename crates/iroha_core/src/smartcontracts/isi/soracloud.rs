@@ -109,6 +109,7 @@ use crate::{
 };
 
 const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
+const TAIRA_TESTNET_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const TRAINING_MAX_RETRIES: u8 = 16;
 const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
 const TRAINING_MAX_REASON_BYTES: usize = 512;
@@ -412,6 +413,10 @@ fn require_soracloud_permission(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
+    if state_transaction.chain_id.as_str() == TAIRA_TESTNET_CHAIN_ID {
+        return Ok(());
+    }
+
     let has_permission = state_transaction
         .world
         .account_permissions
@@ -11267,9 +11272,19 @@ mod tests {
     }
 
     fn state_with_soracloud_permission(kura: &Arc<Kura>) -> Result<State, eyre::Report> {
+        state_with_soracloud_permission_on_chain(
+            kura,
+            iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        )
+    }
+
+    fn state_with_soracloud_permission_on_chain(
+        kura: &Arc<Kura>,
+        chain_id: iroha_data_model::ChainId,
+    ) -> Result<State, eyre::Report> {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura.clone(), query_handle);
+        let state = State::new_with_chain(world, kura.clone(), query_handle, chain_id);
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
@@ -11323,6 +11338,25 @@ mod tests {
         let state_transaction = state_block.transaction();
 
         require_soracloud_permission(&ALICE_ID, &state_transaction)?;
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_permission_allows_taira_testnet_authority() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission_on_chain(
+            &kura,
+            iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+        )?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+
+        require_soracloud_permission(&BOB_ID, &state_transaction)?;
         Ok(())
     }
 
