@@ -3345,6 +3345,25 @@ impl Actor {
                         "local_commit_vote_emitted",
                     );
                     precommit_action = Some("emitted");
+                } else if self
+                    .local_same_slot_vote(
+                        crate::sumeragi::consensus::Phase::Commit,
+                        pending_height,
+                        pending_view,
+                        vote_epoch,
+                    )
+                    .is_some_and(|existing| existing.block_hash == hash)
+                {
+                    pending.note_local_commit_vote_emitted();
+                    self.note_frontier_owner_local_vote_emitted(hash, pending_height, pending_view);
+                    let _ = self.maybe_replay_known_block_commit_evidence(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        local_vote_topology.as_ref(),
+                        "local_commit_vote_already_recorded",
+                    );
+                    precommit_action = Some("already_recorded");
                 } else {
                     precommit_action = Some("emit_failed");
                 }
