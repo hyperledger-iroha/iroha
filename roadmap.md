@@ -9,7 +9,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - Promote the localnet inline `offline-note-v2-recursive-v1` verifier registration into the production genesis/config artifact flow with signed real Halo2 IPA VK/PK metadata and no debug fallback.
   - Add Rust four-peer localnet issue/redeem/audit e2e coverage that submits real Offline V2 proofs and validates replay/nullifier/accounting behavior across consensus.
-  - Add Swift Offline V2 transaction builders and real prover integration surfaces without exposing mock-proof helpers; readiness metadata decoding is in place.
   - Fold the new prover slice into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
 - Carry native asset escrow through the remaining Aitai application corridor.
   - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and proof-carrying anonymous escrow helper surfaces, then subscribe through the numeric and anonymous escrow query/event APIs.
@@ -31,7 +30,7 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The crate-local sweep is green as of 2026-04-24 with `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`.
   - When validation budget allows, carry the alias-routing and Torii telemetry slices through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
 - Broaden validation for the new canonical account-alias lease flow beyond the focused onboarding and executor checks.
-  - The onboarding auto-renew path now grants the subscriber `CanModifyNftMetadata` for the subscription NFT before trigger registration; rerun a wider `cargo test -p iroha_torii` window with `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
+  - The onboarding auto-renew path now grants the subscriber `CanModifyNftMetadata` for the subscription NFT before trigger registration; rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
   - Add or rerun focused coverage for user-signed enable/disable mutation flows and the SNS subscription auto-renew billing path in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, not just the onboarding enqueue path.
   - Once the alias lease slice is stable under those focused reruns, fold it into the next broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor.
 - Broaden validation after the 2026-04-22 targeted `sumeragi::main_loop` regression sweep and follow-up unit coverage additions.

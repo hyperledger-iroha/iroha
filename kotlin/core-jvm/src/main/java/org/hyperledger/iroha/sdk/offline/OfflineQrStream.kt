@@ -55,7 +55,7 @@ object OfflineQrStream {
 
     class Options @JvmOverloads constructor(
         val chunkSize: Int = 360,
-        val parityGroup: Int = 0,
+        val parityGroup: Int = 3,
     ) {
         init {
             require(chunkSize in 1..0xFFFF) { "chunkSize must be between 1 and 65535" }
