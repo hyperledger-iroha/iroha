@@ -13,6 +13,22 @@ Last updated: 2026-04-28
   - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::pacemaker_ -- --nocapture`
   - `git diff --check`
 
+## 2026-04-28 Izanami seed-7 stress evidence
+
+- Ran real 20-peer/800s stress matrices with fresh `target/codex-stress` binaries for seed `7`:
+  - `dist/izanami-stress-400-seed7-20260428` (`stress-400`, both Sumeragi modes)
+  - `dist/izanami-stress-800-seed7-20260428` (`stress-800`, both Sumeragi modes)
+- Stress results are margin evidence, not paper-mode acceptance replacements. The permissioned profile stayed resilient across all 800 TPS rows and all but the 400 TPS 25% packet-loss subrow; that 400 TPS row degraded on one queue drop with no submission failures. NPoS stayed resilient for targeted-load and stopping, while transient-failure, packet-loss subrows, and leader-isolation degraded from bounded queue drops; all completed rows had `exit_code=0`, `status=ok`, accepted submissions equal to started submissions, zero hard failures, and final strict/quorum height evidence.
+- Added `--report-only` to the matrix runner so completed raw logs can regenerate `summary.md`, `evidence.tsv`, and `paper-style-final-report.md` after a post-run report assembly failure. Rebuilt both stress artifact directories with the new path.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=target/codex-stress cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
+  - `TEST_NETWORK_BIN_IROHAD=target/codex-stress/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-400-seed7-20260428 --mode stress-400 --sumeragi-mode both --izanami-cmd target/codex-stress/debug/izanami -- --seed 7`
+  - `TEST_NETWORK_BIN_IROHAD=target/codex-stress/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-800-seed7-20260428 --mode stress-800 --sumeragi-mode both --izanami-cmd target/codex-stress/debug/izanami -- --seed 7`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-400-seed7-20260428 --mode stress-400 --sumeragi-mode both --report-only`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-800-seed7-20260428 --mode stress-800 --sumeragi-mode both --report-only`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh scripts/run_izanami_communication_vulnerability_sweep.sh`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+
 ## 2026-04-28 SDK compatibility matrix gap closure
 
 - Added `fixtures/sdk/compatibility_matrix.json` as the canonical public SDK compatibility matrix fixture for the `i23-features` branch, with every SDK/story cell populated.
