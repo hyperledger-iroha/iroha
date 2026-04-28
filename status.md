@@ -1,6 +1,33 @@
 # Status
 
-Last updated: 2026-04-27
+Last updated: 2026-04-28
+
+## 2026-04-28 Offline Note V2 focused validation gap closure
+
+- Added focused core rejection coverage for Offline Note V2 redeem/audit proof validation: non-`OpenVerifyEnvelope` proof bytes, wrong verifier key id/backend, inactive verifier keys, and public-input hash mismatches now have explicit tests.
+- Tightened Torii Offline V2 readiness smoke coverage so the exposed verifier id and public-input schema hash match the canonical fixture contract.
+- Added native app validation coverage for the shared `interop_contract_v2.json`, synthetic Android counter rejection, transcript-like recursive proof rejection, and old QR prefix rejection. Android PK and PNG now also have physical-only KeyMint runner scripts that require a selected API 31+ non-emulator device and capture public attestation artifacts under untracked `artifacts/offline/keymint/`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo test -p iroha_core offline_note_v2 --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke -- --nocapture`
+  - `cd IrohaSwift && swift test --filter OfflineNoteV2`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test' --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --console=plain`
+  - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ./gradlew --no-daemon :core:test --console=plain`
+  - `cd /Users/takemiyamakoto/dev/bpng/png2-android && ./gradlew --no-daemon :core:test --console=plain`
+  - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
+  - `cd /Users/takemiyamakoto/dev/bpng/png2-android && ANDROID_SERIAL=19181FDF600918 E2E_DEVICE_SERIAL=19181FDF600918 scripts/run_offline_keymint_physical.sh`
+  - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=2EC58932-9675-444C-AE62-607F4151132F' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/AppAttestationAssertionDecoderTests -only-testing:RetailWalletIOSTests/OfflineProofVerifierFixtureTests`
+  - `cd /Users/takemiyamakoto/dev/bpng/png2-ios && xcodebuild test -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'platform=iOS Simulator,id=2BA33CF1-9A39-469D-ABD0-99DD09FEB5B8' -only-testing:RetailWalletIOSTests/OfflineAPIContractTests -only-testing:RetailWalletIOSTests/AppAttestationAssertionDecoderTests`
+  - `cd /Users/takemiyamakoto/dev/pk-retail-wallet-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
+  - `cd /Users/takemiyamakoto/dev/bpng/png2-ios && xcodebuild build -project RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -configuration Debug -destination 'generic/platform=iOS Simulator'`
+  - `git diff --check` in the Iroha root and all four touched app repositories.
+  - `shasum -a 256` confirmed every copied `fixtures/offline/interop_contract_v2.json` has hash `2660dd41e3b8c1f4b8337d14febbc88e3febe45428c08e4d083197ef01d4e0f6`.
+  - Targeted changed-file scans found no temporary-work markers, exact retired proof-domain identifiers, or retired fountain QR v1 identifiers.
+- The physical KeyMint gate ran on Pixel 6 serial `19181FDF600918`. PK artifacts were captured under `/Users/takemiyamakoto/dev/pk-retail-wallet-android/artifacts/offline/keymint/20260428T054909Z-19181FDF600918`; PNG artifacts were captured under `/Users/takemiyamakoto/dev/bpng/png2-android/artifacts/offline/keymint/20260428T055030Z-19181FDF600918`.
 
 ## 2026-04-27 SNS alias auto-renew billing amount-scale fix
 
@@ -1004,11 +1031,11 @@ Last updated: 2026-04-27
 - `roadmap.md` now tracks unfinished work only. Completed history was removed from the roadmap so it stops acting like a second status log.
 - Historical completed roadmap-only epics were archived here at summary level instead of staying in the roadmap:
   - Kagami NPoS-ready network generation, explicit consensus-mode cutover tooling, peer/block signature hardening, and bootstrap-from-trusted-peer genesis fetch are complete.
-  - Kagami/Mochi Iroha3 profiles, account-identity / alias unification, CLI output normalization, CI TODO cleanup, and offline QR storm follow-up work are complete.
+  - Kagami/Mochi Iroha3 profiles, account-identity / alias unification, CLI output normalization, CI cleanup, and offline QR storm follow-up work are complete.
   - Soracloud platform MVP and Soracloud model-training / weight-lifecycle work are complete.
   - Kotodama / IVM developer-experience observability work is complete.
   - Asset ID, account-literal, and asset-alias lease cleanup follow-ups are complete.
-  - The tracked repository TODO inventory had no actionable code/runtime/SDK/test/tooling/docs TODOs at the time of the scan; only reference-only TODO mentions remained.
+  - The tracked repository action-item inventory had no actionable code/runtime/SDK/test/tooling/docs entries at the time of the scan; only reference-only mentions remained.
 
 ## 2026-04-22 Recent Completed Follow-ups
 

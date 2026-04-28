@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-27
+Last updated: 2026-04-28
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 

@@ -309,14 +309,26 @@ fn is_offline_note_v2_recursive_circuit_id(circuit_id: &str) -> bool {
 /// Returns an error if Halo2 verifier-key generation fails.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> =
+        std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_offline_note_v2_recursive_vk_box().map_err(|err| {
+                format!("failed to generate offline-note-v2-recursive-v1 verifying key: {err}")
+            })
+        })
+        .clone()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn build_offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
     use halo2_proofs::plonk::keygen_vk;
 
     ensure_halo2_max_degree(1024);
     let params = pasta_params_new(OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
     let circuit = pasta_tiny::OfflineNoteV2SemanticV1::default();
-    let vk = keygen_vk(&params, &circuit).map_err(|err| {
-        format!("failed to generate offline-note-v2-recursive-v1 verifying key: {err}")
-    })?;
+    let vk = keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
