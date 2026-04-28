@@ -759,7 +759,7 @@ impl Actor {
         );
     }
 
-    fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
+    pub(super) fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
         let response = self.block_body_response_for_wire(block);
         self.dispatch_block_body_response_with_plain_fallback(peer, block, response);
     }
@@ -1181,6 +1181,30 @@ impl Actor {
             return;
         }
         let msg = self.build_fetch_pending_block_payload(block);
+        let consensus_body_targets = peers
+            .iter()
+            .filter_map(|(peer, meta)| {
+                matches!(meta.priority, FetchPendingBlockPriority::Consensus).then(|| peer.clone())
+            })
+            .collect::<Vec<_>>();
+        if !consensus_body_targets.is_empty() {
+            let header = block.header();
+            info!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                targets = ?consensus_body_targets,
+                "sending exact BlockBodyResponse companion for consensus missing-block fetch"
+            );
+            let response = self.block_body_response_for_wire(block);
+            for peer in consensus_body_targets {
+                self.dispatch_block_body_response_with_plain_fallback(
+                    peer,
+                    block,
+                    response.clone(),
+                );
+            }
+        }
         let hintless_block_sync = matches!(
             &msg,
             BlockMessage::BlockSyncUpdate(update)
@@ -4441,7 +4465,7 @@ impl Actor {
         };
         let block_hash = request.block_hash;
         let peer = request.requester;
-        if let Some(block) = self.local_signed_block_for_hash(block_hash) {
+        if let Some(block) = self.local_signed_block_for_body_repair(block_hash) {
             let header = block.header();
             if header.height().get() == request.height && header.view_change_index() == request.view
             {

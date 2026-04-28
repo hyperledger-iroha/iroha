@@ -5238,7 +5238,12 @@ impl Actor {
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
     ) -> bool {
-        let Some(block) = self.local_signed_block_for_hash(qc.subject_block_hash) else {
+        let block = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            self.local_signed_block_for_body_repair(qc.subject_block_hash)
+        } else {
+            self.local_signed_block_for_hash(qc.subject_block_hash)
+        };
+        let Some(block) = block else {
             return false;
         };
         self.rehydrate_pending_from_block_for_qc(qc, block, false, "deferred_payload")

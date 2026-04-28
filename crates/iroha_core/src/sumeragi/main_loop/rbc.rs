@@ -1161,8 +1161,11 @@ pub(super) fn should_process_commit_after_ready(
     clear_pending: bool,
     delivered_before: bool,
     deliver_emitted: bool,
+    ready_quorum_reached: bool,
 ) -> bool {
-    clear_pending || ((recorded_ready || deliver_emitted) && !delivered_before)
+    clear_pending
+        || ready_quorum_reached
+        || ((recorded_ready || deliver_emitted) && !delivered_before)
 }
 
 pub(super) fn should_process_commit_after_deliver(first_deliver: bool) -> bool {
@@ -2876,6 +2879,7 @@ impl Actor {
                 &topology,
             );
         }
+        let fetch_mode = self.pending_rbc_missing_block_fetch_mode(key, None);
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
         let decision = super::plan_missing_block_fetch_with_mode(
             &mut requests,
@@ -2890,7 +2894,7 @@ impl Actor {
             retry_window,
             view_change_window,
             self.recovery_signer_fallback_attempts(),
-            super::MissingBlockFetchMode::StrictSigners,
+            fetch_mode,
             false,
         );
         self.pending.missing_block_requests = requests;
@@ -3345,7 +3349,22 @@ impl Actor {
         key: SessionKey,
         reason: Option<PendingRbcDropReason>,
     ) -> super::MissingBlockFetchMode {
-        let _ = (key, reason);
+        let _ = reason;
+        let fallback_attempts = self.recovery_signer_fallback_attempts();
+        if fallback_attempts != 0
+            && self
+                .pending
+                .missing_block_requests
+                .get(&key.0)
+                .is_some_and(|stats| {
+                    stats.height == key.1
+                        && stats.view == key.2
+                        && matches!(stats.phase, crate::sumeragi::consensus::Phase::Commit)
+                        && stats.attempts >= fallback_attempts
+                })
+        {
+            return super::MissingBlockFetchMode::Default;
+        }
         super::MissingBlockFetchMode::StrictSigners
     }
 
@@ -3424,6 +3443,21 @@ impl Actor {
                 return false;
             }
         }
+        if self.runtime_da_enabled()
+            && Self::stale_rbc_repair_message_can_seed_session(kind)
+            && self.stale_frontier_rbc_repair_is_actionable(*block_hash, height, view)
+        {
+            debug!(
+                height,
+                view,
+                local_view,
+                committed_height,
+                block = %block_hash,
+                kind,
+                "accepting RBC message for stale view with actionable frontier repair"
+            );
+            return false;
+        }
         if self.runtime_da_enabled() && self.rbc_rebroadcast_active(key) {
             debug!(
                 height,
@@ -3444,6 +3478,58 @@ impl Actor {
             "dropping RBC message for stale view"
         );
         true
+    }
+
+    fn stale_rbc_repair_message_can_seed_session(kind: &'static str) -> bool {
+        matches!(
+            kind,
+            "RbcInit" | "RbcChunk" | "RbcChunkCompact" | "RbcReady" | "RbcDeliver"
+        )
+    }
+
+    fn stale_frontier_rbc_repair_is_actionable(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        if !self.frontier_slot_is_exact_height(height) {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                request.phase == crate::sumeragi::consensus::Phase::Commit
+                    && request.height == height
+                    && request.view == view
+                    && self.missing_block_request_has_actionable_dependency(
+                        block_hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.phase == crate::sumeragi::consensus::Phase::Commit
+                    && entry.qc.subject_block_hash == block_hash
+                    && entry.qc.height == height
+                    && entry.qc.view == view
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.missing_commit_qc_repair_active_for_round(
+                block_hash,
+                height,
+                view,
+                committed_height,
+                now,
+            )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -5425,11 +5511,26 @@ impl Actor {
                 }
             }
         }
+        let ready_quorum_reached = recorded_ready
+            && ready_count_before < deliver_quorum
+            && ready_count_after >= deliver_quorum;
+        if recorded_ready && ready_quorum_reached && !clear_pending && delivered_before {
+            let now = Instant::now();
+            self.touch_pending_progress(ready.block_hash, ready.height, ready.view, now);
+            let _ = self.note_missing_block_request_dependency_progress(
+                ready.block_hash,
+                ready.height,
+                ready.view,
+                now,
+                true,
+            );
+        }
         if should_process_commit_after_ready(
             recorded_ready,
             clear_pending,
             delivered_before,
             deliver_emitted,
+            ready_quorum_reached,
         ) {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             let consensus_queue_backlog = queue_depths.vote_rx > 0

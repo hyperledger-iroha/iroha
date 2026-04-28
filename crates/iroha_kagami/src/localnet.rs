@@ -1611,6 +1611,18 @@ fn render_peer_config(
     );
     root.insert("kura".into(), Value::Table(kura));
 
+    let mut soracloud_runtime = Table::new();
+    soracloud_runtime.insert(
+        "state_dir".into(),
+        Value::String(
+            kura_store_dir
+                .join("soracloud_runtime")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    root.insert("soracloud_runtime".into(), Value::Table(soracloud_runtime));
+
     let mut tiered_state = Table::new();
     tiered_state.insert(
         "cold_store_root".into(),
@@ -6706,6 +6718,12 @@ mod tests {
             .and_then(|t| t.get("store_dir"))
             .and_then(toml::Value::as_str)
             .expect("kura store");
+        let soracloud_runtime_path = parsed
+            .get("soracloud_runtime")
+            .and_then(toml::Value::as_table)
+            .and_then(|t| t.get("state_dir"))
+            .and_then(toml::Value::as_str)
+            .expect("soracloud runtime state dir");
         let tiered_state = parsed
             .get("tiered_state")
             .and_then(toml::Value::as_table)
@@ -6725,6 +6743,14 @@ mod tests {
         assert!(
             Path::new(kura_path).is_absolute(),
             "kura store path should be absolute"
+        );
+        assert!(
+            Path::new(soracloud_runtime_path).is_absolute(),
+            "soracloud runtime state_dir should be absolute"
+        );
+        assert!(
+            Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
+            "soracloud runtime state_dir should be isolated under the peer store"
         );
         assert!(
             Path::new(tiered_root).is_absolute(),
