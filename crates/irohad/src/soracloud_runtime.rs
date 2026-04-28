@@ -6101,16 +6101,25 @@ fn local_read_request_metadata_tlv_bytes(
             ivm::pointer_abi::validate_tlv_bytes(&request.request_body).is_ok(),
         ),
     );
-    let metadata_bytes =
-        norito::json::to_vec(&norito::json::Value::Object(metadata)).map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!(
-                    "serialize Soracloud query metadata for service `{}` handler `{}`: {error}",
-                    request.service_name, request.handler_name
-                ),
-            )
-        })?;
+    let metadata_value = norito::json::Value::Object(metadata);
+    let metadata_json = Json::from_norito_value_ref(&metadata_value).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "serialize Soracloud query metadata JSON for service `{}` handler `{}`: {error}",
+                request.service_name, request.handler_name
+            ),
+        )
+    })?;
+    let metadata_bytes = norito::to_bytes(&metadata_json).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "serialize Soracloud query metadata for service `{}` handler `{}`: {error}",
+                request.service_name, request.handler_name
+            ),
+        )
+    })?;
     Ok(make_pointer_tlv(PointerType::Json, &metadata_bytes))
 }
 
@@ -6135,12 +6144,61 @@ fn insert_public_input_aliases(
     Ok(())
 }
 
+fn pointer_tlv_payload(tlv_bytes: &[u8]) -> &[u8] {
+    ivm::pointer_abi::validate_tlv_bytes(tlv_bytes)
+        .map(|tlv| tlv.payload)
+        .unwrap_or(tlv_bytes)
+}
+
+fn json_value_from_tlv(tlv_bytes: &[u8]) -> Result<norito::json::Value, VMError> {
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(tlv_bytes).map_err(|_| VMError::DecodeError)?;
+    if tlv.type_id != PointerType::Json {
+        return Err(VMError::DecodeError);
+    }
+    match norito::decode_from_bytes::<Json>(tlv.payload) {
+        Ok(json) => json
+            .try_into_any_norito::<norito::json::Value>()
+            .map_err(|_| VMError::DecodeError),
+        Err(_) => {
+            let value = norito::json::from_slice::<norito::json::Value>(tlv.payload)
+                .map_err(|_| VMError::DecodeError)?;
+            Ok(value)
+        }
+    }
+}
+
+fn trigger_event_json_tlv(fields: norito::json::Map) -> Result<Vec<u8>, VMError> {
+    let value = norito::json::Value::Object(fields);
+    let json = Json::from_norito_value_ref(&value).map_err(|_| VMError::DecodeError)?;
+    let bytes = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+    Ok(make_pointer_tlv(PointerType::Json, &bytes))
+}
+
 fn local_read_public_inputs(
     body_tlv: &[u8],
     metadata_tlv: &[u8],
     observed_height: u64,
 ) -> Result<BTreeMap<Name, Vec<u8>>, VMError> {
     let mut inputs = BTreeMap::new();
+    let mut trigger_event = norito::json::Map::new();
+    trigger_event.insert(
+        "_request_body".to_owned(),
+        norito::json::Value::from(hex::encode(pointer_tlv_payload(body_tlv))),
+    );
+    trigger_event.insert(
+        "_request_meta".to_owned(),
+        json_value_from_tlv(metadata_tlv)?,
+    );
+    trigger_event.insert(
+        "observed_height".to_owned(),
+        norito::json::Value::from(observed_height),
+    );
+    let trigger_event_tlv = trigger_event_json_tlv(trigger_event)?;
+    insert_public_input_aliases(
+        &mut inputs,
+        &["trigger_event_json", "event", "entrypoint_payload"],
+        &trigger_event_tlv,
+    )?;
     insert_public_input_aliases(
         &mut inputs,
         &["_request_body", "request_body", "body", "payload", "arg0", "param0"],
@@ -6153,7 +6211,6 @@ fn local_read_public_inputs(
             "request_meta",
             "metadata",
             "meta",
-            "trigger_event_json",
             "arg1",
             "param1",
         ],
@@ -6174,6 +6231,25 @@ fn ordered_mailbox_public_inputs(
     observed_height: u64,
 ) -> Result<BTreeMap<Name, Vec<u8>>, VMError> {
     let mut inputs = BTreeMap::new();
+    let mut trigger_event = norito::json::Map::new();
+    trigger_event.insert(
+        "_request_body".to_owned(),
+        norito::json::Value::from(hex::encode(pointer_tlv_payload(payload_tlv))),
+    );
+    trigger_event.insert(
+        "execution_sequence".to_owned(),
+        norito::json::Value::from(execution_sequence),
+    );
+    trigger_event.insert(
+        "observed_height".to_owned(),
+        norito::json::Value::from(observed_height),
+    );
+    let trigger_event_tlv = trigger_event_json_tlv(trigger_event)?;
+    insert_public_input_aliases(
+        &mut inputs,
+        &["trigger_event_json", "event", "entrypoint_payload"],
+        &trigger_event_tlv,
+    )?;
     insert_public_input_aliases(
         &mut inputs,
         &["_request_body", "request_body", "body", "payload", "arg0", "param0"],
@@ -20541,6 +20617,59 @@ mod tests {
         assert!(response.found);
         assert_eq!(response.payload_bytes, expected_payload);
         Ok(())
+    }
+
+    #[test]
+    fn local_read_public_inputs_encode_trigger_event_json_for_ivm_helpers() {
+        let body_tlv = make_pointer_tlv(PointerType::Blob, br#"{"hello":"world"}"#);
+        let metadata_value = norito::json::Value::Object(norito::json::Map::from([
+            (
+                "request_path".to_owned(),
+                norito::json::Value::from("/api/auth/me"),
+            ),
+            (
+                "request_method".to_owned(),
+                norito::json::Value::from("GET"),
+            ),
+        ]));
+        let metadata_json =
+            Json::from_norito_value_ref(&metadata_value).expect("metadata JSON value");
+        let metadata_bytes = norito::to_bytes(&metadata_json).expect("metadata norito bytes");
+        let metadata_tlv = make_pointer_tlv(PointerType::Json, &metadata_bytes);
+
+        let inputs =
+            local_read_public_inputs(&body_tlv, &metadata_tlv, 42).expect("public inputs");
+        let trigger_event_tlv = inputs
+            .get(&public_input_name("trigger_event_json").expect("input name"))
+            .expect("trigger event public input");
+        let trigger_event_tlv =
+            ivm::pointer_abi::validate_tlv_bytes(trigger_event_tlv).expect("valid JSON TLV");
+        assert_eq!(trigger_event_tlv.type_id, PointerType::Json);
+
+        let trigger_json: Json =
+            norito::decode_from_bytes(trigger_event_tlv.payload).expect("JSON wrapper");
+        let trigger_value: norito::json::Value = trigger_json
+            .try_into_any_norito()
+            .expect("trigger event JSON value");
+        assert_eq!(
+            trigger_value
+                .get("_request_body")
+                .and_then(norito::json::Value::as_str),
+            Some("7b2268656c6c6f223a22776f726c64227d")
+        );
+        assert_eq!(
+            trigger_value
+                .get("_request_meta")
+                .and_then(|metadata| metadata.get("request_path"))
+                .and_then(norito::json::Value::as_str),
+            Some("/api/auth/me")
+        );
+        assert_eq!(
+            trigger_value
+                .get("observed_height")
+                .and_then(norito::json::Value::as_u64),
+            Some(42)
+        );
     }
 
     #[test]
