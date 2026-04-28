@@ -1657,13 +1657,8 @@ impl Actor {
         }
 
         let now = Instant::now();
-        let known_block_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
-            block_hash,
-            height,
-            view,
-            self.committed_height_snapshot(),
-            now,
-        );
+        let known_block_commit_qc_repair =
+            self.missing_commit_qc_request_pending_for_round(block_hash, height, view);
         let mut targets = super::missing_block_request_targets_without_local(
             &self.common_config.peer.id,
             targets,
@@ -3955,7 +3950,13 @@ impl Actor {
                     exact_retry_emitted,
                     "routing vote-backed contiguous frontier payload miss through exact body repair"
                 );
-                if self.config.resilience.enabled {
+                let resilience_generic_fallback = self.config.resilience.enabled
+                    && signature_topology
+                        .as_ref()
+                        .len()
+                        .saturating_sub(signers.len())
+                        >= 2;
+                if resilience_generic_fallback {
                     let cooldown = self.rebroadcast_cooldown();
                     let mut targets = rebroadcast_targets_for_qc(
                         self.common_config.peer.id(),
@@ -4033,6 +4034,27 @@ impl Actor {
                             super::MissingBlockRecoveryStage::HashFetch,
                             None,
                             now,
+                        );
+                    }
+                    if matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+                        && exact_owner_routed
+                        && !self
+                            .pending
+                            .missing_block_requests
+                            .contains_key(&block_hash)
+                    {
+                        let view_change_window =
+                            Some(self.quorum_timeout(self.runtime_da_enabled()));
+                        let _ = super::touch_missing_block_request(
+                            &mut self.pending.missing_block_requests,
+                            block_hash,
+                            height,
+                            view,
+                            phase,
+                            super::MissingBlockPriority::Consensus,
+                            now,
+                            cooldown,
+                            view_change_window,
                         );
                     }
                     debug!(
@@ -4230,29 +4252,63 @@ impl Actor {
         }
 
         if block_known {
-            false
-        } else {
-            if quorum_met {
-                self.defer_qc_if_block_missing_with_quorum_hint(
-                    phase,
-                    block_hash,
-                    height,
-                    view,
-                    signers,
-                    signature_topology,
-                    /*commit_quorum_met*/ true,
-                )
-            } else {
-                self.defer_qc_if_block_missing(
-                    phase,
-                    block_hash,
-                    height,
-                    view,
-                    signers,
-                    signature_topology,
-                )
-            }
+            return false;
         }
+
+        let deferred = if quorum_met {
+            self.defer_qc_if_block_missing_with_quorum_hint(
+                phase,
+                block_hash,
+                height,
+                view,
+                signers,
+                signature_topology,
+                /*commit_quorum_met*/ true,
+            )
+        } else {
+            self.defer_qc_if_block_missing(
+                phase,
+                block_hash,
+                height,
+                view,
+                signers,
+                signature_topology,
+            )
+        };
+
+        let resilience_commit_frontier_fallback = quorum_met
+            && self.config.resilience.enabled
+            && matches!(phase, crate::sumeragi::consensus::Phase::Commit)
+            && height == self.committed_height_snapshot().saturating_add(1)
+            && height == self.active_consensus_round_height()
+            && signature_topology
+                .as_ref()
+                .len()
+                .saturating_sub(signers.len())
+                >= 2;
+        if resilience_commit_frontier_fallback
+            && !self
+                .pending
+                .missing_block_requests
+                .contains_key(&block_hash)
+        {
+            let now = Instant::now();
+            let cooldown = self.rebroadcast_cooldown();
+            let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+            let _ = super::touch_missing_block_request(
+                &mut self.pending.missing_block_requests,
+                block_hash,
+                height,
+                view,
+                phase,
+                super::MissingBlockPriority::Consensus,
+                now,
+                cooldown,
+                view_change_window,
+            );
+        }
+
+        deferred
     }
 
     pub(crate) fn precommit_qc_extends_locked(

@@ -5049,8 +5049,12 @@ impl Actor {
     ) -> usize {
         if target_missing_only {
             let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-            let mut topology_peers =
-                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            let mut topology_peers = if matches!(phase, crate::sumeragi::consensus::Phase::NewView)
+            {
+                self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+            } else {
+                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+            };
             if topology_peers.is_empty() {
                 topology_peers = self.effective_commit_topology();
             }
@@ -5115,8 +5119,11 @@ impl Actor {
             return 0;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let mut topology_peers =
-            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        let mut topology_peers = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
+            self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+        } else {
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+        };
         if topology_peers.is_empty() {
             topology_peers = self.effective_commit_topology();
         }
