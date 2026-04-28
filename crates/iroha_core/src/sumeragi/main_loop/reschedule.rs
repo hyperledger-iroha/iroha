@@ -2404,7 +2404,7 @@ impl Actor {
             })
             .collect();
         let canonical_topology = super::network_topology::Topology::new(topology_peers.to_vec());
-        let (_consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology =
             super::topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
         let observed_signer_peers = match super::signer_peers_for_topology(
@@ -2441,9 +2441,59 @@ impl Actor {
             && missing_targets.len() < all_non_local_targets.len()
         {
             // Near quorum, signer-index inference can be brittle under churn; fan out to all peers.
+            if matches!(consensus_mode, ConsensusMode::Npos) {
+                self.record_npos_repair_coverage(
+                    height,
+                    view,
+                    "near_commit_quorum_full_fanout",
+                    topology_peers,
+                    &all_non_local_targets,
+                );
+            }
             return all_non_local_targets;
         }
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            self.record_npos_repair_coverage(
+                height,
+                view,
+                "missing_commit_votes",
+                topology_peers,
+                &missing_targets,
+            );
+        }
         missing_targets
+    }
+
+    fn record_npos_repair_coverage(
+        &self,
+        height: u64,
+        view: u64,
+        reason: &str,
+        topology_peers: &[PeerId],
+        selected_targets: &[PeerId],
+    ) {
+        let selected: std::collections::BTreeSet<_> = selected_targets.iter().cloned().collect();
+        let selected_bps = crate::sumeragi::stake_snapshot::stake_coverage_bps_for_world(
+            self.state.view().world(),
+            topology_peers,
+            &selected,
+        )
+        .unwrap_or(0);
+        let reached = crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+            self.state.view().world(),
+            topology_peers,
+            &selected,
+        )
+        .unwrap_or(false);
+        super::status::record_npos_repair_coverage(
+            height,
+            view,
+            reason,
+            selected_targets.len(),
+            6_667,
+            selected_bps,
+            reached,
+        );
     }
 }
 

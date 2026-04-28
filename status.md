@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-28
 
+## 2026-04-28 Izanami/Sumeragi result-strengthening harness
+
+- Hardened Izanami shutdown accounting so load supervisors stop planning new submissions at shutdown, drain spawned submission tasks for a bounded timeout, and expose `submit_plans_started`, `submit_plans_shutdown_skipped`, and `submit_tasks_shutdown_aborted` in the final `izanami::summary`. The CLI persists `--shutdown-drain-timeout`; the matrix wrapper keeps quick runs at `15s` and paper/stress profiles at `60s`.
+- Added run evidence to Izanami summaries and matrix TSVs: submit-latency sample percentiles (`p50`/`p95`/`p99`/max), final quorum/strict height, max peer-height skew, first height progress after fault start/end, and best-effort Sumeragi status deltas for view changes, commit-pipeline timing, missing-block fetch, RBC pressure/evictions, block-sync roster source counters, and NPoS repair coverage.
+- Added observational NPoS repair-coverage telemetry to `/v1/sumeragi/status` with Norito-defaulted fields. The snapshot is populated only from local repair/fanout selection, only surfaced for active NPoS status, and does not feed block validity, validator ordering, signatures, or deterministic consensus state.
+- Updated the communication-vulnerability matrix tooling to emit `paper-style-final-report.md`, added `paper`, `stress-400`, and `stress-800` profiles, expanded acceptance-failure marker checks, and added `scripts/run_izanami_communication_vulnerability_sweep.sh` to aggregate multi-profile/multi-seed runs into `sweep-summary.tsv`, `sweep-evidence.tsv`, and `sweep-report.md`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p izanami --bin izanami`
+  - `cargo check -p iroha_torii`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh && bash -n scripts/run_izanami_communication_vulnerability_sweep.sh`
+  - `cargo test -p izanami metrics_snapshot_accumulates_counts -- --nocapture`
+  - `cargo test -p izanami latency_summary_uses_ceil_rank_percentiles -- --nocapture`
+  - `cargo test -p izanami shutdown_submission_drain_counts_aborted_tasks -- --nocapture`
+  - `cargo test -p izanami cli_overrides_shutdown_drain_timeout -- --nocapture`
+  - `cargo test -p izanami stored_args_roundtrip_preserves_fault_window_fields -- --nocapture`
+  - `cargo test -p iroha_core --lib npos_repair_coverage_snapshot_is_npos_only -- --nocapture`
+  - `cargo test -p iroha_core --lib stake_coverage_bps_for_world_reports_selected_coverage -- --nocapture`
+  - `cargo test -p iroha_data_model --test consensus_roundtrip sumeragi_wire_status_roundtrip -- --nocapture`
+  - `cargo test -p iroha sumeragi_status_wire_roundtrip_to_json_preserves_fields -- --nocapture`
+  - `git diff --check`
+- The full 10-seed paper/stress sweep remains intentionally unrun in this slice because it is an expensive acceptance run.
+
 ## 2026-04-28 Offline Note V2 focused validation gap closure
 
 - Added focused core rejection coverage for Offline Note V2 redeem/audit proof validation: non-`OpenVerifyEnvelope` proof bytes, wrong verifier key id/backend, inactive verifier keys, and public-input hash mismatches now have explicit tests.
