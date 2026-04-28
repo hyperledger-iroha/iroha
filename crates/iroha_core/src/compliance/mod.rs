@@ -657,9 +657,9 @@ mod tests {
     fn selector_matches_authority_domain() {
         let alpha = account("alice", "wonderland");
         let retail_domain =
-            iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("domain id");
+            iroha_data_model::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
         let other_domain =
-            iroha_data_model::domain::DomainId::try_new("ubl", "sbp").expect("domain id");
+            iroha_data_model::domain::DomainId::try_new("ubl", "paynet").expect("domain id");
         let policy = LaneCompliancePolicy {
             allow: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -705,7 +705,7 @@ mod tests {
     fn selector_matches_authority_domain_prefix() {
         let alpha = account("alice", "wonderland");
         let retail_domain =
-            iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("domain id");
+            iroha_data_model::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
         let policy = LaneCompliancePolicy {
             allow: vec![LaneComplianceRule {
                 selector: ParticipantSelector {

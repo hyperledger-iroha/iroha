@@ -1409,10 +1409,10 @@ fn localnet_dataspace_catalog(
     if localnet_uses_alias_multilane_catalog(sora_profile) {
         for (alias, id, description) in [
             (
-                "bpng",
+                "paynet",
                 i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64"),
-                "BPNG private dataspace",
+                "PayNet private dataspace",
             ),
             (
                 "nexus",
@@ -1465,9 +1465,9 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         ),
         (
             i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
-            "bpng",
-            "BPNG private dataspace lane",
-            "bpng",
+            "paynet",
+            "PayNet private dataspace lane",
+            "paynet",
             "public",
         ),
         (
@@ -5078,8 +5078,8 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            lanes_by_alias.get("bpng"),
-            Some(&("bpng".to_owned(), "public".to_owned()))
+            lanes_by_alias.get("paynet"),
+            Some(&("paynet".to_owned(), "public".to_owned()))
         );
         assert_eq!(
             lanes_by_alias.get("nexus"),
@@ -5107,7 +5107,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            dataspaces_by_alias.get("bpng"),
+            dataspaces_by_alias.get("paynet"),
             Some(
                 &i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
                     .expect("PAYNET dataspace id fits i64")
