@@ -1336,6 +1336,79 @@ pub mod isi {
             (state, asset_id, account_id, definition_id)
         }
 
+        fn offline_note_v2_verifier_test_state(
+            status: ConfidentialStatus,
+        ) -> (State, OfflineNoteRecursiveProofV2, Hash) {
+            let verifier_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            );
+            let vk_box = VerifyingKeyBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                b"offline-note-v2-test-verifying-key".to_vec(),
+            );
+            let commitment = crate::zk::hash_vk(&vk_box);
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                None,
+                OFFLINE_NOTE_V2_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                "pasta",
+                offline_note_v2_recursive_public_inputs_schema_hash(),
+                commitment,
+            );
+            record.key = Some(vk_box);
+            record.status = status;
+            record.max_proof_bytes = 4096;
+            record.vk_len = b"offline-note-v2-test-verifying-key".len() as u32;
+
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+                commitment,
+                OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+                b"offline-note-v2-test-proof".to_vec(),
+            );
+            let proof_bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
+            let public_inputs_hash = Hash::new(b"offline-note-v2-public-inputs");
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::default(), Arc::clone(&kura), query);
+            state
+                .world
+                .verifying_keys
+                .insert(verifier_id.clone(), record);
+            state.world.verifying_keys_by_circuit.insert(
+                (
+                    crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID.to_owned(),
+                    1,
+                ),
+                verifier_id.clone(),
+            );
+
+            let proof = OfflineNoteRecursiveProofV2 {
+                verifier_key_id: verifier_id,
+                public_inputs_hash: public_inputs_hash.clone(),
+                proof: ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), proof_bytes),
+            };
+
+            (state, proof, public_inputs_hash)
+        }
+
+        fn assert_offline_rejection(err: Error, label: &str, detail: &str) {
+            let message = err.to_string();
+            assert!(
+                message.contains(label),
+                "expected error label `{label}`, got: {message}"
+            );
+            assert!(
+                message.contains(detail),
+                "expected error detail `{detail}`, got: {message}"
+            );
+        }
+
         #[test]
         fn reserve_offline_note_escrow_rejects_escrow_self_reference() {
             let (state, asset_id, _account_id, _definition_id) =
@@ -1429,6 +1502,77 @@ pub mod isi {
                 panic!("expected invariant violation");
             };
             assert!(message.contains("offline_reason::duplicate_hash:"));
+        }
+
+        #[test]
+        fn offline_note_v2_rejects_non_open_verify_envelope_proof_bytes() {
+            let (state, mut proof, _public_inputs_hash) =
+                offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
+            proof.proof.bytes = b"legacy transcript payload".to_vec();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            let err = offline_note_v2_resolve_verifier(&proof, &transaction)
+                .expect_err("legacy transcript bytes must not decode as OpenVerifyEnvelope");
+            assert_offline_rejection(err, "invalid_proof", "OpenVerifyEnvelope");
+        }
+
+        #[test]
+        fn offline_note_v2_rejects_wrong_verifier_key_id_backend() {
+            let (state, mut proof, _public_inputs_hash) =
+                offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
+            proof.verifier_key_id = VerifyingKeyId::new(
+                "stark/fri-v1",
+                crate::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            let err = offline_note_v2_resolve_verifier(&proof, &transaction)
+                .expect_err("proof backend must match the selected verifier key id");
+            assert_offline_rejection(err, "verifier_key_invalid", "backend");
+        }
+
+        #[test]
+        fn offline_note_v2_rejects_inactive_verifier_key() {
+            let (state, proof, _public_inputs_hash) =
+                offline_note_v2_verifier_test_state(ConfidentialStatus::Proposed);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let transaction = block.transaction();
+
+            let err = offline_note_v2_resolve_verifier(&proof, &transaction)
+                .expect_err("inactive Offline V2 verifier keys must reject proofs");
+            assert_offline_rejection(err, "verifier_key_inactive", "not active");
+        }
+
+        #[test]
+        fn offline_note_v2_redeem_and_audit_reject_public_input_hash_mismatch() {
+            let (state, proof, _public_inputs_hash) =
+                offline_note_v2_verifier_test_state(ConfidentialStatus::Active);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let redeem_err = verify_offline_note_v2_recursive_proof(
+                &proof,
+                &Hash::new(b"offline-note-v2-wrong-redeem-inputs"),
+                Vec::new(),
+                &mut transaction,
+            )
+            .expect_err("redeem proof must be bound to the expected public inputs");
+            assert_offline_rejection(redeem_err, "proof_binding", "expected public inputs");
+
+            let audit_err = verify_offline_note_v2_recursive_proof(
+                &proof,
+                &Hash::new(b"offline-note-v2-wrong-audit-inputs"),
+                Vec::new(),
+                &mut transaction,
+            )
+            .expect_err("audit proof must be bound to the expected public inputs");
+            assert_offline_rejection(audit_err, "proof_binding", "expected public inputs");
         }
 
         #[test]
