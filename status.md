@@ -2,6 +2,17 @@
 
 Last updated: 2026-04-28
 
+## 2026-04-28 Sumeragi pacemaker low-online recovery gate
+
+- Narrowed the pacemaker's first-proposal low-online deferral so it still suppresses fresh view-0 startup proposals without an online commit quorum, but no longer blocks cached-slot cleanup, missing-QC committed-QC fallback proposals, recovery heartbeat proposals, stale/unknown precommit recovery, or future-NEW_VIEW reanchor catch-up.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::cached_recovery_proposal -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::force_view_change_if_idle_forces_missing_qc_frontier_proposal -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::pacemaker_ -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-28 SDK compatibility matrix gap closure
 
 - Added `fixtures/sdk/compatibility_matrix.json` as the canonical public SDK compatibility matrix fixture for the `i23-features` branch, with every SDK/story cell populated.
