@@ -55143,6 +55143,7 @@ fn build_onboarding_alias_auto_renew_instructions(
     max_failures: u32,
     max_charge_amount: u64,
 ) -> Result<(Vec<InstructionBox>, NftId)> {
+    use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 
     let subscription_id =
@@ -55171,17 +55172,25 @@ fn build_onboarding_alias_auto_renew_instructions(
         (*ACCOUNT_ALIAS_AUTO_RENEW_KEY).clone(),
         IrohaJson::new(settings),
     );
-    let permission: Permission = CanRegisterTrigger {
+    let register_trigger_permission: Permission = CanRegisterTrigger {
         authority: subscriber.clone(),
+    }
+    .into();
+    let modify_subscription_permission: Permission = CanModifyNftMetadata {
+        nft: subscription_id.clone(),
     }
     .into();
     Ok((
         vec![
             InstructionBox::from(Grant::account_permission(
-                permission.clone(),
+                register_trigger_permission.clone(),
                 onboarding_authority.clone(),
             )),
             InstructionBox::from(Register::nft(Nft::new(subscription_id.clone(), metadata))),
+            InstructionBox::from(Grant::account_permission(
+                modify_subscription_permission,
+                subscriber.clone(),
+            )),
             InstructionBox::from(Register::trigger(build_billing_trigger(
                 billing_trigger_id,
                 subscriber.clone(),
@@ -55194,7 +55203,7 @@ fn build_onboarding_alias_auto_renew_instructions(
                 subscriber.clone(),
             )),
             InstructionBox::from(Revoke::account_permission(
-                permission,
+                register_trigger_permission,
                 onboarding_authority.clone(),
             )),
         ],
@@ -65446,6 +65455,60 @@ mod subscription_api_tests {
         let usage = derive_trigger_id("sub_usage_", &subscription_id).unwrap();
         assert_eq!(bill, bill2);
         assert_ne!(bill, usage);
+    }
+
+    #[test]
+    fn onboarding_alias_auto_renew_grants_subscriber_metadata_mutation() {
+        let subscription_domain: DomainId =
+            DomainId::try_new("subscriptions", "universal").unwrap();
+        let lease_quote = LeaseQuote {
+            selector: iroha_data_model::sns::NameSelectorV1::new(
+                iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+                "merchant",
+            )
+            .unwrap(),
+            pricing_class: 0,
+            payment_asset_id: "xor#wonderland.universal#alice".into(),
+            payment_asset_definition_id: test_asset_definition_id_from_hex(
+                "550e8400e29b41d4a7164466554400f1",
+            ),
+            collector_account: ALICE_ID.clone(),
+            charge_amount: 7,
+            expires_at_ms: 100_000,
+            grace_expires_at_ms: 110_000,
+            redemption_expires_at_ms: 120_000,
+        };
+        let (instructions, subscription_id) = build_onboarding_alias_auto_renew_instructions(
+            &ALICE_ID,
+            &BOB_ID,
+            &subscription_domain,
+            "merchant@wonderland",
+            &lease_quote,
+            1,
+            1_000,
+            3,
+            7,
+        )
+        .expect("build auto-renew instructions");
+        let expected_permission: Permission =
+            iroha_executor_data_model::permission::nft::CanModifyNftMetadata {
+                nft: subscription_id,
+            }
+            .into();
+
+        let grants_subscriber_nft_mutation = instructions.iter().any(|instruction| {
+            let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
+                return false;
+            };
+            matches!(
+                grant,
+                GrantBox::Permission(permission)
+                    if permission.destination == BOB_ID.clone()
+                        && permission.object == expected_permission
+            )
+        });
+
+        assert!(grants_subscriber_nft_mutation);
     }
 
     #[test]

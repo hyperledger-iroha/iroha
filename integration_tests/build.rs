@@ -9,22 +9,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const SAMPLE_NAMES: &[&str] = &[
-    "executor_with_admin",
-    "executor_with_custom_permission",
-    "executor_remove_permission",
-    "executor_custom_instructions_simple",
-    "executor_custom_instructions_complex",
-    "executor_with_migration_fail",
-    "executor_with_fuel",
-    "executor_with_custom_parameter",
-    "mint_rose_trigger",
-    "create_nft_for_every_user_trigger",
-    "query_assets_and_save_cursor",
-    "smart_contract_can_filter_queries",
-    "threshold_escrow",
-    "trigger_cat_and_mouse",
-];
+const SAMPLE_MANIFEST: &str = include_str!("../crates/ivm/prebuilt_samples.txt");
+
+fn prebuilt_sample_names() -> Vec<&'static str> {
+    SAMPLE_MANIFEST
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
 
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -52,6 +45,7 @@ fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../crates/ivm/prebuilt_samples.txt");
 
     let root = workspace_root();
     let fixtures_dir = root.join("integration_tests/fixtures/ivm");
@@ -78,7 +72,7 @@ fn main() {
 
     fs::create_dir_all(&samples_dir).expect("failed to create prebuilt samples directory");
 
-    let mut sample_names = SAMPLE_NAMES.to_vec();
+    let mut sample_names = prebuilt_sample_names();
     if env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
         .ok()
         .as_deref()

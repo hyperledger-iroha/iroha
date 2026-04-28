@@ -393,6 +393,8 @@ fn minimal_config_snapshot() {
                 trust_penalty_bad_gossip: 5,
                 trust_penalty_unknown_peer: 3,
                 trust_min_score: -20,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_outbound_percent: 0,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
                 p2p_proxy: None,

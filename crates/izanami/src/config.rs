@@ -24,6 +24,8 @@ use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
+
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
 #[command(author, version, about = "Izanami chaosnet orchestrator for Iroha", long_about = None)]
@@ -58,6 +60,12 @@ pub struct IzanamiArgs {
     /// Optional p95 block-interval threshold enforced when `target_blocks` is set.
     #[arg(long, value_parser = parse_duration)]
     pub latency_p95_threshold: Option<Duration>,
+    /// Optional run-relative offset before fault workers start injecting faults.
+    #[arg(long, value_parser = parse_duration)]
+    pub fault_window_start: Option<Duration>,
+    /// Optional run-relative offset after which fault workers stop injecting faults.
+    #[arg(long, value_parser = parse_duration)]
+    pub fault_window_end: Option<Duration>,
     /// Optional deterministic seed for reproducible chaos runs.
     #[arg(long)]
     pub seed: Option<u64>,
@@ -88,6 +96,13 @@ pub struct IzanamiArgs {
     /// Fault toggle switches parsed from CLI flags.
     #[command(flatten)]
     pub faults: FaultArgs,
+    /// P2P application-frame packet-loss percentage used when packet-loss faults are enabled.
+    #[arg(
+        long = "fault-network-packet-loss-percent",
+        default_value_t = DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+        value_parser = clap::value_parser!(u8).range(0..=100),
+    )]
+    pub packet_loss_percent: u8,
     /// Enable Nexus/Sora multi-lane defaults from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
@@ -162,6 +177,16 @@ pub struct FaultArgs {
         default_missing_value = "true",
     )]
     pub network_partition: bool,
+    /// Enable P2P packet-loss faults.
+    #[arg(
+        long = "fault-enable-network-packet-loss",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
+    pub network_packet_loss: bool,
     /// Enable CPU stress faults.
     #[arg(
         long = "fault-enable-cpu-stress",
@@ -186,12 +211,13 @@ pub struct FaultArgs {
 
 impl FaultArgs {
     pub fn to_toggles(&self) -> FaultToggles {
-        FaultToggles::from_explicit_array([
+        FaultToggles::from_explicit_array_with_packet_loss([
             self.crash_restart,
             self.wipe_storage,
             self.spam_invalid_transactions,
             self.network_latency,
             self.network_partition,
+            self.network_packet_loss,
             self.cpu_stress,
             self.disk_saturation,
         ])
@@ -206,6 +232,7 @@ impl Default for FaultArgs {
             spam_invalid_transactions: true,
             network_latency: true,
             network_partition: true,
+            network_packet_loss: true,
             cpu_stress: true,
             disk_saturation: true,
         }
@@ -220,6 +247,7 @@ impl From<FaultToggles> for FaultArgs {
             spam_invalid_transactions: toggles.spam_invalid_transactions(),
             network_latency: toggles.network_latency(),
             network_partition: toggles.network_partition(),
+            network_packet_loss: toggles.network_packet_loss(),
             cpu_stress: toggles.cpu_stress(),
             disk_saturation: toggles.disk_saturation(),
         }
@@ -238,22 +266,32 @@ impl FaultToggles {
     const SPAM_INVALID_TRANSACTIONS: u8 = 1 << 2;
     const NETWORK_LATENCY: u8 = 1 << 3;
     const NETWORK_PARTITION: u8 = 1 << 4;
-    const CPU_STRESS: u8 = 1 << 5;
-    const DISK_SATURATION: u8 = 1 << 6;
+    const NETWORK_PACKET_LOSS: u8 = 1 << 5;
+    const CPU_STRESS: u8 = 1 << 6;
+    const DISK_SATURATION: u8 = 1 << 7;
     const ALL_BITS: u8 = Self::CRASH_RESTART
         | Self::WIPE_STORAGE
         | Self::SPAM_INVALID_TRANSACTIONS
         | Self::NETWORK_LATENCY
         | Self::NETWORK_PARTITION
+        | Self::NETWORK_PACKET_LOSS
         | Self::CPU_STRESS
         | Self::DISK_SATURATION;
 
     /// Legacy helper preserving the historical "optional add-on faults" semantics used by tests.
     pub const fn from_array(flags: [bool; 4]) -> Self {
-        Self::from_explicit_array([true, true, true, flags[0], flags[1], flags[2], flags[3]])
+        Self::from_explicit_array_with_packet_loss([
+            true, true, true, flags[0], flags[1], false, flags[2], flags[3],
+        ])
     }
 
     pub const fn from_explicit_array(flags: [bool; 7]) -> Self {
+        Self::from_explicit_array_with_packet_loss([
+            flags[0], flags[1], flags[2], flags[3], flags[4], false, flags[5], flags[6],
+        ])
+    }
+
+    pub const fn from_explicit_array_with_packet_loss(flags: [bool; 8]) -> Self {
         let mut bits = 0u8;
         if flags[0] {
             bits |= Self::CRASH_RESTART;
@@ -271,9 +309,12 @@ impl FaultToggles {
             bits |= Self::NETWORK_PARTITION;
         }
         if flags[5] {
-            bits |= Self::CPU_STRESS;
+            bits |= Self::NETWORK_PACKET_LOSS;
         }
         if flags[6] {
+            bits |= Self::CPU_STRESS;
+        }
+        if flags[7] {
             bits |= Self::DISK_SATURATION;
         }
         Self { bits }
@@ -313,6 +354,10 @@ impl FaultToggles {
         self.bits & Self::NETWORK_PARTITION != 0
     }
 
+    pub const fn network_packet_loss(self) -> bool {
+        self.bits & Self::NETWORK_PACKET_LOSS != 0
+    }
+
     pub const fn cpu_stress(self) -> bool {
         self.bits & Self::CPU_STRESS != 0
     }
@@ -335,6 +380,8 @@ pub struct ChaosConfig {
     pub progress_interval: Duration,
     pub progress_timeout: Duration,
     pub latency_p95_threshold: Option<Duration>,
+    pub fault_window_start: Option<Duration>,
+    pub fault_window_end: Option<Duration>,
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
@@ -342,6 +389,7 @@ pub struct ChaosConfig {
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
+    pub packet_loss_percent: u8,
     pub log_filter: String,
     pub faults: FaultToggles,
     pub nexus: Option<NexusProfile>,
@@ -405,6 +453,33 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 "latency_p95_threshold requires target_blocks to be set"
             ));
         }
+        if args
+            .fault_window_start
+            .is_some_and(|offset| offset >= args.duration)
+        {
+            return Err(eyre!(
+                "fault_window_start ({:?}) must be before duration ({:?})",
+                args.fault_window_start.expect("checked above"),
+                args.duration
+            ));
+        }
+        if args
+            .fault_window_end
+            .is_some_and(|offset| offset > args.duration)
+        {
+            return Err(eyre!(
+                "fault_window_end ({:?}) must not exceed duration ({:?})",
+                args.fault_window_end.expect("checked above"),
+                args.duration
+            ));
+        }
+        if let (Some(start), Some(end)) = (args.fault_window_start, args.fault_window_end)
+            && end <= start
+        {
+            return Err(eyre!(
+                "fault_window_end ({end:?}) must be after fault_window_start ({start:?})"
+            ));
+        }
         if args.tps <= 0.0 {
             return Err(eyre!("tps must be positive"));
         }
@@ -430,6 +505,12 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.fault_interval_max,
             ));
         }
+        if args.packet_loss_percent > 100 {
+            return Err(eyre!(
+                "fault-network-packet-loss-percent ({}) must be between 0 and 100",
+                args.packet_loss_percent
+            ));
+        }
 
         let toggles = args.faults.to_toggles();
         if args.faulty > 0 && !toggles.any_enabled() {
@@ -447,6 +528,8 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             progress_interval,
             progress_timeout,
             latency_p95_threshold,
+            fault_window_start,
+            fault_window_end,
             seed,
             tps,
             max_inflight,
@@ -457,6 +540,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             fault_interval_min,
             fault_interval_max,
             faults: _faults,
+            packet_loss_percent,
             nexus,
             allow_net,
         } = args;
@@ -476,6 +560,8 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             progress_interval,
             progress_timeout,
             latency_p95_threshold,
+            fault_window_start,
+            fault_window_end,
             seed,
             tps,
             max_inflight,
@@ -483,6 +569,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
+            packet_loss_percent,
             log_filter,
             faults: toggles,
             nexus,
@@ -515,6 +602,8 @@ impl IzanamiArgs {
             progress_interval: cfg.progress_interval,
             progress_timeout: cfg.progress_timeout,
             latency_p95_threshold: cfg.latency_p95_threshold,
+            fault_window_start: cfg.fault_window_start,
+            fault_window_end: cfg.fault_window_end,
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
@@ -525,6 +614,7 @@ impl IzanamiArgs {
             fault_interval_min: min,
             fault_interval_max: max,
             faults: FaultArgs::from(cfg.faults),
+            packet_loss_percent: cfg.packet_loss_percent,
             nexus: cfg.nexus.is_some(),
             allow_net: cfg.allow_net,
         }
@@ -977,6 +1067,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -992,9 +1084,11 @@ mod tests {
                 spam_invalid_transactions: true,
                 network_latency: true,
                 network_partition: true,
+                network_packet_loss: true,
                 cpu_stress: true,
                 disk_saturation: true,
             },
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         assert!(ChaosConfig::try_from(args).is_err());
@@ -1013,6 +1107,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
@@ -1023,6 +1119,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         init_tracing_with_filter(&args.log_filter);
@@ -1042,6 +1139,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1052,6 +1151,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1076,6 +1176,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1086,6 +1188,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         assert!(ChaosConfig::try_from(args).is_err());
@@ -1108,6 +1211,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1118,6 +1223,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1193,6 +1299,8 @@ mod tests {
             progress_interval: Duration::from_secs(10),
             progress_timeout: Duration::from_secs(5),
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1203,6 +1311,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1227,6 +1336,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: f64::NAN,
             max_inflight: 1,
@@ -1237,6 +1348,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1261,6 +1373,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: f64::MAX,
             max_inflight: 1,
@@ -1271,6 +1385,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1295,6 +1410,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: f64::MIN_POSITIVE,
             max_inflight: 1,
@@ -1305,6 +1422,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1329,6 +1447,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: Some(Duration::from_millis(900)),
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1339,6 +1459,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1363,6 +1484,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: Some(Duration::ZERO),
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1373,6 +1496,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1381,6 +1505,51 @@ mod tests {
         assert!(
             err.to_string().contains("latency_p95_threshold"),
             "error should mention latency_p95_threshold: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_accepts_bounded_fault_window() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.duration = Duration::from_secs(800);
+        args.fault_window_start = Some(Duration::from_secs(133));
+        args.fault_window_end = Some(Duration::from_secs(266));
+
+        let config = ChaosConfig::try_from(args).expect("paper fault window should be valid");
+
+        assert_eq!(config.fault_window_start, Some(Duration::from_secs(133)));
+        assert_eq!(config.fault_window_end, Some(Duration::from_secs(266)));
+    }
+
+    #[test]
+    fn chaos_config_rejects_fault_window_end_before_start() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.duration = Duration::from_secs(800);
+        args.fault_window_start = Some(Duration::from_secs(266));
+        args.fault_window_end = Some(Duration::from_secs(133));
+
+        let err = ChaosConfig::try_from(args).expect_err("inverted fault window must fail");
+
+        assert!(
+            err.to_string().contains("fault_window_end"),
+            "error should mention fault_window_end: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_fault_window_start_after_duration() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.duration = Duration::from_secs(30);
+        args.fault_window_start = Some(Duration::from_secs(30));
+
+        let err = ChaosConfig::try_from(args).expect_err("late fault window must fail");
+
+        assert!(
+            err.to_string().contains("fault_window_start"),
+            "error should mention fault_window_start: {err}"
         );
     }
 
@@ -1397,6 +1566,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1407,6 +1578,7 @@ mod tests {
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
@@ -1431,6 +1603,8 @@ mod tests {
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -1446,9 +1620,11 @@ mod tests {
                 spam_invalid_transactions: false,
                 network_latency: false,
                 network_partition: false,
+                network_packet_loss: false,
                 cpu_stress: false,
                 disk_saturation: false,
             },
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
         };
         let Err(err) = ChaosConfig::try_from(args) else {

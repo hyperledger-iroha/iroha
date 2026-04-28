@@ -37050,6 +37050,8 @@ pub(crate) mod tests_runtime_handlers {
     async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history() {
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
+        let fee_sink_keypair = KeyPair::random();
+        let fee_sink = AccountId::new(fee_sink_keypair.public_key().clone());
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let fee_asset_id = iroha_data_model::asset::AssetDefinitionId::new(
             domain_id.clone(),
@@ -37057,13 +37059,18 @@ pub(crate) mod tests_runtime_handlers {
         );
         let domain = Domain::new(domain_id).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
+        let fee_sink_account = Account::new(fee_sink.clone()).build(&fee_sink);
         let fee_asset_definition =
             iroha_data_model::asset::AssetDefinition::numeric(fee_asset_id.clone())
                 .with_name("xor".to_owned())
                 .build(&authority);
-        let world = World::with([domain], [account], [fee_asset_definition]);
+        let world = World::with(
+            [domain],
+            [account, fee_sink_account],
+            [fee_asset_definition],
+        );
         let mut app = mk_app_state_for_tests_with_world(world);
-        configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &authority);
+        configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &fee_sink);
 
         let tx = TransactionBuilder::new((*app.chain_id).clone(), authority.clone())
             .with_instructions([Log::new(Level::INFO, "fee-insolvent".to_owned())])

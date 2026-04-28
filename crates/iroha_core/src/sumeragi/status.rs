@@ -8338,6 +8338,7 @@ mod tests {
 
     #[test]
     fn rbc_mismatch_snapshot_tracks_counts_per_peer() {
+        let _guard = super::rbc_status_test_guard();
         super::reset_rbc_mismatch_for_tests();
         let peer_a = PeerId::new(KeyPair::random().public_key().clone());
         let peer_b = PeerId::new(KeyPair::random().public_key().clone());

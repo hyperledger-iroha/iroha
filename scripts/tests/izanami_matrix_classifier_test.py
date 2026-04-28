@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -7,12 +8,9 @@ SCRIPT = ROOT / "scripts" / "run_izanami_communication_vulnerability_matrix.sh"
 
 def _classifier_degraded_pattern() -> str:
     source = SCRIPT.read_text()
-    marker = "Fault scenarios deliberately make Torii endpoints unreachable"
-    start = source.index(marker)
-    rg_call = source.index("if rg -q '", start)
-    pattern_start = rg_call + len("if rg -q '")
-    pattern_end = source.index("'", pattern_start)
-    return source[pattern_start:pattern_end]
+    match = re.search(r"^acceptance_failure_regex='([^']+)'", source, re.MULTILINE)
+    assert match is not None
+    return match.group(1)
 
 
 def test_matrix_classifier_ignores_retryable_endpoint_refusals() -> None:

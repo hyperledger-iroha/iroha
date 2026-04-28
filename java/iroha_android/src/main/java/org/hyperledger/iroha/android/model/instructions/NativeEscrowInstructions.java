@@ -18,6 +18,13 @@ public final class NativeEscrowInstructions {
   private static final String ARG_BUYER_AMOUNT = "buyer_amount";
   private static final String ARG_SELLER_AMOUNT = "seller_amount";
   private static final String ARG_EVIDENCE_HASHES = "evidence_hashes";
+  private static final String ARG_FUNDING_NULLIFIERS = "funding_nullifiers";
+  private static final String ARG_ESCROW_COMMITMENT = "escrow_commitment";
+  private static final String ARG_ESCROW_NULLIFIERS = "escrow_nullifiers";
+  private static final String ARG_BUYER_OUTPUT_COMMITMENTS = "buyer_output_commitments";
+  private static final String ARG_SELLER_OUTPUT_COMMITMENTS = "seller_output_commitments";
+  private static final String ARG_PROOF = "proof";
+  private static final String ARG_ROOT_HINT = "root_hint";
 
   /** Permission allowing a court account or role to resolve disputed native escrows. */
   public static final String CAN_RESOLVE_ESCROW_DISPUTE = "CanResolveEscrowDispute";
@@ -92,6 +99,116 @@ public final class NativeEscrowInstructions {
     return new ResolveEscrowDispute(escrowId, buyerAmount, sellerAmount, evidenceHashes);
   }
 
+  public static AnonymousEscrowInstruction openAnonymousAssetEscrow(
+      final String escrowId,
+      final String assetDefinition,
+      final List<String> fundingNullifiers,
+      final String escrowCommitment,
+      final String proof,
+      final String rootHint,
+      final List<String> evidenceHashes) {
+    final Map<String, String> args = new LinkedHashMap<>();
+    args.put(ARG_ACTION, AnonymousEscrowInstruction.ACTION_OPEN);
+    args.put(ARG_ESCROW_ID, requireValue(escrowId, "escrowId"));
+    args.put(ARG_ASSET_DEFINITION, requireValue(assetDefinition, "assetDefinition"));
+    appendList(args, ARG_FUNDING_NULLIFIERS, normalizedList(fundingNullifiers, "fundingNullifiers"));
+    args.put(ARG_ESCROW_COMMITMENT, requireValue(escrowCommitment, "escrowCommitment"));
+    args.put(ARG_PROOF, requireValue(proof, "proof"));
+    appendOptional(args, ARG_ROOT_HINT, rootHint);
+    appendEvidence(args, normalizedEvidenceHashes(evidenceHashes));
+    return new AnonymousEscrowInstruction(AnonymousEscrowInstruction.ACTION_OPEN, escrowId, args);
+  }
+
+  public static AnonymousEscrowInstruction acceptAnonymousAssetEscrow(final String escrowId) {
+    return anonymousEscrowOnly(AnonymousEscrowInstruction.ACTION_ACCEPT, escrowId);
+  }
+
+  public static AnonymousEscrowInstruction markAnonymousPaymentSent(final String escrowId) {
+    return anonymousEscrowOnly(AnonymousEscrowInstruction.ACTION_MARK_PAYMENT_SENT, escrowId);
+  }
+
+  public static AnonymousEscrowInstruction releaseAnonymousAssetEscrow(
+      final String escrowId,
+      final List<String> escrowNullifiers,
+      final List<String> buyerOutputCommitments,
+      final String proof,
+      final String rootHint) {
+    final Map<String, String> args = anonymousProofArguments(
+        AnonymousEscrowInstruction.ACTION_RELEASE, escrowId, escrowNullifiers, proof, rootHint);
+    appendList(
+        args,
+        ARG_BUYER_OUTPUT_COMMITMENTS,
+        normalizedList(buyerOutputCommitments, "buyerOutputCommitments"));
+    return new AnonymousEscrowInstruction(AnonymousEscrowInstruction.ACTION_RELEASE, escrowId, args);
+  }
+
+  public static AnonymousEscrowInstruction cancelAnonymousAssetEscrow(
+      final String escrowId,
+      final List<String> escrowNullifiers,
+      final List<String> sellerOutputCommitments,
+      final String proof,
+      final String rootHint) {
+    final Map<String, String> args = anonymousProofArguments(
+        AnonymousEscrowInstruction.ACTION_CANCEL, escrowId, escrowNullifiers, proof, rootHint);
+    appendList(
+        args,
+        ARG_SELLER_OUTPUT_COMMITMENTS,
+        normalizedList(sellerOutputCommitments, "sellerOutputCommitments"));
+    return new AnonymousEscrowInstruction(AnonymousEscrowInstruction.ACTION_CANCEL, escrowId, args);
+  }
+
+  public static AnonymousEscrowInstruction openAnonymousEscrowDispute(
+      final String escrowId, final List<String> evidenceHashes) {
+    final Map<String, String> args = escrowOnlyArguments(
+        AnonymousEscrowInstruction.ACTION_OPEN_DISPUTE, requireValue(escrowId, "escrowId"));
+    appendEvidence(args, normalizedEvidenceHashes(evidenceHashes));
+    return new AnonymousEscrowInstruction(
+        AnonymousEscrowInstruction.ACTION_OPEN_DISPUTE, escrowId, args);
+  }
+
+  public static AnonymousEscrowInstruction resolveAnonymousEscrowDispute(
+      final String escrowId,
+      final List<String> escrowNullifiers,
+      final List<String> buyerOutputCommitments,
+      final List<String> sellerOutputCommitments,
+      final String proof,
+      final String rootHint,
+      final List<String> evidenceHashes) {
+    final Map<String, String> args = anonymousProofArguments(
+        AnonymousEscrowInstruction.ACTION_RESOLVE, escrowId, escrowNullifiers, proof, rootHint);
+    appendList(
+        args,
+        ARG_BUYER_OUTPUT_COMMITMENTS,
+        normalizedList(buyerOutputCommitments, "buyerOutputCommitments"));
+    appendList(
+        args,
+        ARG_SELLER_OUTPUT_COMMITMENTS,
+        normalizedList(sellerOutputCommitments, "sellerOutputCommitments"));
+    appendEvidence(args, normalizedEvidenceHashes(evidenceHashes));
+    return new AnonymousEscrowInstruction(AnonymousEscrowInstruction.ACTION_RESOLVE, escrowId, args);
+  }
+
+  private static AnonymousEscrowInstruction anonymousEscrowOnly(
+      final String action, final String escrowId) {
+    return new AnonymousEscrowInstruction(
+        action,
+        escrowId,
+        escrowOnlyArguments(action, requireValue(escrowId, "escrowId")));
+  }
+
+  private static Map<String, String> anonymousProofArguments(
+      final String action,
+      final String escrowId,
+      final List<String> escrowNullifiers,
+      final String proof,
+      final String rootHint) {
+    final Map<String, String> args = escrowOnlyArguments(action, requireValue(escrowId, "escrowId"));
+    appendList(args, ARG_ESCROW_NULLIFIERS, normalizedList(escrowNullifiers, "escrowNullifiers"));
+    args.put(ARG_PROOF, requireValue(proof, "proof"));
+    appendOptional(args, ARG_ROOT_HINT, rootHint);
+    return args;
+  }
+
   private static String require(final Map<String, String> arguments, final String key) {
     final String value = arguments.get(key);
     if (value == null || value.isBlank()) {
@@ -119,6 +236,17 @@ public final class NativeEscrowInstructions {
     return Collections.unmodifiableList(normalized);
   }
 
+  private static List<String> normalizedList(final List<String> values, final String fieldName) {
+    if (values == null || values.isEmpty()) {
+      return Collections.emptyList();
+    }
+    final List<String> normalized = new ArrayList<>(values.size());
+    for (int i = 0; i < values.size(); i++) {
+      normalized.add(requireValue(values.get(i), fieldName + "[" + i + "]"));
+    }
+    return Collections.unmodifiableList(normalized);
+  }
+
   private static List<String> parseEvidenceHashes(final String raw) {
     if (raw == null || raw.isBlank()) {
       return Collections.emptyList();
@@ -137,6 +265,18 @@ public final class NativeEscrowInstructions {
       final Map<String, String> arguments, final List<String> evidenceHashes) {
     if (evidenceHashes != null && !evidenceHashes.isEmpty()) {
       arguments.put(ARG_EVIDENCE_HASHES, String.join(",", evidenceHashes));
+    }
+  }
+
+  private static void appendList(
+      final Map<String, String> arguments, final String key, final List<String> values) {
+    arguments.put(key, String.join(",", values));
+  }
+
+  private static void appendOptional(
+      final Map<String, String> arguments, final String key, final String value) {
+    if (value != null) {
+      arguments.put(key, requireValue(value, key));
     }
   }
 
@@ -529,6 +669,69 @@ public final class NativeEscrowInstructions {
     @Override
     public int hashCode() {
       return Objects.hash(escrowId, buyerAmount, sellerAmount, evidenceHashes);
+    }
+  }
+
+  /** Typed representation for proof-carrying anonymous native escrow instructions. */
+  public static final class AnonymousEscrowInstruction implements InstructionTemplate {
+    public static final String ACTION_OPEN = "OpenAnonymousAssetEscrow";
+    public static final String ACTION_ACCEPT = "AcceptAnonymousAssetEscrow";
+    public static final String ACTION_MARK_PAYMENT_SENT = "MarkAnonymousEscrowPaymentSent";
+    public static final String ACTION_RELEASE = "ReleaseAnonymousAssetEscrow";
+    public static final String ACTION_CANCEL = "CancelAnonymousAssetEscrow";
+    public static final String ACTION_OPEN_DISPUTE = "OpenAnonymousEscrowDispute";
+    public static final String ACTION_RESOLVE = "ResolveAnonymousEscrowDispute";
+
+    private final String action;
+    private final String escrowId;
+    private final Map<String, String> arguments;
+
+    private AnonymousEscrowInstruction(
+        final String action, final String escrowId, final Map<String, String> arguments) {
+      this.action = requireValue(action, "action");
+      this.escrowId = requireValue(escrowId, "escrowId");
+      this.arguments = immutable(arguments);
+    }
+
+    public String action() {
+      return action;
+    }
+
+    public String escrowId() {
+      return escrowId;
+    }
+
+    @Override
+    public InstructionKind kind() {
+      return InstructionKind.CUSTOM;
+    }
+
+    @Override
+    public Map<String, String> toArguments() {
+      return arguments;
+    }
+
+    public static AnonymousEscrowInstruction fromArguments(final Map<String, String> arguments) {
+      return new AnonymousEscrowInstruction(
+          require(arguments, ARG_ACTION), require(arguments, ARG_ESCROW_ID), arguments);
+    }
+
+    @Override
+    public boolean equals(final Object obj) {
+      if (this == obj) {
+        return true;
+      }
+      if (!(obj instanceof AnonymousEscrowInstruction other)) {
+        return false;
+      }
+      return Objects.equals(action, other.action)
+          && Objects.equals(escrowId, other.escrowId)
+          && Objects.equals(arguments, other.arguments);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(action, escrowId, arguments);
     }
   }
 

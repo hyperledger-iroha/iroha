@@ -65,6 +65,46 @@ class NativeEscrowInstructionsTest {
     }
 
     @Test
+    fun `anonymous escrow operations carry shielded proof material`() {
+        val open = OpenAnonymousAssetEscrowInstruction(
+            escrowId = "anonymous-escrow",
+            assetDefinition = "xor#wonderland",
+            fundingNullifiers = listOf("n1", "n2"),
+            escrowCommitment = "escrow-note",
+            proof = "proof-envelope",
+            rootHint = "root",
+            evidenceHashes = listOf("receipt"),
+        )
+        val release = ReleaseAnonymousAssetEscrowInstruction(
+            escrowId = "anonymous-escrow",
+            escrowNullifiers = listOf("escrow-nullifier"),
+            buyerOutputCommitments = listOf("buyer-note"),
+            proof = "release-proof",
+        )
+        val resolve = ResolveAnonymousEscrowDisputeInstruction(
+            escrowId = "anonymous-escrow",
+            escrowNullifiers = listOf("escrow-nullifier"),
+            buyerOutputCommitments = listOf("buyer-note"),
+            sellerOutputCommitments = listOf("seller-note"),
+            proof = "resolve-proof",
+            evidenceHashes = listOf("judgement"),
+        )
+
+        assertEquals("OpenAnonymousAssetEscrow", open.arguments["action"])
+        assertEquals("n1,n2", open.arguments["funding_nullifiers"])
+        assertEquals("escrow-note", open.arguments["escrow_commitment"])
+        assertEquals("proof-envelope", open.arguments["proof"])
+        assertEquals("root", open.arguments["root_hint"])
+        assertEquals("receipt", open.arguments["evidence_hashes"])
+        assertEquals(open, OpenAnonymousAssetEscrowInstruction.fromArguments(open.arguments))
+        assertEquals("buyer-note", release.arguments["buyer_output_commitments"])
+        assertEquals(release, ReleaseAnonymousAssetEscrowInstruction.fromArguments(release.arguments))
+        assertEquals("seller-note", resolve.arguments["seller_output_commitments"])
+        assertEquals("judgement", resolve.arguments["evidence_hashes"])
+        assertEquals(resolve, ResolveAnonymousEscrowDisputeInstruction.fromArguments(resolve.arguments))
+    }
+
+    @Test
     fun `native escrow status and permission constants match wire names`() {
         assertEquals(AssetEscrowStatus.PAYMENT_SENT, AssetEscrowStatus.fromWireName("PaymentSent"))
         assertEquals("CanResolveEscrowDispute", NativeEscrowPermissions.CAN_RESOLVE_ESCROW_DISPUTE)

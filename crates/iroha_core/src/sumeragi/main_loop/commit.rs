@@ -2807,6 +2807,16 @@ impl Actor {
         trigger: CommitPipelineTrigger,
         tick_deadline: Option<Instant>,
     ) -> CommitPipelineTimings {
+        self.process_commit_candidates_with_trigger_inner(trigger, tick_deadline, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn process_commit_candidates_with_trigger_inner(
+        &mut self,
+        trigger: CommitPipelineTrigger,
+        tick_deadline: Option<Instant>,
+        include_recovery_candidates: bool,
+    ) -> CommitPipelineTimings {
         let pipeline_start = Instant::now();
         let finish_timings = |timings: CommitPipelineTimings| {
             let timings = timings.finish(pipeline_start);
@@ -2869,7 +2879,7 @@ impl Actor {
         let rebroadcast_cooldown = self.control_plane_rebroadcast_cooldown();
         let local_peer_id = self.common_config.peer.id().clone();
 
-        if self.active_pending_blocks_len() == 0 {
+        if self.commit_candidate_blocks_len(include_recovery_candidates) == 0 {
             let inflight = self.subsystems.commit.inflight.is_some();
             if matches!(trigger, CommitPipelineTrigger::Tick) {
                 super::status::note_commit_pipeline_tick(self.consensus_mode, inflight);
@@ -3100,7 +3110,15 @@ impl Actor {
                 }
                 continue;
             }
-            if aborted {
+            let certified_aborted_pending = self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| pending.commit_qc_observed())
+                || self
+                    .cached_commit_qc_for_block(hash, pending_height, pending_view)
+                    .is_some();
+            if aborted && !certified_aborted_pending {
                 debug!(
                     ?hash,
                     height = pending_height,
@@ -4416,7 +4434,9 @@ impl Actor {
                 epoch,
             };
             let locked_payload_known = self.block_known_for_lock(lock.subject_block_hash);
-            if locked_payload_known
+            let locked_hash_committed =
+                self.committed_block_hash_for_height(lock.height) == Some(lock.subject_block_hash);
+            if (locked_payload_known || locked_hash_committed)
                 && candidate.height == lock.height
                 && candidate.subject_block_hash != lock.subject_block_hash
             {
@@ -7221,10 +7241,10 @@ impl Actor {
             matches!(backpressure_action, PacemakerBackpressureAction::First);
         let should_fire_now = pacemaker.should_fire(now);
         if deferring {
-            if backpressure.only_queue_saturation() {
+            if backpressure.only_pacing_backpressure() {
                 if should_fire_now {
-                    // Allow proposals to proceed once the pacemaker deadline elapses when queue
-                    // saturation is the only backpressure signal, but keep logging deferral.
+                    // Allow proposals to proceed once the pacemaker deadline elapses when only
+                    // pacing pressure is present; keep logging the deferral.
                     return (log_initial_deferral, true, true);
                 }
                 // Defer proposal assembly under backpressure, but still request a log on the first

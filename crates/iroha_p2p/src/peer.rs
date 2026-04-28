@@ -1997,7 +1997,11 @@ mod run {
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
     const OUTBOUND_DRAIN_LO_MAX: usize = 32;
     const INBOUND_SEND_WARN_MS: u64 = 250;
-    const MALFORMED_PAYLOAD_FRAME_THRESHOLD: u32 = 3;
+    // Decrypt/auth failures remain fatal. A malformed inner payload frame, however,
+    // is discarded after the encrypted frame has been consumed, so the next frame can
+    // still decode cleanly. Keep validator links alive through bounded transient
+    // framing damage under load instead of tearing down quorum after a tiny burst.
+    const MALFORMED_PAYLOAD_FRAME_THRESHOLD: u32 = 64;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighTopic {
@@ -3382,6 +3386,15 @@ mod run {
         Other,
     }
 
+    impl HighBatchClass {
+        fn should_isolate_plaintext(self) -> bool {
+            matches!(
+                self,
+                Self::Control | Self::ConsensusPayload | Self::ConsensusChunk
+            )
+        }
+    }
+
     fn classify_high_batch(topic: Topic) -> HighBatchClass {
         match topic {
             Topic::Control => HighBatchClass::Control,
@@ -3460,8 +3473,11 @@ mod run {
             match priority {
                 Priority::High => {
                     let class = classify_high_batch(topic);
-                    // Control traffic should not be delayed behind other high batches.
-                    if class == HighBatchClass::Control {
+                    // Control and availability-repair traffic should not be batched with
+                    // neighbouring high-priority messages. If one encrypted frame is lost or
+                    // malformed under fault injection, this keeps the blast radius to a single
+                    // control/payload/chunk message and lets Sumeragi repair fanout make progress.
+                    if class.should_isolate_plaintext() {
                         self.flush_plain_high()?;
                         self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
@@ -3714,6 +3730,11 @@ mod run {
             None
         }
 
+        fn availability_repair_pending(&self) -> bool {
+            !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+        }
+
         fn high_queue_len(&self, class: HighBatchClass) -> usize {
             match class {
                 HighBatchClass::Control => self.queue_high_control.front().map_or(0, BytesMut::len),
@@ -3801,7 +3822,9 @@ mod run {
             let mut hi_burst = 0usize;
 
             while frames_added < Self::MAX_BATCH_FRAMES {
-                let force_low = hi_burst >= Self::MAX_BATCH_HI_BURST && !self.queue_low.is_empty();
+                let force_low = hi_burst >= Self::MAX_BATCH_HI_BURST
+                    && !self.queue_low.is_empty()
+                    && !self.availability_repair_pending();
                 let next_high = if force_low {
                     None
                 } else {
@@ -3984,6 +4007,7 @@ mod run {
             Consensus(u8),
             ConsensusPayload(u8),
             ConsensusChunk(u8),
+            TxGossip(u8),
         }
 
         impl ClassifyTopic for RoutedMsg {
@@ -3993,6 +4017,7 @@ mod run {
                     Self::Consensus(_) => Topic::Consensus,
                     Self::ConsensusPayload(_) => Topic::ConsensusPayload,
                     Self::ConsensusChunk(_) => Topic::ConsensusChunk,
+                    Self::TxGossip(_) => Topic::TxGossip,
                 }
             }
         }
@@ -4069,6 +4094,30 @@ mod run {
             ) -> Poll<std::io::Result<()>> {
                 Poll::Ready(Ok(()))
             }
+        }
+
+        fn encrypted_wire_frame_count(bytes: &[u8]) -> usize {
+            let mut pos = 0usize;
+            let mut frames = 0usize;
+            while pos < bytes.len() {
+                assert!(
+                    bytes.len().saturating_sub(pos) >= MessageSender::<ChaCha20Poly1305>::U32_SIZE,
+                    "truncated encrypted frame prefix"
+                );
+                let len = u32::from_be_bytes(
+                    bytes[pos..pos + MessageSender::<ChaCha20Poly1305>::U32_SIZE]
+                        .try_into()
+                        .expect("u32 slice length"),
+                ) as usize;
+                pos = pos.saturating_add(MessageSender::<ChaCha20Poly1305>::U32_SIZE);
+                assert!(
+                    bytes.len().saturating_sub(pos) >= len,
+                    "truncated encrypted frame payload"
+                );
+                pos = pos.saturating_add(len);
+                frames = frames.saturating_add(1);
+            }
+            frames
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -4276,6 +4325,63 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_isolates_consensus_payload_and_chunk_encrypted_frames() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for msg in [
+                RoutedMsg::ConsensusPayload(1),
+                RoutedMsg::ConsensusPayload(2),
+                RoutedMsg::ConsensusChunk(3),
+            ] {
+                sender
+                    .prepare_message(&Message::Data(msg), Priority::High)
+                    .expect("prepare availability message");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                assert_eq!(
+                    encrypted_wire_frame_count(&buffer),
+                    3,
+                    "availability-repair messages should use one encrypted frame each"
+                );
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::ConsensusPayload(1),
+                    RoutedMsg::ConsensusPayload(2),
+                    RoutedMsg::ConsensusChunk(3),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
         async fn message_sender_high_lane_fairness_drains_payload_and_chunk_under_consensus() {
             let buffer = Arc::new(Mutex::new(Vec::new()));
             let writer = CollectingWrite {
@@ -4342,6 +4448,74 @@ mod run {
                     RoutedMsg::Consensus(8),
                     RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(9),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_defers_low_when_availability_repair_is_pending() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for id in 1..=4 {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+                sender.flush_plain_high().expect("flush consensus");
+            }
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::TxGossip(90)), Priority::Low)
+                .expect("prepare low gossip");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusPayload(10)),
+                    Priority::High,
+                )
+                .expect("prepare payload");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusChunk(11)),
+                    Priority::High,
+                )
+                .expect("prepare chunk");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::TxGossip(90),
                 ]
             );
         }
@@ -4895,7 +5069,7 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn malformed_payload_frame_disconnects_after_three_consecutive_frames() {
+        async fn malformed_payload_frame_disconnects_after_threshold_consecutive_frames() {
             let key_byte = 7u8;
             let mut malformed_plain = blob_message_frame(&[0xAAu8]);
             malformed_plain.pop().expect("truncate malformed frame");

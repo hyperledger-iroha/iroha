@@ -1,0 +1,15 @@
+# Shared IVM prebuilt sample manifest consumed by `ivm_prebuild` and integration test staging.
+executor_with_admin
+executor_with_custom_permission
+executor_remove_permission
+executor_custom_instructions_simple
+executor_custom_instructions_complex
+executor_with_migration_fail
+executor_with_fuel
+executor_with_custom_parameter
+mint_rose_trigger
+create_nft_for_every_user_trigger
+query_assets_and_save_cursor
+smart_contract_can_filter_queries
+threshold_escrow
+trigger_cat_and_mouse

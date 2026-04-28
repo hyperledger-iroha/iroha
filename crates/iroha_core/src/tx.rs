@@ -119,13 +119,11 @@ static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLoc
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
 });
-#[cfg(test)]
 static HEARTBEAT_EXPIRES_AT_HEIGHT_NAME: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
         iroha_data_model::name::Name::from_str("expires_at_height")
             .expect("static heartbeat expires_at_height metadata key")
     });
-#[cfg(test)]
 static HEARTBEAT_TX_SEQUENCE_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("tx_sequence")
         .expect("static heartbeat tx_sequence metadata key")
@@ -695,7 +693,6 @@ pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
 }
 
 /// Build a Sumeragi heartbeat transaction using the provided time source.
-#[cfg(test)]
 pub(crate) fn build_heartbeat_transaction_with_time_source(
     chain_id: ChainId,
     signer: &KeyPair,
@@ -6659,9 +6656,14 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        // Program issues SCALL 0xAB (not mapped by the ABI policy) then HALT; admission should
-        // reject before the VM runs.
-        let prog = minimal_ivm_program_with_syscall(1, 0xAB);
+        let syscall = (0u8..=u8::MAX)
+            .find(|number| {
+                !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
+            })
+            .expect("ABI v1 should leave at least one u8 syscall number unmapped");
+
+        // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
+        let prog = minimal_ivm_program_with_syscall(1, syscall);
         let tx = TransactionBuilder::new(chain, authority_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
@@ -6672,8 +6674,9 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                let expected = format!("unknown syscall number 0x{syscall:02x}");
                 assert!(
-                    msg.contains("unknown syscall number 0xab") && msg.contains("abi_version 1"),
+                    msg.contains(&expected) && msg.contains("abi_version 1"),
                     "expected UnknownSyscall rejection to surface via NotPermitted, got {msg}"
                 );
             }

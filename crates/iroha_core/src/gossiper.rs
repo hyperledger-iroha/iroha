@@ -518,13 +518,25 @@ impl TransactionGossiper {
     #[allow(clippy::too_many_lines)]
     fn gossip_transactions(&mut self) {
         let now = Instant::now();
-        if self.gossip_backpressure_active(now) {
+        let queue_active_len = self.queue.active_len();
+        let targeted_backlog_active =
+            Self::targeted_backlog_requires_gossip(self.gossip_size, queue_active_len);
+        if self.gossip_backpressure_active(now) && !targeted_backlog_active {
             iroha_logger::trace!(
                 drops = self.last_drop_count,
                 cooldown_ms = self.backpressure_cooldown().as_millis(),
                 "transaction gossiper skipping gossip due to relay backpressure"
             );
             return;
+        }
+        if targeted_backlog_active && self.last_drop_at.is_some() {
+            iroha_logger::debug!(
+                queue_active_len,
+                gossip_size = self.gossip_size.get(),
+                drops = self.last_drop_count,
+                cooldown_ms = self.backpressure_cooldown().as_millis(),
+                "transaction gossiper continuing under targeted backlog despite relay backpressure"
+            );
         }
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
@@ -692,8 +704,14 @@ impl TransactionGossiper {
             .network
             .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
         let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_PUBLIC_DOMAIN);
+        let public_target_cap = Self::effective_public_target_cap(
+            self.dataspace_cfg.public_target_cap,
+            self.gossip_size,
+            self.queue.active_len(),
+            self.queue.current_backpressure().is_saturated(),
+        );
         let (targets, total_online) =
-            Self::select_targets_with_seed(targets, self.dataspace_cfg.public_target_cap, seed);
+            Self::select_targets_with_seed(targets, public_target_cap, seed);
         let (targets, suppressed_targets) =
             self.filter_targets_by_peer_recent_suppression(targets, &sent_hashes);
 
@@ -721,7 +739,7 @@ impl TransactionGossiper {
         }
 
         let message = Arc::new(message);
-        if self.dataspace_cfg.public_target_cap.is_some() {
+        if public_target_cap.is_some() {
             iroha_logger::debug!(
                 tx_count = batch_txs,
                 size_bytes = encoded_len,
@@ -744,7 +762,7 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 &targets,
-                self.dataspace_cfg.public_target_cap,
+                public_target_cap,
                 batch_txs,
                 frame_bytes,
                 false,
@@ -792,7 +810,7 @@ impl TransactionGossiper {
                 dataspace_id,
                 lane_ids,
                 &targets,
-                self.dataspace_cfg.public_target_cap,
+                public_target_cap,
                 batch_txs,
                 frame_bytes,
                 false,
@@ -1065,6 +1083,32 @@ impl TransactionGossiper {
             GossipPlane::Public => self.dataspace_cfg.public_target_cap,
             GossipPlane::Restricted => self.dataspace_cfg.restricted_target_cap,
         }
+    }
+
+    fn effective_public_target_cap(
+        configured_cap: Option<NonZeroUsize>,
+        gossip_size: NonZeroU32,
+        queue_active_len: usize,
+        queue_saturated: bool,
+    ) -> Option<NonZeroUsize> {
+        let configured_cap = configured_cap?;
+        if queue_saturated {
+            return None;
+        }
+
+        let backlog_threshold = (gossip_size.get() as usize)
+            .max(configured_cap.get())
+            .saturating_mul(2);
+        if queue_active_len >= backlog_threshold {
+            None
+        } else {
+            Some(configured_cap)
+        }
+    }
+
+    fn targeted_backlog_requires_gossip(gossip_size: NonZeroU32, queue_active_len: usize) -> bool {
+        let backlog_threshold = (gossip_size.get() as usize).saturating_mul(2);
+        queue_active_len >= backlog_threshold
     }
 
     fn seed_for_plane(seed: u64, dataspace_id: DataSpaceId, domain: u64) -> u64 {
@@ -2805,7 +2849,9 @@ mod tests {
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: defaults::network::TRUST_MIN_SCORE,
-            deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
@@ -3786,6 +3832,56 @@ mod tests {
             first, second,
             "selection should be stable for the same seed"
         );
+    }
+
+    #[test]
+    fn public_gossip_fanout_keeps_cap_without_backlog() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 7, false);
+
+        assert_eq!(effective, Some(cap));
+    }
+
+    #[test]
+    fn public_gossip_fanout_widens_under_targeted_backlog() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 16, false);
+
+        assert_eq!(
+            effective, None,
+            "backlogged public ingress should feed the whole online validator set"
+        );
+    }
+
+    #[test]
+    fn public_gossip_fanout_widens_when_queue_is_saturated() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 1, true);
+
+        assert_eq!(effective, None);
+    }
+
+    #[test]
+    fn targeted_backlog_keeps_gossip_active_at_threshold() {
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        assert!(!TransactionGossiper::targeted_backlog_requires_gossip(
+            gossip_size,
+            15
+        ));
+        assert!(TransactionGossiper::targeted_backlog_requires_gossip(
+            gossip_size,
+            16
+        ));
     }
 
     #[test]

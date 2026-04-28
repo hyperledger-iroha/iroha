@@ -93,6 +93,12 @@ fn merge_with_overrides(
     if is_cli_source(matches, "latency_p95_threshold") {
         base.latency_p95_threshold = overrides.latency_p95_threshold;
     }
+    if is_cli_source(matches, "fault_window_start") {
+        base.fault_window_start = overrides.fault_window_start;
+    }
+    if is_cli_source(matches, "fault_window_end") {
+        base.fault_window_end = overrides.fault_window_end;
+    }
     if is_cli_source(matches, "seed") {
         base.seed = overrides.seed;
     }
@@ -134,6 +140,12 @@ fn merge_with_overrides(
     }
     if is_cli_source(matches, "network_partition") {
         base.faults.network_partition = overrides.faults.network_partition;
+    }
+    if is_cli_source(matches, "network_packet_loss") {
+        base.faults.network_packet_loss = overrides.faults.network_packet_loss;
+    }
+    if is_cli_source(matches, "packet_loss_percent") {
+        base.packet_loss_percent = overrides.packet_loss_percent;
     }
     if is_cli_source(matches, "cpu_stress") {
         base.faults.cpu_stress = overrides.faults.cpu_stress;
@@ -203,6 +215,8 @@ mod tests {
         persisted.target_blocks = Some(256);
         persisted.progress_interval = Duration::from_secs(9);
         persisted.progress_timeout = Duration::from_secs(90);
+        persisted.fault_window_start = Some(Duration::from_secs(13));
+        persisted.fault_window_end = Some(Duration::from_secs(26));
         persisted.seed = Some(13);
         persisted.tps = defaults.tps + 1.0;
         persisted.max_inflight = defaults.max_inflight + 10;
@@ -229,6 +243,8 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+        assert_eq!(merged.fault_window_start, persisted.fault_window_start);
+        assert_eq!(merged.fault_window_end, persisted.fault_window_end);
         assert_eq!(merged.seed, persisted.seed);
         assert!((merged.tps - persisted.tps).abs() <= f64::EPSILON);
         assert_eq!(merged.max_inflight, persisted.max_inflight);
@@ -248,6 +264,8 @@ mod tests {
         persisted.target_blocks = Some(42);
         persisted.progress_interval = Duration::from_secs(5);
         persisted.progress_timeout = Duration::from_secs(50);
+        persisted.fault_window_start = Some(Duration::from_secs(5));
+        persisted.fault_window_end = Some(Duration::from_secs(10));
 
         let max_inflight_arg = defaults.max_inflight.to_string();
         let (cli_args, matches) = parse_cli_arguments(vec![
@@ -266,6 +284,30 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+        assert_eq!(merged.fault_window_start, persisted.fault_window_start);
+        assert_eq!(merged.fault_window_end, persisted.fault_window_end);
+    }
+
+    #[test]
+    fn cli_overrides_fault_window_offsets() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.fault_window_start = Some(Duration::from_secs(33));
+        persisted.fault_window_end = Some(Duration::from_secs(66));
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--tui".to_string(),
+            "--fault-window-start".to_string(),
+            "133s".to_string(),
+            "--fault-window-end".to_string(),
+            "266s".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+
+        assert_eq!(merged.fault_window_start, Some(Duration::from_secs(133)));
+        assert_eq!(merged.fault_window_end, Some(Duration::from_secs(266)));
     }
 
     #[test]
@@ -321,6 +363,7 @@ mod tests {
             spam_invalid_transactions: false,
             network_latency: false,
             network_partition: false,
+            network_packet_loss: false,
             cpu_stress: false,
             disk_saturation: false,
         };
@@ -343,6 +386,7 @@ mod tests {
         assert!(merged.faults.network_latency);
         assert!(merged.faults.cpu_stress);
         assert!(!merged.faults.network_partition);
+        assert!(!merged.faults.network_packet_loss);
         assert!(!merged.faults.disk_saturation);
     }
 
@@ -355,6 +399,7 @@ mod tests {
             "--fault-enable-spam-invalid-transactions=false".to_string(),
             "--fault-enable-network-latency=false".to_string(),
             "--fault-enable-network-partition=false".to_string(),
+            "--fault-enable-network-packet-loss=false".to_string(),
             "--fault-enable-cpu-stress=false".to_string(),
             "--fault-enable-disk-saturation=false".to_string(),
         ]);
@@ -364,8 +409,26 @@ mod tests {
         assert!(!cli_args.faults.spam_invalid_transactions);
         assert!(!cli_args.faults.network_latency);
         assert!(!cli_args.faults.network_partition);
+        assert!(!cli_args.faults.network_packet_loss);
         assert!(!cli_args.faults.cpu_stress);
         assert!(!cli_args.faults.disk_saturation);
+    }
+
+    #[test]
+    fn cli_overrides_packet_loss_percent() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.packet_loss_percent = 75;
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--fault-network-packet-loss-percent".to_string(),
+            "25".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+
+        assert_eq!(merged.packet_loss_percent, 25);
     }
 
     #[test]

@@ -11,10 +11,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Add Rust four-peer localnet issue/redeem/audit e2e coverage that submits real Offline V2 proofs and validates replay/nullifier/accounting behavior across consensus.
   - Fold the new prover slice into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
 - Carry native asset escrow through the remaining Aitai application corridor.
-  - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and the new Kotlin/Java/Swift helper surfaces, then subscribe through the numeric escrow query/event APIs.
-  - Add Kotodama/IVM pointer-ABI wrappers, SDK builders, and app-facing lifecycle events for the proof-carrying anonymous escrow ISIs now that the native core/query path is in place.
+  - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and proof-carrying anonymous escrow helper surfaces, then subscribe through the numeric and anonymous escrow query/event APIs.
+  - Add app-facing lifecycle events for transparent and shielded offer state changes, and keep any remaining Kotodama wrapper work scoped to app calls that still need contract compatibility.
   - Add end-to-end UI/client smoke coverage once the Sora Aitai application replaces the old contract escrow account path for both transparent XOR and shielded anonymous-asset offers.
-  - Rerun the full Kotlin, Java Android, and Swift SDK suites after the Aitai app wiring lands.
+  - Rerun the full Kotlin, Java Android, and Swift SDK suites after the Aitai app wiring lands and a Java 21 runtime is available in the validation shell.
   - Keep NFT/RWA escrow and court fee/payout generalization as separate follow-ups; the v1 primitive intentionally resolves only between the escrow seller and accepted buyer.
 - Carry the Soracloud production posture hardening through the operator-host rollout corridor.
   - Local focused, portable QEMU, and prior multi-peer load gates are green as of 2026-04-25; the readiness runner now reports missing operator inventory and missing observability evidence as production blockers. Before public rollout, run the mixed-host Inrou smoke with the real operator inventory, attach the real metrics/status/alert/dashboard evidence, and archive a blocker-free readiness report.
@@ -30,7 +30,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The crate-local sweep is green as of 2026-04-24 with `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`.
   - When validation budget allows, carry the alias-routing and Torii telemetry slices through the next `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor and record the result in `status.md`.
 - Broaden validation for the new canonical account-alias lease flow beyond the focused onboarding and executor checks.
-  - Rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
+  - The onboarding auto-renew path now grants the subscriber `CanModifyNftMetadata` for the subscription NFT before trigger registration; rerun a wider `cargo test -p iroha_torii` window with the new `/v1/accounts/{account_id}/aliases`, `/renew`, and `/auto-renew` handlers enabled.
+  - Add or rerun focused coverage for user-signed enable/disable mutation flows and the SNS subscription auto-renew billing path in `crates/iroha_core/src/smartcontracts/ivm/host.rs`, not just the onboarding enqueue path.
   - Once the alias lease slice is stable under those focused reruns, fold it into the next broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` corridor.
 - Broaden validation after the 2026-04-22 targeted `sumeragi::main_loop` regression sweep and follow-up unit coverage additions.
   - Rerun a wider `cargo test -p iroha_core --lib` window now that the reported 10-case failure cluster is green under focused verification.
@@ -43,21 +44,15 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Consensus and Izanami
 
-- Close the exact-reproduction gaps in the Izanami communication vulnerability matrix.
-  - Add a timed fault scheduler that can reproduce the paper's 133s-266s injection window instead of relying only on randomized Izanami fault-loop timing.
-  - Add an OS `netem` or in-process P2P packet-drop injector so the `packet-loss` scenario can run 25%, 50%, and 75% loss between selected peer groups.
-  - Replace the current self-only trusted-peer restart approximation with a network-level relay/proxy partition so packet loss and isolation do not mutate the peer's validator view while simulating communication loss.
-  - Wire Sumeragi proposer/leader telemetry into the `leader-isolation` scenario so Izanami isolates the active proposer rather than a fixed selected peer.
-  - Keep any future quick-mode publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed.
-  - After those exact injectors land, run `scripts/run_izanami_communication_vulnerability_matrix.sh --mode paper --sumeragi-mode both` and record both Iroha classifications against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline in `status.md`.
-- Rerun the permissioned preserved-peer stable envelope with fresh binaries from the current tree.
-  - Build fresh `izanami` / `iroha3d` binaries instead of reusing prior artifacts.
-  - Confirm the previously observed height-533 zero-local-vote `missing_qc` loop does not recur on the current branch.
-  - If the run is otherwise green but teardown still panics, preserve dirs/logs and split that into a separate reproducible follow-up.
-- Close the remaining Izanami stable-profile acceptance gates.
-  - Rerun the 4-peer `1 TPS`, `300s`, `200 blocks` gate with preserved artifacts.
-  - Once the short gate is green, rerun the longer `3600s` / `2000+` block acceptance pass.
-  - If a run fails, classify the first cause as execution-root divergence, consensus stall, endpoint instability, or workload-plan timeout before tuning again.
+- Maintain Izanami communication vulnerability publication evidence.
+  - The exact-injector 75% packet-loss 2026-04-26 paper-shaped run at `dist/izanami-exact-packet-paper-20260426` is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`; keep this as the current full-matrix resilience baseline.
+  - Native in-process P2P packet-drop injection is wired into `packet-loss` and leader-targeted `leader-isolation`; the matrix runner now supports the paper's 133s-266s timed fault window plus configurable packet-loss sweeps (`75%` quick, `25%/50%/75%` paper). The explicit 25%/50%/75% paper packet-loss sweep at `dist/izanami-packet-sweep-paper-20260427-loss-only` is green for both permissioned and NPoS Sumeragi and is recorded in `status.md`.
+  - The 2026-04-27 quick matrix at `dist/izanami-quick-both-20260427` is green for all ten permissioned/NPoS rows, and the post-ingress-hardening leader-isolation rerun at `dist/izanami-quick-leader-retry-20260427` keeps both modes resilient with zero acceptance markers.
+  - Keep any future publication reruns split with `--sumeragi-mode both` so permissioned and NPoS Sumeragi classifications are not collapsed, and preserve per-loss packet-loss subrows when comparing against the paper's Algorand/Aptos/Avalanche/Redbelly/Solana baseline.
+- Recalibrate the Izanami stable-profile acceptance envelope for sustained workload targets.
+  - The fresh 4-peer permissioned `1 TPS` / `300s` / `100 blocks` gate at `dist/izanami-stable-gate-20260427-target100` is green and recorded in `status.md`.
+  - The matching `200`-block diagnostic at `dist/izanami-stable-gate-20260427-rerun` crossed the prior stall region and reached strict/quorum height `107` with zero submission or confirmation failures, but missed the target because the stable workload drained before `200` blocks.
+  - Before the longer `3600s` / `2000+` block acceptance pass, choose a sustained-workload gate or lower short-run target so the KPI measures liveness instead of exhaustion of submitted work.
 - Root-cause the remaining NPoS soak/localnet collapse instead of keeping it as a log-only symptom.
   - Reproduce with preserved peer dirs and `iroha_futures::supervisor=debug`.
   - Identify the first exiting supervised child before investigating downstream connection refusals.
@@ -80,26 +75,19 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Targeted follow-ups
 
-- Reconcile the app-facing alias auto-renew mutation endpoint with the on-chain NFT/domain permission model.
-  - The new coverage pass confirmed the read path, but a user-signed disable/update flow still hits `Can't modify NFT from domain owned by another account` when the subscription NFT lives in the operator-owned subscription domain.
-  - Decide whether alias auto-renew mutations should be operator-submitted, whether the subscription asset should live in a user-controlled domain, or whether a narrower on-chain permission needs to be granted for this subscription NFT class.
-  - Add an integration test for the chosen enable/disable path once the permission model is settled.
+- Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.
+  - Add an integration test proving a user-signed enable/disable update can mutate the subscription NFT created by onboarding.
+  - If a non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.
 - Add a live multi-peer multisig test for previously unregistered signatories.
   - Start from the existing materialization coverage in `integration_tests/tests/multisig.rs`.
   - Add a case where a signatory is materialized by registration and then successfully authors `MultisigPropose` / `MultisigApprove` on the network.
   - Assert transaction-authority shape and final instruction execution, not only account materialization.
-- Unify IVM prebuilt sample staging so CLI and integration tests cannot drift.
-  - Move the sample manifest to one shared source of truth.
-  - Keep `crates/ivm/src/bin/ivm_prebuild.rs` and `integration_tests/build.rs` consuming the same sample list and fixture semantics.
-  - Cover a real drift case such as `threshold_escrow`, which is staged by `integration_tests/build.rs` but not listed in `ivm_prebuild.rs` today.
-- Make the Sumeragi formal CI source of truth deterministic.
-  - Decide whether CI should pin the container digest or use the locally pinned `0.52.2` toolchain path as the canonical version.
-  - Update `.github/workflows/pr.yml`, `scripts/formal/sumeragi_apalache.sh`, and `docs/formal/sumeragi/README.md` together.
+- Verify the deterministic Sumeragi formal CI source of truth.
   - Rerun `bash ci/check_sumeragi_formal.sh` and record the exact Apalache version or digest in `status.md`.
-- Replace the vague translation refresh backlog with a real metadata audit.
-  - Generalize the existing `ci/check_android_docs_i18n.sh` logic or add a new repo-wide checker for `source_hash` / `translation_last_reviewed`.
-  - Run it against repo-root docs, `docs/source`, and `docs/portal` to produce an actual mismatch list.
-  - Refresh only the files the checker flags, then document or gate the audit command.
+- Extend and burn down the translation metadata audit backlog.
+  - The new `ci/check_docs_i18n_metadata.py` gate covers `docs/formal`; refresh the stale `docs/formal` translations or decide when to turn on `--require-current`.
+  - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
+  - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Add a recorded capture gate for the default `sora-temple` petal styles.
   - Use `petal score-styles` with a published style set, profile, seed, and minimum success ratio.
   - Record the JSON baseline in `status.md` and keep the default style honest under aggressive capture.
