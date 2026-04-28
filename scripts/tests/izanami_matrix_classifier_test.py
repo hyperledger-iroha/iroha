@@ -86,6 +86,30 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "Mode: `stress-400`" in report.read_text()
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
 
+    report.unlink()
+    (out_dir / "summary.md").unlink()
+    evidence.unlink()
+    subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--out",
+            str(out_dir),
+            "--mode",
+            "stress-400",
+            "--sumeragi-mode",
+            "permissioned",
+            "--report-only",
+        ],
+        check=True,
+        cwd=ROOT,
+    )
+
+    assert report.exists()
+    assert "Iroha (Sumeragi permissioned)" in report.read_text()
+    assert "targeted-load" in summary.read_text()
+    assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
+
 
 def test_sweep_aggregates_profile_and_seed(tmp_path: Path) -> None:
     out_dir = tmp_path / "sweep"
