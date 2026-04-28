@@ -96,7 +96,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::json::Json;
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
-    api::StorageManifestResponseDto,
+    api::{StorageManifestResponseDto, StorageStoredFileDto},
 };
 use ivm::{
     CoreHost, IVM, IVMHost, PointerType, VMError,
@@ -2551,6 +2551,13 @@ struct RemoteHydrationChunk {
     digest_hex: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SorafsHydratedFileLayout {
+    path: Vec<String>,
+    offset: u64,
+    size: u64,
+}
+
 impl SoracloudRuntimeManager {
     /// Construct the runtime manager for the supplied node state.
     #[must_use]
@@ -3768,6 +3775,11 @@ impl SoracloudRuntimeManager {
             &plan.bundle_hash,
             &bundle_root,
         )?;
+        self.hydrate_published_inrou_guest_image_artifact(
+            &bundle_root,
+            bundle,
+            inrou.selected_guest_isa,
+        )?;
         ensure_inrou_entrypoint_present(&bundle_root, &bundle.container.entrypoint)?;
         let kernel_image_path =
             resolve_inrou_bundle_member_path(&bundle_root, &inrou.kernel_image_path)?;
@@ -4021,6 +4033,11 @@ impl SoracloudRuntimeManager {
             &PathBuf::from(&plan.bundle_cache_path),
             &plan.bundle_hash,
             &bundle_root,
+        )?;
+        self.hydrate_published_inrou_guest_image_artifact(
+            &bundle_root,
+            bundle,
+            inrou.selected_guest_isa,
         )?;
         ensure_inrou_entrypoint_present(&bundle_root, &bundle.container.entrypoint)?;
         let firecracker = resolve_executable_on_path("firecracker")
@@ -5069,6 +5086,239 @@ impl SoracloudRuntimeManager {
         }
 
         Ok(None)
+    }
+
+    fn read_committed_sorafs_directory_payload_by_digest(
+        &self,
+        view: &StateView<'_>,
+        remote_sources: &[RemoteHydrationSource],
+        manifest_digest: [u8; 32],
+    ) -> eyre::Result<Option<(Vec<u8>, Vec<SorafsHydratedFileLayout>)>> {
+        if !manifest_is_committed(view, &self.state, &manifest_digest) {
+            return Ok(None);
+        }
+
+        if let Some(sorafs_node) = self.sorafs_node.as_ref()
+            && sorafs_node.is_enabled()
+            && let Ok(manifest) = sorafs_node.manifest_metadata_by_digest(&manifest_digest)
+        {
+            let content_length = usize::try_from(manifest.content_length()).wrap_err_with(|| {
+                format!(
+                    "convert committed SoraFS manifest {} content length to usize",
+                    hex::encode(manifest_digest)
+                )
+            })?;
+            let payload = sorafs_node
+                .read_payload_range(manifest.manifest_id(), 0, content_length)
+                .wrap_err_with(|| {
+                    format!(
+                        "read committed SoraFS payload for manifest {}",
+                        hex::encode(manifest_digest)
+                    )
+                })?;
+            let files = manifest
+                .files()
+                .iter()
+                .map(|file| SorafsHydratedFileLayout {
+                    path: file.path.clone(),
+                    offset: file.offset,
+                    size: file.size,
+                })
+                .collect();
+            return Ok(Some((payload, files)));
+        }
+
+        self.read_committed_remote_sorafs_directory_payload(
+            remote_sources,
+            &hex::encode(manifest_digest),
+        )
+    }
+
+    fn read_committed_remote_sorafs_directory_payload(
+        &self,
+        remote_sources: &[RemoteHydrationSource],
+        manifest_digest_hex: &str,
+    ) -> eyre::Result<Option<(Vec<u8>, Vec<SorafsHydratedFileLayout>)>> {
+        let Some(_cache) = self.sorafs_provider_cache.as_ref() else {
+            return Ok(None);
+        };
+        if remote_sources.is_empty() {
+            return Ok(None);
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .wrap_err("build Soracloud remote directory hydration HTTP client")?;
+
+        for source in remote_sources {
+            if !source
+                .manifest_digest_hex
+                .eq_ignore_ascii_case(manifest_digest_hex)
+            {
+                continue;
+            }
+            for provider_id in &source.provider_ids {
+                let Some(base_url) = self.remote_provider_base_url(provider_id) else {
+                    continue;
+                };
+                let Some(manifest) =
+                    self.fetch_remote_manifest_metadata(&client, &base_url, source)
+                else {
+                    continue;
+                };
+                if !manifest
+                    .manifest_digest_hex
+                    .eq_ignore_ascii_case(&source.manifest_digest_hex)
+                {
+                    continue;
+                }
+                if let Some(expected_chunker) = source.chunker_handle.as_ref()
+                    && !manifest
+                        .chunk_profile_handle
+                        .eq_ignore_ascii_case(expected_chunker)
+                {
+                    continue;
+                }
+
+                let Some(plan) =
+                    self.fetch_remote_hydration_plan(&client, &base_url, &source.manifest_cid_hex)
+                else {
+                    continue;
+                };
+                if !plan
+                    .chunker_handle
+                    .eq_ignore_ascii_case(&manifest.chunk_profile_handle)
+                {
+                    continue;
+                }
+
+                let client_id = "soracloud-runtime-directory-hydration";
+                let nonce = remote_hydration_nonce(
+                    &source.manifest_cid_hex,
+                    provider_id,
+                    Hash::new(manifest.manifest_digest_hex.as_bytes()),
+                );
+                let Some(stream_token) = self.fetch_remote_stream_token(
+                    &client,
+                    &base_url,
+                    &source.manifest_cid_hex,
+                    provider_id,
+                    &plan,
+                    client_id,
+                    &nonce,
+                ) else {
+                    continue;
+                };
+
+                let Ok(capacity) = usize::try_from(plan.content_length) else {
+                    continue;
+                };
+                let mut payload = Vec::with_capacity(capacity);
+                let mut cursor = 0_u64;
+                let mut fetch_failed = false;
+                for chunk in &plan.chunks {
+                    if chunk.offset != cursor {
+                        fetch_failed = true;
+                        break;
+                    }
+                    let Some(bytes) = self.fetch_remote_chunk(
+                        &client,
+                        &base_url,
+                        &plan,
+                        chunk,
+                        &stream_token,
+                        client_id,
+                        &nonce,
+                    ) else {
+                        fetch_failed = true;
+                        break;
+                    };
+                    if bytes.len() != usize::try_from(chunk.length).unwrap_or(usize::MAX) {
+                        fetch_failed = true;
+                        break;
+                    }
+                    cursor = cursor.saturating_add(bytes.len() as u64);
+                    payload.extend_from_slice(&bytes);
+                }
+                if fetch_failed || cursor != plan.content_length {
+                    continue;
+                }
+                let payload_digest_hex = hex::encode(blake3::hash(&payload).as_bytes());
+                if !payload_digest_hex.eq_ignore_ascii_case(&manifest.payload_digest_hex) {
+                    continue;
+                }
+                let files = manifest
+                    .files
+                    .iter()
+                    .map(storage_file_dto_layout)
+                    .collect::<eyre::Result<Vec<_>>>()?;
+                return Ok(Some((payload, files)));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn hydrate_published_inrou_guest_image_artifact(
+        &self,
+        bundle_root: &Path,
+        bundle: &SoraDeploymentBundleV1,
+        selected_guest_isa: SoraInrouGuestIsaV1,
+    ) -> eyre::Result<()> {
+        let Some(inrou) = bundle.container.inrou.as_ref() else {
+            return Ok(());
+        };
+        let Some(image) = inrou.guest_images.get(&selected_guest_isa) else {
+            return Ok(());
+        };
+        let Some(artifact) = image.published_artifact.as_ref() else {
+            return Ok(());
+        };
+
+        let required_paths = [
+            Some(image.kernel_image_path.as_str()),
+            Some(image.rootfs_image_path.as_str()),
+            image.initrd_image_path.as_deref(),
+        ];
+        if required_paths
+            .iter()
+            .flatten()
+            .all(|path| bundle_root.join(strip_leading_slashes(path)).is_file())
+        {
+            return Ok(());
+        }
+
+        let manifest_digest = parse_sorafs_manifest_digest_hex(&artifact.manifest_digest_hex)?;
+        let view = self.state.view();
+        let remote_sources = collect_remote_hydration_sources(&view, &self.state);
+        let hydrated = self
+            .read_committed_sorafs_directory_payload_by_digest(
+                &view,
+                &remote_sources,
+                manifest_digest,
+            )?
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "published Inrou guest-image artifact {} for {} is not available in local or remote SoraFS storage",
+                    artifact.manifest_digest_hex,
+                    selected_guest_isa.as_str()
+                )
+            })?;
+        drop(view);
+
+        let inrou_root = bundle_root.join("inrou");
+        materialize_sorafs_payload_files(&hydrated.0, &hydrated.1, &inrou_root).wrap_err_with(
+            || {
+                format!(
+                    "hydrate published Inrou guest-image artifact {} into {}",
+                    artifact.manifest_digest_hex,
+                    inrou_root.display()
+                )
+            },
+        )?;
+        Ok(())
     }
 
     fn remote_provider_base_url(&self, provider_id: &[u8; 32]) -> Option<reqwest::Url> {
@@ -13146,6 +13396,95 @@ fn parse_remote_hydration_plan(
         content_length,
         chunks,
     })
+}
+
+fn parse_sorafs_manifest_digest_hex(raw: &str) -> eyre::Result<[u8; 32]> {
+    let bytes = hex::decode(raw.trim()).wrap_err("decode SoraFS manifest digest hex")?;
+    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+        eyre::eyre!(
+            "SoraFS manifest digest hex must decode to 32 bytes, got {}",
+            bytes.len()
+        )
+    })
+}
+
+fn storage_file_dto_layout(
+    file: &StorageStoredFileDto,
+) -> eyre::Result<SorafsHydratedFileLayout> {
+    Ok(SorafsHydratedFileLayout {
+        path: file.path.clone(),
+        offset: file.offset,
+        size: file.size,
+    })
+}
+
+fn materialize_sorafs_payload_files(
+    payload: &[u8],
+    files: &[SorafsHydratedFileLayout],
+    target_root: &Path,
+) -> eyre::Result<()> {
+    if files.is_empty() {
+        eyre::bail!("published SoraFS directory artifact did not declare any files");
+    }
+
+    for file in files {
+        let start = usize::try_from(file.offset).wrap_err_with(|| {
+            format!(
+                "convert published SoraFS file `{}` offset to usize",
+                file.path.join("/")
+            )
+        })?;
+        let size = usize::try_from(file.size).wrap_err_with(|| {
+            format!(
+                "convert published SoraFS file `{}` size to usize",
+                file.path.join("/")
+            )
+        })?;
+        let end = start.checked_add(size).ok_or_else(|| {
+            eyre::eyre!(
+                "published SoraFS file `{}` range overflows host usize",
+                file.path.join("/")
+            )
+        })?;
+        if end > payload.len() {
+            eyre::bail!(
+                "published SoraFS file `{}` range {}..{} exceeds payload length {}",
+                file.path.join("/"),
+                start,
+                end,
+                payload.len()
+            );
+        }
+        let target = sorafs_hydrated_file_target(target_root, &file.path)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .wrap_err_with(|| format!("create {}", parent.display()))?;
+        }
+        write_bytes_atomic(&target, &payload[start..end])
+            .wrap_err_with(|| format!("write {}", target.display()))?;
+    }
+    Ok(())
+}
+
+fn sorafs_hydrated_file_target(root: &Path, components: &[String]) -> eyre::Result<PathBuf> {
+    if components.is_empty() {
+        eyre::bail!("published SoraFS directory artifact file path must not be empty");
+    }
+    let mut path = root.to_path_buf();
+    for component in components {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.contains('/')
+            || component.contains('\\')
+        {
+            eyre::bail!(
+                "published SoraFS directory artifact contains unsafe path component `{component}`"
+            );
+        }
+        path.push(component);
+    }
+    Ok(path)
 }
 
 fn collect_remote_hydration_sources(

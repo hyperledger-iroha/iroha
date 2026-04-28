@@ -43,6 +43,7 @@ public final class AccountAddress {
   private static final int I105_BASE;
 
   private static volatile boolean allowMlDsa;
+  private static volatile boolean allowBls;
   private static volatile boolean allowGost;
   private static volatile boolean allowSm2;
 
@@ -739,24 +740,46 @@ public final class AccountAddress {
       case "ml_dsa":
         curveId = 0x02;
         break;
+      case "bls_normal":
+      case "bls-normal":
+      case "blsnormal":
+      case "bls12-381-g1":
+        curveId = 0x03;
+        break;
+      case "secp256k1":
+      case "secp-256k1":
+      case "secp":
+        curveId = 0x04;
+        break;
+      case "bls_small":
+      case "bls-small":
+      case "blssmall":
+      case "bls12-381-g2":
+        curveId = 0x05;
+        break;
       case "gost256a":
       case "gost-256-a":
+      case "gost3410-2012-256-paramset-a":
         curveId = 0x0A;
         break;
       case "gost256b":
       case "gost-256-b":
+      case "gost3410-2012-256-paramset-b":
         curveId = 0x0B;
         break;
       case "gost256c":
       case "gost-256-c":
+      case "gost3410-2012-256-paramset-c":
         curveId = 0x0C;
         break;
       case "gost512a":
       case "gost-512-a":
+      case "gost3410-2012-512-paramset-a":
         curveId = 0x0D;
         break;
       case "gost512b":
       case "gost-512-b":
+      case "gost3410-2012-512-paramset-b":
         curveId = 0x0E;
         break;
       case "sm2":
@@ -774,6 +797,7 @@ public final class AccountAddress {
   public static void configureCurveSupport(final CurveSupportConfig config) {
     final CurveSupportConfig effective = Objects.requireNonNull(config, "config");
     allowMlDsa = effective.allowMlDsa;
+    allowBls = effective.allowBls;
     allowGost = effective.allowGost;
     allowSm2 = effective.allowSm2;
   }
@@ -797,6 +821,11 @@ public final class AccountAddress {
         return true;
       case 0x02:
         return allowMlDsa;
+      case 0x03:
+      case 0x05:
+        return allowBls;
+      case 0x04:
+        return true;
       case 0x0A:
       case 0x0B:
       case 0x0C:
@@ -814,6 +843,9 @@ public final class AccountAddress {
     switch (curveId & 0xFF) {
       case 0x01:
       case 0x02:
+      case 0x03:
+      case 0x04:
+      case 0x05:
       case 0x0A:
       case 0x0B:
       case 0x0C:
@@ -832,6 +864,12 @@ public final class AccountAddress {
         return "ed25519";
       case 0x02:
         return "ml-dsa";
+      case 0x03:
+        return "bls_normal";
+      case 0x04:
+        return "secp256k1";
+      case 0x05:
+        return "bls_small";
       case 0x0A:
         return "gost256a";
       case 0x0B:
@@ -1224,17 +1262,23 @@ public final class AccountAddress {
 
   public static final class CurveSupportConfig {
     public final boolean allowMlDsa;
+    public final boolean allowBls;
     public final boolean allowGost;
     public final boolean allowSm2;
 
-    private CurveSupportConfig(final boolean allowMlDsa, final boolean allowGost, final boolean allowSm2) {
+    private CurveSupportConfig(
+        final boolean allowMlDsa,
+        final boolean allowBls,
+        final boolean allowGost,
+        final boolean allowSm2) {
       this.allowMlDsa = allowMlDsa;
+      this.allowBls = allowBls;
       this.allowGost = allowGost;
       this.allowSm2 = allowSm2;
     }
 
     public static CurveSupportConfig ed25519Only() {
-      return new CurveSupportConfig(false, false, false);
+      return new CurveSupportConfig(false, false, false, false);
     }
 
     public static Builder builder() {
@@ -1243,11 +1287,17 @@ public final class AccountAddress {
 
     public static final class Builder {
       private boolean allowMlDsa;
+      private boolean allowBls;
       private boolean allowGost;
       private boolean allowSm2;
 
       public Builder allowMlDsa(final boolean value) {
         this.allowMlDsa = value;
+        return this;
+      }
+
+      public Builder allowBls(final boolean value) {
+        this.allowBls = value;
         return this;
       }
 
@@ -1262,7 +1312,7 @@ public final class AccountAddress {
       }
 
       public CurveSupportConfig build() {
-        return new CurveSupportConfig(allowMlDsa, allowGost, allowSm2);
+        return new CurveSupportConfig(allowMlDsa, allowBls, allowGost, allowSm2);
       }
     }
   }

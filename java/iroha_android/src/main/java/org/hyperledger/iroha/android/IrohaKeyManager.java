@@ -10,6 +10,9 @@ import org.hyperledger.iroha.android.crypto.Ed25519Signer;
 import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
 import org.hyperledger.iroha.android.crypto.MlDsaSigner;
+import org.hyperledger.iroha.android.crypto.NativeSigningPrivateKey;
+import org.hyperledger.iroha.android.crypto.NativeSigningPublicKey;
+import org.hyperledger.iroha.android.crypto.NativeSigningSigner;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
@@ -308,6 +311,7 @@ public final class IrohaKeyManager {
     return switch (signingAlgorithm) {
       case ED25519 -> validateEd25519KeyPair(keyPair);
       case ML_DSA -> validateMlDsaKeyPair(keyPair);
+      default -> validateNativeSigningKeyPair(signingAlgorithm, keyPair);
     };
   }
 
@@ -368,6 +372,51 @@ public final class IrohaKeyManager {
           expected.length,
           toHex(encodedPublic, Math.min(12, encodedPublic.length)),
           "mldsa_public_key_mismatch");
+    }
+    return KeyMaterialValidation.valid(
+        encodedPublic.length,
+        expected.length,
+        toHex(encodedPublic, Math.min(12, encodedPublic.length)));
+  }
+
+  private static KeyMaterialValidation validateNativeSigningKeyPair(
+      final SigningAlgorithm signingAlgorithm, final KeyPair keyPair) {
+    if (keyPair == null
+        || !(keyPair.getPublic() instanceof NativeSigningPublicKey)
+        || ((NativeSigningPublicKey) keyPair.getPublic()).signingAlgorithm() != signingAlgorithm) {
+      return KeyMaterialValidation.invalid(
+          0, 0, "", signingAlgorithm.wireName() + "_public_key_missing");
+    }
+    if (!(keyPair.getPrivate() instanceof NativeSigningPrivateKey)
+        || ((NativeSigningPrivateKey) keyPair.getPrivate()).signingAlgorithm()
+            != signingAlgorithm) {
+      final byte[] publicBytes = keyPair.getPublic().getEncoded();
+      final int length = publicBytes == null ? 0 : publicBytes.length;
+      return KeyMaterialValidation.invalid(
+          length,
+          length,
+          toHex(publicBytes, Math.min(12, length)),
+          signingAlgorithm.wireName() + "_private_key_missing");
+    }
+    final byte[] encodedPublic = keyPair.getPublic().getEncoded();
+    final byte[] expected;
+    try {
+      expected =
+          NativeSignerBridge.publicKeyFromPrivate(
+              signingAlgorithm, keyPair.getPrivate().getEncoded());
+    } catch (final RuntimeException ex) {
+      return KeyMaterialValidation.invalid(
+          encodedPublic.length,
+          encodedPublic.length,
+          toHex(encodedPublic, Math.min(12, encodedPublic.length)),
+          signingAlgorithm.wireName() + "_public_key_derivation_failed");
+    }
+    if (!java.util.Arrays.equals(expected, encodedPublic)) {
+      return KeyMaterialValidation.invalid(
+          encodedPublic.length,
+          expected.length,
+          toHex(encodedPublic, Math.min(12, encodedPublic.length)),
+          signingAlgorithm.wireName() + "_public_key_mismatch");
     }
     return KeyMaterialValidation.valid(
         encodedPublic.length,
@@ -456,6 +505,20 @@ public final class IrohaKeyManager {
         }
         yield new MlDsaSigner(
             (MlDsaPrivateKey) keyPair.getPrivate(), (MlDsaPublicKey) keyPair.getPublic());
+      }
+      default -> {
+        if (!(keyPair.getPrivate() instanceof NativeSigningPrivateKey)) {
+          throw new SigningException(
+              "Expected a " + signingAlgorithm.providerName() + " private key for alias=" + alias);
+        }
+        if (!(keyPair.getPublic() instanceof NativeSigningPublicKey)) {
+          throw new SigningException(
+              "Expected a " + signingAlgorithm.providerName() + " public key for alias=" + alias);
+        }
+        yield new NativeSigningSigner(
+            signingAlgorithm,
+            (NativeSigningPrivateKey) keyPair.getPrivate(),
+            (NativeSigningPublicKey) keyPair.getPublic());
       }
     };
   }

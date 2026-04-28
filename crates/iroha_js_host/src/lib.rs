@@ -59,7 +59,8 @@ use iroha_core::zk::{
     test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
+    derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 #[cfg(test)]
@@ -223,6 +224,20 @@ const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
 const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
 const JS_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
+    Algorithm::Ed25519,
+    Algorithm::Secp256k1,
+    Algorithm::BlsNormal,
+    Algorithm::BlsSmall,
+    Algorithm::MlDsa,
+    Algorithm::Gost3410_2012_256ParamSetA,
+    Algorithm::Gost3410_2012_256ParamSetB,
+    Algorithm::Gost3410_2012_256ParamSetC,
+    Algorithm::Gost3410_2012_512ParamSetA,
+    Algorithm::Gost3410_2012_512ParamSetB,
+    Algorithm::Sm2,
+];
 
 fn ensure_packed_struct_disabled() {
     static INIT: std::sync::Once = std::sync::Once::new();
@@ -817,6 +832,170 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         private_key: Buffer::from(private_bytes),
         distid: None,
     })
+}
+
+fn algorithm_alias_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
+    let value = value.unwrap_or("ed25519").trim();
+    let key = algorithm_alias_key(value);
+    let algorithm = match key.as_str() {
+        "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
+        "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
+        "mldsa" | "mldsa65" | "mldsa44" | "mldsa87" => Algorithm::MlDsa,
+        "blsnormal" | "bls12381g1" => Algorithm::BlsNormal,
+        "blssmall" | "bls12381g2" => Algorithm::BlsSmall,
+        "gost256a" | "gost34102012256paramseta" => Algorithm::Gost3410_2012_256ParamSetA,
+        "gost256b" | "gost34102012256paramsetb" => Algorithm::Gost3410_2012_256ParamSetB,
+        "gost256c" | "gost34102012256paramsetc" => Algorithm::Gost3410_2012_256ParamSetC,
+        "gost512a" | "gost34102012512paramseta" => Algorithm::Gost3410_2012_512ParamSetA,
+        "gost512b" | "gost34102012512paramsetb" => Algorithm::Gost3410_2012_512ParamSetB,
+        "sm2" => Algorithm::Sm2,
+        _ => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("unsupported crypto algorithm: {value}"),
+            ));
+        }
+    };
+    Ok(algorithm)
+}
+
+fn js_keypair_from_keypair(keypair: KeyPair) -> JsKeyPair {
+    let algorithm = keypair.algorithm();
+    let (_, public_bytes) = keypair.public_key().to_bytes();
+    let (_, private_bytes) = keypair.private_key().to_bytes();
+    JsKeyPair {
+        algorithm: algorithm.as_static_str().to_owned(),
+        public_key: Buffer::from(public_bytes.to_vec()),
+        private_key: Buffer::from(private_bytes),
+        distid: None,
+    }
+}
+
+/// Return canonical algorithm labels available through the JavaScript native binding.
+#[napi(js_name = "supportedCryptoAlgorithms")]
+pub fn supported_crypto_algorithms_js() -> Vec<String> {
+    SUPPORTED_CRYPTO_ALGORITHMS
+        .iter()
+        .map(|algorithm| algorithm.as_static_str().to_owned())
+        .collect()
+}
+
+/// Normalize a user-facing algorithm label to the canonical Rust `iroha_crypto` label.
+#[napi(js_name = "normalizeCryptoAlgorithm")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<String> {
+    Ok(parse_crypto_algorithm(algorithm.as_deref())?
+        .as_static_str()
+        .to_owned())
+}
+
+/// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoKeypair")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_keypair(
+    algorithm: Option<String>,
+    seed: Option<Uint8Array>,
+) -> napi::Result<JsKeyPair> {
+    let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
+    let keypair = seed.map_or_else(
+        || KeyPair::random_with_algorithm(algorithm),
+        |seed| KeyPair::from_seed(seed.to_vec(), algorithm),
+    );
+    Ok(js_keypair_from_keypair(keypair))
+}
+
+/// Reconstruct a key pair from private-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoKeypairFromPrivate")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_keypair_from_private(
+    algorithm: String,
+    private_key: Uint8Array,
+) -> napi::Result<JsKeyPair> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    let keypair = KeyPair::from_private_key(private_key).map_err(norito_to_napi)?;
+    Ok(js_keypair_from_keypair(keypair))
+}
+
+/// Derive public-key bytes from private-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoPublicKeyFromPrivate")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_public_key_from_private(
+    algorithm: String,
+    private_key: Uint8Array,
+) -> napi::Result<Buffer> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    let public_key = PublicKey::from(private_key);
+    let (_, public_bytes) = public_key.to_bytes();
+    Ok(Buffer::from(public_bytes.to_vec()))
+}
+
+/// Sign a message with private-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoSign")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_sign(
+    algorithm: String,
+    private_key: Uint8Array,
+    message: Uint8Array,
+) -> napi::Result<Buffer> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    let signature = Signature::new(&private_key, message.as_ref());
+    Ok(Buffer::from(signature.payload().to_vec()))
+}
+
+/// Verify a signature against public-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoVerify")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_verify(
+    algorithm: String,
+    public_key: Uint8Array,
+    message: Uint8Array,
+    signature: Uint8Array,
+) -> napi::Result<bool> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let public_key =
+        PublicKey::from_bytes(algorithm, public_key.as_ref()).map_err(norito_to_napi)?;
+    let signature = Signature::from_bytes(signature.as_ref());
+    Ok(signature.verify(&public_key, message.as_ref()).is_ok())
+}
+
+/// Encode public-key bytes as an Iroha multihash literal.
+#[napi(js_name = "cryptoPublicKeyMultihash")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_public_key_multihash(
+    algorithm: String,
+    public_key: Uint8Array,
+) -> napi::Result<String> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    PublicKey::from_bytes(algorithm, public_key.as_ref())
+        .map(|public_key| public_key.to_string())
+        .map_err(norito_to_napi)
+}
+
+/// Encode private-key bytes as an exposed Iroha multihash literal.
+#[napi(js_name = "cryptoPrivateKeyMultihash")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_private_key_multihash(
+    algorithm: String,
+    private_key: Uint8Array,
+) -> napi::Result<String> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    Ok(ExposedPrivateKey(private_key).to_string())
 }
 
 /// Derive an Ed25519 public key from a private key seed or keypair payload.

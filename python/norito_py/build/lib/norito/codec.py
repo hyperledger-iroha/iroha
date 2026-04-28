@@ -170,9 +170,6 @@ class NoritoDecoder:
     def compact_len_active(self) -> bool:
         return bool(self.flags & header.COMPACT_LEN)
 
-    def compact_seq_len_active(self) -> bool:
-        return False
-
     def remaining(self) -> int:
         return len(self.data) - self.offset
 

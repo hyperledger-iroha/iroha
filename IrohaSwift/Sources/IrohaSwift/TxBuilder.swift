@@ -932,11 +932,18 @@ public final class IrohaSDK: @unchecked Sendable {
         case .ed25519:
             let keypair = try Keypair.generate()
             return try SigningKey.ed25519(privateKey: keypair.privateKeyBytes, metadata: metadata)
-        case .mlDsa:
-            let keypair = try MlDsaKeypair.generate(suite: .mlDsa65)
-            return try SigningKey.mlDsa(privateKey: keypair.secretKey, metadata: metadata)
         default:
-            throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+            var seed = Data((0..<32).map { _ in UInt8.random(in: UInt8.min...UInt8.max) })
+            defer { seed.resetBytes(in: 0..<seed.count) }
+            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+                algorithm: defaultSigningAlgorithm,
+                seed: seed
+            ) else {
+                throw SigningKeyError.unsupportedAlgorithm(defaultSigningAlgorithm.wireName)
+            }
+            return try SigningKey.native(algorithm: defaultSigningAlgorithm,
+                                         privateKey: derived.privateKey,
+                                         metadata: metadata)
         }
     }
 
@@ -955,16 +962,16 @@ public final class IrohaSDK: @unchecked Sendable {
                 throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
             }
             return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
-        case .mlDsa:
+        default:
             guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
-                algorithm: .mlDsa,
+                algorithm: defaultSigningAlgorithm,
                 seed: seed
             ) else {
-                throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+                throw SigningKeyError.unsupportedAlgorithm(defaultSigningAlgorithm.wireName)
             }
-            return try SigningKey.mlDsa(privateKey: derived.privateKey, metadata: metadata)
-        default:
-            throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+            return try SigningKey.native(algorithm: defaultSigningAlgorithm,
+                                         privateKey: derived.privateKey,
+                                         metadata: metadata)
         }
     }
 

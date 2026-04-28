@@ -12,6 +12,29 @@ final class IrohaSDKSigningAlgorithmTests: XCTestCase {
         XCTAssertEqual(signingKey.algorithm, .ed25519)
     }
 
+    func testSigningAlgorithmsMatchRustBridgeDiscriminants() {
+        let expected: [(SigningAlgorithm, UInt8, String)] = [
+            (.ed25519, 0, "ed25519"),
+            (.secp256k1, 1, "secp256k1"),
+            (.blsNormal, 2, "bls_normal"),
+            (.blsSmall, 3, "bls_small"),
+            (.mlDsa, 4, "ml-dsa"),
+            (.gost2012_256A, 5, "gost3410-2012-256-paramset-a"),
+            (.gost2012_256B, 6, "gost3410-2012-256-paramset-b"),
+            (.gost2012_256C, 7, "gost3410-2012-256-paramset-c"),
+            (.gost2012_512A, 8, "gost3410-2012-512-paramset-a"),
+            (.gost2012_512B, 9, "gost3410-2012-512-paramset-b"),
+            (.sm2, 10, "sm2")
+        ]
+
+        XCTAssertEqual(SigningAlgorithm.allCases.count, expected.count)
+        for (algorithm, discriminant, wireName) in expected {
+            XCTAssertEqual(algorithm.noritoDiscriminant, discriminant)
+            XCTAssertEqual(SigningAlgorithm(noritoDiscriminant: discriminant), algorithm)
+            XCTAssertEqual(algorithm.wireName, wireName)
+        }
+    }
+
     func testSigningKeyFromSeedUsesConfiguredMlDsa() throws {
         let sdk = IrohaSDK(baseURL: baseURL, defaultSigningAlgorithm: .mlDsa)
         let seed = Data("iroha-swift-ml-dsa-seed".utf8)

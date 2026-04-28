@@ -4,7 +4,14 @@ import CryptoKit
 public enum SigningAlgorithm: UInt8, CaseIterable, Sendable {
     case ed25519 = 0
     case secp256k1 = 1
+    case blsNormal = 2
+    case blsSmall = 3
     case mlDsa = 4
+    case gost2012_256A = 5
+    case gost2012_256B = 6
+    case gost2012_256C = 7
+    case gost2012_512A = 8
+    case gost2012_512B = 9
     case sm2 = 10
 
     public var noritoDiscriminant: UInt8 { rawValue }
@@ -19,6 +26,33 @@ public enum SigningAlgorithm: UInt8, CaseIterable, Sendable {
             return true
         default:
             return false
+        }
+    }
+
+    public var wireName: String {
+        switch self {
+        case .ed25519:
+            return "ed25519"
+        case .secp256k1:
+            return "secp256k1"
+        case .blsNormal:
+            return "bls_normal"
+        case .blsSmall:
+            return "bls_small"
+        case .mlDsa:
+            return "ml-dsa"
+        case .gost2012_256A:
+            return "gost3410-2012-256-paramset-a"
+        case .gost2012_256B:
+            return "gost3410-2012-256-paramset-b"
+        case .gost2012_256C:
+            return "gost3410-2012-256-paramset-c"
+        case .gost2012_512A:
+            return "gost3410-2012-512-paramset-a"
+        case .gost2012_512B:
+            return "gost3410-2012-512-paramset-b"
+        case .sm2:
+            return "sm2"
         }
     }
 }
@@ -206,6 +240,17 @@ public struct SigningKey {
                              metadata: metadata)
     }
 
+    public static func native(algorithm: SigningAlgorithm,
+                              privateKey: Data,
+                              metadata: SigningMetadata = SigningMetadata()) throws -> SigningKey {
+        guard algorithm != .ed25519 else {
+            return try SigningKey.ed25519(privateKey: privateKey, metadata: metadata)
+        }
+        return try nativeSigningKey(algorithm: algorithm,
+                                    privateKey: privateKey,
+                                    metadata: metadata)
+    }
+
     public static func mldsa(_ keypair: MlDsaKeypair,
                              metadata: SigningMetadata = SigningMetadata()) -> SigningKey {
         (try? nativeSigningKey(algorithm: .mlDsa,
@@ -227,12 +272,10 @@ extension SigningKey {
         switch algorithm {
         case .ed25519:
             return try SigningKey.ed25519(privateKey: payload, metadata: metadata)
-        case .secp256k1:
-            return try SigningKey.secp256k1(privateKey: payload, metadata: metadata)
-        case .mlDsa:
-            return try SigningKey.mlDsa(privateKey: payload, metadata: metadata)
-        case .sm2:
-            throw MultihashPrivateKeyError.unsupportedAlgorithm("sm2 private keys require Sm2Keypair")
+        default:
+            return try SigningKey.native(algorithm: algorithm,
+                                         privateKey: payload,
+                                         metadata: metadata)
         }
     }
 
@@ -330,8 +373,22 @@ private enum MultihashPrivateKey {
             return .ed25519
         case 0x1301:
             return .secp256k1
+        case 0x1309:
+            return .blsNormal
+        case 0x130a:
+            return .blsSmall
         case 0x130b:
             return .mlDsa
+        case 0x130c:
+            return .gost2012_256A
+        case 0x130d:
+            return .gost2012_256B
+        case 0x130e:
+            return .gost2012_256C
+        case 0x130f:
+            return .gost2012_512A
+        case 0x1310:
+            return .gost2012_512B
         case 0x1311:
             return .sm2
         default:

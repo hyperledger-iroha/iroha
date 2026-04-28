@@ -1629,6 +1629,40 @@ impl AppDeployArgs {
                 static_site_binding_attached,
             )?;
             let mut bundle = bundle;
+            let published_bundle = if let Some(bundle_file) = service
+                .bundle_file
+                .as_deref()
+                .map(|path| resolve_manifest_path(&manifest_dir, path))
+            {
+                let published = publish_sorafs_file_artifact(
+                    &bundle_file,
+                    &format!("Soracloud service bundle ({})", service.service_name),
+                    &torii_url,
+                    authority,
+                    key_pair,
+                    self.timeout_secs,
+                )?;
+                if published.payload_hash != bundle.container.bundle_hash {
+                    return Err(eyre!(
+                        "published service bundle `{}` hash {} did not match admitted bundle hash {}",
+                        bundle_file.display(),
+                        published.payload_hash,
+                        bundle.container.bundle_hash
+                    ));
+                }
+                Some(ServiceBundlePublishOutput {
+                    service_name: service.service_name.clone(),
+                    bundle_file: bundle_file.to_string_lossy().into_owned(),
+                    content_cid: published.content_cid,
+                    manifest_digest_hex: published.manifest_digest_hex,
+                    manifest_id_hex: published.manifest_id_hex,
+                    bundle_hash: published.payload_hash.to_string(),
+                    note: "service bundle bytes were published to SoraFS for runtime hydration"
+                        .to_owned(),
+                })
+            } else {
+                None
+            };
             let published_inrou_guest_images = publish_inrou_guest_image_artifacts(
                 service_workspace_dir.as_deref(),
                 &mut bundle,
@@ -1694,6 +1728,7 @@ impl AppDeployArgs {
                 route_path_prefix,
                 route_visibility,
                 published_public_discovery,
+                published_bundle,
                 published_inrou_guest_images,
                 response,
                 notes,
@@ -7376,6 +7411,9 @@ struct AppServiceMutationOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    published_bundle: Option<ServiceBundlePublishOutput>,
+    #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
     response: norito::json::Value,
@@ -7952,11 +7990,32 @@ struct InrouGuestImageArtifactPublishOutput {
     note: String,
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct ServiceBundlePublishOutput {
+    service_name: String,
+    bundle_file: String,
+    content_cid: String,
+    manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_id_hex: Option<String>,
+    bundle_hash: String,
+    note: String,
+}
+
 #[derive(Clone, Debug)]
 struct PublishedSorafsDirectoryArtifact {
     content_cid: String,
     manifest_digest_hex: String,
     manifest_id_hex: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedSorafsFileArtifact {
+    content_cid: String,
+    manifest_digest_hex: String,
+    manifest_id_hex: Option<String>,
+    payload_hash: Hash,
 }
 
 #[derive(Clone, Debug)]
@@ -10353,6 +10412,119 @@ fn publish_sorafs_directory_artifact(
         content_cid,
         manifest_digest_hex,
         manifest_id_hex,
+    })
+}
+
+fn publish_sorafs_file_artifact(
+    input_file: &Path,
+    description: &str,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<PublishedSorafsFileArtifact> {
+    let metadata = fs::metadata(input_file)
+        .wrap_err_with(|| format!("failed to access {description} `{}`", input_file.display()))?;
+    if !metadata.is_file() {
+        return Err(eyre!(
+            "{description} `{}` must be a file",
+            input_file.display()
+        ));
+    }
+    let payload = fs::read(input_file)
+        .wrap_err_with(|| format!("failed to read {description} `{}`", input_file.display()))?;
+    let payload_hash = Hash::new(&payload);
+    let descriptor = chunker_registry::default_descriptor();
+    let plan = CarBuildPlan::single_file_with_profile(&payload, descriptor.profile)
+        .map_err(|err| eyre!("failed to package {description} `{}`: {err}", input_file.display()))?;
+    let writer = CarWriter::new(&plan, &payload)
+        .wrap_err_with(|| format!("failed to prepare {description} CAR writer"))?;
+    let mut sink = io::sink();
+    let car_stats = writer
+        .write_to(&mut sink)
+        .wrap_err_with(|| format!("failed to compute {description} CAR metadata"))?;
+    let root_cid = car_stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("{description} CAR planning produced no root CID"))?;
+    let mut car_payload_digest = [0u8; 32];
+    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .content_length(plan.content_length)
+        .car_digest(car_payload_digest)
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: 0,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .wrap_err_with(|| format!("failed to build {description} manifest"))?;
+    let manifest_bytes = manifest
+        .encode()
+        .wrap_err_with(|| format!("failed to encode {description} manifest"))?;
+    let manifest_digest = manifest
+        .digest()
+        .wrap_err_with(|| format!("failed to compute {description} manifest digest"))?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+
+    let mut client_config = soracloud_submission_config()?;
+    client_config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    client_config.account = authority.clone();
+    client_config.key_pair = key_pair.clone();
+    let client = Client::new(client_config);
+    client
+        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
+            authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            chunk_digest_sha3_256,
+            submitted_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            alias: None,
+            successor_of: None,
+        })
+        .wrap_err_with(|| format!("failed to register {description} manifest"))?;
+    let storage_response = client
+        .post_sorafs_storage_pin(&manifest_bytes, &payload, None)
+        .wrap_err_with(|| format!("failed to upload {description} bundle into SoraFS storage"))?;
+    let status = storage_response.status();
+    let body = storage_response.body().to_vec();
+    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
+    if status != iroha::http::StatusCode::OK && !already_stored {
+        return Err(eyre!(
+            "failed to upload {description} bundle into SoraFS storage: {} {}",
+            status,
+            std::str::from_utf8(&body).unwrap_or("")
+        ));
+    }
+    let storage_value: norito::json::Value = if already_stored {
+        norito::json::Value::Null
+    } else {
+        json::from_slice(&body)
+            .wrap_err_with(|| format!("failed to decode {description} storage response"))?
+    };
+    let manifest_id_hex = storage_value
+        .get("manifest_id_hex")
+        .and_then(norito::json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let content_cid = encode_content_cid(&manifest.root_cid);
+
+    Ok(PublishedSorafsFileArtifact {
+        content_cid,
+        manifest_digest_hex,
+        manifest_id_hex,
+        payload_hash,
     })
 }
 
@@ -31407,7 +31579,14 @@ printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
             .iter()
             .find(|service| service.service_name == "travel-ops_live")
             .expect("live service output");
+        assert!(live_service.published_bundle.is_some());
         assert_eq!(live_service.published_inrou_guest_images.len(), 2);
+        let vault_service = release_response
+            .services
+            .iter()
+            .find(|service| service.service_name == "travel-ops_vault")
+            .expect("vault service output");
+        assert!(vault_service.published_bundle.is_some());
         assert!(
             release_response
                 .published_static_site
@@ -31419,7 +31598,7 @@ printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
             .iter()
             .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/storage/pin")
             .count();
-        assert_eq!(storage_pin_requests, 4);
+        assert_eq!(storage_pin_requests, 6);
         let deploy_requests = server
             .requests()
             .into_iter()
@@ -31564,6 +31743,7 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             .iter()
             .find(|service| service.service_name == "travel-ops_live")
             .expect("live service output");
+        assert!(live_service.published_bundle.is_some());
         assert_eq!(live_service.published_inrou_guest_images.len(), 2);
         assert!(live_service
             .published_inrou_guest_images
@@ -31574,7 +31754,7 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             .iter()
             .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/storage/pin")
             .count();
-        assert_eq!(storage_pin_requests, 2);
+        assert_eq!(storage_pin_requests, 4);
     }
 
     #[test]
