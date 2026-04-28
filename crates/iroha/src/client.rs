@@ -2199,6 +2199,38 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
                 map.insert("witness_ms".into(), Value::from(timeouts.witness_ms));
                 Value::Object(map)
             });
+    let npos_repair_coverage = wire
+        .npos_repair_coverage
+        .as_ref()
+        .map_or(Value::Null, |coverage| {
+            let mut map = Map::new();
+            map.insert(
+                "last_repair_height".into(),
+                Value::from(coverage.last_repair_height),
+            );
+            map.insert(
+                "last_repair_view".into(),
+                Value::from(coverage.last_repair_view),
+            );
+            map.insert("reason".into(), Value::from(coverage.reason.clone()));
+            map.insert(
+                "selected_repair_peer_count".into(),
+                Value::from(coverage.selected_repair_peer_count),
+            );
+            map.insert(
+                "required_stake_quorum_bps".into(),
+                Value::from(u64::from(coverage.required_stake_quorum_bps)),
+            );
+            map.insert(
+                "selected_stake_coverage_bps".into(),
+                Value::from(u64::from(coverage.selected_stake_coverage_bps)),
+            );
+            map.insert(
+                "reached_stake_quorum_coverage".into(),
+                Value::from(coverage.reached_stake_quorum_coverage),
+            );
+            Value::Object(map)
+        });
 
     let mut block_sync_roster = Map::new();
     block_sync_roster.insert(
@@ -2770,6 +2802,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::from(wire.effective_pacemaker_interval_ms),
     );
     root.insert("effective_npos_timeouts".into(), effective_npos_timeouts);
+    root.insert("npos_repair_coverage".into(), npos_repair_coverage);
     root.insert(
         "effective_collectors_k".into(),
         Value::from(wire.effective_collectors_k),
@@ -13803,6 +13836,7 @@ mod tests {
             effective_availability_timeout_ms: 0,
             effective_pacemaker_interval_ms: 0,
             effective_npos_timeouts: None,
+            npos_repair_coverage: None,
             effective_collectors_k: 0,
             effective_redundant_send_r: 0,
             leader_index: 2,
@@ -16733,6 +16767,7 @@ mod tests {
             effective_availability_timeout_ms: 0,
             effective_pacemaker_interval_ms: 0,
             effective_npos_timeouts: None,
+            npos_repair_coverage: None,
             effective_collectors_k: 0,
             effective_redundant_send_r: 0,
             leader_index: 0,
@@ -17107,6 +17142,17 @@ mod tests {
                     witness_ms: 270,
                 },
             ),
+            npos_repair_coverage: Some(
+                iroha_data_model::block::consensus::SumeragiNposRepairCoverageStatus {
+                    last_repair_height: 12,
+                    last_repair_view: 5,
+                    reason: "missing_commit_votes".to_string(),
+                    selected_repair_peer_count: 2,
+                    required_stake_quorum_bps: 6_667,
+                    selected_stake_coverage_bps: 7_500,
+                    reached_stake_quorum_coverage: true,
+                },
+            ),
             effective_collectors_k: 7,
             effective_redundant_send_r: 3,
             leader_index: 2,
@@ -17307,6 +17353,20 @@ mod tests {
         assert_eq!(
             npos_timeouts.get("witness_ms").and_then(Value::as_u64),
             Some(270)
+        );
+        let repair_coverage = root
+            .get("npos_repair_coverage")
+            .and_then(Value::as_object)
+            .expect("npos_repair_coverage object");
+        assert_eq!(
+            repair_coverage.get("reason").and_then(Value::as_str),
+            Some("missing_commit_votes")
+        );
+        assert_eq!(
+            repair_coverage
+                .get("selected_stake_coverage_bps")
+                .and_then(Value::as_u64),
+            Some(7_500)
         );
         let handling = root
             .get("consensus_message_handling")

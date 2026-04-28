@@ -8,8 +8,8 @@ use norito::codec::{Decode, Encode};
 use tracing::warn;
 
 use crate::config::{
-    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles,
-    IzanamiArgs, WorkloadProfile,
+    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
+    DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, FaultArgs, FaultToggles, IzanamiArgs, WorkloadProfile,
 };
 use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
@@ -44,6 +44,8 @@ struct StoredArgs {
     progress_interval_ms: u64,
     #[norito(default = "default_progress_timeout_ms")]
     progress_timeout_ms: u64,
+    #[norito(default = "default_shutdown_drain_timeout_ms")]
+    shutdown_drain_timeout_ms: u64,
     #[norito(default)]
     latency_p95_threshold_ms: Option<u64>,
     #[norito(default)]
@@ -89,6 +91,11 @@ fn default_progress_timeout_ms() -> u64 {
         .expect("default progress timeout should fit into u64")
 }
 
+fn default_shutdown_drain_timeout_ms() -> u64 {
+    u64::try_from(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT.as_millis())
+        .expect("default shutdown drain timeout should fit into u64")
+}
+
 fn default_submitters() -> u32 {
     1
 }
@@ -107,6 +114,8 @@ impl StoredArgs {
         let pipeline_time_ms = maybe_duration_to_ms(args.pipeline_time, "pipeline time")?;
         let progress_interval_ms = duration_to_ms(args.progress_interval, "progress interval")?;
         let progress_timeout_ms = duration_to_ms(args.progress_timeout, "progress timeout")?;
+        let shutdown_drain_timeout_ms =
+            duration_to_ms(args.shutdown_drain_timeout, "shutdown drain timeout")?;
         let latency_p95_threshold_ms =
             maybe_duration_to_ms(args.latency_p95_threshold, "latency p95 threshold")?;
         let fault_window_start_ms =
@@ -142,6 +151,7 @@ impl StoredArgs {
             target_blocks: args.target_blocks,
             progress_interval_ms,
             progress_timeout_ms,
+            shutdown_drain_timeout_ms,
             latency_p95_threshold_ms,
             fault_window_start_ms,
             fault_window_end_ms,
@@ -162,6 +172,7 @@ impl StoredArgs {
             target_blocks: self.target_blocks,
             progress_interval: Duration::from_millis(self.progress_interval_ms),
             progress_timeout: Duration::from_millis(self.progress_timeout_ms),
+            shutdown_drain_timeout: Duration::from_millis(self.shutdown_drain_timeout_ms),
             latency_p95_threshold: self.latency_p95_threshold_ms.map(Duration::from_millis),
             fault_window_start: self.fault_window_start_ms.map(Duration::from_millis),
             fault_window_end: self.fault_window_end_ms.map(Duration::from_millis),
@@ -257,11 +268,13 @@ mod portable_tests {
         args.allow_net = true;
         args.fault_window_start = Some(Duration::from_secs(133));
         args.fault_window_end = Some(Duration::from_secs(266));
+        args.shutdown_drain_timeout = Duration::from_secs(60);
 
         let loaded = StoredArgs::from_args(&args)?.into_args()?;
 
         assert_eq!(loaded.fault_window_start, args.fault_window_start);
         assert_eq!(loaded.fault_window_end, args.fault_window_end);
+        assert_eq!(loaded.shutdown_drain_timeout, args.shutdown_drain_timeout);
         Ok(())
     }
 }
@@ -410,6 +423,7 @@ mod tests {
             target_blocks: Some(42),
             progress_interval: Duration::from_secs(7),
             progress_timeout: Duration::from_secs(55),
+            shutdown_drain_timeout: Duration::from_secs(19),
             latency_p95_threshold: Some(Duration::from_millis(900)),
             fault_window_start: Some(Duration::from_secs(13)),
             fault_window_end: Some(Duration::from_secs(26)),
@@ -447,6 +461,7 @@ mod tests {
         assert_eq!(loaded.target_blocks, args.target_blocks);
         assert_eq!(loaded.progress_interval, args.progress_interval);
         assert_eq!(loaded.progress_timeout, args.progress_timeout);
+        assert_eq!(loaded.shutdown_drain_timeout, args.shutdown_drain_timeout);
         assert_eq!(loaded.latency_p95_threshold, args.latency_p95_threshold);
         assert_eq!(loaded.fault_window_start, args.fault_window_start);
         assert_eq!(loaded.fault_window_end, args.fault_window_end);
@@ -522,6 +537,10 @@ mod tests {
         assert_eq!(loaded.target_blocks, None);
         assert_eq!(loaded.progress_interval, DEFAULT_PROGRESS_INTERVAL);
         assert_eq!(loaded.progress_timeout, DEFAULT_PROGRESS_TIMEOUT);
+        assert_eq!(
+            loaded.shutdown_drain_timeout,
+            DEFAULT_SHUTDOWN_DRAIN_TIMEOUT
+        );
         assert_eq!(loaded.latency_p95_threshold, None);
         assert_eq!(
             loaded.packet_loss_percent,
