@@ -110,6 +110,7 @@ iroha_i18n = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 rand = { workspace = true }
 x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"] }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }
@@ -122,7 +123,6 @@ iroha_test_samples = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { path = "../sorafs_chunker" }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
-blake3 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
