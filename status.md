@@ -2,6 +2,17 @@
 
 Last updated: 2026-04-28
 
+## 2026-04-28 Izanami evidence reporting review fixes
+
+- Tightened the communication-vulnerability matrix acceptance marker so only a real whitespace-delimited `failures=N` field can degrade a run; `expected_failures=N` metadata no longer satisfies the marker.
+- Stopped duration-only Izanami deadline sampling from reporting `first_progress_after_fault_start_height` / `first_progress_after_fault_end_height`; those fields now remain reserved for polling runs that actually observe height advancement after the fault boundary, while final quorum/strict/skew evidence is still recorded.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `cargo test -p izanami duration_deadline -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-28 Sumeragi main-loop recovery regression closure
 
 - Fixed the reported Sumeragi main-loop recovery failure cluster by keeping contiguous frontier recovery on exact slots instead of leaking back into generic missing-block state, while preserving the wider-roster resilience fallback when a commit quorum leaves a meaningful non-quorum tail.

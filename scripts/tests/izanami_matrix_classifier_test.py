@@ -45,6 +45,7 @@ def test_matrix_classifier_does_not_match_tolerated_fault_metadata(tmp_path: Pat
     tolerated = tmp_path / "tolerated.log"
     tolerated.write_text(
         "progress tolerated_failures=5\n"
+        "summary expected_failures=13 confirmation_failed=0\n"
         "summary expected_failures=3 failures=0 confirmation_failed=0\n"
     )
     actual = tmp_path / "actual.log"
