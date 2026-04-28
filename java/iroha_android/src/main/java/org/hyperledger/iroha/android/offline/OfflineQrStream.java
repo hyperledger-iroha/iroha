@@ -104,7 +104,7 @@ public final class OfflineQrStream {
     private final int parityGroup;
 
     public Options() {
-      this(360, 0);
+      this(360, 3);
     }
 
     public Options(final int chunkSize, final int parityGroup) {
