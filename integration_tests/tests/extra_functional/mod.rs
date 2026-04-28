@@ -5,6 +5,7 @@ mod connected_peers;
 mod genesis;
 mod multiple_blocks_created;
 mod normal;
+mod offline_note_v2;
 mod offline_peers;
 mod restart_peer;
 mod seven_peer_consistency;
