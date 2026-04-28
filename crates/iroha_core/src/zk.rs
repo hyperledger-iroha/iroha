@@ -309,8 +309,7 @@ fn is_offline_note_v2_recursive_circuit_id(circuit_id: &str) -> bool {
 /// Returns an error if Halo2 verifier-key generation fails.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
-    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> =
-        std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
 
     CACHE
         .get_or_init(|| {

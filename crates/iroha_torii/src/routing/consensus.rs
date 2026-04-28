@@ -8,7 +8,8 @@ use iroha_data_model::{
         SumeragiCommitPipelineStatus, SumeragiConsensusCapsStatus,
         SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
-        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiNposTimeoutsStatus,
+        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus,
         SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
         SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
         SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
@@ -2947,6 +2948,33 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             ])
         })
         .unwrap_or(Value::Null);
+    let npos_repair_coverage = snap
+        .npos_repair_coverage
+        .as_ref()
+        .map(|coverage| {
+            json_object(vec![
+                json_entry("last_repair_height", coverage.last_repair_height),
+                json_entry("last_repair_view", coverage.last_repair_view),
+                json_entry("reason", coverage.reason.clone()),
+                json_entry(
+                    "selected_repair_peer_count",
+                    coverage.selected_repair_peer_count,
+                ),
+                json_entry(
+                    "required_stake_quorum_bps",
+                    coverage.required_stake_quorum_bps,
+                ),
+                json_entry(
+                    "selected_stake_coverage_bps",
+                    coverage.selected_stake_coverage_bps,
+                ),
+                json_entry(
+                    "reached_stake_quorum_coverage",
+                    coverage.reached_stake_quorum_coverage,
+                ),
+            ])
+        })
+        .unwrap_or(Value::Null);
     crate::json_object(vec![
         json_entry("mode_tag", &snap.mode_tag),
         json_entry(
@@ -3007,6 +3035,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.effective_pacemaker_interval_ms,
         ),
         json_entry("effective_npos_timeouts", effective_npos_timeouts),
+        json_entry("npos_repair_coverage", npos_repair_coverage),
         json_entry("effective_collectors_k", snap.effective_collectors_k),
         json_entry(
             "effective_redundant_send_r",
@@ -4392,6 +4421,18 @@ pub async fn handle_v1_sumeragi_status(
                     witness_ms: timeouts.witness_ms,
                 }
             }),
+            npos_repair_coverage: snap
+                .npos_repair_coverage
+                .as_ref()
+                .map(|coverage| SumeragiNposRepairCoverageStatus {
+                    last_repair_height: coverage.last_repair_height,
+                    last_repair_view: coverage.last_repair_view,
+                    reason: coverage.reason.clone(),
+                    selected_repair_peer_count: coverage.selected_repair_peer_count,
+                    required_stake_quorum_bps: coverage.required_stake_quorum_bps,
+                    selected_stake_coverage_bps: coverage.selected_stake_coverage_bps,
+                    reached_stake_quorum_coverage: coverage.reached_stake_quorum_coverage,
+                }),
             effective_collectors_k: snap.effective_collectors_k,
             effective_redundant_send_r: snap.effective_redundant_send_r,
             leader_index: snap.leader_index,
