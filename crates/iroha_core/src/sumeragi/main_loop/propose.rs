@@ -3124,6 +3124,22 @@ impl Actor {
                     "online peer count below commit quorum; continuing proposal flow"
                 );
             }
+            if required > 1
+                && tracked_height == committed_height.saturating_add(1)
+                && self.subsystems.propose.last_successful_proposal.is_none()
+            {
+                self.subsystems.propose.pacemaker.next_deadline = now
+                    .checked_add(
+                        self.subsystems
+                            .propose
+                            .pacemaker
+                            .propose_interval
+                            .max(Duration::from_millis(1)),
+                    )
+                    .unwrap_or(now);
+                self.maybe_rebroadcast_new_view_votes(tracked_height, now);
+                return false;
+            }
         }
 
         if required == 1 && topology.as_ref().len() == 1 {

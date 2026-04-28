@@ -14861,17 +14861,21 @@ impl Actor {
             })
     }
 
-    fn local_signed_block_for_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
+    fn local_signed_block_for_hash_with_repair_options(
+        &self,
+        hash: HashOf<BlockHeader>,
+        include_aborted_pending: bool,
+    ) -> Option<Arc<SignedBlock>> {
         if let Some(pending) = self.pending.pending_blocks.get(&hash) {
-            if !pending.is_retry_aborted()
-                && !matches!(pending.validation_status, ValidationStatus::Invalid)
+            if !matches!(pending.validation_status, ValidationStatus::Invalid)
+                && (include_aborted_pending || !pending.is_retry_aborted())
             {
                 return Some(Arc::new(pending.block.clone()));
             }
         }
         if let Some(inflight) = self.subsystems.commit.inflight.as_ref()
             && inflight.block_hash == hash
-            && !inflight.pending.aborted
+            && (include_aborted_pending || !inflight.pending.aborted)
             && !matches!(
                 inflight.pending.validation_status,
                 ValidationStatus::Invalid
@@ -14884,6 +14888,21 @@ impl Actor {
         }
         let height = self.kura.get_block_height_by_hash(hash)?;
         self.kura.get_block(height)
+    }
+
+    fn local_signed_block_for_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
+        self.local_signed_block_for_hash_with_repair_options(
+            hash, /*include_aborted_pending*/ false,
+        )
+    }
+
+    fn local_signed_block_for_body_repair(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<Arc<SignedBlock>> {
+        self.local_signed_block_for_hash_with_repair_options(
+            hash, /*include_aborted_pending*/ true,
+        )
     }
 
     fn with_local_payload_for_progress<T>(
@@ -18780,6 +18799,15 @@ impl Actor {
         };
         let proposal_deadline_due = self.subsystems.propose.pacemaker.next_deadline <= now
             || self.pacemaker_queue_nudge_due(now);
+        let commit_wakeup_before_idle = self.pending.commit_pipeline_wakeup;
+        let queue_saturated_before_idle = self.queue_backpressure_state().is_saturated();
+        let commit_candidates_before_idle = self
+            .commit_candidate_blocks_len(commit_wakeup_before_idle || queue_saturated_before_idle);
+        let preserve_idle_view_budget_for_commit =
+            should_preserve_idle_view_budget_for_commit_pipeline(
+                commit_wakeup_before_idle,
+                commit_candidates_before_idle,
+            );
         let preserve_idle_view_budget_for_proposal = should_preserve_idle_view_budget_for_proposal(
             queue_len,
             mode_flip_pending_before_idle,
@@ -18796,6 +18824,14 @@ impl Actor {
                     consensus_queue_backpressure =
                         pre_idle_proposal_backpressure.consensus_queue_backpressure,
                     "preserving tick budget for due proposal attempt before idle view repair"
+                );
+                false
+            } else if preserve_idle_view_budget_for_commit {
+                trace!(
+                    queue_len,
+                    commit_candidates = commit_candidates_before_idle,
+                    queue_saturated = queue_saturated_before_idle,
+                    "preserving tick budget for commit pipeline wake before idle view repair"
                 );
                 false
             } else {
@@ -21904,6 +21940,26 @@ impl Actor {
                                     Arc::clone(&encoded),
                                 ),
                             });
+                        }
+                    }
+                    if let Some(block) =
+                        self.local_signed_block_for_body_repair(key.0)
+                            .filter(|block| {
+                                let header = block.header();
+                                header.height().get() == key.1
+                                    && header.view_change_index() == key.2
+                            })
+                    {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            ready = ready_count,
+                            targets = ?targets,
+                            "sending targeted BlockBodyResponse companion to peers missing READY"
+                        );
+                        for peer in &targets {
+                            self.send_block_body_response(peer.clone(), block.as_ref());
                         }
                     }
                     self.subsystems
@@ -34863,6 +34919,13 @@ fn availability_gate_timeout_exceeded(pending_age: Duration, timeout: Duration) 
 
 fn should_run_commit_pipeline_on_tick(pending_blocks: usize) -> bool {
     pending_blocks > 0
+}
+
+fn should_preserve_idle_view_budget_for_commit_pipeline(
+    commit_pipeline_wakeup: bool,
+    candidate_blocks_for_commit: usize,
+) -> bool {
+    commit_pipeline_wakeup && candidate_blocks_for_commit > 0
 }
 
 fn round_phase_after_event(input: RoundFsmInput) -> super::status::RoundPhaseTrace {

@@ -1235,6 +1235,17 @@ impl Actor {
             .iter()
             .filter_map(|key| self.vote_log.get(key).map(|vote| vote.block_hash))
             .collect();
+        let preserved_active_pending_hashes: BTreeSet<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(hash, pending)| {
+                (pending.height == active_height
+                    && !matches!(pending.validation_status, ValidationStatus::Invalid)
+                    && !pending.is_retry_aborted())
+                .then_some(*hash)
+            })
+            .collect();
         let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
         let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
         let current_view = self.phase_tracker.current_view(active_height);
@@ -1256,6 +1267,19 @@ impl Actor {
         let preserved_active_new_view_votes: BTreeSet<_> = self
             .stored_votes()
             .filter_map(|vote| preserve_new_view_vote(vote).then_some(vote_key(vote)))
+            .collect();
+        let preserve_active_pending_vote = |vote: &crate::sumeragi::consensus::Vote| {
+            vote.height == active_height
+                && matches!(
+                    vote.phase,
+                    crate::sumeragi::consensus::Phase::Prepare
+                        | crate::sumeragi::consensus::Phase::Commit
+                )
+                && preserved_active_pending_hashes.contains(&vote.block_hash)
+        };
+        let preserved_active_pending_votes: BTreeSet<_> = self
+            .stored_votes()
+            .filter_map(|vote| preserve_active_pending_vote(vote).then_some(vote_key(vote)))
             .collect();
         let preserved_local_active_vote_identities: BTreeSet<_> = self
             .vote_log_identities
@@ -1279,6 +1303,11 @@ impl Actor {
             .iter()
             .filter_map(|(key, vote)| preserve_new_view_vote(vote).then_some(key.clone()))
             .collect();
+        let preserved_active_pending_vote_identities: BTreeSet<_> = self
+            .vote_log_identities
+            .iter()
+            .filter_map(|(key, vote)| preserve_active_pending_vote(vote).then_some(key.clone()))
+            .collect();
         let should_keep = |height: u64, view: u64| -> bool {
             if height <= committed_height || height < min_height || height > max_height {
                 return false;
@@ -1301,21 +1330,28 @@ impl Actor {
             should_keep(key.1, key.2)
                 || preserved_local_active_votes.contains(key)
                 || preserved_active_new_view_votes.contains(key)
+                || preserved_active_pending_votes.contains(key)
         };
         self.vote_log.retain(|key, _| should_keep_vote_key(key));
         self.vote_log_identities.retain(|key, vote| {
             should_keep(vote.height, vote.view)
                 || preserved_local_active_vote_identities.contains(key)
                 || preserved_active_new_view_vote_identities.contains(key)
+                || preserved_active_pending_vote_identities.contains(key)
         });
         self.vote_validation_cache
             .retain(|key, _| should_keep_vote_key(key));
         self.vote_validation_cache_identities
             .retain(|key, _| self.vote_log_identities.contains_key(key));
-        self.qc_cache
-            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+        self.qc_cache.retain(|(_, hash, height, view, _), _| {
+            should_keep(*height, *view)
+                || (*height == active_height && preserved_active_pending_hashes.contains(hash))
+        });
         self.qc_signer_tally
-            .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
+            .retain(|(_, hash, height, view, _), _| {
+                should_keep(*height, *view)
+                    || (*height == active_height && preserved_active_pending_hashes.contains(hash))
+            });
         self.subsystems
             .qc_verify
             .verified_cache
@@ -1323,6 +1359,7 @@ impl Actor {
         self.vote_roster_cache.retain(|hash, entry| {
             should_keep(entry.height, entry.view)
                 || preserved_local_active_roster_hashes.contains(hash)
+                || preserved_active_pending_hashes.contains(hash)
         });
         self.deferred_qcs
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
@@ -1331,17 +1368,20 @@ impl Actor {
         self.quarantined_block_sync_qcs
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.deferred_votes.retain(|_, votes| {
-            votes.retain(|(_, height, view, _, _), _| should_keep(*height, *view));
+            votes.retain(|(_, height, view, _, _), vote| {
+                should_keep(*height, *view) || preserve_active_pending_vote(vote)
+            });
             !votes.is_empty()
+        });
+        self.subsystems.vote_verify.pending.retain(|key, pending| {
+            should_keep(key.height, key.view) || preserve_active_pending_vote(&pending.vote)
         });
         self.subsystems
             .vote_verify
-            .pending
-            .retain(|key, _| should_keep(key.height, key.view));
-        self.subsystems
-            .vote_verify
             .pending_validation
-            .retain(|key, _| should_keep(key.height, key.view));
+            .retain(|key, vote| {
+                should_keep(key.height, key.view) || preserve_active_pending_vote(vote)
+            });
         self.subsystems
             .vote_verify
             .signature_topology_cache

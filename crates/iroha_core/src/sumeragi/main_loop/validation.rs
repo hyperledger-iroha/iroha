@@ -429,7 +429,10 @@ impl Actor {
                 && !other.aborted
                 && !matches!(other.validation_status, ValidationStatus::Invalid)
         });
-        if superseded_by_newer_view && !pending.commit_qc_observed() {
+        if superseded_by_newer_view
+            && !pending.commit_qc_observed()
+            && validation_priority_reason.is_none()
+        {
             debug!(
                 height = pending.height,
                 view = pending.view,
