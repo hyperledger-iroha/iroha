@@ -3131,9 +3131,75 @@ impl Actor {
                     "online peer count below commit quorum; continuing proposal flow"
                 );
             }
+            let roster_set: BTreeSet<_> = topology.as_ref().iter().cloned().collect();
+            let current_view_idx = current_view.unwrap_or_default();
+            let new_view_quorum_at_tracked_height =
+                self.subsystems.propose.new_view_tracker.entries.iter().any(
+                    |((entry_height, _), entry)| {
+                        *entry_height == tracked_height
+                            && entry.count_in_roster(&roster_set, local_peer.as_ref()) >= required
+                    },
+                );
+            let exact_new_view_quorum_ready = new_view_quorum_at_tracked_height
+                && (pending_queue_len == 0
+                    || view_age.is_some_and(|age| age >= self.commit_quorum_timeout()));
+            let future_new_view_quorum_observed = tracked_height < desired_height
+                && self.subsystems.propose.new_view_tracker.entries.iter().any(
+                    |((entry_height, _), entry)| {
+                        *entry_height >= tracked_height.saturating_add(1)
+                            && entry.count_in_roster(&roster_set, local_peer.as_ref()) >= required
+                    },
+                );
+            let cached_current_slot = self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(tracked_height, current_view_idx)
+                .is_some();
+            let missing_qc_recovery_active =
+                self.subsystems
+                    .propose
+                    .proposal_liveness
+                    .is_some_and(|slot| {
+                        slot.height == tracked_height
+                            && slot.view == current_view_idx
+                            && matches!(
+                                slot.state,
+                                ProposalLivenessState::AwaitingProposalAfterMissingQc
+                                    | ProposalLivenessState::RecoveryAcquireDependencies
+                            )
+                    });
+            let forced_recovery_view = self
+                .subsystems
+                .propose
+                .forced_view_after_timeout
+                .is_some_and(|(forced_height, forced_view)| {
+                    forced_height == tracked_height && forced_view >= current_view_idx
+                });
+            let committed_qc_frontier_recovery_candidate = self.config.resilience.enabled
+                && tracked_height == committed_height.saturating_add(1)
+                && current_view_idx > 0
+                && self
+                    .subsystems
+                    .propose
+                    .new_view_tracker
+                    .entries
+                    .get(&(tracked_height, current_view_idx))
+                    .is_none_or(|entry| entry.senders.is_empty())
+                && !self.proposal_gated_by_missing_dependencies(tracked_height)
+                && precommit_qc.is_some_and(|qc| tracked_height == qc.height.saturating_add(1));
+            let empty_recovery_view = pending_queue_len == 0 && current_view_idx > 0;
+            let recovery_or_quorum_evidence = empty_recovery_view
+                || exact_new_view_quorum_ready
+                || future_new_view_quorum_observed
+                || cached_current_slot
+                || missing_qc_recovery_active
+                || committed_qc_frontier_recovery_candidate
+                || forced_recovery_view;
             if required > 1
                 && tracked_height == committed_height.saturating_add(1)
                 && self.subsystems.propose.last_successful_proposal.is_none()
+                && !recovery_or_quorum_evidence
             {
                 self.subsystems.propose.pacemaker.next_deadline = now
                     .checked_add(

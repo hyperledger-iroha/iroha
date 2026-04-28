@@ -13,6 +13,17 @@ Last updated: 2026-04-28
   - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
   - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh && git diff --check`
 
+## 2026-04-28 Sumeragi pacemaker low-online recovery gate
+
+- Narrowed the pacemaker's first-proposal low-online deferral so it still suppresses fresh view-0 startup proposals without an online commit quorum, but no longer blocks cached-slot cleanup, missing-QC committed-QC fallback proposals, recovery heartbeat proposals, stale/unknown precommit recovery, or future-NEW_VIEW reanchor catch-up.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::cached_recovery_proposal -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::force_view_change_if_idle_forces_missing_qc_frontier_proposal -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::pacemaker_ -- --nocapture`
+  - `git diff --check`
+
 ## 2026-04-28 Izanami seed-7 stress evidence
 
 - Ran real 20-peer/800s stress matrices with fresh `target/codex-stress` binaries for seed `7`:
