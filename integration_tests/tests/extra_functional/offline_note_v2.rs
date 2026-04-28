@@ -6,7 +6,10 @@ use integration_tests::sandbox;
 use iroha::{
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
-        isi::{offline::AuditOfflineNoteV2, offline::IssueOfflineNoteV2, offline::RedeemOfflineNoteV2, verifying_keys},
+        isi::{
+            offline::AuditOfflineNoteV2, offline::IssueOfflineNoteV2, offline::RedeemOfflineNoteV2,
+            verifying_keys,
+        },
         offline::{
             OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineNoteAuditBundleV2,
             OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2, OfflineNoteIssuedClaimV2,
@@ -18,21 +21,25 @@ use iroha::{
     },
 };
 use iroha_core::zk::{
-    OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+    OFFLINE_NOTE_V2_MAX_PROOF_BYTES, OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
     derive_halo2_ipa_offline_note_v2_proving_key_bytes, offline_note_v2_recursive_vk_record,
     prove_offline_note_v2_audit, prove_offline_note_v2_redeem,
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
 use tokio::task::spawn_blocking;
 
 const OFFLINE_NOTE_V2_VERIFIER_NAMESPACE: &str = "offline_note_v2";
+const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
 
 #[tokio::test]
 async fn offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers() -> Result<()> {
     let context = stringify!(offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers);
-    let verifier_id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID);
+    let verifier_id = VerifyingKeyId::new(
+        ZK_BACKEND_HALO2_IPA,
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+    );
     let verifier_record =
         offline_note_v2_recursive_vk_record(OFFLINE_NOTE_V2_VERIFIER_NAMESPACE, 1)
             .map_err(|error| eyre::eyre!(error))?;
@@ -56,8 +63,25 @@ async fn offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers() -> Resul
     );
 
     let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
+    let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
     let builder = NetworkBuilder::new()
         .with_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write(["zk", "halo2", "enabled"], true)
+                .write(
+                    ["zk", "halo2", "max_envelope_bytes"],
+                    i64::from(OFFLINE_NOTE_V2_MAX_PROOF_BYTES),
+                )
+                .write(
+                    ["zk", "halo2", "max_proof_bytes"],
+                    i64::from(OFFLINE_NOTE_V2_MAX_PROOF_BYTES),
+                )
+                .write(
+                    ["confidential", "verify_timeout_ms"],
+                    PROOF_VERIFY_TIMEOUT_MS,
+                );
+        })
         .with_genesis_instruction(Register::asset_definition(asset_definition))
         .with_genesis_instruction(Mint::asset_numeric(
             Numeric::from(100_u64),
@@ -66,6 +90,10 @@ async fn offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers() -> Resul
         .with_genesis_instruction(Grant::account_permission(
             manage_offline_escrow,
             ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            manage_verifying_keys,
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         ))
         .with_genesis_instruction(verifying_keys::RegisterVerifyingKey {
             id: verifier_id.clone(),

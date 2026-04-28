@@ -583,11 +583,13 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         ));
     }
 
+    let mut vk_registry_instructions = Vec::new();
     for tx_instr in extra_transactions.into_iter() {
         if tx_instr.is_empty() {
             continue;
         }
         builder = builder.next_transaction();
+        vk_registry_instructions.extend(tx_instr.iter().cloned());
         for instruction in tx_instr {
             builder = builder.append_instruction(instruction);
         }
@@ -649,14 +651,22 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             continue;
         }
         builder = builder.next_transaction();
+        vk_registry_instructions.extend(tx_instr.iter().cloned());
         for instruction in tx_instr {
             builder = builder.append_instruction(instruction);
         }
     }
 
+    let vk_set_hash = iroha_genesis::compute_genesis_vk_set_hash(vk_registry_instructions.iter())
+        .expect("compute genesis verifying key set hash");
+    let vk_set_hash_field = vk_set_hash.map_or(norito::json::Value::Null, |hash| {
+        norito::json::Value::String(format_hash_hex(hash))
+    });
+    let mut confidential_root = norito::json::Map::new();
+    confidential_root.insert("vk_set_hash".to_owned(), vk_set_hash_field);
     let conf_param = Parameter::Custom(CustomParameter::new(
         confidential_metadata::registry_root_id(),
-        Json::new(norito::json!({ "vk_set_hash": null })),
+        Json::new(norito::json::Value::Object(confidential_root)),
     ));
     builder = builder.append_parameter(conf_param);
     if let Some(handshake_meta) = consensus_handshake_meta {
@@ -668,6 +678,17 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .build_and_sign(&genesis_key_pair)
         .expect("build minimal genesis");
     (block, genesis_account, topology_vec, genesis_key_pair)
+}
+
+fn format_hash_hex(hash: [u8; 32]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(66);
+    encoded.push_str("0x");
+    for byte in hash {
+        write!(&mut encoded, "{byte:02x}").expect("write to String");
+    }
+    encoded
 }
 
 pub(crate) fn ensure_genesis_results(
@@ -996,7 +1017,7 @@ mod tests {
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        Registrable, asset::AssetDefinition, domain::Domain, isi::register::RegisterPeerWithPop,
+        asset::AssetDefinition, domain::Domain, isi::register::RegisterPeerWithPop,
         parameter::system::SumeragiParameters,
     };
     use norito::codec::Decode;
@@ -1909,6 +1930,79 @@ mod tests {
             block.0.header().confidential_features().is_some(),
             "genesis block must advertise confidential feature digest"
         );
+    }
+
+    #[test]
+    fn genesis_confidential_digest_tracks_registered_verifying_keys() {
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "offline-v2-test");
+        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+            1,
+            "offline-v2-test",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0xAA; 32],
+            [0xBB; 32],
+        );
+        record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        record.gas_schedule_id = Some("halo2_default".into());
+        let register = InstructionBox::from(
+            iroha_data_model::isi::verifying_keys::RegisterVerifyingKey { id: vk_id, record },
+        );
+        let expected = iroha_genesis::compute_genesis_vk_set_hash([&register])
+            .expect("compute verifier set hash")
+            .expect("active verifier registry hash");
+
+        let (block, _, _, _) = super::build_minimal_genesis_unexecuted_with_post_topology(
+            Vec::new(),
+            vec![vec![register]],
+            topology,
+            vec![entry],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let declared_hash = block
+            .0
+            .transactions_vec()
+            .iter()
+            .find_map(|tx| {
+                use iroha_data_model::{isi::SetParameter, transaction::Executable};
+
+                let Executable::Instructions(instrs) = tx.instructions() else {
+                    return None;
+                };
+                instrs.iter().find_map(|instr| {
+                    let set_parameter = instr.as_any().downcast_ref::<SetParameter>()?;
+                    let Parameter::Custom(custom) = set_parameter.inner() else {
+                        return None;
+                    };
+                    if custom.id() != &confidential_metadata::registry_root_id() {
+                        return None;
+                    }
+                    let value: norito::json::Value = custom
+                        .payload()
+                        .try_into_any_norito()
+                        .expect("decode confidential registry root");
+                    let Some(norito::json::Value::String(hash)) = value.get("vk_set_hash") else {
+                        return None;
+                    };
+                    Some(hash.clone())
+                })
+            })
+            .expect("confidential registry root parameter");
+        assert_eq!(declared_hash, format_hash_hex(expected));
     }
 
     #[test]
