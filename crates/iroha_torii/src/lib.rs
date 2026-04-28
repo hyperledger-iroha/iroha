@@ -1032,6 +1032,21 @@ fn execute_alias_resolve_local_read(
     Ok(StatusCode::NOT_FOUND.into_response())
 }
 
+fn execute_alias_resolve_unrouted_local_read(
+    app: &SharedAppState,
+    canonical: String,
+    alias_label: &iroha_data_model::account::rekey::AccountAlias,
+) -> Result<AxResponse, Error> {
+    if let Some((alias, account_id, source)) =
+        resolve_alias_label_on_chain(app, canonical, alias_label)?
+    {
+        let account_id_string = account_id.to_string();
+        return alias_resolve_ok(&alias, &account_id_string, None, source);
+    }
+
+    Ok(StatusCode::NOT_FOUND.into_response())
+}
+
 fn execute_alias_resolve_index_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -28278,13 +28293,24 @@ async fn handler_alias_resolve(
             "v1/aliases/resolve",
         )?;
     }
-    let (_, alias_label) = parse_account_alias_label_with_catalog(
+    let (canonical, alias_label) = parse_account_alias_label_with_catalog(
         request.alias.as_str(),
         &app.state.nexus_snapshot().dataspace_catalog,
     )?;
-    let candidate_routes = match torii_target_alias_routes(app.as_ref(), &alias_label) {
+    let candidate_routes = match resolve_torii_target_alias_routes(app.as_ref(), &alias_label) {
         Ok(routes) => routes,
-        Err(response) => return Ok(response),
+        Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })
+            if dataspace_id == alias_label.dataspace =>
+        {
+            return execute_alias_resolve_unrouted_local_read(&app, canonical, &alias_label);
+        }
+        Err(error) => {
+            return Ok(torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                format!("failed to resolve target-alias routes for {alias_label:?}: {error}"),
+            ));
+        }
     };
 
     if candidate_routes.len() == 1 {
@@ -50943,7 +50969,7 @@ mod tests {
     use std::{
         collections::HashSet,
         net::SocketAddr,
-        num::{NonZeroU64, NonZeroUsize},
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         str::FromStr,
         sync::Arc,
         time::Duration,
@@ -52198,6 +52224,67 @@ mod tests {
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.alias, "merchant@restricted");
         assert_eq!(dto.account_id, authority.to_string());
+    }
+
+    #[tokio::test]
+    async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(1).expect("nonzero lane count"),
+            vec![iroha_data_model::nexus::LaneConfig::default()],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(10),
+                alias: "bpng".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..actual::Nexus::default()
+        };
+        {
+            let app_state = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+            state.set_nexus(nexus.clone()).expect("apply nexus config");
+            let state_view = app_state.state.view();
+            app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+        }
+        bind_account_alias_for_test(&app, &authority, "banking@bpng");
+
+        let request = routing::AliasResolveRequestDto {
+            alias: "banking@bpng".to_string(),
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let response = handler_alias_resolve(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("handler should read local native alias state")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.alias, "banking@bpng");
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.source.as_deref(), Some("rekey_record"));
     }
 
     #[tokio::test]
