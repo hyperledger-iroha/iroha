@@ -37206,9 +37206,6 @@ impl RbcSession {
     }
 
     pub(crate) fn record_ready(&mut self, sender: u32, signature: Vec<u8>) -> bool {
-        if self.delivered {
-            return false;
-        }
         if let Some(existing) = self
             .ready_signatures
             .iter()

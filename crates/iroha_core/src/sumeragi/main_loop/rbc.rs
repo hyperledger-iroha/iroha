@@ -1162,7 +1162,7 @@ pub(super) fn should_process_commit_after_ready(
     delivered_before: bool,
     deliver_emitted: bool,
 ) -> bool {
-    (clear_pending || (recorded_ready && !delivered_before)) && !deliver_emitted
+    clear_pending || ((recorded_ready || deliver_emitted) && !delivered_before)
 }
 
 pub(super) fn should_process_commit_after_deliver(first_deliver: bool) -> bool {
