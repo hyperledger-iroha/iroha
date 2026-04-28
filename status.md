@@ -2,6 +2,17 @@
 
 Last updated: 2026-04-28
 
+## 2026-04-28 Izanami stress audit queue root-cause fix
+
+- Root-caused the seed-7 stress degraded rows to Izanami's sampled confirmation audit queue, not Sumeragi consensus state: the completed stress logs show `confirmation_queue_dropped` hits while Sumeragi status deltas report no RBC store pressure, no RBC evictions, no pending-RBC drops, no persist drops, and accepted submissions equal started submissions.
+- Fixed the audit scheduler so sampled confirmations are not enqueued when the remaining run window cannot cover the configured audit timeout. Late samples now count as `confirmation_budget_skipped`; genuine bounded queue overflow still increments `confirmation_queue_dropped`, and an unexpected early audit-channel close now increments `confirmation_failed`.
+- This improves the next stress rerun's classification path without rewriting the completed `dist/izanami-stress-400-seed7-20260428` / `dist/izanami-stress-800-seed7-20260428` logs. Re-run the stress matrices with fresh binaries to confirm the previously degraded rows move to resilient when no real queue overflow occurs.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p izanami confirmation_audit_scheduler -- --nocapture`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh && git diff --check`
+
 ## 2026-04-28 Izanami seed-7 stress evidence
 
 - Ran real 20-peer/800s stress matrices with fresh `target/codex-stress` binaries for seed `7`:
