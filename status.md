@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-28
 
+## 2026-04-28 Python SDK all-algorithm crypto bridge
+
+- Extended the Python SDK crypto bridge beyond Ed25519/raw SM2 helpers to expose generic `CryptoKeyPair`, key generation/import, signing, verification, and multihash import/export for every compiled `iroha_crypto` signature suite: Ed25519, secp256k1, ML-DSA-65, TC26 GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.
+- Kept compatibility-specific Ed25519 account-id helpers and raw SM2 distid/SEC1 helpers while adding payload-based generic APIs for all algorithms.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_python_rs`
+  - `cargo build --release -p iroha_python_rs`
+  - `python3 -m compileall -q python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/crypto_algorithms_test.py`
+  - Direct Python execution of `python/iroha_python/tests/crypto_algorithms_test.py` test functions against `target/release/libiroha_python_rs.dylib` (`3` test functions passed)
+  - `git diff --check`
+- Local tooling gaps: `ruff`, `maturin`, and `pytest` are not installed in the available Python interpreters, so the focused Python smoke used plain assertion execution instead of pytest collection.
+
 ## 2026-04-28 Izanami evidence reporting review fixes
 
 - Tightened the communication-vulnerability matrix acceptance marker so only a real whitespace-delimited `failures=N` field can degrade a run; `expected_failures=N` metadata no longer satisfies the marker.

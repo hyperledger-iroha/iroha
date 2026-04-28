@@ -1,4 +1,4 @@
-"""High-level Ed25519 and SM2 helpers backed by `iroha_crypto` via PyO3 bindings."""
+"""High-level crypto helpers backed by `iroha_crypto` via PyO3 bindings."""
 
 from __future__ import annotations
 
@@ -9,6 +9,26 @@ from ._native import load_crypto_extension
 from .address import AccountAddress
 
 _crypto = load_crypto_extension()
+
+ED25519_ALGORITHM: Final[str] = "ed25519"
+SECP256K1_ALGORITHM: Final[str] = "secp256k1"
+ML_DSA_ALGORITHM: Final[str] = "ml-dsa"
+GOST_3410_2012_256_PARAMSET_A_ALGORITHM: Final[str] = "gost3410-2012-256-paramset-a"
+GOST_3410_2012_256_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-256-paramset-b"
+GOST_3410_2012_256_PARAMSET_C_ALGORITHM: Final[str] = "gost3410-2012-256-paramset-c"
+GOST_3410_2012_512_PARAMSET_A_ALGORITHM: Final[str] = "gost3410-2012-512-paramset-a"
+GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramset-b"
+BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
+BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
+SM2_ALGORITHM: Final[str] = "sm2"
+try:
+    SUPPORTED_CRYPTO_ALGORITHMS: Final[tuple[str, ...]] = tuple(
+        _crypto.supported_crypto_algorithms()
+    )
+except AttributeError as exc:  # pragma: no cover - stale native extension guard
+    raise RuntimeError(
+        "iroha_python._crypto is missing the all-algorithm crypto API; rebuild the extension"
+    ) from exc
 
 ED25519_PRIVATE_KEY_LENGTH: Final[int] = 32
 ED25519_PUBLIC_KEY_LENGTH: Final[int] = 32
@@ -38,6 +58,18 @@ _SM2_FIXTURE_SEED = bytes.fromhex(_SM2_FIXTURE_REFERENCE["seed_hex"])
 _SM2_FIXTURE_MESSAGE = bytes.fromhex(_SM2_FIXTURE_REFERENCE["message_hex"])
 
 __all__ = [
+    "ED25519_ALGORITHM",
+    "SECP256K1_ALGORITHM",
+    "ML_DSA_ALGORITHM",
+    "GOST_3410_2012_256_PARAMSET_A_ALGORITHM",
+    "GOST_3410_2012_256_PARAMSET_B_ALGORITHM",
+    "GOST_3410_2012_256_PARAMSET_C_ALGORITHM",
+    "GOST_3410_2012_512_PARAMSET_A_ALGORITHM",
+    "GOST_3410_2012_512_PARAMSET_B_ALGORITHM",
+    "BLS_NORMAL_ALGORITHM",
+    "BLS_SMALL_ALGORITHM",
+    "SM2_ALGORITHM",
+    "SUPPORTED_CRYPTO_ALGORITHMS",
     "ED25519_PRIVATE_KEY_LENGTH",
     "ED25519_PUBLIC_KEY_LENGTH",
     "ED25519_SIGNATURE_LENGTH",
@@ -45,6 +77,7 @@ __all__ = [
     "SM2_PUBLIC_KEY_LENGTH",
     "SM2_SIGNATURE_LENGTH",
     "SM2_DEFAULT_DISTINGUISHED_ID",
+    "CryptoKeyPair",
     "Ed25519KeyPair",
     "Sm2KeyPair",
     "Instruction",
@@ -55,8 +88,14 @@ __all__ = [
     "AccountId",
     "AssetDefinitionId",
     "AssetId",
+    "normalize_crypto_algorithm",
+    "supported_crypto_algorithms",
+    "derive_keypair_from_seed",
     "derive_ed25519_keypair_from_seed",
+    "generate_keypair",
     "generate_ed25519_keypair",
+    "load_keypair",
+    "load_keypair_from_multihash",
     "load_ed25519_keypair",
     "load_ed25519_keypair_from_hex",
     "derive_sm2_keypair_from_seed",
@@ -67,10 +106,16 @@ __all__ = [
     "ed25519_public_key_account_id",
     "build_signed_transaction",
     "hash_blake2b_32",
+    "public_key_multihash",
+    "private_key_multihash",
+    "parse_public_key_multihash",
+    "parse_private_key_multihash",
+    "sign",
     "sign_ed25519",
     "sign_sm2",
     "decode_transaction_receipt_json",
     "verify_signed_transaction_versioned",
+    "verify",
     "verify_ed25519",
     "verify_sm2",
     "derive_confidential_keyset",
@@ -149,6 +194,90 @@ def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, An
         "proof_bytes": proof_bytes,
         "verifying_key_bytes": verifying_key_bytes,
     }
+
+
+@dataclass(frozen=True)
+class CryptoKeyPair:
+    """Container for an `iroha_crypto` signature key pair."""
+
+    algorithm: str
+    private_key: bytes
+    public_key: bytes
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "algorithm", normalize_crypto_algorithm(self.algorithm))
+        object.__setattr__(self, "private_key", bytes(self.private_key))
+        object.__setattr__(self, "public_key", bytes(self.public_key))
+
+    @property
+    def private_key_hex(self) -> str:
+        """Return the private-key payload as a hex string."""
+
+        return self.private_key.hex()
+
+    @property
+    def public_key_hex(self) -> str:
+        """Return the public-key payload as a hex string."""
+
+        return self.public_key.hex()
+
+    @property
+    def public_key_multihash(self) -> str:
+        """Return the canonical bare multihash for the public key."""
+
+        return public_key_multihash(self.algorithm, self.public_key)
+
+    @property
+    def prefixed_public_key_multihash(self) -> str:
+        """Return the algorithm-prefixed multihash for the public key."""
+
+        return public_key_multihash(self.algorithm, self.public_key, prefixed=True)
+
+    @property
+    def private_key_multihash(self) -> str:
+        """Return the canonical bare multihash for the private key."""
+
+        return private_key_multihash(self.algorithm, self.private_key)
+
+    @property
+    def prefixed_private_key_multihash(self) -> str:
+        """Return the algorithm-prefixed multihash for the private key."""
+
+        return private_key_multihash(self.algorithm, self.private_key, prefixed=True)
+
+    def sign(self, message: bytes) -> bytes:
+        """Sign ``message`` using this key pair."""
+
+        return sign(self.algorithm, self.private_key, message)
+
+    def verify(self, message: bytes, signature: bytes) -> bool:
+        """Verify ``signature`` against ``message`` using this key pair."""
+
+        return verify(self.algorithm, self.public_key, message, signature)
+
+    @classmethod
+    def generate(cls, algorithm: str) -> CryptoKeyPair:
+        """Generate a random key pair for ``algorithm``."""
+
+        return generate_keypair(algorithm)
+
+    @classmethod
+    def from_seed(cls, seed: bytes, algorithm: str) -> CryptoKeyPair:
+        """Derive a key pair for ``algorithm`` from ``seed``."""
+
+        return derive_keypair_from_seed(seed, algorithm)
+
+    @classmethod
+    def from_private_key(cls, algorithm: str, private_key: bytes) -> CryptoKeyPair:
+        """Reconstruct a key pair for ``algorithm`` from a private-key payload."""
+
+        return load_keypair(private_key, algorithm)
+
+    @classmethod
+    def from_private_key_multihash(cls, encoded: str) -> CryptoKeyPair:
+        """Reconstruct a key pair from a private-key multihash string."""
+
+        return load_keypair_from_multihash(encoded)
 
 
 @dataclass(frozen=True)
@@ -295,6 +424,59 @@ class ConfidentialKeyset:
         return self.fvk.hex()
 
 
+def normalize_crypto_algorithm(algorithm: str) -> str:
+    """Return the canonical `iroha_crypto` label for ``algorithm``."""
+
+    if not isinstance(algorithm, str):
+        raise TypeError("algorithm must be a string")
+    return str(_crypto.normalize_crypto_algorithm(algorithm))
+
+
+def supported_crypto_algorithms() -> tuple[str, ...]:
+    """Return canonical labels for algorithms compiled into this SDK build."""
+
+    return SUPPORTED_CRYPTO_ALGORITHMS
+
+
+def _generic_keypair(algorithm: str, private: bytes, public: bytes) -> CryptoKeyPair:
+    return CryptoKeyPair(
+        algorithm=normalize_crypto_algorithm(algorithm),
+        private_key=bytes(private),
+        public_key=bytes(public),
+    )
+
+
+def generate_keypair(algorithm: str) -> CryptoKeyPair:
+    """Generate a random key pair for any supported signature algorithm."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    private, public = _crypto.generate_keypair(normalized)
+    return _generic_keypair(normalized, private, public)
+
+
+def derive_keypair_from_seed(seed: bytes, algorithm: str) -> CryptoKeyPair:
+    """Derive a key pair for any supported signature algorithm from ``seed``."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    private, public = _crypto.derive_keypair_from_seed(seed, normalized)
+    return _generic_keypair(normalized, private, public)
+
+
+def load_keypair(private_key: bytes, algorithm: str) -> CryptoKeyPair:
+    """Reconstruct a key pair for any supported algorithm from private-key payload bytes."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    private, public = _crypto.load_keypair(private_key, normalized)
+    return _generic_keypair(normalized, private, public)
+
+
+def load_keypair_from_multihash(encoded: str) -> CryptoKeyPair:
+    """Reconstruct a key pair from a bare or algorithm-prefixed private-key multihash."""
+
+    algorithm, private, public = _crypto.load_keypair_from_multihash(encoded)
+    return _generic_keypair(algorithm, private, public)
+
+
 def generate_ed25519_keypair() -> Ed25519KeyPair:
     """Generate a random Ed25519 key pair."""
 
@@ -409,6 +591,34 @@ def verify_sm2(
             f"signature must be {SM2_SIGNATURE_LENGTH} bytes, got {len(signature)}"
         )
     return bool(_crypto.verify_sm2(public_key, message, signature, distid))
+
+
+def public_key_multihash(algorithm: str, public_key: bytes, *, prefixed: bool = False) -> str:
+    """Return the canonical multihash string for a public-key payload."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    return str(_crypto.public_key_multihash(normalized, public_key, prefixed))
+
+
+def private_key_multihash(algorithm: str, private_key: bytes, *, prefixed: bool = False) -> str:
+    """Return the canonical multihash string for a private-key payload."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    return str(_crypto.private_key_multihash(normalized, private_key, prefixed))
+
+
+def parse_public_key_multihash(encoded: str) -> tuple[str, bytes]:
+    """Decode a bare or algorithm-prefixed public-key multihash string."""
+
+    algorithm, public_key = _crypto.parse_public_key_multihash(encoded)
+    return str(algorithm), bytes(public_key)
+
+
+def parse_private_key_multihash(encoded: str) -> tuple[str, bytes]:
+    """Decode a bare or algorithm-prefixed private-key multihash string."""
+
+    algorithm, private_key = _crypto.parse_private_key_multihash(encoded)
+    return str(algorithm), bytes(private_key)
 
 
 def ed25519_public_key_multihash(public_key: bytes) -> str:
@@ -567,6 +777,20 @@ def build_signed_transaction(
                 normalized["verifying_key_bytes"],
             )
     return builder.sign(private_key)
+
+
+def sign(algorithm: str, private_key: bytes, message: bytes) -> bytes:
+    """Return a signature for ``message`` using any supported algorithm."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    return bytes(_crypto.sign(normalized, private_key, message))
+
+
+def verify(algorithm: str, public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Verify a signature for any supported algorithm."""
+
+    normalized = normalize_crypto_algorithm(algorithm)
+    return bool(_crypto.verify(normalized, public_key, message, signature))
 
 
 def sign_ed25519(private_key: bytes, message: bytes) -> bytes:

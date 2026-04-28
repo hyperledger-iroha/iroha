@@ -23,8 +23,8 @@ use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId, PrivateKey, PublicKey,
-    Signature, derive_keyset_from_slice,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
+    PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
@@ -142,6 +142,73 @@ fn algorithm_guard(algorithm: Algorithm) -> PyResult<()> {
         Ok(())
     }
 }
+
+fn supported_crypto_algorithms() -> Vec<Algorithm> {
+    let mut algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa];
+    algorithms.extend([
+        Algorithm::Gost3410_2012_256ParamSetA,
+        Algorithm::Gost3410_2012_256ParamSetB,
+        Algorithm::Gost3410_2012_256ParamSetC,
+        Algorithm::Gost3410_2012_512ParamSetA,
+        Algorithm::Gost3410_2012_512ParamSetB,
+    ]);
+    algorithms.extend([Algorithm::BlsNormal, Algorithm::BlsSmall]);
+    algorithms.push(Algorithm::Sm2);
+    algorithms
+}
+
+fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
+    let normalized = algorithm.trim().to_ascii_lowercase();
+    if let Ok(parsed) = Algorithm::from_str(&normalized) {
+        return Ok(parsed);
+    }
+
+    let compact = normalized
+        .chars()
+        .map(|ch| match ch {
+            '_' | ' ' | '.' => '-',
+            _ => ch,
+        })
+        .collect::<String>();
+
+    let parsed = match compact.as_str() {
+        "ed-25519" | "ed25519" => Some(Algorithm::Ed25519),
+        "ecdsa"
+        | "ecdsa-secp256k1"
+        | "ecdsa-secp256k1-sha256"
+        | "secp-256-k1"
+        | "secp-256k1"
+        | "secp256k1" => Some(Algorithm::Secp256k1),
+        "dilithium" | "dilithium3" | "ml-dsa" | "ml-dsa-65" | "mldsa" | "mldsa65" => {
+            Some(Algorithm::MlDsa)
+        }
+        "gost-3410-2012-256-paramset-a" | "gost3410-2012-256-paramset-a" => {
+            Some(Algorithm::Gost3410_2012_256ParamSetA)
+        }
+        "gost-3410-2012-256-paramset-b" | "gost3410-2012-256-paramset-b" => {
+            Some(Algorithm::Gost3410_2012_256ParamSetB)
+        }
+        "gost-3410-2012-256-paramset-c" | "gost3410-2012-256-paramset-c" => {
+            Some(Algorithm::Gost3410_2012_256ParamSetC)
+        }
+        "gost-3410-2012-512-paramset-a" | "gost3410-2012-512-paramset-a" => {
+            Some(Algorithm::Gost3410_2012_512ParamSetA)
+        }
+        "gost-3410-2012-512-paramset-b" | "gost3410-2012-512-paramset-b" => {
+            Some(Algorithm::Gost3410_2012_512ParamSetB)
+        }
+        "bls-normal" | "blsnormal" | "bls12-381-g1" | "bls12-381-normal" => {
+            Some(Algorithm::BlsNormal)
+        }
+        "bls-small" | "blssmall" | "bls12-381-g2" | "bls12-381-small" => Some(Algorithm::BlsSmall),
+        "sm2" => Some(Algorithm::Sm2),
+        _ => None,
+    };
+
+    parsed
+        .ok_or_else(|| PyValueError::new_err(format!("unsupported crypto algorithm `{algorithm}`")))
+}
+
 fn parse_err(kind: &str, err: ParseError) -> PyErr {
     PyValueError::new_err(format!("failed to parse {kind} key: {err}"))
 }
@@ -152,6 +219,14 @@ fn parse_private_key(bytes: &[u8]) -> PyResult<PrivateKey> {
 
 fn parse_public_key(bytes: &[u8]) -> PyResult<PublicKey> {
     PublicKey::from_bytes(Algorithm::Ed25519, bytes).map_err(|err| parse_err("public", err))
+}
+
+fn parse_private_key_for_algorithm(algorithm: Algorithm, bytes: &[u8]) -> PyResult<PrivateKey> {
+    PrivateKey::from_bytes(algorithm, bytes).map_err(|err| parse_err("private", err))
+}
+
+fn parse_public_key_for_algorithm(algorithm: Algorithm, bytes: &[u8]) -> PyResult<PublicKey> {
+    PublicKey::from_bytes(algorithm, bytes).map_err(|err| parse_err("public", err))
 }
 
 fn proxy_mode_from_label_py(label: &str) -> PyResult<ProxyMode> {
@@ -214,10 +289,8 @@ fn parse_sm2_signature(bytes: &[u8]) -> PyResult<Sm2Signature> {
 }
 
 fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let (pub_alg, public_bytes) = key_pair.public_key().to_bytes();
-    algorithm_guard(pub_alg)?;
-    let (priv_alg, mut private_bytes) = key_pair.private_key().to_bytes();
-    algorithm_guard(priv_alg)?;
+    let (_, public_bytes) = key_pair.public_key().to_bytes();
+    let (_, mut private_bytes) = key_pair.private_key().to_bytes();
 
     let public = Py::from(PyBytes::new(py, public_bytes));
     let private = Py::from(PyBytes::new(py, private_bytes.as_slice()));
@@ -7234,6 +7307,168 @@ impl SignedTransactionEnvelope {
 }
 
 #[pyfunction]
+#[pyo3(name = "supported_crypto_algorithms")]
+/// Return the canonical names of signature algorithms compiled into the Python SDK.
+fn supported_crypto_algorithms_py() -> Vec<String> {
+    supported_crypto_algorithms()
+        .into_iter()
+        .map(|algorithm| algorithm.as_static_str().to_owned())
+        .collect()
+}
+
+#[pyfunction]
+#[pyo3(name = "normalize_crypto_algorithm")]
+/// Normalize a crypto algorithm alias to the canonical `iroha_crypto` label.
+fn normalize_crypto_algorithm_py(algorithm: &str) -> PyResult<String> {
+    parse_algorithm_arg(algorithm).map(|algorithm| algorithm.as_static_str().to_owned())
+}
+
+#[pyfunction]
+#[pyo3(name = "generate_keypair")]
+/// Generate a random key pair for any signature algorithm compiled into the SDK.
+fn generate_keypair_py(py: Python<'_>, algorithm: &str) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let key_pair = KeyPair::random_with_algorithm(algorithm);
+    keypair_to_py(py, key_pair)
+}
+
+#[pyfunction]
+#[pyo3(name = "derive_keypair_from_seed")]
+/// Derive a key pair for any supported algorithm from arbitrary seed material.
+fn derive_keypair_from_seed_py(
+    py: Python<'_>,
+    seed: &[u8],
+    algorithm: &str,
+) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    keypair_to_py(py, key_pair)
+}
+
+#[pyfunction]
+#[pyo3(name = "load_keypair")]
+/// Reconstruct a key pair for any supported algorithm from raw private-key payload bytes.
+fn load_keypair_py(
+    py: Python<'_>,
+    private_key: &[u8],
+    algorithm: &str,
+) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let private = parse_private_key_for_algorithm(algorithm, private_key)?;
+    let key_pair = KeyPair::from_private_key(private)
+        .map_err(|err| PyValueError::new_err(format!("failed to reconstruct key pair: {err}")))?;
+    keypair_to_py(py, key_pair)
+}
+
+#[pyfunction]
+#[pyo3(name = "sign")]
+/// Sign `message` with the private-key payload for any supported signature algorithm.
+fn sign_py(
+    py: Python<'_>,
+    algorithm: &str,
+    private_key: &[u8],
+    message: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let private_key = parse_private_key_for_algorithm(algorithm, private_key)?;
+    let signature = Signature::new(&private_key, message);
+    Ok(Py::from(PyBytes::new(py, signature.payload())))
+}
+
+#[pyfunction]
+#[pyo3(name = "verify")]
+/// Verify a raw signature against a public-key payload for any supported signature algorithm.
+fn verify_py(
+    algorithm: &str,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> PyResult<bool> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
+    let signature = Signature::from_bytes(signature);
+    Ok(signature.verify(&public_key, message).is_ok())
+}
+
+#[pyfunction]
+#[pyo3(name = "public_key_multihash", signature = (algorithm, public_key, prefixed=false))]
+/// Return the canonical multihash encoding for a public-key payload.
+fn public_key_multihash_py(algorithm: &str, public_key: &[u8], prefixed: bool) -> PyResult<String> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
+    Ok(if prefixed {
+        public_key.to_prefixed_string()
+    } else {
+        public_key.to_string()
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "private_key_multihash", signature = (algorithm, private_key, prefixed=false))]
+/// Return the canonical multihash encoding for a private-key payload.
+fn private_key_multihash_py(
+    algorithm: &str,
+    private_key: &[u8],
+    prefixed: bool,
+) -> PyResult<String> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let private_key = parse_private_key_for_algorithm(algorithm, private_key)?;
+    let exposed = ExposedPrivateKey(private_key);
+    Ok(if prefixed {
+        exposed.to_prefixed_string()
+    } else {
+        exposed.to_string()
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "parse_public_key_multihash")]
+/// Decode a public key from a bare or algorithm-prefixed multihash string.
+fn parse_public_key_multihash_py(py: Python<'_>, encoded: &str) -> PyResult<(String, Py<PyBytes>)> {
+    let public_key = encoded.parse::<PublicKey>().map_err(|err| {
+        PyValueError::new_err(format!("failed to parse public key multihash: {err}"))
+    })?;
+    let (algorithm, payload) = public_key.to_bytes();
+    Ok((
+        algorithm.as_static_str().to_owned(),
+        Py::from(PyBytes::new(py, payload)),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(name = "parse_private_key_multihash")]
+/// Decode a private key from a bare or algorithm-prefixed multihash string.
+fn parse_private_key_multihash_py(
+    py: Python<'_>,
+    encoded: &str,
+) -> PyResult<(String, Py<PyBytes>)> {
+    let exposed = encoded.parse::<ExposedPrivateKey>().map_err(|err| {
+        PyValueError::new_err(format!("failed to parse private key multihash: {err}"))
+    })?;
+    let (algorithm, mut payload) = exposed.0.to_bytes();
+    let bytes = Py::from(PyBytes::new(py, payload.as_slice()));
+    payload.fill(0);
+    Ok((algorithm.as_static_str().to_owned(), bytes))
+}
+
+#[pyfunction]
+#[pyo3(name = "load_keypair_from_multihash")]
+/// Reconstruct a key pair from a private-key multihash string.
+fn load_keypair_from_multihash_py(
+    py: Python<'_>,
+    encoded: &str,
+) -> PyResult<(String, Py<PyBytes>, Py<PyBytes>)> {
+    let exposed = encoded.parse::<ExposedPrivateKey>().map_err(|err| {
+        PyValueError::new_err(format!("failed to parse private key multihash: {err}"))
+    })?;
+    let algorithm = exposed.0.algorithm();
+    let key_pair = KeyPair::from_private_key(exposed.0)
+        .map_err(|err| PyValueError::new_err(format!("failed to reconstruct key pair: {err}")))?;
+    let (private, public) = keypair_to_py(py, key_pair)?;
+    Ok((algorithm.as_static_str().to_owned(), private, public))
+}
+
+#[pyfunction]
 #[pyo3(name = "generate_ed25519_keypair")]
 /// Generate a random Ed25519 key pair using `iroha_crypto` defaults.
 fn generate_ed25519_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
@@ -7724,6 +7959,18 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Instruction>()?;
     module.add_class::<TransactionBuilder>()?;
     module.add_class::<SignedTransactionEnvelope>()?;
+    module.add_function(wrap_pyfunction!(supported_crypto_algorithms_py, module)?)?;
+    module.add_function(wrap_pyfunction!(normalize_crypto_algorithm_py, module)?)?;
+    module.add_function(wrap_pyfunction!(generate_keypair_py, module)?)?;
+    module.add_function(wrap_pyfunction!(derive_keypair_from_seed_py, module)?)?;
+    module.add_function(wrap_pyfunction!(load_keypair_py, module)?)?;
+    module.add_function(wrap_pyfunction!(sign_py, module)?)?;
+    module.add_function(wrap_pyfunction!(verify_py, module)?)?;
+    module.add_function(wrap_pyfunction!(public_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(private_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_public_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_private_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(load_keypair_from_multihash_py, module)?)?;
     module.add_function(wrap_pyfunction!(generate_ed25519_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         derive_ed25519_keypair_from_seed_py,

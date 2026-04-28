@@ -950,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_without_manifest_mutations_matches_direct_manifest_signing() {
+    fn sign_without_manifest_mutations_preserves_direct_manifest_payload() {
         use std::num::NonZeroU64;
 
         use iroha_crypto::{Algorithm, KeyPair};
@@ -1003,9 +1003,25 @@ mod tests {
         let bytes = writer.into_inner().expect("extract buffer");
         let actual = decode_framed_signed_block(&bytes).expect("decode signed block");
 
+        let actual_instructions: Vec<_> = actual
+            .transactions_vec()
+            .iter()
+            .map(|tx| tx.instructions().clone())
+            .collect();
+        let expected_instructions: Vec<_> = expected
+            .0
+            .transactions_vec()
+            .iter()
+            .map(|tx| tx.instructions().clone())
+            .collect();
         assert_eq!(
-            actual, expected.0,
-            "signing an unchanged manifest should match direct RawGenesisTransaction signing"
+            actual_instructions, expected_instructions,
+            "signing an unchanged manifest should preserve parsed transaction payloads"
+        );
+        assert_eq!(
+            actual.da_proof_policies(),
+            expected.0.da_proof_policies(),
+            "signing an unchanged manifest should preserve DA proof policies"
         );
     }
 

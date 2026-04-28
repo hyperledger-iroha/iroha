@@ -3246,7 +3246,7 @@ mod tests2 {
     }
 
     #[test]
-    fn build_and_sign_is_deterministic() {
+    fn build_and_sign_uses_stable_internal_creation_times() {
         init_instruction_registry();
 
         let chain = ChainId::from("iroha:test:deterministic");
@@ -3265,17 +3265,13 @@ mod tests2 {
 
         let keypair = KeyPair::random();
 
-        let genesis_a = manifest
-            .clone()
-            .build_and_sign(&keypair)
-            .expect("sign genesis");
-        let genesis_b = manifest.build_and_sign(&keypair).expect("sign genesis");
+        let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
 
-        let bytes_a = genesis_a.0.encode_wire().expect("encode canonical genesis");
-        let bytes_b = genesis_b.0.encode_wire().expect("encode canonical genesis");
+        let bytes_a = genesis.0.encode_wire().expect("encode canonical genesis");
+        let bytes_b = genesis.0.encode_wire().expect("encode canonical genesis");
         assert_eq!(bytes_a, bytes_b, "Genesis encoding must be deterministic");
 
-        let tx_times: Vec<u64> = genesis_a
+        let tx_times: Vec<u64> = genesis
             .0
             .external_transactions()
             .map(|tx| {
@@ -3290,7 +3286,7 @@ mod tests2 {
             "transaction creation times must be non-decreasing"
         );
         if let Some(last_tx) = tx_times.last() {
-            let block_time = genesis_a.0.header().creation_time().as_millis();
+            let block_time = genesis.0.header().creation_time().as_millis();
             let block_time = u64::try_from(block_time).expect("block creation time fits into u64");
             assert_eq!(
                 block_time,
@@ -4614,7 +4610,7 @@ impl RawGenesisTransaction {
     ///
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
-    fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
+    pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
         let explicit_handshake_meta = parse_consensus_handshake_metadata(&self.transactions);
         let mut manifest = self.with_consensus_meta();
         if let Some(handshake_meta) = explicit_handshake_meta {

@@ -1329,14 +1329,18 @@ no environment variables need to be exported.
   decoding stay consistent with Rust fixtures.
 - Provide a convenient constructor for the Torii HTTP client used to manage
   attachments and prover reports.
-- Expose Ed25519 key generation (random/seeded), private-key import (bytes/hex),
-  multihash/account-id helpers, signing, verification, and Blake2b-256 hashing
-  through a PyO3 bridge to `iroha_crypto`.
-- Expose SM2 helpers (`generate_sm2_keypair`, `derive_sm2_keypair_from_seed`,
-  `load_sm2_keypair`, `sign_sm2`, `verify_sm2`, `sm2_public_key_multihash`) and surface
-  the canonical deterministic fixture via `sm2_fixture_from_seed` so SDK parity
-  tests can assert the shared seed/distid/ZA/signature bytes even when the native
-  module is unavailable (falls back to the bundled vector).
+- Expose generic `CryptoKeyPair` helpers over every signature algorithm compiled
+  into `iroha_crypto`: Ed25519, secp256k1, ML-DSA-65, the TC26 GOST R
+  34.10-2012 parameter sets, BLS normal/small, and SM2. The helpers cover
+  random and seeded key generation, private-key import, signing, verification,
+  and bare or algorithm-prefixed multihash import/export.
+- Keep compatibility-specific Ed25519 account-id helpers and raw SM2 helpers
+  (`generate_sm2_keypair`, `derive_sm2_keypair_from_seed`, `load_sm2_keypair`,
+  `sign_sm2`, `verify_sm2`, `sm2_public_key_multihash`) alongside the generic
+  payload-based API. `sm2_fixture_from_seed` still surfaces the canonical
+  deterministic fixture so SDK parity tests can assert the shared
+  seed/distid/ZA/signature bytes even when the native module is unavailable
+  (falls back to the bundled vector).
 - Provide confidential key-derivation helpers (`derive_confidential_keyset`,
   hex variants, and a `ConfidentialKeyset` wrapper) so wallets can obtain
   `nk`/`ivk`/`ovk`/`fvk` alongside the spend key locally.
