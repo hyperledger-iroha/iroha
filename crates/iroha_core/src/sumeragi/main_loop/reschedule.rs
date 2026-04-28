@@ -645,17 +645,24 @@ impl Actor {
                                 now,
                             )
                     });
-            let same_height_quorum_timeout_owner_active = contiguous_frontier
+            let same_height_quorum_timeout_owner_present = contiguous_frontier
                 && self.frontier_recovery.as_ref().is_some_and(|state| {
                     state.frontier_height == pending.height
                         && state.last_cause == "quorum_timeout"
                         && (state.last_action_at.is_some()
                             || state.last_dependency_progress_at.is_some())
-                        && now.saturating_duration_since(state.entered_at)
-                            < self
-                                .frontier_recovery_window()
-                                .max(Duration::from_millis(1))
                 });
+            let same_height_quorum_timeout_owner_active = same_height_quorum_timeout_owner_present
+                && self.frontier_recovery.as_ref().is_some_and(|state| {
+                    now.saturating_duration_since(state.entered_at)
+                        < self
+                            .frontier_recovery_window()
+                            .max(Duration::from_millis(1))
+                });
+            let same_height_non_owner_vote_retransmit_blocker = same_height_vote_backed_work_active
+                || same_height_rbc_sender_activity_active
+                || same_height_fresh_missing_block_request
+                || same_height_missing_block_recovery_backlog_active;
             let same_height_actionable_progress_active = same_height_dependency_backlog_active
                 || same_height_vote_backed_work_active
                 || same_height_rbc_sender_activity_active
@@ -694,9 +701,37 @@ impl Actor {
                     vote_queue_backlog || consensus_queue_backlog,
                     rbc_availability_unresolved,
                 );
+            let same_height_quorum_timeout_owner_rearm_window = if contiguous_frontier
+                && has_votes
+                && !has_qc
+                && same_height_quorum_timeout_owner_present
+                && !same_height_non_owner_vote_retransmit_blocker
+                && !validation_inflight
+                && !missing_local_data
+                && !rbc_availability_unresolved
+            {
+                let resend_window = contiguous_frontier_vote_backed_resend_window(
+                    self.rebroadcast_cooldown(),
+                    vote_count,
+                    min_votes_for_commit,
+                );
+                self.frontier_recovery.as_ref().and_then(|state| {
+                    let last_owner_action = state
+                        .last_action_at
+                        .or(state.last_dependency_progress_at)
+                        .unwrap_or(state.entered_at);
+                    (now.saturating_duration_since(last_owner_action) >= resend_window)
+                        .then_some(resend_window)
+                })
+            } else {
+                None
+            };
+            let vote_backed_frontier_resend_window = contiguous_frontier_fast_resend_window
+                .or(same_height_quorum_timeout_owner_rearm_window);
             let vote_backed_retransmit_allowed_under_same_height_recovery =
-                !same_height_actionable_progress_active && !consensus_queue_backlog;
-            if let Some(fast_resend_window) = contiguous_frontier_fast_resend_window
+                same_height_quorum_timeout_owner_rearm_window.is_some()
+                    || (!same_height_actionable_progress_active && !consensus_queue_backlog);
+            if let Some(fast_resend_window) = vote_backed_frontier_resend_window
                 && has_votes
                 && !has_qc
                 && !validation_inflight
@@ -978,7 +1013,7 @@ impl Actor {
                         min_votes_for_commit,
                     );
                 let effective_reschedule_backoff =
-                    if let Some(fast_resend_window) = contiguous_frontier_fast_resend_window {
+                    if let Some(fast_resend_window) = vote_backed_frontier_resend_window {
                         effective_reschedule_backoff.min(fast_resend_window)
                     } else {
                         effective_reschedule_backoff
@@ -1021,7 +1056,7 @@ impl Actor {
                     min_votes_for_commit,
                     stake_quorum_missing,
                     effective_reschedule_backoff,
-                    contiguous_frontier_fast_resend_window.map(|_| effective_reschedule_backoff),
+                    vote_backed_frontier_resend_window.map(|_| effective_reschedule_backoff),
                 ));
             }
         }

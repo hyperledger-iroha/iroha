@@ -645,7 +645,28 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> Option<(usize, usize, usize, usize)> {
-        if self.should_retain_stale_pending_payload_for_body_repair(pending_hash, height, view) {
+        self.drop_stale_pending_block_with_body_repair_retention(pending_hash, height, view, true)
+    }
+
+    fn drop_stale_pending_block_for_fresh_proposal(
+        &mut self,
+        pending_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Option<(usize, usize, usize, usize)> {
+        self.drop_stale_pending_block_with_body_repair_retention(pending_hash, height, view, false)
+    }
+
+    fn drop_stale_pending_block_with_body_repair_retention(
+        &mut self,
+        pending_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        retain_for_body_repair: bool,
+    ) -> Option<(usize, usize, usize, usize)> {
+        if retain_for_body_repair
+            && self.should_retain_stale_pending_payload_for_body_repair(pending_hash, height, view)
+        {
             let mut pending = self
                 .pending
                 .pending_blocks
@@ -1026,7 +1047,7 @@ impl Actor {
         let recovery_exhausted = owner_age >= hard_yield_age;
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
         let local_vote_blocks = local_vote.as_ref().is_some_and(|vote| {
-            self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now)
+            self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
@@ -1096,7 +1117,8 @@ impl Actor {
             return false;
         }
 
-        let dropped = self.drop_stale_pending_block(owner_hash, height, owner_view);
+        let dropped =
+            self.drop_stale_pending_block_for_fresh_proposal(owner_hash, height, owner_view);
         let cleared_inflight = if dropped.is_none() {
             self.clear_stale_commit_inflight_for_block(owner_hash, height, owner_view, true)
         } else {
@@ -1178,6 +1200,7 @@ impl Actor {
         proposal_view: u64,
         existing_vote: &crate::sumeragi::consensus::Vote,
         now: Instant,
+        block_active_tip_owner: bool,
     ) -> bool {
         if existing_vote.view >= proposal_view || !self.config.resilience.enabled {
             return true;
@@ -1203,12 +1226,13 @@ impl Actor {
             let tip_height = self.state.committed_height();
             let tip_hash = self.state.latest_block_hash_fast();
             let pending_age = pending.progress_age(now).max(pending.age());
-            if self.pending_block_is_active_for_tip(
-                existing_vote.block_hash,
-                pending,
-                tip_height,
-                tip_hash,
-            ) && pending_age < min_stale_age
+            if block_active_tip_owner
+                && self.pending_block_is_active_for_tip(
+                    existing_vote.block_hash,
+                    pending,
+                    tip_height,
+                    tip_hash,
+                )
             {
                 return true;
             }
@@ -1298,6 +1322,7 @@ impl Actor {
                 view,
                 &existing_vote,
                 now,
+                true,
             ) {
                 debug!(
                     height = proposal_height,
@@ -3233,10 +3258,18 @@ impl Actor {
             && self.config.resilience.enabled
             && tracked_height == committed_height.saturating_add(1)
             && tracked_view > 0
+            && self
+                .subsystems
+                .propose
+                .new_view_tracker
+                .entries
+                .get(&(tracked_height, tracked_view))
+                .is_none_or(|entry| entry.senders.is_empty())
             && !self.proposal_gated_by_missing_dependencies(tracked_height)
             && let Some(qc) = precommit_qc
             && tracked_height == qc.height.saturating_add(1)
         {
+            self.maybe_rebroadcast_new_view_votes(tracked_height, now);
             candidate = Some(NewViewSelection {
                 key: (tracked_height, tracked_view),
                 quorum: required,
@@ -3933,6 +3966,7 @@ impl Actor {
                 view_idx,
                 &existing_vote,
                 now,
+                true,
             ) {
                 debug!(
                     height,
