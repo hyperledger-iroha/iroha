@@ -43146,6 +43146,7 @@ async fn handle_rbc_chunk_rejects_epoch_mismatch() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_chunk_rejects_digest_mismatch() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -43258,6 +43259,7 @@ async fn handle_rbc_chunk_rejects_digest_mismatch() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_chunk_stash_attributes_mismatch_on_flush() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -43338,6 +43340,7 @@ async fn handle_rbc_chunk_stash_attributes_mismatch_on_flush() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn hydrate_rbc_session_from_block_attributes_mismatch_to_sender() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
