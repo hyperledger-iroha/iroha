@@ -19,7 +19,7 @@ fn zk_syscalls_present_and_unknown_rejected() {
     }
 
     // Unknown number should not be allowed by policy (and host must return UnknownSyscall)
-    let unknown = 0xABu32;
+    let unknown = 0xDFu32;
     assert!(
         !ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, unknown),
         "unknown syscall must be disallowed by policy"

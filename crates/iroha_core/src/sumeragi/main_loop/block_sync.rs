@@ -718,13 +718,50 @@ impl Actor {
         Self::block_body_response_from_payload(block_hash, height, view, body)
     }
 
-    fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
-        let response = self.block_body_response_for_wire(block);
+    fn plain_block_body_response_for_wire(
+        &self,
+        block: &SignedBlock,
+    ) -> super::message::BlockBodyResponse {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        super::message::BlockBodyResponse {
+            block_hash,
+            height,
+            view,
+            body: super::message::BlockBodyData::BlockCreated(
+                self.frontier_block_created_for_wire(block),
+            ),
+        }
+    }
+
+    fn dispatch_block_body_response_with_plain_fallback(
+        &mut self,
+        peer: PeerId,
+        block: &SignedBlock,
+        response: super::message::BlockBodyResponse,
+    ) {
+        if matches!(
+            response.body,
+            super::message::BlockBodyData::BlockSyncUpdate(_)
+        ) {
+            let plain = self.plain_block_body_response_for_wire(block);
+            self.dispatch_fetch_pending_block_response(
+                peer.clone(),
+                BlockMessage::BlockBodyResponse(plain),
+                /*bypass_queue*/ true,
+            );
+        }
         self.dispatch_fetch_pending_block_response(
             peer,
             BlockMessage::BlockBodyResponse(response),
             /*bypass_queue*/ true,
         );
+    }
+
+    fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
+        let response = self.block_body_response_for_wire(block);
+        self.dispatch_block_body_response_with_plain_fallback(peer, block, response);
     }
 
     pub(super) fn flush_frontier_body_requesters(&mut self, block: &SignedBlock) {
@@ -1286,11 +1323,7 @@ impl Actor {
         let response = Self::block_body_response_from_payload(block_hash, height, view, payload);
         let requesters = self.take_pending_block_body_requesters(&block_hash);
         for peer in requesters {
-            self.dispatch_fetch_pending_block_response(
-                peer,
-                BlockMessage::BlockBodyResponse(response.clone()),
-                /*bypass_queue*/ true,
-            );
+            self.dispatch_block_body_response_with_plain_fallback(peer, block, response.clone());
         }
         true
     }
@@ -4436,10 +4469,10 @@ impl Actor {
                     request.view,
                     payload,
                 );
-                self.dispatch_fetch_pending_block_response(
+                self.dispatch_block_body_response_with_plain_fallback(
                     peer,
-                    BlockMessage::BlockBodyResponse(response),
-                    /*bypass_queue*/ true,
+                    block.as_ref(),
+                    response,
                 );
                 self.release_block_payload_dedup(&dedup_key);
                 return Ok(());
@@ -4505,6 +4538,38 @@ impl Actor {
             )
     }
 
+    fn observed_commit_qc_epoch_for_body_repair(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Option<u64> {
+        self.cached_commit_qc_for_block(block_hash, height, view)
+            .map(|qc| qc.epoch)
+            .or_else(|| {
+                self.deferred_missing_payload_qcs
+                    .values()
+                    .find_map(|entry| {
+                        (entry.qc.subject_block_hash == block_hash
+                            && entry.qc.height == height
+                            && entry.qc.view == view
+                            && matches!(entry.qc.phase, crate::sumeragi::consensus::Phase::Commit))
+                        .then_some(entry.qc.epoch)
+                    })
+            })
+            .or_else(|| {
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .and_then(|pending| {
+                        pending
+                            .commit_qc_observed()
+                            .then_some(pending.commit_qc_epoch)
+                            .flatten()
+                    })
+            })
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_block_body_response(
         &mut self,
@@ -4561,7 +4626,24 @@ impl Actor {
                     self.release_block_payload_dedup(&dedup_key);
                     return Ok(());
                 }
-                self.handle_block_created(block_created, sender)
+                if allow_same_height_repair {
+                    let observed_commit_qc_epoch = self.observed_commit_qc_epoch_for_body_repair(
+                        response.block_hash,
+                        response.height,
+                        response.view,
+                    );
+                    self.handle_block_created_from_block_sync(
+                        block_created,
+                        sender,
+                        /*allow_frontier_owner_preserve_on_payload_mismatch*/ true,
+                        observed_commit_qc_epoch.is_some(),
+                        observed_commit_qc_epoch.is_some(),
+                        observed_commit_qc_epoch.is_some(),
+                        observed_commit_qc_epoch,
+                    )
+                } else {
+                    self.handle_block_created(block_created, sender)
+                }
             }
             super::message::BlockBodyData::BlockSyncUpdate(update) => {
                 let header = update.block.header();

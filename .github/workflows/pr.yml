@@ -379,15 +379,27 @@ jobs:
 
   sumeragi_formal:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/apalache-mc/apalache:latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned Apalache
+        run: bash scripts/formal/install_apalache.sh 0.52.2
       - name: Apalache version
-        run: apalache-mc --version
+        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version
       - name: Sumeragi formal model checks (fast + deep)
         run: bash ci/check_sumeragi_formal.sh
+
+  docs_i18n_metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit translated documentation metadata
+        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal
 
   nexus_cross_dataspace_localnet:
     runs-on: [self-hosted, Linux, iroha2]

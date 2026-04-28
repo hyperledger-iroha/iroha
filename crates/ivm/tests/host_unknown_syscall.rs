@@ -12,8 +12,8 @@ use ivm::{
 fn default_host_unknown_syscall_returns_unknown() {
     let mut vm = IVM::new(1000);
     let mut host = DefaultHost::new();
-    match host.syscall(0xAB, &mut vm) {
-        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, 0xAB),
+    match host.syscall(0xDF, &mut vm) {
+        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, 0xDF),
         other => panic!("expected UnknownSyscall, got {other:?}"),
     }
 }

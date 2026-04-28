@@ -59,6 +59,50 @@ final class NativeEscrowInstructionBuildersTests: XCTestCase {
         XCTAssertEqual(NativeEscrowPermissions.canResolveEscrowDispute, "CanResolveEscrowDispute")
     }
 
+    func testAnonymousEscrowPayloadShapes() throws {
+        let proof: [String: Any] = [
+            "backend": "halo2/ipa",
+            "proof": "proof-bytes",
+            "vk_inline": "vk-bytes",
+        ]
+        let open = try object(from: NativeEscrowInstructionBuilders.openAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            assetDefinition: "xor#wonderland",
+            fundingNullifiers: ["n1", "n2"],
+            escrowCommitment: "escrow-note",
+            proof: proof,
+            rootHint: "root",
+            evidenceHashes: ["receipt"]
+        ))
+        let release = try object(from: NativeEscrowInstructionBuilders.releaseAnonymousAssetEscrow(
+            escrowId: "anonymous-escrow",
+            escrowNullifiers: ["escrow-nullifier"],
+            buyerOutputCommitments: ["buyer-note"],
+            proof: proof
+        ))
+        let resolve = try object(from: NativeEscrowInstructionBuilders.resolveAnonymousEscrowDispute(
+            escrowId: "anonymous-escrow",
+            escrowNullifiers: ["escrow-nullifier"],
+            buyerOutputCommitments: ["buyer-note"],
+            sellerOutputCommitments: ["seller-note"],
+            proof: proof,
+            evidenceHashes: ["judgement"]
+        ))
+
+        let openInner = try XCTUnwrap(open["OpenAnonymousAssetEscrow"] as? [String: Any])
+        let releaseInner = try XCTUnwrap(release["ReleaseAnonymousAssetEscrow"] as? [String: Any])
+        let resolveInner = try XCTUnwrap(resolve["ResolveAnonymousEscrowDispute"] as? [String: Any])
+
+        XCTAssertEqual(openInner["funding_nullifiers"] as? [String], ["n1", "n2"])
+        XCTAssertEqual(openInner["escrow_commitment"] as? String, "escrow-note")
+        XCTAssertEqual(openInner["root_hint"] as? String, "root")
+        XCTAssertEqual(openInner["evidence_hashes"] as? [String], ["receipt"])
+        XCTAssertEqual((openInner["proof"] as? [String: Any])?["backend"] as? String, "halo2/ipa")
+        XCTAssertEqual(releaseInner["buyer_output_commitments"] as? [String], ["buyer-note"])
+        XCTAssertEqual(resolveInner["seller_output_commitments"] as? [String], ["seller-note"])
+        XCTAssertEqual(resolveInner["evidence_hashes"] as? [String], ["judgement"])
+    }
+
     func testIrohaSDKConvenienceHelpersProduceSamePayloads() throws {
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let direct = try NativeEscrowInstructionBuilders.resolveEscrowDispute(

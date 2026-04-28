@@ -63,7 +63,7 @@ If Apalache is not in `PATH`, you can:
 
 - set `APALACHE_BIN` to the executable path, or
 - use the Docker fallback (enabled by default when `docker` is available):
-  - image: `APALACHE_DOCKER_IMAGE` (default `ghcr.io/apalache-mc/apalache:latest`)
+  - image: `APALACHE_DOCKER_IMAGE` (default `ghcr.io/apalache-mc/apalache:0.52.2`)
   - requires a running Docker daemon
   - disable fallback with `APALACHE_ALLOW_DOCKER=0`.
 
@@ -71,7 +71,7 @@ Examples:
 
 ```bash
 APALACHE_BIN=/opt/apalache/bin/apalache-mc bash scripts/formal/sumeragi_apalache.sh fast
-APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:latest bash scripts/formal/sumeragi_apalache.sh deep
+APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:0.52.2 bash scripts/formal/sumeragi_apalache.sh deep
 ```
 
 ## Notes

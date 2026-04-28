@@ -3392,14 +3392,14 @@ impl Actor {
             .pending
             .pending_blocks
             .get(&block_hash)
-            .is_some_and(|pending| pending.aborted)
+            .is_some_and(|pending| pending.is_retry_aborted())
         {
             iroha_logger::debug!(
                 height,
                 view,
                 phase = ?phase,
                 block = ?block_hash,
-                "skipping QC aggregation for aborted pending block"
+                "skipping QC aggregation for retry-aborted pending block"
             );
             return;
         }
@@ -3955,6 +3955,100 @@ impl Actor {
                     exact_retry_emitted,
                     "routing vote-backed contiguous frontier payload miss through exact body repair"
                 );
+                if self.config.resilience.enabled {
+                    let cooldown = self.rebroadcast_cooldown();
+                    let mut targets = rebroadcast_targets_for_qc(
+                        self.common_config.peer.id(),
+                        signers,
+                        signature_topology,
+                    );
+                    let mut widened_targets = targets.into_iter().collect::<BTreeSet<_>>();
+                    widened_targets.extend(
+                        signature_topology
+                            .as_ref()
+                            .iter()
+                            .filter(|peer| *peer != self.common_config.peer.id())
+                            .cloned(),
+                    );
+                    targets = widened_targets.into_iter().collect();
+                    let fetch_freshness_cap =
+                        super::saturating_mul_duration(cooldown, 2).max(Duration::from_millis(1));
+                    let (
+                        missing_fetch_inflight,
+                        missing_fetch_fresh,
+                        missing_fetch_age_ms,
+                        missing_fetch_freshness_window_ms,
+                    ) = self
+                        .pending
+                        .missing_block_requests
+                        .get(&block_hash)
+                        .and_then(|request| {
+                            (request.height == height).then(|| {
+                                let request_age =
+                                    now.saturating_duration_since(request.last_requested);
+                                let request_window =
+                                    request.retry_window.max(Duration::from_millis(1));
+                                let freshness_window = request_window.min(fetch_freshness_cap);
+                                (
+                                    true,
+                                    request_age < freshness_window,
+                                    request_age.as_millis(),
+                                    freshness_window.as_millis(),
+                                )
+                            })
+                        })
+                        .unwrap_or((false, false, 0, 0));
+                    let mut missing_block_requested = false;
+                    if !targets.is_empty() && !missing_fetch_fresh {
+                        let view_change_window =
+                            Some(self.quorum_timeout(self.runtime_da_enabled()));
+                        let _ = super::touch_missing_block_request(
+                            &mut self.pending.missing_block_requests,
+                            block_hash,
+                            height,
+                            view,
+                            phase,
+                            super::MissingBlockPriority::Consensus,
+                            now,
+                            cooldown,
+                            view_change_window,
+                        );
+                        let requester_roster_proof_known =
+                            self.requester_has_local_roster_proof(block_hash, height, view);
+                        send_missing_block_request(
+                            &self.network,
+                            &self.common_config.peer.id,
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockPriority::Consensus,
+                            requester_roster_proof_known,
+                            &targets,
+                        );
+                        missing_block_requested = true;
+                        self.note_missing_block_height_attempt(
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockRecoveryStage::HashFetch,
+                            None,
+                            now,
+                        );
+                    }
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        targets = targets.len(),
+                        missing_block_requested,
+                        missing_fetch_inflight,
+                        missing_fetch_fresh,
+                        missing_fetch_age_ms,
+                        missing_fetch_freshness_window_ms,
+                        "paired exact frontier body repair with consensus-priority missing-block fetch"
+                    );
+                }
             }
             let cooldown = self.rebroadcast_cooldown();
             if !contiguous_frontier && self.block_sync_fetch_log.allow(block_hash, now, cooldown) {

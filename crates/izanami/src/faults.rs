@@ -38,6 +38,8 @@ pub struct FaultConfig {
     pub network_latency: Option<NetworkLatencyConfig>,
     /// Optional network-partition fault settings.
     pub network_partition: Option<NetworkPartitionConfig>,
+    /// Optional P2P packet-loss fault settings.
+    pub network_packet_loss: Option<NetworkPacketLossConfig>,
     /// Optional CPU pressure settings.
     pub cpu_stress: Option<CpuStressConfig>,
     /// Optional disk-pressure settings.
@@ -57,6 +59,8 @@ pub enum FaultScenarioKind {
     NetworkLatencySpike,
     /// Restart with a self-only trusted peer roster for a short period.
     NetworkPartition,
+    /// Restart with debug P2P packet-loss settings for a short period.
+    NetworkPacketLoss,
     /// Burn CPU locally for a short period.
     CpuStress,
     /// Fill a small local file to emulate storage pressure.
@@ -92,6 +96,27 @@ impl Default for NetworkPartitionConfig {
     fn default() -> Self {
         Self {
             duration: Duration::from_secs(5)..=Duration::from_secs(10),
+        }
+    }
+}
+
+/// Default inbound/outbound P2P packet-loss percentage.
+pub const DEFAULT_NETWORK_PACKET_LOSS_PERCENT: u8 = 75;
+
+/// Settings for temporary P2P application-frame packet loss.
+#[derive(Clone, Debug)]
+pub struct NetworkPacketLossConfig {
+    /// How long the packet-loss injection should remain active.
+    pub duration: RangeInclusive<Duration>,
+    /// Inbound and outbound P2P application-frame loss percentage.
+    pub percent: RangeInclusive<u8>,
+}
+
+impl Default for NetworkPacketLossConfig {
+    fn default() -> Self {
+        Self {
+            duration: Duration::from_secs(5)..=Duration::from_secs(10),
+            percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT..=DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
         }
     }
 }
@@ -215,6 +240,7 @@ enum FaultScenario {
     SpamInvalidTransactions,
     NetworkLatencySpike,
     NetworkPartition,
+    NetworkPacketLoss,
     CpuStress,
     DiskSaturation,
 }
@@ -227,6 +253,7 @@ impl From<FaultScenarioKind> for FaultScenario {
             FaultScenarioKind::SpamInvalidTransactions => Self::SpamInvalidTransactions,
             FaultScenarioKind::NetworkLatencySpike => Self::NetworkLatencySpike,
             FaultScenarioKind::NetworkPartition => Self::NetworkPartition,
+            FaultScenarioKind::NetworkPacketLoss => Self::NetworkPacketLoss,
             FaultScenarioKind::CpuStress => Self::CpuStress,
             FaultScenarioKind::DiskSaturation => Self::DiskSaturation,
         }
@@ -244,8 +271,21 @@ struct FaultApplyCtx<'a, P: FaultPeer> {
 }
 
 impl FaultScenario {
+    fn kind(self) -> FaultScenarioKind {
+        match self {
+            Self::CrashRestart => FaultScenarioKind::CrashRestart,
+            Self::WipeStorage => FaultScenarioKind::WipeStorage,
+            Self::SpamInvalidTransactions => FaultScenarioKind::SpamInvalidTransactions,
+            Self::NetworkLatencySpike => FaultScenarioKind::NetworkLatencySpike,
+            Self::NetworkPartition => FaultScenarioKind::NetworkPartition,
+            Self::NetworkPacketLoss => FaultScenarioKind::NetworkPacketLoss,
+            Self::CpuStress => FaultScenarioKind::CpuStress,
+            Self::DiskSaturation => FaultScenarioKind::DiskSaturation,
+        }
+    }
+
     fn random<R: Rng>(rng: &mut R, config: &FaultConfig) -> Self {
-        let mut scenarios = Vec::with_capacity(7);
+        let mut scenarios = Vec::with_capacity(8);
         if config.crash_restart {
             scenarios.push(Self::CrashRestart);
         }
@@ -260,6 +300,9 @@ impl FaultScenario {
         }
         if config.network_partition.is_some() {
             scenarios.push(Self::NetworkPartition);
+        }
+        if config.network_packet_loss.is_some() {
+            scenarios.push(Self::NetworkPacketLoss);
         }
         if config.cpu_stress.is_some() {
             scenarios.push(Self::CpuStress);
@@ -313,6 +356,21 @@ impl FaultScenario {
                     Ok(())
                 }
             }
+            FaultScenario::NetworkPacketLoss => {
+                if let Some(cfg) = &ctx.config.network_packet_loss {
+                    network_packet_loss(
+                        ctx.peer,
+                        ctx.config_layers,
+                        ctx.genesis,
+                        ctx.rng,
+                        cfg,
+                        ctx.deadline,
+                    )
+                    .await
+                } else {
+                    Ok(())
+                }
+            }
             FaultScenario::CpuStress => {
                 if let Some(cfg) = &ctx.config.cpu_stress {
                     cpu_stress(ctx.deadline, ctx.rng, cfg).await
@@ -329,6 +387,36 @@ impl FaultScenario {
             }
         }
     }
+}
+
+/// Apply one randomly selected enabled fault scenario to a peer.
+///
+/// # Errors
+///
+/// Returns an error when the sampled fault scenario cannot be applied or the peer restart path
+/// fails while the scenario is active.
+pub async fn apply_random_fault_once<P: FaultPeer>(
+    peer: &P,
+    config: &FaultConfig,
+    config_layers: &Arc<Vec<Table>>,
+    genesis: &Arc<GenesisBlock>,
+    base_domain: &DomainId,
+    rng: &mut StdRng,
+    deadline: Instant,
+) -> Result<FaultScenarioKind> {
+    let scenario = FaultScenario::random(rng, config);
+    scenario
+        .apply(FaultApplyCtx {
+            peer,
+            config,
+            config_layers,
+            genesis,
+            base_domain,
+            rng,
+            deadline,
+        })
+        .await?;
+    Ok(scenario.kind())
 }
 
 /// Apply a single fault scenario to a peer using the supplied deterministic seed.
@@ -537,6 +625,60 @@ async fn network_partition<P: FaultPeer>(
     peer.restart_with_layers(config_layers, &[], genesis).await
 }
 
+async fn network_packet_loss<P: FaultPeer>(
+    peer: &P,
+    config_layers: &Arc<Vec<Table>>,
+    genesis: &Arc<GenesisBlock>,
+    rng: &mut StdRng,
+    cfg: &NetworkPacketLossConfig,
+    deadline: Instant,
+) -> Result<()> {
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return Ok(());
+    };
+    let duration = remaining.min(sample_duration(rng, &cfg.duration));
+    if duration.is_zero() {
+        return Ok(());
+    }
+
+    let percent = sample_u8(rng, &cfg.percent).min(100);
+    info!(
+        target: "izanami::faults",
+        peer = peer.mnemonic(),
+        ?duration,
+        percent,
+        "injecting P2P packet loss"
+    );
+
+    peer.shutdown().await;
+    let overrides = Table::new()
+        .write(["network", "debug_packet_loss_inbound_percent"], percent)
+        .write(["network", "debug_packet_loss_outbound_percent"], percent);
+    let result = peer
+        .restart_with_layers(config_layers, std::slice::from_ref(&overrides), genesis)
+        .await;
+    if let Err(err) = result {
+        warn!(
+            target: "izanami::faults",
+            peer = peer.mnemonic(),
+            ?err,
+            "failed to restart peer with packet-loss overrides; attempting recovery"
+        );
+        peer.shutdown().await;
+        let _ = peer.restart_with_layers(config_layers, &[], genesis).await;
+        return Err(err);
+    }
+
+    sleep(duration).await;
+    info!(
+        target: "izanami::faults",
+        peer = peer.mnemonic(),
+        "restoring normal P2P packet delivery"
+    );
+    peer.shutdown().await;
+    peer.restart_with_layers(config_layers, &[], genesis).await
+}
+
 async fn cpu_stress(deadline: Instant, rng: &mut StdRng, cfg: &CpuStressConfig) -> Result<()> {
     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
         return Ok(());
@@ -656,6 +798,15 @@ fn sample_duration<R: Rng>(rng: &mut R, range: &RangeInclusive<Duration>) -> Dur
 }
 
 fn sample_usize<R: Rng>(rng: &mut R, range: &RangeInclusive<usize>) -> usize {
+    let start = *range.start();
+    let end = *range.end();
+    if start >= end {
+        return start;
+    }
+    rng.random_range(start..=end)
+}
+
+fn sample_u8<R: Rng>(rng: &mut R, range: &RangeInclusive<u8>) -> u8 {
     let start = *range.start();
     let end = *range.end();
     if start >= end {
@@ -948,6 +1099,7 @@ mod tests {
             spam_invalid_transactions: true,
             network_latency: None,
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -968,6 +1120,7 @@ mod tests {
             spam_invalid_transactions: true,
             network_latency: Some(NetworkLatencyConfig::default()),
             network_partition: Some(NetworkPartitionConfig::default()),
+            network_packet_loss: None,
             cpu_stress: Some(CpuStressConfig::default()),
             disk_saturation: Some(DiskSaturationConfig::default()),
         };
@@ -997,6 +1150,7 @@ mod tests {
             spam_invalid_transactions: false,
             network_latency: Some(NetworkLatencyConfig::default()),
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1008,6 +1162,42 @@ mod tests {
                 "disabled fault scenarios must never be scheduled"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn apply_random_fault_once_applies_single_enabled_scenario() {
+        let peer = MockPeer::new("single-random");
+        let config = FaultConfig {
+            interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: true,
+            network_latency: None,
+            network_partition: None,
+            network_packet_loss: None,
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let config_layers = Arc::new(Vec::new());
+        let genesis = dummy_genesis();
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let scenario = apply_random_fault_once(
+            &peer,
+            &config,
+            &config_layers,
+            &genesis,
+            &domain,
+            &mut rng,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("single enabled scenario should apply");
+
+        assert_eq!(scenario, FaultScenarioKind::SpamInvalidTransactions);
+        assert_eq!(*peer.client.submissions.lock().expect("submission lock"), 3);
     }
 
     #[test]
@@ -1045,6 +1235,7 @@ mod tests {
             spam_invalid_transactions: true,
             network_latency: None,
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1083,6 +1274,7 @@ mod tests {
             spam_invalid_transactions: true,
             network_latency: None,
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1132,6 +1324,7 @@ mod tests {
                 gossip_delay: Duration::from_millis(10)..=Duration::from_millis(10),
             }),
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1198,6 +1391,7 @@ mod tests {
                 gossip_delay: Duration::from_millis(10)..=Duration::from_millis(10),
             }),
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1250,6 +1444,7 @@ mod tests {
             spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: Some(DiskSaturationConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),
@@ -1307,6 +1502,7 @@ mod tests {
             network_partition: Some(NetworkPartitionConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),
             }),
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1396,6 +1592,7 @@ mod tests {
             network_partition: Some(NetworkPartitionConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),
             }),
+            network_packet_loss: None,
             cpu_stress: None,
             disk_saturation: None,
         };
@@ -1425,6 +1622,78 @@ mod tests {
                 "recovery restart must remove temporary partition overrides"
             ),
             other => panic!("unexpected final recovery event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn network_packet_loss_restarts_with_percent_and_restores() {
+        let peer = MockPeer::new("packet-loss");
+        let config_layers = Arc::new(Vec::new());
+        let genesis = dummy_genesis();
+        let mut rng = StdRng::seed_from_u64(77);
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
+        let config = FaultConfig {
+            interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
+            network_latency: None,
+            network_partition: None,
+            network_packet_loss: Some(NetworkPacketLossConfig {
+                duration: Duration::from_millis(5)..=Duration::from_millis(5),
+                percent: 75..=75,
+            }),
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let ctx = FaultApplyCtx {
+            peer: &peer,
+            config: &config,
+            config_layers: &config_layers,
+            genesis: &genesis,
+            base_domain: &domain,
+            rng: &mut rng,
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+
+        FaultScenario::NetworkPacketLoss
+            .apply(ctx)
+            .await
+            .expect("network packet-loss fault should succeed");
+
+        let events = peer.events().await;
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], MockEvent::Shutdown));
+        match &events[1] {
+            MockEvent::Restart { extra_layers } => {
+                assert_eq!(extra_layers.len(), 1);
+                let network = extra_layers[0]
+                    .get("network")
+                    .and_then(toml::Value::as_table)
+                    .expect("network override table");
+                assert_eq!(
+                    network
+                        .get("debug_packet_loss_inbound_percent")
+                        .and_then(toml::Value::as_integer),
+                    Some(75)
+                );
+                assert_eq!(
+                    network
+                        .get("debug_packet_loss_outbound_percent")
+                        .and_then(toml::Value::as_integer),
+                    Some(75)
+                );
+            }
+            other => panic!("unexpected restart payload: {other:?}"),
+        }
+        assert!(matches!(events[2], MockEvent::Shutdown));
+        match &events[3] {
+            MockEvent::Restart { extra_layers } => assert!(
+                extra_layers.is_empty(),
+                "recovery restart should remove packet-loss overrides"
+            ),
+            other => panic!("unexpected final event: {other:?}"),
         }
     }
 }

@@ -109,6 +109,7 @@ const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 // Same-height commit votes are on the liveness hot path. For small rosters, verify them inline so
 // they cannot be stranded behind a vote-worker backlog during repeated view changes.
 const VOTE_VERIFY_INLINE_ROSTER_MAX: usize = 8;
+const VOTE_VERIFY_RESILIENCE_INLINE_ROSTER_MAX: usize = 32;
 
 impl Actor {
     fn signer_public_key_from_signature_topology(
@@ -190,6 +191,11 @@ impl Actor {
         vote: &crate::sumeragi::consensus::Vote,
         signature_topology: &super::network_topology::Topology,
     ) -> bool {
+        let inline_roster_max = if self.config.resilience.enabled {
+            VOTE_VERIFY_RESILIENCE_INLINE_ROSTER_MAX
+        } else {
+            VOTE_VERIFY_INLINE_ROSTER_MAX
+        };
         let local_commit_vote_for_known_block = vote.phase == Phase::Commit
             && self.block_known_locally(vote.block_hash)
             && self
@@ -197,7 +203,7 @@ impl Actor {
                 .is_some_and(|idx| idx == vote.signer);
         self.should_fast_path_new_view_vote(vote)
             || (self.should_fast_path_commit_vote(vote)
-                && signature_topology.as_ref().len() <= VOTE_VERIFY_INLINE_ROSTER_MAX
+                && signature_topology.as_ref().len() <= inline_roster_max
                 && (self.block_known_locally(vote.block_hash)
                     || self
                         .pending
