@@ -99,9 +99,9 @@ use iroha_torii::sorafs::{
     api::StorageManifestResponseDto,
 };
 use ivm::{
-    IVM, IVMHost, PointerType, VMError,
+    CoreHost, IVM, IVMHost, PointerType, VMError,
     syscalls::{
-        SYSCALL_SORACLOUD_APPEND_JOURNAL, SYSCALL_SORACLOUD_EGRESS_FETCH,
+        self as ivm_syscalls, SYSCALL_SORACLOUD_APPEND_JOURNAL, SYSCALL_SORACLOUD_EGRESS_FETCH,
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE, SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
         SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT, SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
         SYSCALL_SORACLOUD_READ_CONFIG, SYSCALL_SORACLOUD_READ_CREDENTIAL,
@@ -1192,6 +1192,31 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             ));
         };
 
+        let mailbox_payload_tlv = match mailbox_payload_tlv_bytes(&request.mailbox_message.payload_bytes) {
+            Ok(tlv_bytes) => tlv_bytes,
+            Err(error) => {
+                return Ok(deterministic_mailbox_failure_result(
+                    request,
+                    vm_error_label(&error),
+                    SoraServiceHealthStatusV1::Degraded,
+                ));
+            }
+        };
+        let public_inputs = match ordered_mailbox_public_inputs(
+            &mailbox_payload_tlv,
+            request.execution_sequence,
+            request.observed_height,
+        ) {
+            Ok(public_inputs) => public_inputs,
+            Err(error) => {
+                return Ok(deterministic_mailbox_failure_result(
+                    request,
+                    vm_error_label(&error),
+                    SoraServiceHealthStatusV1::Degraded,
+                ));
+            }
+        };
+
         let committed_entries = collect_committed_service_state_entries(
             &self.state.view(),
             request.deployment.service_name.as_ref(),
@@ -1201,7 +1226,8 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             self.state_dir(),
             self.config.egress.clone(),
             committed_entries,
-        );
+        )
+        .with_public_inputs(public_inputs);
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
         if let Err(error) = vm.load_program(&bundle_bytes) {
@@ -1221,17 +1247,8 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 SoraServiceHealthStatusV1::Degraded,
             ));
         }
-        match mailbox_payload_tlv_bytes(&request.mailbox_message.payload_bytes) {
-            Ok(tlv_bytes) => match vm.alloc_input_tlv(&tlv_bytes) {
-                Ok(ptr) => vm.set_register(10, ptr),
-                Err(error) => {
-                    return Ok(deterministic_mailbox_failure_result(
-                        request,
-                        vm_error_label(&error),
-                        SoraServiceHealthStatusV1::Degraded,
-                    ));
-                }
-            },
+        match vm.alloc_input_tlv(&mailbox_payload_tlv) {
+            Ok(ptr) => vm.set_register(10, ptr),
             Err(error) => {
                 return Ok(deterministic_mailbox_failure_result(
                     request,
@@ -1239,7 +1256,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                     SoraServiceHealthStatusV1::Degraded,
                 ));
             }
-        }
+        };
         vm.set_register(11, request.execution_sequence);
         vm.set_register(12, request.observed_height);
         if let Err(error) = vm.run() {
@@ -1490,6 +1507,8 @@ struct SoracloudIvmHost {
     request: SoracloudOrderedMailboxExecutionRequest,
     state_dir: PathBuf,
     egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
+    core_host: CoreHost,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     committed_entries: BTreeMap<(String, String), SoraServiceStateEntryV1>,
     binding_totals: BTreeMap<String, u64>,
     observed_local_read_bindings:
@@ -1520,6 +1539,8 @@ impl SoracloudIvmHost {
             request,
             state_dir,
             egress,
+            core_host: CoreHost::new(),
+            public_inputs: BTreeMap::new(),
             committed_entries,
             binding_totals,
             observed_local_read_bindings: BTreeMap::new(),
@@ -1530,6 +1551,11 @@ impl SoracloudIvmHost {
             egress_requests: 0,
             egress_bytes: 0,
         }
+    }
+
+    fn with_public_inputs(mut self, public_inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.public_inputs = public_inputs;
+        self
     }
 
     fn handler_class(&self) -> SoraServiceHandlerClassV1 {
@@ -1856,6 +1882,22 @@ impl SoracloudIvmHost {
         }
     }
 
+    fn read_public_input(&self, vm: &mut IVM) -> Result<u64, VMError> {
+        let ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(ptr)?;
+        if tlv.type_id != PointerType::Name {
+            return Err(VMError::NoritoInvalid);
+        }
+        let name: Name =
+            norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let Some(bytes) = self.public_inputs.get(&name) else {
+            return Err(VMError::PermissionDenied);
+        };
+        let dst = vm.alloc_input_tlv(bytes)?;
+        vm.set_register(10, dst);
+        Ok(0)
+    }
+
     fn host_network_allows(&self, host: &str, port: u16) -> bool {
         let container_policy: &SoraCapabilityPolicyV1 = &self.request.bundle.container.capabilities;
         if !container_policy.network.allows_host_port(host, port) {
@@ -2023,6 +2065,7 @@ impl SoracloudIvmHost {
 impl IVMHost for SoracloudIvmHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
+            ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT => self.read_public_input(vm),
             SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
                 let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = self
                     .read_request_payload(
@@ -2221,7 +2264,7 @@ impl IVMHost for SoracloudIvmHost {
                 )?;
                 Ok(0)
             }
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => self.core_host.syscall(number, vm),
         }
     }
 
@@ -5769,6 +5812,33 @@ fn execute_query_local_read(
         ));
     };
 
+    let body_tlv = local_read_request_body_tlv_bytes(request).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "encode Soracloud query body for service `{}` handler `{}`: {}",
+                request.service_name,
+                request.handler_name,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+    let metadata_tlv = local_read_request_metadata_tlv_bytes(request)?;
+    let public_inputs =
+        local_read_public_inputs(&body_tlv, &metadata_tlv, request.observed_height).map_err(
+            |error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "prepare Soracloud query public inputs for service `{}` handler `{}`: {}",
+                        request.service_name,
+                        request.handler_name,
+                        vm_error_label(&error),
+                    ),
+                )
+            },
+        )?;
+
     let committed_entries =
         collect_committed_service_state_entries(view, request.service_name.as_str());
     let host = SoracloudIvmHost::new(
@@ -5776,7 +5846,8 @@ fn execute_query_local_read(
         state_dir.to_path_buf(),
         egress.clone(),
         committed_entries,
-    );
+    )
+    .with_public_inputs(public_inputs);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&bundle_bytes).map_err(|error| {
@@ -5806,17 +5877,6 @@ fn execute_query_local_read(
         )
     })?;
 
-    let body_tlv = local_read_request_body_tlv_bytes(request).map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "encode Soracloud query body for service `{}` handler `{}`: {}",
-                request.service_name,
-                request.handler_name,
-                vm_error_label(&error),
-            ),
-        )
-    })?;
     let body_ptr = vm.alloc_input_tlv(&body_tlv).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -5828,7 +5888,6 @@ fn execute_query_local_read(
             ),
         )
     })?;
-    let metadata_tlv = local_read_request_metadata_tlv_bytes(request)?;
     let metadata_ptr = vm.alloc_input_tlv(&metadata_tlv).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -5844,6 +5903,14 @@ fn execute_query_local_read(
     vm.set_register(11, metadata_ptr);
     vm.set_register(12, request.observed_height);
     vm.run().map_err(|error| {
+        let error_label = vm_error_label(&error);
+        let error_detail = vm
+            .last_diagnostic()
+            .and_then(|diagnostic| diagnostic.context.syscall)
+            .map_or_else(
+                || error_label.to_owned(),
+                |syscall| format!("{error_label}(0x{syscall:02x})"),
+            );
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
@@ -5851,7 +5918,7 @@ fn execute_query_local_read(
                 context.handler.handler_name,
                 request.service_name,
                 request.service_version,
-                vm_error_label(&error),
+                error_detail,
             ),
         )
     })?;
@@ -6045,6 +6112,86 @@ fn local_read_request_metadata_tlv_bytes(
             )
         })?;
     Ok(make_pointer_tlv(PointerType::Json, &metadata_bytes))
+}
+
+fn public_input_name(name: &str) -> Result<Name, VMError> {
+    Name::from_str(name).map_err(|_| VMError::NoritoInvalid)
+}
+
+fn public_input_int_tlv(value: u64) -> Result<Vec<u8>, VMError> {
+    let value = i64::try_from(value).unwrap_or(i64::MAX);
+    let bytes = norito::to_bytes(&value).map_err(|_| VMError::NoritoInvalid)?;
+    Ok(make_pointer_tlv(PointerType::NoritoBytes, &bytes))
+}
+
+fn insert_public_input_aliases(
+    inputs: &mut BTreeMap<Name, Vec<u8>>,
+    aliases: &[&str],
+    value: &[u8],
+) -> Result<(), VMError> {
+    for alias in aliases {
+        inputs.insert(public_input_name(alias)?, value.to_vec());
+    }
+    Ok(())
+}
+
+fn local_read_public_inputs(
+    body_tlv: &[u8],
+    metadata_tlv: &[u8],
+    observed_height: u64,
+) -> Result<BTreeMap<Name, Vec<u8>>, VMError> {
+    let mut inputs = BTreeMap::new();
+    insert_public_input_aliases(
+        &mut inputs,
+        &["_request_body", "request_body", "body", "payload", "arg0", "param0"],
+        body_tlv,
+    )?;
+    insert_public_input_aliases(
+        &mut inputs,
+        &[
+            "_request_meta",
+            "request_meta",
+            "metadata",
+            "meta",
+            "trigger_event_json",
+            "arg1",
+            "param1",
+        ],
+        metadata_tlv,
+    )?;
+    let observed_height_tlv = public_input_int_tlv(observed_height)?;
+    insert_public_input_aliases(
+        &mut inputs,
+        &["observed_height", "height", "arg2", "param2"],
+        &observed_height_tlv,
+    )?;
+    Ok(inputs)
+}
+
+fn ordered_mailbox_public_inputs(
+    payload_tlv: &[u8],
+    execution_sequence: u64,
+    observed_height: u64,
+) -> Result<BTreeMap<Name, Vec<u8>>, VMError> {
+    let mut inputs = BTreeMap::new();
+    insert_public_input_aliases(
+        &mut inputs,
+        &["_request_body", "request_body", "body", "payload", "arg0", "param0"],
+        payload_tlv,
+    )?;
+    let execution_sequence_tlv = public_input_int_tlv(execution_sequence)?;
+    insert_public_input_aliases(
+        &mut inputs,
+        &["execution_sequence", "sequence", "arg1", "param1"],
+        &execution_sequence_tlv,
+    )?;
+    let observed_height_tlv = public_input_int_tlv(observed_height)?;
+    insert_public_input_aliases(
+        &mut inputs,
+        &["observed_height", "height", "arg2", "param2"],
+        &observed_height_tlv,
+    )?;
+    Ok(inputs)
 }
 
 fn decode_local_read_vm_output(

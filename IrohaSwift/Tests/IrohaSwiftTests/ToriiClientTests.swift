@@ -3619,7 +3619,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["limit"], "20")
             XCTAssertEqual(query["offset"], "40")
             XCTAssertEqual(query["authority"], "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
-            XCTAssertEqual(query["contract_alias"], "benefits::sbp")
+            XCTAssertEqual(query["contract_alias"], "benefits::paynet")
             XCTAssertEqual(query["contract_entrypoint"], "claim")
             XCTAssertEqual(query["since_timestamp_ms"], "1000")
             XCTAssertEqual(query["until_timestamp_ms"], "2000")
@@ -3637,11 +3637,11 @@ final class ToriiClientTests: XCTestCase {
                         "entrypoint_hash": "0xabc",
                         "result_ok": true,
                         "contract_address": "cntr:deadbeef",
-                        "contract_alias": "benefits::sbp",
+                        "contract_alias": "benefits::paynet",
                         "contract_entrypoint": "claim",
                         "contract_payload": {"amount": 500},
-                        "gas_asset_id": "gas#sbp",
-                        "fee_sponsor": "sponsor@sbp",
+                        "gas_asset_id": "gas#paynet",
+                        "fee_sponsor": "sponsor@paynet",
                         "gas_limit": 50000
                     }
                 ],
@@ -3655,7 +3655,7 @@ final class ToriiClientTests: XCTestCase {
             limit: 20,
             offset: 40,
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            contractAlias: "benefits::sbp",
+            contractAlias: "benefits::paynet",
             contractEntrypoint: "claim",
             sinceTimestampMs: 1000,
             untilTimestampMs: 2000,
@@ -3663,7 +3663,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let list = try await makeClient().getContractActivity(params: params)
         XCTAssertEqual(list.total, 1)
-        XCTAssertEqual(list.items.first?.contractAlias, "benefits::sbp")
+        XCTAssertEqual(list.items.first?.contractAlias, "benefits::paynet")
         XCTAssertEqual(list.items.first?.contractEntrypoint, "claim")
         XCTAssertEqual(list.items.first?.timestampMs, 1234)
         guard case let .object(payload)? = list.items.first?.contractPayload,
@@ -3682,10 +3682,10 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["limit"], "10")
             XCTAssertEqual(query["offset"], "5")
-            XCTAssertEqual(query["contract_alias"], "benefits::sbp")
+            XCTAssertEqual(query["contract_alias"], "benefits::paynet")
             XCTAssertEqual(query["module"], "benefits")
             XCTAssertEqual(query["event_kind"], "spend")
-            XCTAssertEqual(query["participant"], "merchant@sbp")
+            XCTAssertEqual(query["participant"], "merchant@paynet")
             XCTAssertEqual(query["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
             XCTAssertEqual(query["provenance"], "derived")
             XCTAssertEqual(query["result_ok"], "false")
@@ -3700,22 +3700,22 @@ final class ToriiClientTests: XCTestCase {
                         "event_id": "0xabc:0",
                         "schema_version": 1,
                         "provenance": "derived",
-                        "authority": "beneficiary@sbp",
+                        "authority": "beneficiary@paynet",
                         "timestamp_ms": 1234,
                         "tx_hash_hex": "0xabc",
                         "block_height": 7,
                         "block_hash_hex": "0xblock",
                         "result_ok": false,
                         "contract_address": "cntr:deadbeef",
-                        "contract_alias": "benefits::sbp",
+                        "contract_alias": "benefits::paynet",
                         "module": "benefits",
                         "event_kind": "spend",
-                        "participants": ["beneficiary@sbp", "merchant@sbp"],
+                        "participants": ["beneficiary@paynet", "merchant@paynet"],
                         "asset_ids": ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
                         "numeric_fields": {"amount": 125},
-                        "payload": {"amount": 125, "merchant_account": "merchant@sbp"},
-                        "gas_asset_id": "gas#sbp",
-                        "fee_sponsor": "sponsor@sbp",
+                        "payload": {"amount": 125, "merchant_account": "merchant@paynet"},
+                        "gas_asset_id": "gas#paynet",
+                        "fee_sponsor": "sponsor@paynet",
                         "gas_limit": 70000
                     }
                 ],
@@ -3728,10 +3728,10 @@ final class ToriiClientTests: XCTestCase {
         let params = ToriiContractEventParams(
             limit: 10,
             offset: 5,
-            contractAlias: "benefits::sbp",
+            contractAlias: "benefits::paynet",
             module: "benefits",
             eventKind: "spend",
-            participant: "merchant@sbp",
+            participant: "merchant@paynet",
             assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             provenance: "derived",
             resultOk: false
@@ -3739,7 +3739,7 @@ final class ToriiClientTests: XCTestCase {
         let list = try await makeClient().getContractEvents(params: params)
         XCTAssertEqual(list.total, 1)
         XCTAssertEqual(list.items.first?.eventId, "0xabc:0")
-        XCTAssertEqual(list.items.first?.participants ?? [], ["beneficiary@sbp", "merchant@sbp"])
+        XCTAssertEqual(list.items.first?.participants ?? [], ["beneficiary@paynet", "merchant@paynet"])
         XCTAssertEqual(list.items.first?.assetIds ?? [], ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM"])
         guard case let .number(amount)? = list.items.first?.numericFields?["amount"] else {
             return XCTFail("Expected numeric field.")
