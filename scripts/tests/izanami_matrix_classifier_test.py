@@ -39,6 +39,21 @@ def test_matrix_classifier_keeps_final_liveness_failure_markers() -> None:
         assert marker in pattern
 
 
+def test_matrix_classifier_does_not_match_tolerated_fault_metadata(tmp_path: Path) -> None:
+    pattern = _classifier_degraded_pattern()
+
+    tolerated = tmp_path / "tolerated.log"
+    tolerated.write_text(
+        "progress tolerated_failures=5\n"
+        "summary expected_failures=3 failures=0 confirmation_failed=0\n"
+    )
+    actual = tmp_path / "actual.log"
+    actual.write_text("summary failures=1 confirmation_failed=0\n")
+
+    assert subprocess.run(["rg", "-q", pattern, str(tolerated)]).returncode == 1
+    assert subprocess.run(["rg", "-q", pattern, str(actual)]).returncode == 0
+
+
 def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     out_dir = tmp_path / "matrix"
 
