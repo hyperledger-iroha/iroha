@@ -29,3 +29,4 @@ src/norito/telemetry_analysis.py
 src/norito/varint.py
 tests/__init__.py
 tests/conftest.py
+tests/test_header_padding.py
