@@ -37572,7 +37572,7 @@ async fn handle_rbc_deliver_drops_when_derived_roster_mismatches() {
 }
 
 #[test]
-fn rbc_session_record_ready_skips_after_deliver() {
+fn rbc_session_record_ready_accepts_distinct_senders_after_deliver() {
     let mut session = RbcSession::test_new(
         0,
         Some(Hash::prehashed([0x11; 32])),
@@ -37583,8 +37583,8 @@ fn rbc_session_record_ready_skips_after_deliver() {
     assert!(session.record_deliver(0, vec![0xDD]));
     let ready_count = session.ready_signatures.len();
 
-    assert!(!session.record_ready(2, vec![0xBB]));
-    assert_eq!(session.ready_signatures.len(), ready_count);
+    assert!(session.record_ready(2, vec![0xBB]));
+    assert_eq!(session.ready_signatures.len(), ready_count + 1);
     assert!(session.delivered);
     assert!(!session.is_invalid());
 }
@@ -75612,6 +75612,59 @@ async fn vote_log_preserves_far_future_new_view_votes_for_active_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn vote_log_prunes_far_stale_new_view_votes_for_active_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let active_height = committed_height.saturating_add(1);
+    let current_view = super::VOTE_CACHE_VIEW_WINDOW.saturating_add(10);
+    let stale_view = current_view
+        .saturating_sub(super::VOTE_CACHE_VIEW_WINDOW)
+        .saturating_sub(1);
+    let epoch = actor.epoch_for_height(active_height);
+    let signer = 0;
+    let highest_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x51; Hash::LENGTH]));
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: highest_hash,
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: active_height,
+        view: stale_view,
+        epoch,
+        highest_qc: Some(QcHeaderRef {
+            subject_block_hash: highest_hash,
+            height: committed_height,
+            view: 0,
+            epoch: actor.epoch_for_height(committed_height),
+            phase: Phase::Commit,
+        }),
+        signer,
+        bls_sig: vec![0_u8; 96],
+    };
+
+    actor
+        .phase_tracker
+        .on_view_change(active_height, current_view, Instant::now());
+    actor.vote_log.insert(
+        (Phase::NewView, active_height, stale_view, epoch, signer),
+        vote,
+    );
+
+    actor.prune_vote_caches_horizon(committed_height);
+
+    assert!(
+        !actor
+            .vote_log
+            .contains_key(&(Phase::NewView, active_height, stale_view, epoch, signer)),
+        "same-height NEW_VIEW votes far behind the local view should not be preserved forever"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_topology_change_preserves_state_on_reorder() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -86480,11 +86533,7 @@ async fn proposal_yields_stale_frontier_owner_with_exhausted_commit_inflight_wit
         .max(actor.frontier_slot_lag_window())
         .max(Duration::from_millis(1));
     let stale_at = now
-        .checked_sub(
-            min_yield_age
-                .saturating_mul(3)
-                .saturating_add(Duration::from_millis(1)),
-        )
+        .checked_sub(min_yield_age.saturating_add(Duration::from_millis(1)))
         .unwrap_or(now);
     actor
         .phase_tracker
@@ -86659,11 +86708,117 @@ async fn proposal_clears_no_pending_stale_frontier_owner_without_qc_lock() {
             now,
             actor.queue.queued_len(),
         ),
-        "hard-stale owner metadata without pending, QC, or inflight work should be cleared"
+        "unprotected owner metadata without pending, QC, or inflight work should be cleared after the normal yield age"
     );
     assert!(
         actor.frontier_slot.is_none(),
         "yielding should clear the no-pending frontier owner blocker"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_clears_hard_stale_no_pending_frontier_owner_after_remote_vote_lockout() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(2);
+    let now = Instant::now();
+    let min_yield_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    let stale_at = now
+        .checked_sub(
+            min_yield_age
+                .saturating_mul(3)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .start_new_round(frontier_height, stale_at);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, fresh_view, now);
+
+    let owner_hash = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    )
+    .hash();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        owner_hash,
+        stale_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+
+    let commit_topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = commit_topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires enough remote validators to form a near-quorum without the local signer"
+    );
+    let seeded = seed_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        frontier_height,
+        owner_view,
+        required.saturating_sub(1),
+    );
+    assert_eq!(seeded, required.saturating_sub(1));
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(frontier_height, fresh_view)
+            .is_some(),
+        "remote near-quorum math should initially keep the no-pending owner live"
+    );
+
+    assert!(
+        actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            owner_hash,
+            owner_view,
+            now,
+            actor.queue.queued_len(),
+        ),
+        "hard-stale no-pending owner metadata should be cleared after repair is exhausted even when old remote votes block fresh quorum math"
+    );
+    assert!(
+        actor.frontier_slot.is_none(),
+        "yielding should clear the remote-vote-locked stale frontier owner"
     );
 
     harness.shutdown.send();
@@ -86959,6 +87114,56 @@ async fn cached_recovery_proposal_with_hint_repairs_missing_body_before_rotation
             .iter()
             .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
         "resilience repair should issue an immediate FetchBlockBody for the cached hint"
+    );
+
+    let repair_window = actor
+        .frontier_slot_lag_window()
+        .max(actor.recovery_deferred_qc_ttl())
+        .max(actor.quorum_timeout(true))
+        .max(actor.rebroadcast_cooldown());
+    assert!(
+        repair_window > Duration::ZERO,
+        "test requires a finite exact-repair wait window"
+    );
+    let stale_started_at = Instant::now()
+        .checked_sub(repair_window.saturating_add(Duration::from_millis(1)))
+        .expect("repair window should fit in Instant range");
+    actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot should remain armed")
+        .timers
+        .lag_window_started_at = Some(stale_started_at);
+
+    let rotated = actor.on_pacemaker_propose_ready(Instant::now());
+    assert!(
+        !rotated,
+        "expired body repair should rotate away from the orphaned cached proposal"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_none(),
+        "orphaned cached proposal should be dropped after the exact repair window expires"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .is_none(),
+        "orphaned cached hint should be dropped after the exact repair window expires"
+    );
+    assert!(
+        actor
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current| current > view),
+        "expired exact repair should advance the recovery view"
     );
 
     harness.shutdown.send();
@@ -121201,11 +121406,14 @@ fn rbc_ready_commit_processing_gate_requires_state_change() {
     assert!(!super::rbc::should_process_commit_after_ready(
         false, false, false, false
     ));
-    assert!(!super::rbc::should_process_commit_after_ready(
+    assert!(super::rbc::should_process_commit_after_ready(
         true, false, false, true
     ));
     assert!(!super::rbc::should_process_commit_after_ready(
         true, false, true, false
+    ));
+    assert!(!super::rbc::should_process_commit_after_ready(
+        true, false, true, true
     ));
 }
 

@@ -2911,6 +2911,25 @@ fn clear_soracloud_inrou_replica_runtime_state(
         ));
 }
 
+fn find_inrou_replica_assignment(
+    state_transaction: &StateTransaction<'_, '_>,
+    service_name: &Name,
+    service_version: &str,
+    replica_slot: u16,
+) -> Option<SoraInrouReplicaPlacementV1> {
+    state_transaction
+        .world
+        .soracloud_inrou_service_placements
+        .get(&(service_name.as_ref().to_owned(), service_version.to_owned()))
+        .and_then(|placement| {
+            placement
+                .placements
+                .iter()
+                .find(|placement| placement.replica_slot == replica_slot)
+        })
+        .cloned()
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct InrouHostReservationUsage {
     hosted_replicas: u16,
@@ -3275,39 +3294,6 @@ fn reconcile_inrou_service_placements(
             .remove(key);
     }
     Ok(())
-}
-
-fn load_inrou_replica_assignment(
-    state_transaction: &StateTransaction<'_, '_>,
-    service_name: &Name,
-    service_version: &str,
-    replica_slot: u16,
-) -> Result<SoraInrouReplicaPlacementV1, InstructionExecutionError> {
-    let placement = state_transaction
-        .world
-        .soracloud_inrou_service_placements
-        .get(&(service_name.as_ref().to_owned(), service_version.to_owned()))
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!(
-                    "Inrou placement record for service `{service_name}` revision `{service_version}` does not exist"
-                )
-                .into(),
-            )
-        })?;
-    placement
-        .placements
-        .iter()
-        .find(|placement| placement.replica_slot == replica_slot)
-        .cloned()
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!(
-                    "Inrou replica slot {replica_slot} is not assigned for service `{service_name}` revision `{service_version}`"
-                )
-                .into(),
-            )
-        })
 }
 
 fn recompute_hf_placement_total_reservation_fee_nanos(
@@ -11090,25 +11076,29 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
         if state.updated_at_ms == 0 {
             state.updated_at_ms = now_ms;
         }
-        let assignment = load_inrou_replica_assignment(
+        let Some(assignment) = find_inrou_replica_assignment(
             state_transaction,
             &state.service_name,
             &state.service_version,
             state.replica_slot,
-        )?;
+        ) else {
+            clear_soracloud_inrou_replica_runtime_state(
+                state_transaction,
+                &state.service_name,
+                &state.service_version,
+                state.replica_slot,
+            );
+            return Ok(());
+        };
         if assignment.validator_account_id != *authority {
-            return Err(invalid_parameter(
-                "only the assigned validator may publish Inrou replica runtime state",
-            ));
+            return Ok(());
         }
         if state.validator_account_id != assignment.validator_account_id
             || state.peer_id != assignment.peer_id
             || state.selected_backend != assignment.selected_backend
             || state.selected_guest_isa != assignment.selected_guest_isa
         {
-            return Err(invalid_parameter(
-                "Inrou replica runtime state does not match the authoritative placement assignment",
-            ));
+            return Ok(());
         }
         write_soracloud_inrou_replica_runtime_state(state_transaction, state)
     }
@@ -11127,16 +11117,22 @@ impl Execute for isi::ClearSoracloudInrouReplicaRuntimeState {
         if self.replica_slot == 0 {
             return Err(invalid_parameter("replica_slot must be greater than zero"));
         }
-        let assignment = load_inrou_replica_assignment(
+        let Some(assignment) = find_inrou_replica_assignment(
             state_transaction,
             &self.service_name,
             &self.service_version,
             self.replica_slot,
-        )?;
+        ) else {
+            clear_soracloud_inrou_replica_runtime_state(
+                state_transaction,
+                &self.service_name,
+                &self.service_version,
+                self.replica_slot,
+            );
+            return Ok(());
+        };
         if assignment.validator_account_id != *authority {
-            return Err(invalid_parameter(
-                "only the assigned validator may clear Inrou replica runtime state",
-            ));
+            return Ok(());
         }
         clear_soracloud_inrou_replica_runtime_state(
             state_transaction,
@@ -11606,6 +11602,57 @@ mod tests {
                 max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
             },
         ]
+    }
+
+    fn sample_inrou_replica_runtime_state_for(
+        service_name: iroha_data_model::name::Name,
+        service_version: &str,
+        replica_slot: u16,
+        validator_account_id: AccountId,
+    ) -> SoraInrouReplicaRuntimeStateV1 {
+        SoraInrouReplicaRuntimeStateV1 {
+            schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+            service_name,
+            service_version: service_version.to_string(),
+            replica_slot,
+            validator_account_id,
+            peer_id: "12D3KooWInrouRuntimePeer".to_string(),
+            selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+            selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+            load_factor_bps: 250,
+            materialized_bundle_hash: Hash::new(b"inrou-runtime-state-test-bundle"),
+            accounted_egress_bytes: 0,
+            pending_mailbox_message_count: 0,
+            last_receipt_id: None,
+            updated_at_ms: 1_000,
+            last_error: None,
+        }
+    }
+
+    fn sample_inrou_service_placement_record_for(
+        service_name: iroha_data_model::name::Name,
+        service_version: &str,
+        runtime_state: &SoraInrouReplicaRuntimeStateV1,
+    ) -> SoraInrouServicePlacementRecordV1 {
+        SoraInrouServicePlacementRecordV1 {
+            schema_version: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+            service_name,
+            service_version: service_version.to_string(),
+            desired_replica_count: runtime_state.replica_slot,
+            eligible_validator_count: 1,
+            placements: vec![SoraInrouReplicaPlacementV1 {
+                replica_slot: runtime_state.replica_slot,
+                validator_account_id: runtime_state.validator_account_id.clone(),
+                peer_id: runtime_state.peer_id.clone(),
+                selected_backend: runtime_state.selected_backend,
+                selected_guest_isa: runtime_state.selected_guest_isa,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
+            }],
+            reconciled_at_ms: 1_000,
+            last_error: None,
+        }
     }
 
     fn bundle_provenance(bundle: &SoraDeploymentBundleV1) -> ManifestProvenance {
@@ -14110,6 +14157,301 @@ mod tests {
                 .to_string()
                 .contains("cannot leave before it activates"),
             "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_inrou_replica_runtime_state_ignores_missing_placement() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+        let service_version = "2026.04.28.075015";
+        let runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name.clone(),
+            service_version,
+            1,
+            ALICE_ID.clone(),
+        );
+        let key = inrou_replica_runtime_key(
+            &runtime_state.service_name,
+            service_version,
+            runtime_state.replica_slot,
+        );
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .insert(key.clone(), runtime_state.clone());
+
+        isi::SetSoracloudInrouReplicaRuntimeState {
+            state: runtime_state,
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        assert!(
+            stx.world
+                .soracloud_inrou_replica_runtime
+                .get(&key)
+                .is_none(),
+            "stale runtime update without an active placement should be cleared instead of failing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn clear_inrou_replica_runtime_state_ignores_missing_placement() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+        let service_version = "2026.04.28.075015";
+        let runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name.clone(),
+            service_version,
+            1,
+            ALICE_ID.clone(),
+        );
+        let key = inrou_replica_runtime_key(
+            &runtime_state.service_name,
+            service_version,
+            runtime_state.replica_slot,
+        );
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .insert(key.clone(), runtime_state);
+
+        isi::ClearSoracloudInrouReplicaRuntimeState {
+            service_name,
+            service_version: service_version.to_string(),
+            replica_slot: 1,
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        assert!(
+            stx.world
+                .soracloud_inrou_replica_runtime
+                .get(&key)
+                .is_none(),
+            "stale clear without an active placement should remove local runtime state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_inrou_replica_runtime_state_records_matching_placement() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+        let service_version = "2026.04.28.075015";
+        let runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name.clone(),
+            service_version,
+            1,
+            ALICE_ID.clone(),
+        );
+        let placement = sample_inrou_service_placement_record_for(
+            service_name,
+            service_version,
+            &runtime_state,
+        );
+        stx.world.soracloud_inrou_service_placements.insert(
+            (
+                placement.service_name.as_ref().to_owned(),
+                placement.service_version.clone(),
+            ),
+            placement,
+        );
+
+        isi::SetSoracloudInrouReplicaRuntimeState {
+            state: runtime_state.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let key = inrou_replica_runtime_key(
+            &runtime_state.service_name,
+            service_version,
+            runtime_state.replica_slot,
+        );
+        assert_eq!(
+            stx.world.soracloud_inrou_replica_runtime.get(&key),
+            Some(&runtime_state)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_inrou_replica_runtime_state_ignores_non_assigned_validator() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission_on_chain(
+            &kura,
+            iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+        )?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+        let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+        let service_version = "2026.04.28.075015";
+        let assigned_runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name.clone(),
+            service_version,
+            1,
+            ALICE_ID.clone(),
+        );
+        let placement = sample_inrou_service_placement_record_for(
+            service_name.clone(),
+            service_version,
+            &assigned_runtime_state,
+        );
+        stx.world.soracloud_inrou_service_placements.insert(
+            (
+                placement.service_name.as_ref().to_owned(),
+                placement.service_version.clone(),
+            ),
+            placement,
+        );
+        let key = inrou_replica_runtime_key(&service_name, service_version, 1);
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .insert(key.clone(), assigned_runtime_state.clone());
+        let stale_runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name,
+            service_version,
+            1,
+            BOB_ID.clone(),
+        );
+
+        isi::SetSoracloudInrouReplicaRuntimeState {
+            state: stale_runtime_state,
+        }
+        .execute(&BOB_ID, &mut stx)?;
+
+        assert_eq!(
+            stx.world.soracloud_inrou_replica_runtime.get(&key),
+            Some(&assigned_runtime_state),
+            "runtime telemetry from a non-assigned validator should not invalidate or overwrite state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_inrou_replica_runtime_state_ignores_mismatched_placement_fields()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+        let service_version = "2026.04.28.075015";
+        let assigned_runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name.clone(),
+            service_version,
+            1,
+            ALICE_ID.clone(),
+        );
+        let placement = sample_inrou_service_placement_record_for(
+            service_name.clone(),
+            service_version,
+            &assigned_runtime_state,
+        );
+        stx.world.soracloud_inrou_service_placements.insert(
+            (
+                placement.service_name.as_ref().to_owned(),
+                placement.service_version.clone(),
+            ),
+            placement,
+        );
+        let key = inrou_replica_runtime_key(&service_name, service_version, 1);
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .insert(key.clone(), assigned_runtime_state.clone());
+        let mut mismatched_runtime_state = assigned_runtime_state.clone();
+        mismatched_runtime_state.peer_id = "12D3KooWMismatchedRuntimePeer".to_string();
+
+        isi::SetSoracloudInrouReplicaRuntimeState {
+            state: mismatched_runtime_state,
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        assert_eq!(
+            stx.world.soracloud_inrou_replica_runtime.get(&key),
+            Some(&assigned_runtime_state),
+            "runtime telemetry that no longer matches placement should not overwrite valid state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn clear_inrou_replica_runtime_state_ignores_non_assigned_validator() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission_on_chain(
+            &kura,
+            iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+        )?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+        let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+        let service_version = "2026.04.28.075015";
+        let assigned_runtime_state = sample_inrou_replica_runtime_state_for(
+            service_name.clone(),
+            service_version,
+            1,
+            ALICE_ID.clone(),
+        );
+        let placement = sample_inrou_service_placement_record_for(
+            service_name.clone(),
+            service_version,
+            &assigned_runtime_state,
+        );
+        stx.world.soracloud_inrou_service_placements.insert(
+            (
+                placement.service_name.as_ref().to_owned(),
+                placement.service_version.clone(),
+            ),
+            placement,
+        );
+        let key = inrou_replica_runtime_key(&service_name, service_version, 1);
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .insert(key.clone(), assigned_runtime_state.clone());
+
+        isi::ClearSoracloudInrouReplicaRuntimeState {
+            service_name,
+            service_version: service_version.to_string(),
+            replica_slot: 1,
+        }
+        .execute(&BOB_ID, &mut stx)?;
+
+        assert_eq!(
+            stx.world.soracloud_inrou_replica_runtime.get(&key),
+            Some(&assigned_runtime_state),
+            "a non-assigned validator should not clear another replica's runtime state"
         );
         Ok(())
     }

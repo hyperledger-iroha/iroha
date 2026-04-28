@@ -1214,16 +1214,27 @@ impl Actor {
             .iter()
             .filter_map(|key| self.vote_log.get(key).map(|vote| vote.block_hash))
             .collect();
+        let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
+        let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
+        let current_view = self.phase_tracker.current_view(active_height);
+        let min_view = current_view.map(|view| view.saturating_sub(super::VOTE_CACHE_VIEW_WINDOW));
+        let max_view = current_view.map(|view| view.saturating_add(super::VOTE_CACHE_VIEW_WINDOW));
         // NEW_VIEW votes may legitimately arrive far ahead of the local round while the node is
-        // catching up. Pruning them by the local view window drops the very quorum evidence needed
-        // to advance, so keep same-height NEW_VIEW votes until the height itself moves on.
+        // catching up. Keep those future votes, but do not preserve ancient same-height views once
+        // the local round has moved well past them: otherwise every prune/rebuild cycle can replay
+        // hundreds of obsolete NEW_VIEW QCs and starve live proposal work.
+        let preserve_new_view_vote = |vote: &crate::sumeragi::consensus::Vote| {
+            if vote.height != active_height
+                || !matches!(vote.phase, crate::sumeragi::consensus::Phase::NewView)
+            {
+                return false;
+            }
+            current_view
+                .is_none_or(|view| vote.view >= view.saturating_sub(super::VOTE_CACHE_VIEW_WINDOW))
+        };
         let preserved_active_new_view_votes: BTreeSet<_> = self
             .stored_votes()
-            .filter_map(|vote| {
-                let keep_active_new_view_vote = vote.height == active_height
-                    && matches!(vote.phase, crate::sumeragi::consensus::Phase::NewView);
-                keep_active_new_view_vote.then_some(vote_key(vote))
-            })
+            .filter_map(|vote| preserve_new_view_vote(vote).then_some(vote_key(vote)))
             .collect();
         let preserved_local_active_vote_identities: BTreeSet<_> = self
             .vote_log_identities
@@ -1245,17 +1256,8 @@ impl Actor {
         let preserved_active_new_view_vote_identities: BTreeSet<_> = self
             .vote_log_identities
             .iter()
-            .filter_map(|(key, vote)| {
-                let keep_active_new_view_vote = vote.height == active_height
-                    && matches!(vote.phase, crate::sumeragi::consensus::Phase::NewView);
-                keep_active_new_view_vote.then_some(key.clone())
-            })
+            .filter_map(|(key, vote)| preserve_new_view_vote(vote).then_some(key.clone()))
             .collect();
-        let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
-        let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
-        let current_view = self.phase_tracker.current_view(active_height);
-        let min_view = current_view.map(|view| view.saturating_sub(super::VOTE_CACHE_VIEW_WINDOW));
-        let max_view = current_view.map(|view| view.saturating_add(super::VOTE_CACHE_VIEW_WINDOW));
         let should_keep = |height: u64, view: u64| -> bool {
             if height <= committed_height || height < min_height || height > max_height {
                 return false;

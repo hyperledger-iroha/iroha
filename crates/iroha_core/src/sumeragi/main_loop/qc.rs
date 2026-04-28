@@ -4342,6 +4342,16 @@ impl Actor {
             qc_present,
             |key, signer_count| {
                 let (phase, block_hash, height, view, epoch) = key;
+                if matches!(phase, crate::sumeragi::consensus::Phase::NewView)
+                    && self
+                        .phase_tracker
+                        .current_view(height)
+                        .is_some_and(|local_view| {
+                            view < local_view.saturating_sub(super::VOTE_CACHE_VIEW_WINDOW)
+                        })
+                {
+                    return;
+                }
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
                 // QC rebuild is a replay path over cached local votes. It must not drive sidecar
                 // mismatch observation/quarantine for uncommitted competing branches.

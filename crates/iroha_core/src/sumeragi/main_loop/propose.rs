@@ -962,12 +962,12 @@ impl Actor {
                     || commit_inflight_live;
                 body_repair_requested = protected_owner
                     && self.request_frontier_owner_body_repair(owner_hash, height, owner_view, now);
+                let stale_unprotected_owner = owner_age >= min_yield_age && !protected_owner;
                 let recovery_exhausted = owner_age >= hard_yield_age;
-                if recovery_exhausted
+                if (stale_unprotected_owner || recovery_exhausted)
                     && !owner_commit_qc_cached
                     && !frontier_commit_qc_observed
                     && !local_vote_consensus_locked
-                    && !competing_quorum_locked
                     && !commit_inflight_live
                 {
                     self.frontier_slot = None;
@@ -3471,7 +3471,7 @@ impl Actor {
                 });
                 let repair_exhausted = repair_age
                     .is_some_and(|age| repair_window != Duration::ZERO && age >= repair_window);
-                if let Some(hint) = cached_hint.filter(|_| !repair_exhausted) {
+                if let Some(hint) = cached_hint.as_ref().filter(|_| !repair_exhausted) {
                     let seeded = self.handle_frontier_body_gap_with_topology(
                         hint.block_hash,
                         height,
@@ -3482,6 +3482,37 @@ impl Actor {
                         now,
                     );
                     let fetch_requested = self.emit_frontier_block_body_fetch_urgent(now);
+                    let repair_active = repair_age.is_some()
+                        || self.frontier_slot.as_ref().is_some_and(|slot| {
+                            slot.height == height
+                                && slot.view == view_idx
+                                && slot.block_hash == hint.block_hash
+                                && slot.exact_fetch_armed
+                                && !slot.body_present
+                        });
+                    if repair_active {
+                        debug!(
+                            height,
+                            view = view_idx,
+                            block = %hint.block_hash,
+                            queue_len = pending_queue_len,
+                            repair_window_ms = repair_window.as_millis(),
+                            repair_age_ms = repair_age.map(|age| age.as_millis()),
+                            seeded_frontier_body_repair = seeded,
+                            fetch_requested,
+                            "cached proposal has no live pending body; requesting exact body repair before rotating"
+                        );
+                        self.maybe_rebroadcast_new_view_votes(height, now);
+                        self.warn_resilience_frontier_proposal_deferred(
+                            height,
+                            view_idx,
+                            "cached_proposal_body_repair",
+                            highest_qc,
+                            pending_queue_len,
+                            now,
+                        );
+                        return false;
+                    }
                     debug!(
                         height,
                         view = view_idx,
@@ -3491,18 +3522,8 @@ impl Actor {
                         repair_age_ms = repair_age.map(|age| age.as_millis()),
                         seeded_frontier_body_repair = seeded,
                         fetch_requested,
-                        "cached proposal has no live pending body; requesting exact body repair before rotating"
+                        "cached proposal has no live pending body and no active exact repair; rotating recovery view"
                     );
-                    self.maybe_rebroadcast_new_view_votes(height, now);
-                    self.warn_resilience_frontier_proposal_deferred(
-                        height,
-                        view_idx,
-                        "cached_proposal_body_repair",
-                        highest_qc,
-                        pending_queue_len,
-                        now,
-                    );
-                    return false;
                 }
                 let dropped_proposal = self
                     .subsystems
@@ -3526,7 +3547,7 @@ impl Actor {
                     repair_age_ms = repair_age.map(|age| age.as_millis()),
                     "cached proposal has no live pending body; rotating recovery view"
                 );
-                self.trigger_view_change_with_cause(
+                self.apply_view_change_after_exhausted_frontier_recovery(
                     height,
                     view_idx,
                     ViewChangeCause::QuorumTimeout,
