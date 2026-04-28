@@ -48,7 +48,7 @@ public final class OfflineJsonParserTest {
               "receiver_display": "Payee",
               "deposit_account_id": "deposit",
               "deposit_account_display": "Deposit",
-              "asset_id": "pkr#sbp",
+              "asset_id": "pkr#paynet",
               "total_amount": "500",
               "claimed_delta": "500",
               "status": "PENDING",
@@ -60,7 +60,7 @@ public final class OfflineJsonParserTest {
                   "sender_id": "payer",
                   "receiver_id": "payee",
                   "amount": "500",
-                  "asset_id": "pkr#sbp",
+                  "asset_id": "pkr#paynet",
                   "status": "PENDING"
                 }
               ]
@@ -80,7 +80,7 @@ public final class OfflineJsonParserTest {
     assert item.receiptCount() == 1L;
     assert item.firstReceiptSummary().isPresent();
     assert "payer".equals(item.firstReceiptSummary().get().senderId());
-    assert "pkr#sbp".equals(item.toJsonMap().get("asset_id"));
+    assert "pkr#paynet".equals(item.toJsonMap().get("asset_id"));
   }
 
   private static void canonicalizesJson() {

@@ -37,8 +37,8 @@ use crate::{
 
 const OFFLINE_NOTE_V2_VK_NAMESPACE: &str = "offline_note_v2";
 
-fn offline_note_v2_verifier_registration(
-) -> color_eyre::Result<(VerifyingKeyId, iroha_data_model::proof::VerifyingKeyRecord)> {
+fn offline_note_v2_verifier_registration()
+-> color_eyre::Result<(VerifyingKeyId, iroha_data_model::proof::VerifyingKeyRecord)> {
     let id = VerifyingKeyId::new(
         iroha_core::zk::ZK_BACKEND_HALO2_IPA,
         iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
