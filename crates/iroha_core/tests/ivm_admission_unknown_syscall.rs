@@ -28,6 +28,14 @@ fn metadata_with_gas_limit(limit: u64) -> Metadata {
     md
 }
 
+fn unlisted_syscall_number() -> u8 {
+    (0u8..=u8::MAX)
+        .find(|number| {
+            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
+        })
+        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+}
+
 #[test]
 fn unknown_syscall_number_rejected_during_ivm_admission() {
     // Minimal world with a single authority account.
@@ -43,10 +51,12 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    // Build a tiny program with an unknown syscall (0xAB) followed by HALT.
+    // Build a tiny program with an unknown syscall followed by HALT.
+    let unknown_syscall = unlisted_syscall_number();
     let mut code = Vec::new();
     code.extend_from_slice(
-        &encoding::wide::encode_sys(instruction::wide::system::SCALL, 0xAB).to_le_bytes(),
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, unknown_syscall)
+            .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let meta = ProgramMetadata {
