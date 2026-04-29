@@ -3715,6 +3715,8 @@ async fn genesis_commit_roster_seeded_when_missing() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let mut harness = test_actor_harness_with_config_and_height_and_kura(
@@ -33578,6 +33580,8 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let mut harness =
@@ -49170,6 +49174,8 @@ fn persistent_kura_for_tests() -> (Arc<Kura>, tempfile::TempDir) {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let (kura, _) = Kura::new(
         &kura_cfg,
