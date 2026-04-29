@@ -2,6 +2,45 @@
 
 Last updated: 2026-04-29
 
+## 2026-04-29 Canonical Kura test fixture repair
+
+- Updated snapshot tests so WSV state and snapshot writing share the same Kura
+  instance under the new state/Kura alignment guard, and kept the intentional
+  last-block soft-fork read scenario as a read-side mismatch instead of a
+  write-side rejection.
+- Adjusted state and Sumeragi fixtures that intentionally modeled missing,
+  future, or conflicting blocks so Kura only stores canonical contiguous
+  chains; non-canonical payloads now live in pending/test state where the
+  behavior under test expects them.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib snapshot::tests::can_read -- --nocapture`
+  - `cargo test -p iroha_core --lib state::tests::all_blocks_skips_missing_kura_entries -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::fetch_pending_block_ -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::fetch_block_body_ -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests -- --nocapture` (`2001` passed, `20` ignored)
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-04-29 SORA Minamoto mainnet Codex skill
+
+- Added a standalone `sora-minamoto-mainnet` Codex skill for the public
+  Minamoto Torii MCP endpoint at `https://minamoto.sora.org/v1/mcp`, mirroring
+  the Taira skill structure while making mainnet write handling explicitly
+  conservative.
+- Expanded the skill with a concrete Minamoto transaction workflow, write
+  confirmation policy, required write inputs, default no-agent-side-signing
+  posture, common read payload examples, failure-to-action map, Taira
+  difference table, and agent output requirements.
+- Updated Codex integration docs and agent guidance so Minamoto workflows point
+  at the new skill, prefer curated `iroha.*` tools, keep signing inputs
+  runtime-only, and avoid Taira testnet faucet/bootstrap assumptions on
+  mainnet.
+- Focused validation for this slice:
+  - `git diff --check`
+  - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/SKILL.md`
+  - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/agents/openai.yaml`
+
 ## 2026-04-29 Mandatory Kura durability before state commit
 
 - Made Kura block storage synchronous and canonical-height checked: duplicate same-height/same-hash stores are idempotent, gaps and same-height hash conflicts are hard errors, and successful returns mean the block is present in the durable block files.
