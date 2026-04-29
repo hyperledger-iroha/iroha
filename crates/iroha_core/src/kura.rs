@@ -93,7 +93,7 @@ pub struct Kura {
     block_store: Mutex<BlockStore>,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
     block_data: Mutex<BlockData>,
-    /// Channel for waking the writer thread when new blocks arrive or shutdown is signalled.
+    /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
     block_notify_tx: mpsc::Sender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
     /// Path to newline-delimited JSON (JSONL) block dump.
@@ -114,9 +114,9 @@ pub struct Kura {
     disk_usage: AtomicU64,
     /// Cached total disk usage including DA payloads.
     disk_usage_total: AtomicU64,
-    /// Cached sum of budgeted bytes for blocks queued but not yet durably indexed.
+    /// Cached sum of budgeted bytes for in-memory blocks not yet durably indexed.
     pending_budget_bytes: AtomicU64,
-    /// Marks whether `pending_budget_bytes` currently reflects in-memory queue state.
+    /// Marks whether `pending_budget_bytes` currently reflects in-memory block state.
     pending_budget_bytes_valid: AtomicBool,
     /// Indicates whether the budget usage cache was initialized successfully.
     disk_usage_initialized: AtomicBool,
@@ -131,8 +131,6 @@ pub struct Kura {
     block_sync_roster_retention: NonZeroUsize,
     /// Number of recent roster sidecars retained alongside the block store.
     roster_sidecar_retention: NonZeroUsize,
-    /// Amount of blocks loaded during initialization
-    init_block_count: usize,
     /// On-disk merge-ledger log and in-memory cache.
     merge_log: Mutex<MergeLedgerLog>,
     /// Durably persisted commit rosters for block-sync consumers.
@@ -142,6 +140,9 @@ pub struct Kura {
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
     writer_fault: Mutex<Option<String>>,
+    /// Test hook for forcing the next synchronous block write to fail after pre-write work.
+    #[cfg(test)]
+    fail_next_block_write: AtomicBool,
     /// Retains the temporary storage directory used by test-only Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
 }
@@ -316,16 +317,6 @@ impl MergeLedgerLog {
             total_entries: 0,
             #[cfg(test)]
             fail_next_append: false,
-        }
-    }
-
-    #[cfg(test)]
-    fn consume_fail_next_append(&mut self) -> bool {
-        if self.fail_next_append {
-            self.fail_next_append = false;
-            true
-        } else {
-            false
         }
     }
 
@@ -625,11 +616,12 @@ impl Kura {
             blocks_in_memory: config.blocks_in_memory,
             block_sync_roster_retention: roster_retention,
             roster_sidecar_retention,
-            init_block_count: block_count,
             merge_log: Mutex::new(merge_log),
             roster_log: Mutex::new(roster_log),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
+            #[cfg(test)]
+            fail_next_block_write: AtomicBool::new(false),
             _temp_store_dir: None,
         });
 
@@ -703,7 +695,6 @@ impl Kura {
             blocks_in_memory: BLOCKS_IN_MEMORY,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            init_block_count: 0,
             merge_log: Mutex::new(MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY)),
             roster_log: Mutex::new(CommitRosterJournal::new(
                 roster_log_path,
@@ -711,6 +702,8 @@ impl Kura {
             )),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
+            #[cfg(test)]
+            fail_next_block_write: AtomicBool::new(false),
             _temp_store_dir: Some(temp_store_dir),
         })
     }
@@ -856,28 +849,6 @@ impl Kura {
             .store(false, Ordering::Relaxed);
     }
 
-    fn add_pending_budget_bytes(&self, delta: u64) {
-        if delta == 0 || !self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
-            return;
-        }
-        let _ = self.pending_budget_bytes.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |current| Some(current.saturating_add(delta)),
-        );
-    }
-
-    fn sub_pending_budget_bytes(&self, delta: u64) {
-        if delta == 0 || !self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
-            return;
-        }
-        let _ = self.pending_budget_bytes.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |current| Some(current.saturating_sub(delta)),
-        );
-    }
-
     fn record_writer_fault(&self, context: &'static str, error: &Error) {
         {
             let mut fault = self.writer_fault.lock();
@@ -888,19 +859,6 @@ impl Kura {
         if let Some(telemetry) = self.telemetry.get() {
             telemetry.inc_storage_budget_exceeded("kura_writer_fault");
         }
-    }
-
-    fn ensure_writer_healthy(&self) -> Result<()> {
-        let fault = self.writer_fault.lock();
-        if let Some(reason) = fault.as_ref() {
-            return Err(Error::BlockWriterFaulted(reason.clone()));
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mark_writer_fault_for_tests(&self, reason: impl Into<String>) {
-        *self.writer_fault.lock() = Some(reason.into());
     }
 
     /// Evict persisted block bodies into DA-backed storage to reclaim disk budget.
@@ -1717,17 +1675,8 @@ impl Kura {
     }
 
     #[iroha_logger::log(skip_all)]
-    #[allow(clippy::too_many_lines)]
     fn receive_blocks_loop(&self, shutdown_signal: &ShutdownSignal) {
         let kura = self;
-        let mut written_block_count = kura.init_block_count;
-        let mut latest_written_block_hash = {
-            let block_data = kura.block_data.lock();
-            written_block_count
-                .checked_sub(1)
-                .map(|idx| block_data[idx].0)
-        };
-
         let block_rx = kura
             .block_notify_rx
             .lock()
@@ -1736,264 +1685,62 @@ impl Kura {
 
         let mut should_exit = false;
         loop {
-            // If kura receive shutdown then close block channel and write remaining blocks to the storage
             if shutdown_signal.is_sent() {
-                info!("Kura block thread is being shut down. Writing remaining blocks to store.");
+                info!("Kura block thread is being shut down. Flushing sidecars and fsync state.");
                 should_exit = true;
             }
 
             kura.flush_pipeline_sidecars();
 
-            let block_data = kura.block_data.lock();
-            let in_memory_len = block_data.len();
-
-            if written_block_count > in_memory_len {
-                warn!(
-                    written_block_count,
-                    in_memory_len,
-                    "kura writer detected in-memory chain shrink; rewinding write cursor"
-                );
-                written_block_count = in_memory_len;
-                kura.invalidate_pending_budget_cache();
-                latest_written_block_hash = written_block_count
-                    .checked_sub(1)
-                    .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
-            } else {
-                let new_latest_written_block_hash = written_block_count
-                    .checked_sub(1)
-                    .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
-                if new_latest_written_block_hash != latest_written_block_hash {
-                    written_block_count = written_block_count.saturating_sub(1); // soft-fork rewrite
-                    kura.invalidate_pending_budget_cache();
-                }
-                latest_written_block_hash = written_block_count
-                    .checked_sub(1)
-                    .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
-            }
-
-            if written_block_count >= block_data.len() {
-                if should_exit {
-                    if let Err(error) = kura.block_store.lock().flush_pending_fsync(true) {
-                        error!(?error, "Failed to fsync pending blocks on shutdown");
-                        kura.record_writer_fault("shutdown fsync", &error);
-                        return;
-                    }
-                    info!("Kura has written remaining blocks to disk and is shutting down.");
+            if should_exit {
+                if let Err(error) = kura.block_store.lock().flush_pending_fsync(true) {
+                    error!(?error, "Failed to fsync pending blocks on shutdown");
+                    kura.record_writer_fault("shutdown fsync", &error);
                     return;
                 }
+                info!("Kura has flushed sidecars and pending fsync state and is shutting down.");
+                return;
+            }
 
-                written_block_count = block_data.len();
-                drop(block_data);
-                let wait_for_fsync = {
-                    let guard = kura.block_store.lock();
-                    guard.next_fsync_wait()
-                };
-                match wait_for_fsync {
-                    Some(wait) => match block_rx.recv_timeout(wait) {
-                        Ok(BlockNotify::NewBlock) => {
-                            debug!(written_block_count, "kura writer received new block signal");
-                            continue;
-                        }
-                        Ok(BlockNotify::Shutdown) => {
-                            should_exit = true;
-                            debug!("kura writer received shutdown signal");
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Timeout) => {
-                            let mut store = kura.block_store.lock();
-                            if let Err(error) = store.flush_pending_fsync(false) {
-                                error!(?error, "Failed to fsync pending batch");
-                                kura.record_writer_fault("periodic fsync", &error);
-                                return;
-                            }
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => {
-                            info!("Block writer channel closed; exiting thread.");
+            let wait_for_fsync = {
+                let guard = kura.block_store.lock();
+                guard.next_fsync_wait()
+            };
+            match wait_for_fsync {
+                Some(wait) => match block_rx.recv_timeout(wait) {
+                    Ok(BlockNotify::NewBlock) => {
+                        debug!("kura writer received sidecar flush signal");
+                    }
+                    Ok(BlockNotify::Shutdown) => {
+                        should_exit = true;
+                        debug!("kura writer received shutdown signal");
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        let mut store = kura.block_store.lock();
+                        if let Err(error) = store.flush_pending_fsync(false) {
+                            error!(?error, "Failed to fsync pending batch");
+                            kura.record_writer_fault("periodic fsync", &error);
                             return;
                         }
-                    },
-                    None => match block_rx.recv() {
-                        Ok(BlockNotify::NewBlock) => {
-                            debug!(written_block_count, "kura writer received new block signal");
-                            continue;
-                        }
-                        Ok(BlockNotify::Shutdown) => {
-                            should_exit = true;
-                            debug!("kura writer received shutdown signal");
-                            continue;
-                        }
-                        Err(error) => {
-                            info!(?error, "Block writer channel closed; exiting thread.");
-                            return;
-                        }
-                    },
-                }
-            }
-
-            // If we get here there are blocks to be written.
-            let start_height = written_block_count;
-            let mut blocks_to_be_written = Vec::new();
-            while written_block_count < block_data.len() {
-                let block_ref = block_data[written_block_count].1.as_ref().expect(
-                    "INTERNAL BUG: The block to be written is None. Check store_block function.",
-                );
-                blocks_to_be_written.push(Arc::clone(block_ref));
-                written_block_count += 1;
-            }
-
-            // We don't want to hold up other threads so we drop the lock on the block data.
-            drop(block_data);
-
-            let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
-
-            if let Some(path) = kura.block_plain_text_path.lock().clone() {
-                let debug_before = match Self::file_len_or_zero(&path) {
-                    Ok(bytes) => Some(bytes),
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            path = %path.display(),
-                            "failed to measure debug block dump before append"
-                        );
-                        None
                     }
-                };
-                if let Err(error) = Self::append_blocks_jsonl(&path, &blocks_to_be_written) {
-                    warn!(
-                        ?error,
-                        path = %path.display(),
-                        "Failed to append debug block dump"
-                    );
-                }
-                if let Some(debug_before) = debug_before {
-                    match Self::file_len_or_zero(&path) {
-                        Ok(debug_after) => {
-                            kura.update_disk_usage_delta(debug_before, debug_after);
-                        }
-                        Err(err) => warn!(
-                            ?err,
-                            path = %path.display(),
-                            "failed to measure debug block dump after append"
-                        ),
+                    Err(RecvTimeoutError::Disconnected) => {
+                        info!("Block writer channel closed; exiting thread.");
+                        return;
                     }
-                }
-            }
-
-            debug!(
-                start_height,
-                batch_len = blocks_to_be_written.len(),
-                in_memory_len,
-                "kura writer processing block batch"
-            );
-            let lock_start = Instant::now();
-            let mut block_store_guard = kura.block_store.lock();
-            let block_store_before = match Self::block_store_tracked_bytes(&mut block_store_guard) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    warn!(?err, "failed to measure block store bytes before append");
-                    None
-                }
-            };
-            let da_before = if kura.disk_usage_total_initialized.load(Ordering::Relaxed) {
-                match Self::da_payload_bytes_for_range(
-                    &block_store_guard,
-                    start_height_u64,
-                    blocks_to_be_written.len(),
-                ) {
-                    Ok(bytes) => Some(bytes),
-                    Err(err) => {
-                        warn!(?err, "failed to measure DA payload bytes before append");
-                        None
+                },
+                None => match block_rx.recv() {
+                    Ok(BlockNotify::NewBlock) => {
+                        debug!("kura writer received sidecar flush signal");
                     }
-                }
-            } else {
-                None
-            };
-            let lock_ms = u64::try_from(lock_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-            debug!(
-                start_height,
-                batch_len = blocks_to_be_written.len(),
-                lock_ms,
-                "kura writer acquired block_store for batch"
-            );
-            let end_height = start_height + blocks_to_be_written.len();
-            let append_start = Instant::now();
-            if let Err(error) = block_store_guard.append_block_batch_at(
-                start_height_u64,
-                &blocks_to_be_written,
-                kura.max_disk_usage_bytes,
-            ) {
-                error!(?error, "Failed to store block batch");
-                kura.record_writer_fault("append block batch", &error);
-                return;
-            }
-            let append_ms = u64::try_from(append_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let index_start = Instant::now();
-            if let Err(error) = block_store_guard.write_index_count(end_height as u64) {
-                error!(
-                    ?error,
-                    "Failed to update index count after persisting block batch"
-                );
-                kura.record_writer_fault("write index count", &error);
-                return;
-            }
-            let index_ms = u64::try_from(index_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let fsync_start = Instant::now();
-            if let Err(error) = block_store_guard.flush_pending_fsync(false) {
-                error!(?error, "Failed to fsync persisted block batch");
-                kura.record_writer_fault("batch fsync", &error);
-                return;
-            }
-            match blocks_to_be_written.iter().try_fold(0u64, |acc, block| {
-                Self::block_required_bytes_for_budget(block.as_ref(), kura.max_disk_usage_bytes)
-                    .map(|required| acc.saturating_add(required))
-            }) {
-                Ok(persisted_pending_bytes) => {
-                    kura.sub_pending_budget_bytes(persisted_pending_bytes)
-                }
-                Err(err) => {
-                    warn!(?err, "failed to update pending budget bytes after persist");
-                    kura.invalidate_pending_budget_cache();
-                }
-            }
-            let fsync_ms = u64::try_from(fsync_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-            debug!(
-                start_height,
-                end_height,
-                batch_len = blocks_to_be_written.len(),
-                lock_ms,
-                append_ms,
-                index_ms,
-                fsync_ms,
-                "persisted block batch to disk"
-            );
-            if let Some(block_store_before) = block_store_before {
-                match Self::block_store_tracked_bytes(&mut block_store_guard) {
-                    Ok(after_bytes) => {
-                        kura.update_disk_usage_delta(block_store_before, after_bytes)
+                    Ok(BlockNotify::Shutdown) => {
+                        should_exit = true;
+                        debug!("kura writer received shutdown signal");
                     }
-                    Err(err) => warn!(?err, "failed to measure block store bytes after append"),
-                }
-            }
-            if let Some(da_before) = da_before {
-                match Self::da_payload_bytes_for_range(
-                    &block_store_guard,
-                    start_height_u64,
-                    blocks_to_be_written.len(),
-                ) {
-                    Ok(da_after) => kura.update_total_disk_usage_delta(da_before, da_after),
-                    Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
-                }
-            }
-            latest_written_block_hash = blocks_to_be_written.last().map(|block| block.hash());
-            {
-                let mut block_data = kura.block_data.lock();
-                Self::drop_persisted_blocks(
-                    &mut block_data,
-                    end_height,
-                    kura.blocks_in_memory.get(),
-                );
+                    Err(error) => {
+                        info!(?error, "Block writer channel closed; exiting thread.");
+                        return;
+                    }
+                },
             }
         }
     }
@@ -2128,39 +1875,179 @@ impl Kura {
         Some(block_arc)
     }
 
-    fn enqueue_block(
+    fn read_durable_hash_at_height(
+        block_store: &mut BlockStore,
+        height: u64,
+    ) -> Result<Option<HashOf<BlockHeader>>> {
+        let durable_count = block_store.read_durable_index_count()?;
+        if durable_count < height {
+            return Ok(None);
+        }
+        Ok(block_store
+            .read_block_hashes(height.saturating_sub(1), 1)?
+            .first()
+            .copied())
+    }
+
+    fn ensure_durable_block_at_height(&self, height: u64, hash: HashOf<BlockHeader>) -> Result<()> {
+        let mut block_store = self.block_store.lock();
+        match Self::read_durable_hash_at_height(&mut block_store, height)? {
+            Some(existing) if existing == hash => Ok(()),
+            Some(expected) => Err(Error::BlockHeightConflict {
+                height,
+                expected,
+                actual: hash,
+            }),
+            None => {
+                let expected_next_height =
+                    block_store.read_durable_index_count()?.saturating_add(1);
+                Err(Error::BlockHeightGap {
+                    expected_next_height,
+                    actual_height: height,
+                })
+            }
+        }
+    }
+
+    fn append_debug_block_dump(&self, block: &Arc<SignedBlock>) {
+        let Some(path) = self.block_plain_text_path.lock().clone() else {
+            return;
+        };
+        let debug_before = match Self::file_len_or_zero(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to measure debug block dump before append"
+                );
+                None
+            }
+        };
+        if let Err(error) = Self::append_blocks_jsonl(&path, std::slice::from_ref(block)) {
+            warn!(
+                ?error,
+                path = %path.display(),
+                "Failed to append debug block dump"
+            );
+        }
+        if let Some(debug_before) = debug_before {
+            match Self::file_len_or_zero(&path) {
+                Ok(debug_after) => self.update_disk_usage_delta(debug_before, debug_after),
+                Err(err) => warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to measure debug block dump after append"
+                ),
+            }
+        }
+    }
+
+    fn persist_block_at_height(&self, block: &Arc<SignedBlock>, height: u64) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_next_block_write.swap(false, Ordering::Relaxed) {
+            return Err(Error::IO(
+                std::io::Error::other("kura store_block injected failure"),
+                PathBuf::from("block_store_test_fail"),
+            ));
+        }
+
+        let start_height = height.saturating_sub(1);
+        let mut block_store = self.block_store.lock();
+        let block_store_before = match Self::block_store_tracked_bytes(&mut block_store) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                warn!(?err, "failed to measure block store bytes before append");
+                None
+            }
+        };
+        let da_before = if self.disk_usage_total_initialized.load(Ordering::Relaxed) {
+            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    warn!(?err, "failed to measure DA payload bytes before append");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        block_store.append_block_batch_at(
+            start_height,
+            std::slice::from_ref(block),
+            self.max_disk_usage_bytes,
+        )?;
+        block_store.flush_pending_fsync(true)?;
+
+        if let Some(block_store_before) = block_store_before {
+            match Self::block_store_tracked_bytes(&mut block_store) {
+                Ok(after_bytes) => self.update_disk_usage_delta(block_store_before, after_bytes),
+                Err(err) => warn!(?err, "failed to measure block store bytes after append"),
+            }
+        }
+        if let Some(da_before) = da_before {
+            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
+                Ok(da_after) => self.update_total_disk_usage_delta(da_before, da_after),
+                Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
+            }
+        }
+        Ok(())
+    }
+
+    fn store_block_durable(
         &self,
         block: &Arc<SignedBlock>,
         merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
-        self.ensure_writer_healthy()?;
-        #[cfg(test)]
-        if merge_entry.is_none() {
-            let mut merge_log = self.merge_log.lock();
-            if merge_log.consume_fail_next_append() {
-                return Err(Error::IO(
-                    std::io::Error::other("kura store_block injected failure"),
-                    PathBuf::from("merge_log_test_fail"),
-                ));
+        let block_hash = block.hash();
+        let actual_height = block.header().height().get();
+        let actual_height_usize = usize::try_from(actual_height)?;
+
+        {
+            let block_data = self.block_data.lock();
+            Self::validate_next_or_existing_block(
+                block_data.as_slice(),
+                actual_height,
+                actual_height_usize,
+                block_hash,
+            )?;
+            if actual_height <= u64::try_from(block_data.len())? {
+                drop(block_data);
+                self.ensure_durable_block_at_height(actual_height, block_hash)?;
+                debug!(
+                    height = actual_height,
+                    ?block_hash,
+                    "block already durably stored in Kura"
+                );
+                return Ok(());
             }
         }
-        let block_hash = block.hash();
-        let has_merge_entry = merge_entry.is_some();
-        self.check_storage_budget(block, merge_entry)?;
-        let block_budget_bytes =
-            Self::block_required_bytes_for_budget(block.as_ref(), self.max_disk_usage_bytes)?;
-        let mut block_data = self.block_data.lock();
-        block_data.push((block_hash, Some(Arc::clone(block))));
-        debug!(
-            new_len = block_data.len(),
-            ?block_hash,
-            "enqueued block for persistence"
-        );
 
+        self.check_storage_budget(block, merge_entry)?;
+
+        let mut block_data = self.block_data.lock();
+        Self::validate_next_or_existing_block(
+            block_data.as_slice(),
+            actual_height,
+            actual_height_usize,
+            block_hash,
+        )?;
+        if actual_height <= u64::try_from(block_data.len())? {
+            drop(block_data);
+            self.ensure_durable_block_at_height(actual_height, block_hash)?;
+            debug!(
+                height = actual_height,
+                ?block_hash,
+                "block was durably stored in Kura while waiting to append"
+            );
+            return Ok(());
+        }
+
+        let merge_log_len_before = self.merge_log.lock().total_entries;
         if let Some(entry) = merge_entry
             && let Err(err) = self.append_merge_entry(entry)
         {
-            block_data.pop();
             error!(
                 ?err,
                 ?block_hash,
@@ -2170,28 +2057,67 @@ impl Kura {
             return Err(err);
         }
 
-        if let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
-            error!(
-                ?err,
-                "Failed to notify block writer about new block; persistence thread unavailable"
-            );
-            if has_merge_entry {
-                let keep = {
-                    let merge_log = self.merge_log.lock();
-                    merge_log.total_entries.saturating_sub(1)
-                };
-                if let Err(rollback_err) = self.truncate_merge_log_to_len(keep) {
-                    error!(
-                        ?rollback_err,
-                        ?block_hash,
-                        "Failed to rollback merge-ledger entry after notify failure"
-                    );
-                }
+        if let Err(err) = self.persist_block_at_height(block, actual_height) {
+            if merge_entry.is_some()
+                && let Err(rollback_err) = self.truncate_merge_log_to_len(merge_log_len_before)
+            {
+                error!(
+                    ?rollback_err,
+                    ?block_hash,
+                    "Failed to rollback merge-ledger entry after block write failure"
+                );
             }
-            block_data.pop();
-            return Err(Error::BlockWriterUnavailable);
+            return Err(err);
         }
-        self.add_pending_budget_bytes(block_budget_bytes);
+
+        block_data.push((block_hash, Some(Arc::clone(block))));
+        Self::drop_persisted_blocks(
+            &mut block_data,
+            actual_height_usize,
+            self.blocks_in_memory.get(),
+        );
+        let new_len = block_data.len();
+        drop(block_data);
+        self.append_debug_block_dump(block);
+
+        debug!(
+            height = actual_height,
+            new_len,
+            ?block_hash,
+            "stored block durably in Kura"
+        );
+
+        Ok(())
+    }
+
+    fn validate_next_or_existing_block(
+        block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
+        actual_height: u64,
+        actual_height_usize: usize,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
+        let expected_next_height = u64::try_from(block_data.len())?.saturating_add(1);
+
+        if actual_height < expected_next_height {
+            let index = actual_height_usize.saturating_sub(1);
+            if let Some((expected, _)) = block_data.get(index) {
+                if *expected == block_hash {
+                    return Ok(());
+                }
+                return Err(Error::BlockHeightConflict {
+                    height: actual_height,
+                    expected: *expected,
+                    actual: block_hash,
+                });
+            }
+        }
+
+        if actual_height > expected_next_height {
+            return Err(Error::BlockHeightGap {
+                expected_next_height,
+                actual_height,
+            });
+        }
 
         Ok(())
     }
@@ -2616,7 +2542,7 @@ impl Kura {
             for (_, block) in data.iter().skip(start) {
                 let block = block
                     .as_ref()
-                    .expect("pending block missing from Kura memory queue");
+                    .expect("pending block missing from Kura memory cache");
                 blocks.push(Arc::clone(block));
             }
             blocks
@@ -2892,53 +2818,106 @@ impl Kura {
         writer.flush()
     }
 
-    /// Put a block in Kura's in-memory block store.
+    /// Store a block durably in Kura's canonical block store.
     ///
     /// # Errors
-    /// Returns an error if the block cannot be enqueued for persistence.
+    /// Returns an error if the block violates canonical height ordering or cannot be persisted.
     pub fn store_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
         let block = block.into();
-        self.enqueue_block(&block, None)
+        self.store_block_durable(&block, None)
     }
 
-    /// Put a block in Kura's in-memory store and persist the merge-ledger entry sealing it.
+    /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
     ///
     /// # Errors
-    /// Returns an error if the block or merge entry cannot be enqueued.
+    /// Returns an error if the block violates canonical height ordering or the block/merge entry
+    /// cannot be persisted.
     pub fn store_block_with_merge_entry(
         &self,
         block: impl Into<Arc<SignedBlock>>,
         merge_entry: &MergeLedgerEntry,
     ) -> Result<()> {
         let block = block.into();
-        self.enqueue_block(&block, Some(merge_entry))
+        self.store_block_durable(&block, Some(merge_entry))
     }
 
-    /// Replace the block in `Kura`'s in memory block store.
+    /// Replace Kura's current top block durably.
     ///
     /// # Errors
-    /// Returns an error if the block cannot be enqueued for persistence or exceeds the
-    /// configured storage budget.
+    /// Returns an error if the block is not at the current top height, cannot be persisted, or
+    /// exceeds the configured storage budget.
     pub fn replace_top_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
-        self.ensure_writer_healthy()?;
         self.invalidate_pending_budget_cache();
         let block = block.into();
-        self.check_replace_storage_budget(block.as_ref())?;
-        let mut data = self.block_data.lock();
-        let previous = data.pop();
-        data.push((block.hash(), Some(block)));
-        if let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
-            error!(
-                ?err,
-                "Failed to notify block writer about top-block replacement; persistence thread unavailable"
-            );
-            data.pop();
-            if let Some(previous) = previous {
-                data.push(previous);
+        let height = block.header().height().get();
+        let height_usize = usize::try_from(height)?;
+        let block_hash = block.hash();
+
+        {
+            let data = self.block_data.lock();
+            if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
+                drop(data);
+                self.ensure_durable_block_at_height(height, block_hash)?;
+                return Ok(());
             }
-            return Err(Error::BlockWriterUnavailable);
         }
+
+        self.check_replace_storage_budget(block.as_ref())?;
+
+        let mut data = self.block_data.lock();
+        if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
+            drop(data);
+            self.ensure_durable_block_at_height(height, block_hash)?;
+            return Ok(());
+        }
+
+        self.persist_block_at_height(&block, height)?;
+
+        if let Some(top) = data.last_mut() {
+            *top = (block_hash, Some(Arc::clone(&block)));
+        }
+        Self::drop_persisted_blocks(&mut data, height_usize, self.blocks_in_memory.get());
+        drop(data);
+        self.append_debug_block_dump(&block);
         Ok(())
+    }
+
+    fn validate_top_replacement(
+        block_data: &[(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)],
+        height: u64,
+        height_usize: usize,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<bool> {
+        let current_height = u64::try_from(block_data.len())?;
+        if current_height == 0 {
+            return Err(Error::BlockHeightGap {
+                expected_next_height: 0,
+                actual_height: height,
+            });
+        }
+        if height > current_height {
+            return Err(Error::BlockHeightGap {
+                expected_next_height: current_height,
+                actual_height: height,
+            });
+        }
+        if height < current_height {
+            let expected = block_data
+                .get(height_usize.saturating_sub(1))
+                .map(|(hash, _)| *hash)
+                .ok_or(Error::BlockHeightGap {
+                    expected_next_height: current_height,
+                    actual_height: height,
+                })?;
+            return Err(Error::BlockHeightConflict {
+                height,
+                expected,
+                actual: block_hash,
+            });
+        }
+        Ok(block_data
+            .last()
+            .is_some_and(|(expected, _)| *expected == block_hash))
     }
 
     /// Truncate the canonical chain to the provided height (inclusive).
@@ -3042,8 +3021,11 @@ impl Kura {
     }
 
     pub(crate) fn fail_next_store_for_tests(&self) {
-        let mut merge_log = self.merge_log.lock();
-        merge_log.fail_next_append = true;
+        self.fail_next_block_write.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_block_write_for_tests(&self) {
+        self.fail_next_block_write.store(true, Ordering::Relaxed);
     }
 }
 
@@ -6262,6 +6244,22 @@ pub enum Error {
         /// Bytes required after accepting the next block.
         required: u64,
     },
+    /// Block height gap: expected next canonical height `{expected_next_height}`, got `{actual_height}`
+    BlockHeightGap {
+        /// Next height Kura can append without leaving a gap.
+        expected_next_height: u64,
+        /// Height declared by the block being stored.
+        actual_height: u64,
+    },
+    /// Block height conflict at `{height}`: stored hash `{expected:?}`, incoming hash `{actual:?}`
+    BlockHeightConflict {
+        /// Conflicting block height.
+        height: u64,
+        /// Hash already stored at that height.
+        expected: HashOf<BlockHeader>,
+        /// Hash of the incoming block.
+        actual: HashOf<BlockHeader>,
+    },
 }
 
 trait AddErrContextExt<T> {
@@ -6936,8 +6934,9 @@ mod tests {
         };
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
-        let block1: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let block2: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let mut blocks = DummyBlocks::new();
+        let block1 = blocks.next();
+        let block2 = blocks.next();
         let entry1 = sample_merge_entry(1);
         kura.store_block_with_merge_entry(block1, &entry1)
             .expect("store block+entry1");
@@ -6951,18 +6950,17 @@ mod tests {
         let (kura_reloaded, _) =
             Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
         let snapshot = kura_reloaded.merge_ledger_snapshot();
-        // Without persisting paired blocks, the merge log is trimmed on restart to
-        // preserve consistency with the block store.
-        assert!(
-            snapshot.is_empty(),
-            "merge log without matching blocks is pruned on restart"
+        assert_eq!(
+            snapshot.len(),
+            2,
+            "merge log should survive with paired blocks"
         );
     }
 
     #[test]
     fn store_block_with_merge_entry_appends_log() {
         let kura = Kura::blank_kura_for_testing();
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let entry = sample_merge_entry(7);
         let expected = entry.clone();
 
@@ -6974,9 +6972,142 @@ mod tests {
     }
 
     #[test]
-    fn store_block_injected_failure_aborts_enqueue() {
+    fn store_block_is_durable_before_return() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: Duration::from_secs(3600),
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let block = DummyBlocks::new().next();
+        let block_hash = block.hash();
+
+        kura.store_block(block).expect("store block");
+
+        let mut store = kura.block_store.lock();
+        assert_eq!(store.read_index_count().expect("index count"), 1);
+        assert_eq!(
+            store
+                .read_durable_index_count()
+                .expect("durable index count"),
+            1,
+            "commit marker must advance before store_block returns"
+        );
+        assert_eq!(
+            store.read_block_hashes(0, 1).expect("stored hash"),
+            vec![block_hash]
+        );
+    }
+
+    #[test]
+    fn store_block_is_idempotent_for_same_height_and_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let block_hash = block.hash();
+
+        kura.store_block(Arc::clone(&block)).expect("store block");
+        let (index_len, data_len, hashes_len) = {
+            let mut store = kura.block_store.lock();
+            (
+                store.index_file_len().expect("index len"),
+                store.data_file_len().expect("data len"),
+                store.hashes_file_len().expect("hashes len"),
+            )
+        };
+
+        kura.store_block(block).expect("idempotent store");
+
+        assert_eq!(kura.blocks_count(), 1);
+        let mut store = kura.block_store.lock();
+        assert_eq!(store.index_file_len().expect("index len"), index_len);
+        assert_eq!(store.data_file_len().expect("data len"), data_len);
+        assert_eq!(store.hashes_file_len().expect("hashes len"), hashes_len);
+        assert_eq!(
+            store.read_block_hashes(0, 1).expect("stored hash"),
+            vec![block_hash]
+        );
+    }
+
+    #[test]
+    fn store_block_rejects_height_gap() {
         let kura = Kura::blank_kura_for_testing();
         let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+
+        let err = kura.store_block(block).expect_err("height gap");
+
+        assert!(matches!(
+            err,
+            Error::BlockHeightGap {
+                expected_next_height: 1,
+                actual_height: 2,
+            }
+        ));
+        assert_eq!(kura.blocks_count(), 0);
+    }
+
+    #[test]
+    fn store_block_rejects_same_height_different_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let stored_hash = block.hash();
+        kura.store_block(block).expect("store first block");
+
+        let conflicting: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let conflicting_hash = conflicting.hash();
+        assert_ne!(stored_hash, conflicting_hash);
+
+        let err = kura
+            .store_block(conflicting)
+            .expect_err("same-height different hash must fail");
+
+        assert!(matches!(
+            err,
+            Error::BlockHeightConflict {
+                height: 1,
+                expected,
+                actual,
+            } if expected == stored_hash && actual == conflicting_hash
+        ));
+        assert_eq!(kura.blocks_count(), 1);
+    }
+
+    #[test]
+    fn store_block_with_merge_entry_rolls_back_on_block_write_failure() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let entry = sample_merge_entry(8);
+
+        kura.fail_next_block_write_for_tests();
+        let err = kura
+            .store_block_with_merge_entry(block, &entry)
+            .expect_err("injected block write failure");
+
+        assert!(matches!(err, Error::IO(_, _)));
+        assert_eq!(kura.blocks_count(), 0);
+        assert!(
+            kura.merge_ledger_snapshot().is_empty(),
+            "merge entry must be rolled back when block write fails"
+        );
+    }
+
+    #[test]
+    fn store_block_injected_failure_aborts_sync_append() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
 
         kura.fail_next_store_for_tests();
         let result = kura.store_block(block.clone());
@@ -6984,7 +7115,7 @@ mod tests {
         assert_eq!(
             kura.blocks_count(),
             0,
-            "failing append should not enqueue blocks in memory"
+            "failing append should not expose the block in memory"
         );
         assert!(kura.merge_ledger_snapshot().is_empty());
     }
@@ -7010,7 +7141,7 @@ mod tests {
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = baseline.saturating_add(kura_cfg.max_disk_usage_bytes.get());
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         kura.attach_telemetry(telemetry);
@@ -7054,7 +7185,7 @@ mod tests {
     #[test]
     fn store_block_with_merge_entry_counts_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let block_required = {
             let wire = block.canonical_wire().expect("block wire");
             let (frame, _) = wire.into_parts();
@@ -7084,7 +7215,7 @@ mod tests {
         kura.store_block(block).expect("budgeted store block");
 
         let temp_dir = TempDir::new().expect("create temp dir");
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let block_required = {
             let wire = block.canonical_wire().expect("block wire");
             let (frame, _) = wire.into_parts();
@@ -7119,10 +7250,11 @@ mod tests {
     }
 
     #[test]
-    fn store_block_rejects_when_pending_blocks_exceed_budget() {
+    fn store_block_rejects_when_storage_exceeds_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
-        let block1: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let block2: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let mut blocks = DummyBlocks::new();
+        let block1 = blocks.next();
+        let block2 = blocks.next();
         let block1_required = Kura::block_required_bytes(&block1).expect("block1 required bytes");
         let block2_required = Kura::block_required_bytes(&block2).expect("block2 required bytes");
         let budget_limit = block1_required.max(block2_required);
@@ -7149,7 +7281,7 @@ mod tests {
 
         let err = kura
             .store_block(block2)
-            .expect_err("pending bytes should exceed budget");
+            .expect_err("stored bytes should exceed budget");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
     }
 
@@ -7325,7 +7457,7 @@ mod tests {
     #[test]
     fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -7451,7 +7583,7 @@ mod tests {
         let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -7482,7 +7614,7 @@ mod tests {
     #[test]
     fn store_block_reclaims_retired_storage_when_budget_exceeded() {
         let temp_dir = TempDir::new().expect("create temp dir");
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -7539,7 +7671,7 @@ mod tests {
         };
         *kura.merge_log.lock() = failing_log;
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let entry = sample_merge_entry(11);
 
         let err = kura
@@ -7702,86 +7834,84 @@ mod tests {
     }
 
     #[test]
-    fn store_block_reports_writer_channel_closed() {
+    fn store_block_does_not_depend_on_writer_channel() {
         let kura = Kura::blank_kura_for_testing();
         kura.block_notify_rx.lock().take();
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let err = kura.store_block(block).expect_err("writer channel closed");
-        assert!(matches!(err, Error::BlockWriterUnavailable));
-        assert_eq!(
-            kura.blocks_count(),
-            0,
-            "failed enqueue should not mutate block cache"
-        );
+        let block = DummyBlocks::new().next();
+        kura.store_block(block).expect("store block");
+        assert_eq!(kura.blocks_count(), 1);
     }
 
     #[test]
-    fn store_block_reports_writer_fault() {
+    fn store_block_does_not_depend_on_writer_fault() {
         let kura = Kura::blank_kura_for_testing();
-        kura.mark_writer_fault_for_tests("injected writer failure");
+        kura.record_writer_fault("test", &Error::BlockWriterUnavailable);
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let err = kura.store_block(block).expect_err("writer faulted");
-        assert!(matches!(err, Error::BlockWriterFaulted(_)));
-        assert_eq!(
-            kura.blocks_count(),
-            0,
-            "failed enqueue should not mutate block cache"
-        );
+        let block = DummyBlocks::new().next();
+        kura.store_block(block).expect("store block");
+        assert_eq!(kura.blocks_count(), 1);
     }
 
     #[test]
-    fn replace_top_block_reports_writer_channel_closed() {
+    fn replace_top_block_does_not_depend_on_writer_channel() {
         let kura = Kura::blank_kura_for_testing();
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let block_hash = block.hash();
         kura.store_block(block).expect("store block");
         kura.block_notify_rx.lock().take();
 
         let replacement: SignedBlock =
-            ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let err = kura
-            .replace_top_block(replacement)
-            .expect_err("writer channel closed");
-        assert!(matches!(err, Error::BlockWriterUnavailable));
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement_hash = replacement.hash();
+        assert_ne!(block_hash, replacement_hash);
+        kura.replace_top_block(replacement)
+            .expect("replace top block");
         assert_eq!(kura.blocks_count(), 1);
         let top_hash = kura.block_data.lock().last().map(|(hash, _)| *hash);
-        assert_eq!(top_hash, Some(block_hash));
+        assert_eq!(top_hash, Some(replacement_hash));
     }
 
     #[test]
-    fn replace_top_block_reports_writer_fault() {
+    fn replace_top_block_does_not_depend_on_writer_fault() {
         let kura = Kura::blank_kura_for_testing();
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let block_hash = block.hash();
         kura.store_block(block).expect("store block");
-        kura.mark_writer_fault_for_tests("injected writer failure");
+        kura.record_writer_fault("test", &Error::BlockWriterUnavailable);
 
         let replacement: SignedBlock =
-            ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let err = kura
-            .replace_top_block(replacement)
-            .expect_err("writer faulted");
-        assert!(matches!(err, Error::BlockWriterFaulted(_)));
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement_hash = replacement.hash();
+        assert_ne!(block_hash, replacement_hash);
+        kura.replace_top_block(replacement)
+            .expect("replace top block");
         assert_eq!(kura.blocks_count(), 1);
         let top_hash = kura.block_data.lock().last().map(|(hash, _)| *hash);
-        assert_eq!(top_hash, Some(block_hash));
+        assert_eq!(top_hash, Some(replacement_hash));
     }
 
     #[test]
-    fn store_block_with_merge_entry_reports_writer_channel_closed() {
+    fn store_block_with_merge_entry_does_not_depend_on_writer_channel() {
         let kura = Kura::blank_kura_for_testing();
         kura.block_notify_rx.lock().take();
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         let entry = sample_merge_entry(7);
-        let err = kura
-            .store_block_with_merge_entry(block, &entry)
-            .expect_err("writer channel closed");
-        assert!(matches!(err, Error::BlockWriterUnavailable));
-        assert_eq!(kura.blocks_count(), 0);
-        assert!(kura.merge_ledger_snapshot().is_empty());
+        kura.store_block_with_merge_entry(block, &entry)
+            .expect("store block with merge entry");
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.merge_ledger_snapshot().len(), 1);
     }
 
     #[test]
@@ -7917,7 +8047,7 @@ mod tests {
         let mut block_store = BlockStore::new(dir.path());
         block_store.create_files_if_they_do_not_exist().unwrap();
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block = DummyBlocks::new().next();
         block_store.append_block_to_chain(&block).unwrap();
 
         let BlockIndex { start, length } = block_store.read_block_index(0).unwrap();
@@ -8550,8 +8680,7 @@ mod tests {
             Kura::start(kura.clone(), ShutdownSignal::new())
         };
 
-        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
-        let block = Arc::new(block);
+        let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block)).expect("store block");
         wait_for_block_hash(&kura, 1, block.hash());
 
@@ -10514,14 +10643,13 @@ mod tests {
         let b3 = blocks.next();
         kura.store_block(b1).expect("store block");
         kura.store_block(b2).expect("store block");
-        kura.store_block(b3).expect("store block");
+        kura.store_block(b3.clone()).expect("store block");
 
         assert_eq!(kura.blocks_count(), 3);
         kura.prune_to_height(2).expect("prune to height");
         assert_eq!(kura.blocks_count(), 2);
 
-        let b4 = blocks.next();
-        kura.store_block(b4).expect("store block after prune");
+        kura.store_block(b3).expect("store block after prune");
         assert_eq!(kura.blocks_count(), 3);
     }
 

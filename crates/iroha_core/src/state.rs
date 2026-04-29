@@ -18402,6 +18402,15 @@ impl State {
         self.block_hashes.committed_height()
     }
 
+    /// Number of committed blocks durably indexed by Kura.
+    ///
+    /// This avoids acquiring a full [`StateView`] when callers only need to
+    /// verify that the state height is backed by durable block storage.
+    #[track_caller]
+    pub fn durable_block_count(&self) -> usize {
+        self.kura.blocks_count()
+    }
+
     /// Snapshot committed block hashes from the block-hash journal.
     ///
     /// This is cheaper than acquiring a full [`StateView`] when only the committed
@@ -18417,6 +18426,15 @@ impl State {
     #[track_caller]
     pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.kura.get_block(height)
+    }
+
+    /// Load a committed block hash by height from Kura's durable index.
+    ///
+    /// This avoids loading the whole block when callers only need to verify
+    /// that state and Kura agree on the latest durable block.
+    #[track_caller]
+    pub fn durable_block_hash(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
+        self.kura.get_block_hash(height)
     }
 
     /// Resolve a committed block height by block hash using Kura's index.

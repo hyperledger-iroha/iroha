@@ -28299,9 +28299,7 @@ async fn handler_alias_resolve(
     )?;
     let candidate_routes = match resolve_torii_target_alias_routes(app.as_ref(), &alias_label) {
         Ok(routes) => routes,
-        Err(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })
-            if dataspace_id == alias_label.dataspace =>
-        {
+        Err(queue::RoutingResolveError::NoLaneForDataspace { .. }) => {
             return execute_alias_resolve_unrouted_local_read(&app, canonical, &alias_label);
         }
         Err(error) => {

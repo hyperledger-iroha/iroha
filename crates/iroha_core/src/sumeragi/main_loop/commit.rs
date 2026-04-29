@@ -35,7 +35,6 @@ pub(super) struct CommitWork {
     pub(super) commit_qc: Option<crate::sumeragi::consensus::Qc>,
     pub(super) allow_quorum_bypass: bool,
     pub(super) allow_signature_index_recovery: bool,
-    pub(super) persist_required: bool,
     pub(super) events_sender: crate::EventsSender,
 }
 
@@ -281,7 +280,6 @@ pub(super) fn execute_commit_work(
         commit_qc,
         allow_quorum_bypass: _allow_quorum_bypass,
         allow_signature_index_recovery,
-        persist_required,
         events_sender: _events_sender,
         ..
     } = work;
@@ -322,7 +320,6 @@ pub(super) fn execute_commit_work(
         height = block_height,
         view = block_view,
         block = %block_hash,
-        persist_required,
         "commit work start"
     );
     let qc_start = Instant::now();
@@ -499,25 +496,23 @@ pub(super) fn execute_commit_work(
                         post_state_root: post_state_from_witness(witness),
                     })
             });
-            if persist_required {
-                let committed_block_for_kura = committed_block.clone();
-                log_stage_start("kura_store");
-                let kura_start = Instant::now();
-                if let Err(err) = kura.store_block(committed_block_for_kura) {
-                    log_stage_end("kura_store", kura_start);
-                    timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
-                    timings.persist_ms = Some(to_ms(persist_start.elapsed()));
-                    return (
-                        CommitOutcome::KuraStoreFailed {
-                            committed_block,
-                            error: err,
-                        },
-                        timings,
-                    );
-                }
-                timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
+            let committed_block_for_kura = committed_block.clone();
+            log_stage_start("kura_store");
+            let kura_start = Instant::now();
+            if let Err(err) = kura.store_block(committed_block_for_kura) {
                 log_stage_end("kura_store", kura_start);
+                timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
+                timings.persist_ms = Some(to_ms(persist_start.elapsed()));
+                return (
+                    CommitOutcome::KuraStoreFailed {
+                        committed_block,
+                        error: err,
+                    },
+                    timings,
+                );
             }
+            timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
+            log_stage_end("kura_store", kura_start);
             log_stage_start("state_apply");
             let apply_start = Instant::now();
             let stake_snapshot_roster = commit_topology.clone();
@@ -1082,7 +1077,6 @@ impl Actor {
                     );
                     self.clear_commit_worker_state();
                     if let Some(inflight) = self.subsystems.commit.inflight.take() {
-                        let persist_required = !inflight.pending.kura_persisted;
                         let local_outside_commit_topology = inflight
                             .commit_topology
                             .iter()
@@ -1102,7 +1096,6 @@ impl Actor {
                             commit_qc: inflight.commit_qc.clone(),
                             allow_quorum_bypass: inflight.allow_quorum_bypass,
                             allow_signature_index_recovery,
-                            persist_required,
                             events_sender: self.events_sender.clone(),
                         };
                         let (outcome, timings) = execute_commit_work(
@@ -1234,7 +1227,7 @@ impl Actor {
         let mut committed_post_apply_snapshot_tail: Option<CommitPostApplySnapshot> = None;
         let mut committed_consensus_mode_tail: Option<ConsensusMode> = None;
         let mut committed_mode_tag_tail: Option<&'static str> = None;
-        let mut persist_required_tail = false;
+        let mut pending_previously_marked_kura_persisted = false;
 
         let topology = super::network_topology::Topology::new(signature_topology.clone());
         let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
@@ -1324,7 +1317,7 @@ impl Actor {
                     pending_view,
                     block_hash,
                 );
-                persist_required_tail = !pending.kura_persisted;
+                pending_previously_marked_kura_persisted = pending.kura_persisted;
                 let qc_key = (
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
@@ -1457,7 +1450,7 @@ impl Actor {
                     height = pending_height,
                     view = pending_view,
                     block = %block_hash,
-                    "failed to enqueue committed block to kura; keeping block pending"
+                    "failed to store committed block in kura; keeping block pending"
                 );
                 crate::sumeragi::status::record_kura_stage_rollback(
                     pending_height,
@@ -2144,7 +2137,7 @@ impl Actor {
                     height = pending_height,
                     view = pending_view,
                     block = %block_hash,
-                    persisted = persist_required_tail,
+                    pending_previously_marked_kura_persisted,
                     "stored committed block to kura"
                 );
                 #[cfg(feature = "telemetry")]
@@ -2385,7 +2378,7 @@ impl Actor {
                 view = pending_view,
                 block = %block_hash,
                 state_height,
-                "block already persisted in kura; retrying state commit without re-enqueue"
+                "block already persisted in kura; retrying commit with mandatory durability check"
             );
             pending.mark_kura_persisted();
         }
@@ -2585,7 +2578,6 @@ impl Actor {
         );
 
         let id = self.subsystems.commit.next_id();
-        let persist_required = !pending.kura_persisted;
         if pending.validated_commit_artifact.is_none()
             && let Some((parent_state_root, post_state_root)) =
                 pending.parent_state_root.zip(pending.post_state_root)
@@ -2613,7 +2605,6 @@ impl Actor {
             commit_qc: commit_qc.clone(),
             allow_quorum_bypass,
             allow_signature_index_recovery,
-            persist_required,
             events_sender: self.events_sender.clone(),
         };
         let inflight = CommitInFlight {
@@ -7464,7 +7455,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
@@ -7587,7 +7577,6 @@ mod tests {
             commit_qc: Some(qc.clone()),
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
@@ -7678,7 +7667,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
@@ -7732,7 +7720,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
@@ -7807,7 +7794,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender,
         };
 
@@ -7818,7 +7804,7 @@ mod tests {
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
-        assert!(result.timings.kura_store_ms.is_none());
+        assert!(result.timings.kura_store_ms.is_some());
         assert!(result.timings.state_apply_ms.is_some());
         assert!(result.timings.state_commit_ms.is_some());
         wake_rx
@@ -7886,7 +7872,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender: events_sender.clone(),
         };
 
@@ -7907,7 +7892,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender,
         };
         handle.work_tx.send(work).expect("send commit work 2");
@@ -7986,7 +7970,6 @@ mod tests {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender,
         };
 
@@ -7997,7 +7980,7 @@ mod tests {
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
-        assert!(result.timings.kura_store_ms.is_none());
+        assert!(result.timings.kura_store_ms.is_some());
         assert!(result.timings.state_apply_ms.is_some());
         assert!(result.timings.state_commit_ms.is_some());
 
