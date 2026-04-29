@@ -1903,6 +1903,7 @@ impl Actor {
         let frontier = msg.frontier;
         let block = msg.block;
         let block_hash = block.hash();
+        self.maybe_cache_rehydrated_kura_body(&block);
         let header = block.header();
         let height = header.height().get();
         let view = header.view_change_index();

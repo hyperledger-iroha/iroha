@@ -974,7 +974,9 @@ impl ConsensusIngressLimiter {
                 BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
                 | BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
-                BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
+                BlockMessage::ConsensusParams(_) | BlockMessage::KuraReplicaAdvert(_) => {
+                    IngressPolicy::limited()
+                }
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
                     IngressPolicy::bulk()
                 }
@@ -2146,6 +2148,7 @@ impl NetworkRelayShared {
                 Some(proposal.header.height),
                 Some(proposal.header.view),
             ),
+            KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
         }
     }
 

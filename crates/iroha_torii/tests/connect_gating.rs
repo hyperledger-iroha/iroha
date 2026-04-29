@@ -427,6 +427,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas: iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         },
         sumeragi: A::Sumeragi {
             role: A::NodeRole::Validator,
