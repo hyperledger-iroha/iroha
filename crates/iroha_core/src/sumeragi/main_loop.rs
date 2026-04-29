@@ -13682,6 +13682,29 @@ impl Actor {
         self.last_committed_height.max(state_height)
     }
 
+    fn unprocessed_committed_height(&self) -> Option<(u64, u64)> {
+        let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        (self.last_committed_height < state_height)
+            .then_some((self.last_committed_height, state_height))
+    }
+
+    fn process_committed_blocks_before_consensus(&mut self, context: &'static str) -> bool {
+        let Some((last_processed, state_height)) = self.unprocessed_committed_height() else {
+            return false;
+        };
+        let progressed = self.poll_committed_blocks();
+        let processed_now = self.last_committed_height;
+        debug!(
+            context,
+            last_processed,
+            state_height,
+            processed_now,
+            progressed,
+            "processed committed blocks before consensus message handling"
+        );
+        progressed
+    }
+
     fn effective_commit_topology(&self) -> Vec<PeerId> {
         let world = self.state.world_view();
         let commit_topology = self.state.commit_topology_snapshot();
@@ -19467,6 +19490,7 @@ impl Actor {
         let _message_timing = message_timing;
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);
+        self.process_committed_blocks_before_consensus(Self::block_message_kind(&msg));
         if let Some((height, view)) = Self::block_message_height_view(&msg) {
             if self.should_drop_future_consensus_message(
                 height,
