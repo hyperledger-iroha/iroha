@@ -4218,6 +4218,22 @@ impl Actor {
         commit_topology.to_vec()
     }
 
+    fn vote_emission_topology_for_height(
+        &self,
+        height: u64,
+        consensus_mode: ConsensusMode,
+        fallback: &super::network_topology::Topology,
+    ) -> super::network_topology::Topology {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height == committed_height.saturating_add(1) {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return super::network_topology::Topology::new(live);
+            }
+        }
+        fallback.clone()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn build_vote(
         &self,
@@ -4379,8 +4395,10 @@ impl Actor {
             );
             return false;
         }
+        self.process_committed_blocks_before_consensus("emit_precommit_vote");
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -4533,7 +4551,7 @@ impl Actor {
         };
         let chain_id = self.common_config.chain.clone();
         let evidence_context = super::evidence::EvidenceValidationContext {
-            topology,
+            topology: &topology,
             chain_id: &chain_id,
             mode_tag,
             prf_seed,
@@ -4675,9 +4693,11 @@ impl Actor {
         ) {
             return false;
         }
+        self.process_committed_blocks_before_consensus("emit_new_view_vote");
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
