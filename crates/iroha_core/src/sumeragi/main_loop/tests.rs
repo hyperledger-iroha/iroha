@@ -98338,6 +98338,7 @@ async fn pacemaker_skips_proposal_when_queue_empty() {
 async fn pacemaker_injects_recovery_heartbeat_when_new_view_leader_queue_empty() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _local_removed_guard = LocalRemovedGuard::new(false);
 
     actor.locked_qc = None;
 
@@ -98426,6 +98427,7 @@ async fn pacemaker_injects_recovery_heartbeat_when_new_view_leader_queue_empty()
 async fn pacemaker_injects_recovery_heartbeat_when_missing_qc_liveness_leader_queue_empty() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _local_removed_guard = LocalRemovedGuard::new(false);
 
     actor.locked_qc = None;
 
@@ -98496,6 +98498,7 @@ async fn pacemaker_injects_recovery_heartbeat_when_missing_qc_liveness_leader_qu
 async fn pacemaker_injects_recovery_heartbeat_from_committed_qc_without_new_view_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _local_removed_guard = LocalRemovedGuard::new(false);
 
     actor.locked_qc = None;
 
