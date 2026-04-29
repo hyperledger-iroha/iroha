@@ -41,16 +41,19 @@ user-local.
 
 ## Standalone Codex skill
 
-This repo also ships a standalone skill at `skills/sora-taira-testnet/` for the
-Codex Skills surface.
+This repo also ships standalone skills for the Codex Skills surface:
 
-To install that skill from a GitHub checkout of this repo, use the built-in
-installer script from your local Codex environment:
+- `skills/sora-taira-testnet/` for Taira testnet workflows
+- `skills/sora-minamoto-mainnet/` for Minamoto mainnet workflows
+
+To install a skill from a GitHub checkout of this repo, use the built-in
+installer script from your local Codex environment and pass the desired skill
+path:
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo <owner>/<repo> \
-  --path skills/sora-taira-testnet
+  --path skills/sora-minamoto-mainnet
 ```
 
 Restart Codex after installation so the skill appears in the Skills tab.
