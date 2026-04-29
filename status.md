@@ -17,6 +17,59 @@ Last updated: 2026-04-29
   - Row-isolated real seed-7 `stress-400` reruns for missing/degraded NPoS rows plus report rebuild for `dist/izanami-stress-400-seed7-20260428`
   - Row-isolated real seed-7 `stress-800` reruns for all permissioned and NPoS rows plus report rebuild for `dist/izanami-stress-800-seed7-20260428`
 
+## 2026-04-29 Canonical Kura test fixture repair
+
+- Updated snapshot tests so WSV state and snapshot writing share the same Kura
+  instance under the new state/Kura alignment guard, and kept the intentional
+  last-block soft-fork read scenario as a read-side mismatch instead of a
+  write-side rejection.
+- Adjusted state and Sumeragi fixtures that intentionally modeled missing,
+  future, or conflicting blocks so Kura only stores canonical contiguous
+  chains; non-canonical payloads now live in pending/test state where the
+  behavior under test expects them.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib snapshot::tests::can_read -- --nocapture`
+  - `cargo test -p iroha_core --lib state::tests::all_blocks_skips_missing_kura_entries -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::fetch_pending_block_ -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::fetch_block_body_ -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests -- --nocapture` (`2001` passed, `20` ignored)
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
+## 2026-04-29 SORA Minamoto mainnet Codex skill
+
+- Added a standalone `sora-minamoto-mainnet` Codex skill for the public
+  Minamoto Torii MCP endpoint at `https://minamoto.sora.org/v1/mcp`, mirroring
+  the Taira skill structure while making mainnet write handling explicitly
+  conservative.
+- Expanded the skill with a concrete Minamoto transaction workflow, write
+  confirmation policy, required write inputs, default no-agent-side-signing
+  posture, common read payload examples, failure-to-action map, Taira
+  difference table, and agent output requirements.
+- Updated Codex integration docs and agent guidance so Minamoto workflows point
+  at the new skill, prefer curated `iroha.*` tools, keep signing inputs
+  runtime-only, and avoid Taira testnet faucet/bootstrap assumptions on
+  mainnet.
+- Focused validation for this slice:
+  - `git diff --check`
+  - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/SKILL.md`
+  - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/agents/openai.yaml`
+
+## 2026-04-29 Mandatory Kura durability before state commit
+
+- Made Kura block storage synchronous and canonical-height checked: duplicate same-height/same-hash stores are idempotent, gaps and same-height hash conflicts are hard errors, and successful returns mean the block is present in the durable block files.
+- Removed the Sumeragi commit-path `persist_required` bypass so every commit worker stores/verifies the block in Kura before applying and committing WSV state; `PendingBlock::kura_persisted` is retained only as retry/logging state.
+- Kept the Kura writer thread on sidecar flushing and shutdown fsync handling instead of making it authoritative for block appends, and added regression coverage for merge-log rollback and `kura_persisted` retry behavior.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core kura::tests`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::state_commit_failure_after_kura_store_keeps_partial_head_hidden`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::pending_kura_persisted_still_checks_kura_before_state_commit`
+  - `cargo test -p iroha_core --lib snapshot::tests::snapshot_write_rejects_state_ahead_of_kura`
+  - `cargo test -p irohad snapshot_read_error_tests::snapshot_read_error_is_recoverable_classifies_errors`
+  - `git diff --check`
+
 ## 2026-04-28 Izanami stress audit queue root-cause fix
 
 - Root-caused the seed-7 stress degraded rows to Izanami's sampled confirmation audit queue, not Sumeragi consensus state: the completed stress logs show `confirmation_queue_dropped` hits while Sumeragi status deltas report no RBC store pressure, no RBC evictions, no pending-RBC drops, no persist drops, and accepted submissions equal started submissions.

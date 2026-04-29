@@ -689,6 +689,10 @@ pub fn generate_default(
         Permission::new("CanManageSoracloud".into(), Json::new(())),
         ALICE_ID.clone(),
     );
+    let grant_permission_to_manage_verifying_keys = Grant::account_permission(
+        Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
+        genesis_account_id.clone(),
+    );
     let grant_permission_to_register_accounts =
         Grant::account_permission(register_account_permission, ALICE_ID.clone());
     let transfer_rose_ownership = Transfer::asset_definition(
@@ -736,6 +740,7 @@ pub fn generate_default(
     }
     let (offline_note_v2_vk_id, offline_note_v2_vk_record) =
         offline_note_v2_verifier_registration()?;
+    builder = builder.append_instruction(grant_permission_to_manage_verifying_keys);
     builder = builder.append_instruction(verifying_keys::RegisterVerifyingKey {
         id: offline_note_v2_vk_id,
         record: offline_note_v2_vk_record,

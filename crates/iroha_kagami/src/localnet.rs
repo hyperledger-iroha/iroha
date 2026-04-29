@@ -21,7 +21,7 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     da::commitment::DaProofPolicyBundle,
     isi::{
-        RegisterBox, SetAssetDefinitionAlias,
+        GrantBox, RegisterBox, SetAssetDefinitionAlias,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         verifying_keys,
     },
@@ -495,9 +495,15 @@ const LOCALNET_CBUAE_ALIAS_DATASPACE_ID: u64 = 12;
 const LOCALNET_PAYNET_ALIAS_LANE_INDEX: u32 = 3;
 const LOCALNET_CBUAE_ALIAS_LANE_INDEX: u32 = 4;
 const LOCALNET_NEXUS_ALIAS_LANE_COUNT: i64 = 5;
+const LOCALNET_BPNG_ALIAS_DATASPACE_ID: u64 = 10;
+const LOCALNET_BPNG_ALIAS_LANE_INDEX: u32 = 3;
+const LOCALNET_BPNG_ALIAS_LANE_COUNT: i64 = 4;
 
 fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> bool {
-    matches!(sora_profile, Some(SoraProfile::Nexus))
+    matches!(
+        sora_profile,
+        Some(SoraProfile::Nexus | SoraProfile::Dataspace)
+    )
 }
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
@@ -1406,8 +1412,8 @@ fn localnet_dataspace_catalog(
         catalog.push(Value::Table(entry));
     }
 
-    if localnet_uses_alias_multilane_catalog(sora_profile) {
-        for (alias, id, description) in [
+    let extra_dataspaces = match sora_profile {
+        Some(SoraProfile::Nexus) => vec![
             (
                 "paynet",
                 i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
@@ -1420,14 +1426,22 @@ fn localnet_dataspace_catalog(
                     .expect("CBUAE dataspace id fits i64"),
                 "Nexus service alias dataspace",
             ),
-        ] {
-            let mut entry = Table::new();
-            entry.insert("alias".into(), Value::String(alias.to_owned()));
-            entry.insert("id".into(), Value::Integer(id));
-            entry.insert("description".into(), Value::String(description.to_owned()));
-            entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
-            catalog.push(Value::Table(entry));
-        }
+        ],
+        Some(SoraProfile::Dataspace) => vec![(
+            "bpng",
+            i64::try_from(LOCALNET_BPNG_ALIAS_DATASPACE_ID).expect("BPNG dataspace id fits i64"),
+            "Bank of Papua New Guinea private Digital Kina dataspace",
+        )],
+        None => Vec::new(),
+    };
+
+    for (alias, id, description) in extra_dataspaces {
+        let mut entry = Table::new();
+        entry.insert("alias".into(), Value::String(alias.to_owned()));
+        entry.insert("id".into(), Value::Integer(id));
+        entry.insert("description".into(), Value::String(description.to_owned()));
+        entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
+        catalog.push(Value::Table(entry));
     }
 
     catalog
@@ -1440,21 +1454,22 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         return None;
     }
 
-    let mut catalog = Vec::new();
-    for (index, alias, description, dataspace, visibility) in [
-        (
-            0_i64,
-            "core",
-            "Primary execution lane",
-            "universal",
-            "public",
-        ),
+    let mut lane_specs = vec![(
+        0_i64,
+        "core",
+        "Primary execution lane",
+        "universal",
+        "public",
+        None,
+    )];
+    lane_specs.extend([
         (
             1_i64,
             "governance",
             "Governance & parliament traffic",
             "governance",
             "restricted",
+            None,
         ),
         (
             2_i64,
@@ -1462,38 +1477,146 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
             "Zero-knowledge attachments",
             "zk",
             "restricted",
+            None,
         ),
-        (
-            i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
-            "paynet",
-            "PayNet private dataspace lane",
-            "paynet",
-            "public",
-        ),
-        (
-            i64::from(LOCALNET_CBUAE_ALIAS_LANE_INDEX),
-            "nexus",
-            "Nexus service alias lane",
-            "nexus",
-            "public",
-        ),
-    ] {
+    ]);
+    let lane_count = match sora_profile {
+        Some(SoraProfile::Nexus) => {
+            lane_specs.extend([
+                (
+                    i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
+                    "paynet",
+                    "PayNet private dataspace lane",
+                    "paynet",
+                    "public",
+                    None,
+                ),
+                (
+                    i64::from(LOCALNET_CBUAE_ALIAS_LANE_INDEX),
+                    "nexus",
+                    "Nexus service alias lane",
+                    "nexus",
+                    "public",
+                    None,
+                ),
+            ]);
+            LOCALNET_NEXUS_ALIAS_LANE_COUNT
+        }
+        Some(SoraProfile::Dataspace) => {
+            lane_specs.push((
+                i64::from(LOCALNET_BPNG_ALIAS_LANE_INDEX),
+                "bpng",
+                "Bank of Papua New Guinea private Digital Kina dataspace lane",
+                "bpng",
+                "restricted",
+                Some("parliament"),
+            ));
+            LOCALNET_BPNG_ALIAS_LANE_COUNT
+        }
+        None => return None,
+    };
+
+    let mut catalog = Vec::new();
+    for (index, alias, description, dataspace, visibility, governance) in lane_specs {
         let mut entry = Table::new();
         entry.insert("index".into(), Value::Integer(index));
         entry.insert("alias".into(), Value::String(alias.to_owned()));
         entry.insert("description".into(), Value::String(description.to_owned()));
         entry.insert("dataspace".into(), Value::String(dataspace.to_owned()));
         entry.insert("visibility".into(), Value::String(visibility.to_owned()));
+        if let Some(governance) = governance {
+            entry.insert("governance".into(), Value::String(governance.to_owned()));
+        }
         entry.insert("metadata".into(), Value::Table(Table::new()));
         catalog.push(Value::Table(entry));
     }
 
-    Some((LOCALNET_NEXUS_ALIAS_LANE_COUNT, catalog))
+    Some((lane_count, catalog))
+}
+
+fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Table> {
+    use toml::{Table, Value};
+
+    if !localnet_uses_alias_multilane_catalog(sora_profile) {
+        return None;
+    }
+
+    fn rule(lane: u32, dataspace: &str, matcher_key: &str, matcher_value: &str) -> toml::Value {
+        let mut matcher = Table::new();
+        matcher.insert(
+            matcher_key.to_owned(),
+            Value::String(matcher_value.to_owned()),
+        );
+        let description = match matcher_key {
+            "instruction" => match matcher_value {
+                "governance" => "Route governance instructions to the governance lane".to_owned(),
+                "smartcontract::deploy" => {
+                    "Route contract deployments to the zk lane for proof tracking".to_owned()
+                }
+                _ => format!("Route {matcher_value} instructions to the {dataspace} lane"),
+            },
+            "account" => format!("Route {matcher_value} account traffic to {dataspace} lane"),
+            _ => format!("Route {matcher_key}={matcher_value} traffic to {dataspace} lane"),
+        };
+        matcher.insert("description".into(), Value::String(description));
+
+        let mut rule = Table::new();
+        rule.insert("lane".into(), Value::Integer(i64::from(lane)));
+        rule.insert("dataspace".into(), Value::String(dataspace.to_owned()));
+        rule.insert("matcher".into(), Value::Table(matcher));
+        Value::Table(rule)
+    }
+
+    let mut rules = vec![
+        rule(1, "governance", "instruction", "governance"),
+        rule(2, "zk", "instruction", "smartcontract::deploy"),
+    ];
+
+    match sora_profile {
+        Some(SoraProfile::Nexus) => {
+            rules.push(rule(
+                LOCALNET_PAYNET_ALIAS_LANE_INDEX,
+                "paynet",
+                "account",
+                "*@paynet",
+            ));
+            rules.push(rule(
+                LOCALNET_PAYNET_ALIAS_LANE_INDEX,
+                "paynet",
+                "account",
+                "*@*.paynet",
+            ));
+        }
+        Some(SoraProfile::Dataspace) => {
+            rules.push(rule(
+                LOCALNET_BPNG_ALIAS_LANE_INDEX,
+                "bpng",
+                "account",
+                "*@bpng",
+            ));
+            rules.push(rule(
+                LOCALNET_BPNG_ALIAS_LANE_INDEX,
+                "bpng",
+                "account",
+                "*@mibank.bpng",
+            ));
+        }
+        None => {}
+    }
+
+    let mut policy = Table::new();
+    policy.insert("default_lane".into(), Value::Integer(0));
+    policy.insert(
+        "default_dataspace".into(),
+        Value::String("universal".to_owned()),
+    );
+    policy.insert("rules".into(), Value::Array(rules));
+    Some(policy)
 }
 
 fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<LaneId> {
     let mut lanes = vec![LaneId::SINGLE];
-    if localnet_uses_alias_multilane_catalog(sora_profile) {
+    if matches!(sora_profile, Some(SoraProfile::Nexus)) {
         lanes.push(LaneId::new(LOCALNET_PAYNET_ALIAS_LANE_INDEX));
         lanes.push(LaneId::new(LOCALNET_CBUAE_ALIAS_LANE_INDEX));
     }
@@ -1770,7 +1893,7 @@ fn render_peer_config(
         );
         fees.insert(
             "per_gas_unit_fee".into(),
-            Value::String("0.00005".to_owned()),
+            Value::String("0.000001".to_owned()),
         );
         fees.insert("sponsorship_enabled".into(), Value::Boolean(false));
         fees.insert("sponsor_max_fee".into(), Value::String("0".to_owned()));
@@ -1787,6 +1910,9 @@ fn render_peer_config(
     if let Some(fault_tolerance) = dataspace_fault_tolerance {
         let catalog = localnet_dataspace_catalog(sora_profile, fault_tolerance);
         nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
+    }
+    if let Some(policy) = localnet_routing_policy(sora_profile) {
+        nexus.insert("routing_policy".into(), Value::Table(policy));
     }
     root.insert("nexus".into(), Value::Table(nexus));
 
@@ -2558,7 +2684,19 @@ fn append_localnet_contract_permissions(
         dataspace: DataSpaceId::UNIVERSAL,
     }
     .into();
-    let mut seen = BTreeSet::new();
+    let mut seen: BTreeSet<(AccountId, Permission)> = genesis
+        .instructions()
+        .filter_map(|instruction| {
+            let grant = instruction.as_any().downcast_ref::<GrantBox>()?;
+            let GrantBox::Permission(grant_permission) = grant else {
+                return None;
+            };
+            Some((
+                grant_permission.destination().clone(),
+                grant_permission.object().clone(),
+            ))
+        })
+        .collect();
     let mut grants = Vec::new();
     let mut push_unique = |permission: Permission, destination: AccountId| {
         if seen.insert((destination.clone(), permission.clone())) {
@@ -5188,6 +5326,162 @@ mod tests {
     }
 
     #[test]
+    fn dataspace_localnet_binds_bpng_restricted_lane_before_genesis_signing() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let peer_count = NonZeroU16::new(4).expect("non-zero");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Dataspace),
+            perf_profile: None,
+            peers: peer_count,
+            seed: Some("localnet-bpng-dataspace-lane".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 34080,
+            base_p2p_port: 34337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let nexus = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .expect("nexus table");
+        assert_eq!(
+            nexus.get("lane_count").and_then(toml::Value::as_integer),
+            Some(LOCALNET_BPNG_ALIAS_LANE_COUNT),
+            "dataspace profile should declare the BPNG lane before genesis signing"
+        );
+
+        let lane_catalog = nexus
+            .get("lane_catalog")
+            .and_then(toml::Value::as_array)
+            .expect("nexus lane catalog");
+        let lanes_by_alias: BTreeMap<_, _> = lane_catalog
+            .iter()
+            .map(|entry| {
+                let entry = entry.as_table().expect("lane entry");
+                let alias = entry
+                    .get("alias")
+                    .and_then(toml::Value::as_str)
+                    .expect("lane alias")
+                    .to_owned();
+                let dataspace = entry
+                    .get("dataspace")
+                    .and_then(toml::Value::as_str)
+                    .expect("lane dataspace")
+                    .to_owned();
+                let visibility = entry
+                    .get("visibility")
+                    .and_then(toml::Value::as_str)
+                    .expect("lane visibility")
+                    .to_owned();
+                (alias, (dataspace, visibility))
+            })
+            .collect();
+        assert_eq!(
+            lanes_by_alias.get("bpng"),
+            Some(&("bpng".to_owned(), "restricted".to_owned()))
+        );
+
+        let dataspace_catalog = nexus
+            .get("dataspace_catalog")
+            .and_then(toml::Value::as_array)
+            .expect("nexus dataspace catalog");
+        let dataspaces_by_alias: BTreeMap<_, _> = dataspace_catalog
+            .iter()
+            .map(|entry| {
+                let entry = entry.as_table().expect("dataspace entry");
+                let alias = entry
+                    .get("alias")
+                    .and_then(toml::Value::as_str)
+                    .expect("dataspace alias")
+                    .to_owned();
+                let id = entry
+                    .get("id")
+                    .and_then(toml::Value::as_integer)
+                    .expect("dataspace id");
+                (alias, id)
+            })
+            .collect();
+        assert_eq!(
+            dataspaces_by_alias.get("bpng"),
+            Some(
+                &i64::try_from(LOCALNET_BPNG_ALIAS_DATASPACE_ID)
+                    .expect("BPNG dataspace id fits i64")
+            )
+        );
+
+        let routing_policy = nexus
+            .get("routing_policy")
+            .and_then(toml::Value::as_table)
+            .expect("routing policy");
+        let account_rules: BTreeSet<_> = routing_policy
+            .get("rules")
+            .and_then(toml::Value::as_array)
+            .expect("routing rules")
+            .iter()
+            .filter_map(|rule| {
+                rule.as_table()
+                    .and_then(|rule| rule.get("matcher"))
+                    .and_then(toml::Value::as_table)
+                    .and_then(|matcher| matcher.get("account"))
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert_eq!(
+            account_rules,
+            BTreeSet::from(["*@bpng".to_owned(), "*@mibank.bpng".to_owned()])
+        );
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let validator_lanes = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .map(|register| register.lane_id.as_u32())
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            validator_lanes,
+            BTreeSet::from([LaneId::SINGLE.as_u32()]),
+            "restricted BPNG dataspace lane must not be bootstrapped as a public stake-elected lane"
+        );
+
+        let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
+        let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
+        let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
+        let block =
+            decode_framed_signed_block(&bytes).expect("decode signed genesis from framed payload");
+
+        assert_eq!(
+            block.header().da_proof_policies_hash(),
+            Some(expected_hash),
+            "signed genesis should embed the BPNG dataspace proof policy bundle from peer config"
+        );
+    }
+
+    #[test]
     fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
@@ -6521,7 +6815,7 @@ mod tests {
         );
         assert_eq!(
             fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
-            Some("0.00005")
+            Some("0.000001")
         );
         assert_eq!(
             fees.get("fee_sink_account_id")

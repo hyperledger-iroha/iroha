@@ -58,6 +58,14 @@ fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
     out
 }
 
+fn unlisted_syscall_number() -> u8 {
+    (0u8..=u8::MAX)
+        .find(|number| {
+            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
+        })
+        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+}
+
 fn metadata_with_gas_limit(limit: u64) -> Metadata {
     let mut md = Metadata::default();
     let key = iroha_data_model::name::Name::from_str("gas_limit").expect("gas_limit key");
@@ -403,7 +411,8 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    let prog = minimal_ivm_program_with_syscall(1, 0xAB);
+    let unknown_syscall = unlisted_syscall_number();
+    let prog = minimal_ivm_program_with_syscall(1, unknown_syscall);
     let parsed = ProgramMetadata::parse(&prog).expect("valid header");
     let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
     let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -451,8 +460,9 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+            let expected = format!("unknown syscall number 0x{unknown_syscall:02x}");
             assert!(
-                msg.contains("unknown syscall number 0xab"),
+                msg.contains(&expected),
                 "unknown syscall must be rejected during admission, got {msg}"
             );
         }

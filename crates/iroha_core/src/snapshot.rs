@@ -1070,6 +1070,8 @@ fn try_write_snapshot(
     signing_key: &KeyPair,
     merkle_chunk_size: NonZeroUsize,
 ) -> Result<(), TryWriteError> {
+    ensure_state_is_backed_by_kura(state)?;
+
     std::fs::create_dir_all(store_dir.as_ref())
         .map_err(|err| TryWriteError::IO(err, store_dir.as_ref().to_path_buf()))?;
     let path_to_file = store_dir.as_ref().join(SNAPSHOT_FILE_NAME);
@@ -1148,6 +1150,32 @@ fn try_write_snapshot(
     promote_tmp_snapshot_file(&path_to_tmp_sig, &path_to_signature_file)?;
     promote_tmp_snapshot_file(&path_to_tmp_merkle, &path_to_merkle_file)?;
     sync_dir(store_dir.as_ref())?;
+    Ok(())
+}
+
+fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
+    let state_height = state.committed_height();
+    let kura_height = state.durable_block_count();
+    if state_height > kura_height {
+        return Err(TryWriteError::StateAheadOfKura {
+            state_height,
+            kura_height,
+        });
+    }
+
+    let Some(height) = NonZeroUsize::new(state_height) else {
+        return Ok(());
+    };
+    let state_hash = state.latest_block_hash_fast();
+    let kura_hash = state.durable_block_hash(height);
+    if state_hash != kura_hash {
+        return Err(TryWriteError::LatestBlockHashMismatch {
+            height: state_height,
+            state_hash,
+            kura_hash,
+        });
+    }
+
     Ok(())
 }
 
@@ -1311,11 +1339,27 @@ enum TryWriteError {
     Serialization(norito::json::Error),
     /// Error (de)serializing snapshot Merkle metadata
     MerkleSerialization(norito::json::Error),
+    /// Refusing to write snapshot at state height `{state_height}` because durable Kura height is `{kura_height}`
+    StateAheadOfKura {
+        /// Height recorded by state/block-hash journal.
+        state_height: usize,
+        /// Height durably indexed by Kura.
+        kura_height: usize,
+    },
+    /// Refusing to write snapshot at height `{height}` because latest state hash `{state_hash:?}` does not match Kura hash `{kura_hash:?}`
+    LatestBlockHashMismatch {
+        /// Height being snapshotted.
+        height: usize,
+        /// Latest block hash recorded by state.
+        state_hash: Option<HashOf<BlockHeader>>,
+        /// Block hash recorded by Kura at the same height.
+        kura_hash: Option<HashOf<BlockHeader>>,
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, num::NonZeroUsize};
+    use std::{fs::File, io::Write, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{ChainId, peer::PeerId};
@@ -1331,8 +1375,7 @@ mod tests {
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
 
-    fn state_factory() -> State {
-        let kura = Kura::blank_kura_for_testing();
+    fn state_factory_with_kura(kura: Arc<Kura>) -> State {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(
             crate::queue::tests::world_with_test_domains(),
@@ -1341,6 +1384,10 @@ mod tests {
         );
         state.chain_id = ChainId::from(TEST_CHAIN_ID);
         state
+    }
+
+    fn state_factory() -> State {
+        state_factory_with_kura(Kura::blank_kura_for_testing())
     }
 
     #[test]
@@ -1795,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    async fn missing_kura_block_is_reported() {
+    async fn snapshot_write_rejects_state_ahead_of_kura() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
@@ -1808,23 +1855,17 @@ mod tests {
             block_hashes.commit_for_tests();
         }
 
-        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
-        let Err(error) = try_read_snapshot(
-            &store_dir,
-            &Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test,
-            BlockCount(1),
-            TEST_CHUNK_SIZE,
-            key_pair.public_key(),
-            &state.chain_id,
-            #[cfg(feature = "telemetry")]
-            StateTelemetry::default(),
-        ) else {
-            panic!("missing Kura block should error");
+        let Err(error) = try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE) else {
+            panic!("snapshot write should reject state ahead of Kura");
         };
 
-        assert!(matches!(error, TryReadError::MissingBlock { height: 1 }));
+        assert!(matches!(
+            error,
+            TryWriteError::StateAheadOfKura {
+                state_height: 1,
+                kura_height: 0,
+            }
+        ));
     }
 
     #[test]
@@ -2061,7 +2102,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory();
+        let state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = KeyPair::random();
 
         let peer_key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -2128,7 +2169,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory();
+        let state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = KeyPair::random();
 
         let peer_key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -2172,6 +2213,8 @@ mod tests {
         kura.store_block(committed_block)
             .expect("store second block");
 
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
         // Store inside kura different block at the same height with different view change
         // index. This imitates a snapshot created for a block which is later discarded as a
         // soft-fork.
@@ -2187,8 +2230,6 @@ mod tests {
             .unwrap();
         kura.replace_top_block(committed_block)
             .expect("replace top block");
-
-        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
         let state = try_read_snapshot(
             &store_dir,
