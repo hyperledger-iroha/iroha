@@ -154,7 +154,7 @@ def test_stress_matrix_marks_throughput_under_delivery(tmp_path: Path) -> None:
     assert "accepted_tps=104.25" in evidence
     log = (out_dir / "permissioned-targeted-load.log").read_text()
     assert "--tps 20000" in log
-    assert "--max-inflight 4096" in log
+    assert "--max-inflight 20000" in log
 
 
 def test_sweep_aggregates_profile_and_seed(tmp_path: Path) -> None:

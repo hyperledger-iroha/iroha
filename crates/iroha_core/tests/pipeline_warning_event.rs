@@ -27,6 +27,8 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -154,6 +156,8 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,

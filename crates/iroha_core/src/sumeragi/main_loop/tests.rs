@@ -3715,6 +3715,8 @@ async fn genesis_commit_roster_seeded_when_missing() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let mut harness = test_actor_harness_with_config_and_height_and_kura(
@@ -33578,6 +33580,8 @@ async fn handle_qc_records_commit_roster_for_unknown_block() {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let mut harness =
@@ -49170,6 +49174,8 @@ fn persistent_kura_for_tests() -> (Arc<Kura>, tempfile::TempDir) {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let (kura, _) = Kura::new(
         &kura_cfg,
@@ -95505,6 +95511,133 @@ async fn handle_vote_uses_height_prf_seed() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 0;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 0;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    assert_eq!(u64::try_from(actor.state.committed_height()).unwrap(), 1);
+    assert_eq!(
+        actor.last_committed_height, 0,
+        "test requires the actor to lag committed state before inbound handling"
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let seed_epoch0 = actor
+        .epoch_manager
+        .as_ref()
+        .expect("epoch manager available")
+        .seed();
+    let height = 2u64;
+    let epoch = 1u64;
+    let canonical_seed_epoch1 = crate::sumeragi::deterministic_npos_seed_for_epoch_from_world(
+        &actor.state.world_view(),
+        actor.state.chain_id_ref(),
+        epoch,
+    );
+    assert_ne!(seed_epoch0, canonical_seed_epoch1);
+
+    let (stale_mode, stale_mode_tag, stale_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(stale_mode, ConsensusMode::Npos);
+    assert_eq!(stale_mode_tag, super::NPOS_TAG);
+    assert_eq!(stale_seed, Some(seed_epoch0));
+
+    let (view, fresh_signature_topology, stale_signature_topology) = (0u64..1024)
+        .find_map(|view| {
+            let stale_signature_topology = super::topology_for_view(
+                &topology,
+                height,
+                view,
+                super::NPOS_TAG,
+                Some(seed_epoch0),
+            );
+            let fresh_signature_topology = super::topology_for_view(
+                &topology,
+                height,
+                view,
+                super::NPOS_TAG,
+                Some(canonical_seed_epoch1),
+            );
+            (stale_signature_topology.as_ref().first() != fresh_signature_topology.as_ref().first())
+                .then_some((view, fresh_signature_topology, stale_signature_topology))
+        })
+        .expect("test requires epoch seeds that select different NPoS leaders");
+
+    let signer = 0u32;
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: genesis_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: Some(QcHeaderRef {
+            phase: Phase::Commit,
+            subject_block_hash: genesis_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+        }),
+        signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+        super::NPOS_TAG,
+        Some(canonical_seed_epoch1),
+    );
+    assert!(
+        super::vote_signature_check(
+            &vote,
+            &stale_signature_topology,
+            &actor.common_config.chain,
+            super::NPOS_TAG,
+        )
+        .is_err(),
+        "without epoch catch-up the same vote is verified against the stale epoch seed"
+    );
+    assert!(
+        super::vote_signature_check(
+            &vote,
+            &fresh_signature_topology,
+            &actor.common_config.chain,
+            super::NPOS_TAG,
+        )
+        .is_ok(),
+        "vote is valid once the actor advances to the next epoch seed"
+    );
+
+    actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::QcVote(vote.clone()),
+            None,
+        ))
+        .expect("inbound vote handled");
+
+    assert_eq!(actor.last_committed_height, 1);
+    let (_, _, fresh_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(fresh_seed, Some(canonical_seed_epoch1));
+    let key = (Phase::NewView, height, view, epoch, signer);
+    assert!(
+        actor.vote_log.contains_key(&key),
+        "inbound vote should be recorded after committed epoch catch-up"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_vote_uses_activation_height_mode_tag() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
@@ -95597,7 +95730,7 @@ async fn emit_precommit_vote_uses_activation_height_mode_tag() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
-    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
 
     let seed_epoch0 = [0xD6; 32];
     let seed_epoch1 = [0xD7; 32];
@@ -95615,7 +95748,7 @@ async fn emit_precommit_vote_uses_activation_height_mode_tag() {
     let height = 2u64;
     let view = 0u64;
     let epoch = actor.epoch_for_height(height);
-    let block = sample_block(height, view, None);
+    let block = sample_block(height, view, Some(genesis_hash));
     let block_hash = block.hash();
     insert_validated_pending(actor, block);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -95628,7 +95761,7 @@ async fn emit_precommit_vote_uses_activation_height_mode_tag() {
             epoch,
             ValidationStatus::Valid,
             &topology,
-            None,
+            Some(genesis_hash),
             Some((Hash::new([]), Hash::new([]))),
         ),
         "expected precommit vote to emit"

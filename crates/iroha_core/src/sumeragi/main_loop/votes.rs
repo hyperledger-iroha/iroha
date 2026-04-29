@@ -650,6 +650,7 @@ impl Actor {
     }
 
     pub(super) fn handle_vote_inbound(&mut self, vote: crate::sumeragi::consensus::Vote) {
+        self.process_committed_blocks_before_consensus("vote_inbound");
         if self.invalid_sig_penalty.is_suppressed(
             InvalidSigKind::Vote,
             vote.signer.into(),

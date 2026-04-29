@@ -5281,6 +5281,12 @@ pub struct Kura {
         default = "defaults::kura::ROSTER_SIDECAR_RETENTION"
     )]
     pub roster_sidecar_retention: NonZeroUsize,
+    /// Distinct remote peers that must advertise a canonical block before local body eviction.
+    #[config(
+        env = "KURA_EVICTION_REQUIRED_REPLICAS",
+        default = "defaults::kura::EVICTION_REQUIRED_REPLICAS"
+    )]
+    pub eviction_required_replicas: NonZeroUsize,
     /// Capacity of the merge-ledger cache used during compaction.
     #[config(
         env = "KURA_MERGE_LEDGER_CACHE_CAPACITY",
@@ -5310,6 +5316,7 @@ impl Kura {
             blocks_in_memory,
             block_sync_roster_retention,
             roster_sidecar_retention,
+            eviction_required_replicas,
             merge_ledger_cache_capacity,
             fsync_mode,
             fsync_interval_ms,
@@ -5326,6 +5333,7 @@ impl Kura {
             blocks_in_memory,
             block_sync_roster_retention,
             roster_sidecar_retention,
+            eviction_required_replicas,
             debug_output_new_blocks,
             merge_ledger_cache_capacity,
             fsync_mode,
