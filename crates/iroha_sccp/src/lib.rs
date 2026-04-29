@@ -6162,6 +6162,183 @@ mod tests {
     }
 
     #[test]
+    fn domain_codec_and_manifest_helpers_reject_unknown_values() {
+        const UNKNOWN_DOMAIN: u32 = 0xFFFF_FFFE;
+        const UNKNOWN_CODEC: u8 = 0xFE;
+
+        assert!(!is_supported_domain(UNKNOWN_DOMAIN));
+        assert_eq!(sccp_chain_key_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_counterparty_account_codec(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_verifier_backend_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_message_backend_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_registry_backend_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_manifest_seed_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_destination_rollout_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_destination_binding_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_submission_template_for_domain(UNKNOWN_DOMAIN), None);
+        assert_eq!(sccp_proof_manifest_for_domain(UNKNOWN_DOMAIN), None);
+
+        assert!(!is_supported_codec(UNKNOWN_CODEC));
+        assert_eq!(sccp_codec_key(UNKNOWN_CODEC), None);
+        assert_eq!(sccp_codec_description(UNKNOWN_CODEC), None);
+        assert_eq!(
+            decode_sccp_normalized_codec_value(UNKNOWN_CODEC, b"value"),
+            None
+        );
+        assert_eq!(
+            decode_sccp_normalized_codec_value(SCCP_CODEC_TEXT_UTF8, b""),
+            None
+        );
+    }
+
+    #[test]
+    fn counterparty_domain_helpers_prefer_the_remote_side() {
+        let asset_register = SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            home_domain: SCCP_DOMAIN_SORA,
+            nonce: 1,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            decimals: 18,
+        });
+        let route_activate = SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_TRON,
+            target_domain: SCCP_DOMAIN_SORA,
+            nonce: 2,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"tron:sora:xor".to_vec(),
+        });
+        let transfer = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            dest_domain: SCCP_DOMAIN_SORA,
+            nonce: 3,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 5,
+            sender_codec: SCCP_CODEC_SOLANA_BASE58,
+            sender: b"11111111111111111111111111111111".to_vec(),
+            recipient_codec: SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@sora".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"sol:sora:xor".to_vec(),
+        });
+
+        assert_eq!(
+            sccp_counterparty_domain_for_message_payload(&asset_register),
+            Some(SCCP_DOMAIN_ETH)
+        );
+        assert_eq!(
+            sccp_counterparty_domain_for_message_payload(&route_activate),
+            Some(SCCP_DOMAIN_TRON)
+        );
+        assert_eq!(
+            sccp_counterparty_domain_for_message_payload(&transfer),
+            Some(SCCP_DOMAIN_SOL)
+        );
+        assert_eq!(
+            sccp_counterparty_domain(SCCP_DOMAIN_SORA, SCCP_DOMAIN_SORA),
+            None
+        );
+    }
+
+    #[test]
+    fn payload_projection_covers_asset_register_and_route_activate() {
+        let asset_register = SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            home_domain: SCCP_DOMAIN_SORA,
+            nonce: 11,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            decimals: 18,
+        });
+        let route_activate = SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            target_domain: SCCP_DOMAIN_TON,
+            nonce: 12,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:xor".to_vec(),
+        });
+
+        assert_eq!(
+            sccp_message_payload_kind_key(&asset_register),
+            "asset_register"
+        );
+        match sccp_payload_projection(&asset_register).expect("asset projection") {
+            SccpPayloadProjectionV1::AssetRegister(projection) => {
+                assert_eq!(projection.target_domain, SCCP_DOMAIN_ETH);
+                assert_eq!(projection.home_domain, SCCP_DOMAIN_SORA);
+                assert_eq!(projection.decimals, 18);
+                assert_eq!(
+                    projection.asset_id,
+                    SccpNormalizedCodecValueV1::TextUtf8 {
+                        value: "xor#universal".to_owned()
+                    }
+                );
+            }
+            other => panic!("unexpected asset projection: {other:?}"),
+        }
+
+        assert_eq!(
+            sccp_message_payload_kind_key(&route_activate),
+            "route_activate"
+        );
+        match sccp_payload_projection(&route_activate).expect("route projection") {
+            SccpPayloadProjectionV1::RouteActivate(projection) => {
+                assert_eq!(projection.source_domain, SCCP_DOMAIN_SORA);
+                assert_eq!(projection.target_domain, SCCP_DOMAIN_TON);
+                assert_eq!(
+                    projection.route_id,
+                    SccpNormalizedCodecValueV1::TextUtf8 {
+                        value: "nexus:ton:xor".to_owned()
+                    }
+                );
+            }
+            other => panic!("unexpected route projection: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn canonical_payload_decoder_rejects_unknown_truncated_and_trailing_bytes() {
+        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 13,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 7,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let encoded = canonical_sccp_payload_bytes(&payload);
+        let mut truncated = encoded.clone();
+        truncated.pop();
+        let mut with_trailing = encoded.clone();
+        with_trailing.push(0);
+
+        assert_eq!(decode_canonical_sccp_payload_bytes(&[]), None);
+        assert_eq!(decode_canonical_sccp_payload_bytes(&[0xFE]), None);
+        assert_eq!(decode_canonical_sccp_payload_bytes(&truncated), None);
+        assert_eq!(decode_canonical_sccp_payload_bytes(&with_trailing), None);
+        assert_eq!(decode_canonical_sccp_payload_bytes(&encoded), Some(payload));
+    }
+
+    #[test]
     fn commitment_merkle_helpers_support_multi_message_blocks() {
         let payloads = [
             SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
@@ -6208,6 +6385,154 @@ mod tests {
         let proof = commitment_merkle_proof(&commitments, 1).expect("proof for middle message");
 
         assert_eq!(merkle_root_from_commitment(&commitments[1], &proof), root);
+    }
+
+    #[test]
+    fn merkle_helpers_cover_empty_singleton_and_odd_last_leaf() {
+        let payloads = [
+            SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
+                version: 1,
+                target_domain: SCCP_DOMAIN_ETH,
+                home_domain: SCCP_DOMAIN_SORA,
+                nonce: 21,
+                asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                decimals: 18,
+            }),
+            SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+                version: 1,
+                source_domain: SCCP_DOMAIN_SORA,
+                target_domain: SCCP_DOMAIN_ETH,
+                nonce: 22,
+                asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                route_id_codec: SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:eth:xor".to_vec(),
+            }),
+            SccpPayloadV1::Transfer(TransferPayloadV1 {
+                version: 1,
+                source_domain: SCCP_DOMAIN_SORA,
+                dest_domain: SCCP_DOMAIN_ETH,
+                nonce: 23,
+                asset_home_domain: SCCP_DOMAIN_SORA,
+                asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                amount: 77,
+                sender_codec: SCCP_CODEC_TEXT_UTF8,
+                sender: b"sora:bridge".to_vec(),
+                recipient_codec: SCCP_CODEC_EVM_HEX,
+                recipient: b"0x2222222222222222222222222222222222222222".to_vec(),
+                route_id_codec: SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:eth:xor".to_vec(),
+            }),
+        ];
+        let commitments: Vec<_> = payloads
+            .iter()
+            .map(hub_commitment_from_sccp_payload)
+            .collect();
+
+        assert_eq!(commitment_merkle_root(&[]), None);
+        assert_eq!(
+            commitment_merkle_proof(&commitments, commitments.len()),
+            None
+        );
+
+        let singleton = &commitments[..1];
+        let singleton_root = commitment_merkle_root(singleton).expect("singleton root");
+        let singleton_proof = commitment_merkle_proof(singleton, 0).expect("singleton proof");
+        assert!(singleton_proof.steps.is_empty());
+        assert_eq!(
+            merkle_root_from_commitment(&singleton[0], &singleton_proof),
+            singleton_root
+        );
+
+        let root = commitment_merkle_root(&commitments).expect("odd root");
+        let last_leaf_proof = commitment_merkle_proof(&commitments, 2).expect("last leaf proof");
+        assert_eq!(last_leaf_proof.steps.len(), 1);
+        assert_eq!(
+            merkle_root_from_commitment(&commitments[2], &last_leaf_proof),
+            root
+        );
+    }
+
+    #[test]
+    fn message_bundle_structure_rejects_commitment_kind_and_parliament_hash_tampering() {
+        let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 31,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 55,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        }));
+
+        let mut wrong_kind = bundle.clone();
+        wrong_kind.commitment.kind = SccpHubMessageKind::RouteActivate;
+        assert!(!verify_message_bundle_structure(&wrong_kind));
+
+        let mut unexpected_parliament_hash = bundle;
+        unexpected_parliament_hash
+            .commitment
+            .parliament_certificate_hash = Some([0x42; 32]);
+        assert!(!verify_message_bundle_structure(
+            &unexpected_parliament_hash
+        ));
+    }
+
+    #[test]
+    fn finality_proof_structure_rejects_bad_bitmap_and_empty_pop() {
+        let commitment_root = [0x88; 32];
+        let mut proof = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+
+        proof.commit_qc.signers_bitmap = vec![0b0000_0010];
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        proof.commit_qc.signers_bitmap = vec![0b0000_0001];
+        proof.commit_qc.validator_set_pops[0].clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+    }
+
+    #[test]
+    fn parliament_certificate_structure_rejects_duplicate_roster_and_signatures() {
+        let payload = GovernancePayloadV1::Pause(TokenControlPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_SORA,
+            nonce: 32,
+            sora_asset_id: [0x44; 32],
+        });
+        let encoded_payload = canonical_governance_payload_bytes(&payload);
+        let certificate =
+            decode_nexus_parliament_certificate(&sample_parliament_certificate(&payload))
+                .expect("decode parliament certificate");
+
+        let mut duplicate_roster = certificate.clone();
+        duplicate_roster
+            .roster_members
+            .push(duplicate_roster.roster_members[0].clone());
+        assert!(!verify_nexus_parliament_certificate_structure(
+            &duplicate_roster,
+            &encoded_payload,
+            7
+        ));
+
+        let mut duplicate_signature = certificate;
+        duplicate_signature
+            .signatures
+            .push(duplicate_signature.signatures[0].clone());
+        assert!(!verify_nexus_parliament_certificate_structure(
+            &duplicate_signature,
+            &encoded_payload,
+            7
+        ));
     }
 
     #[test]
