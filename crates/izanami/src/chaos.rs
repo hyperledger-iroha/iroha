@@ -142,6 +142,7 @@ const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 60_000;
 const IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS: u64 = 150_000;
 const IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS: u64 = 180_000;
 const IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP: usize = 64;
+const IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS: f64 = 200.0;
 const IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP: usize = 8;
 const IZANAMI_STABLE_SEVERE_STOPPING_TPS_CAP: f64 = 10.0;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
@@ -163,6 +164,8 @@ const IZANAMI_THROUGHPUT_CONFIRMATION_WINDOW_SECS: u64 = 60;
 const IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP: usize = 4_096;
 const IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS: u64 = 100;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
+const IZANAMI_STATUS_SAMPLE_MAX_PEERS: usize = 3;
+const IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS: u64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
 // Shared-host permissioned stable soak still needs enough DA slack for late commit votes and
@@ -2195,6 +2198,11 @@ fn effective_submission_max_inflight(config: &ChaosConfig) -> usize {
         submission_confirmation_mode(config),
         SubmissionConfirmationMode::AcceptedByIngress
     ) {
+        if !is_severe_stopping_recovery_run(config)
+            && config.tps > IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS
+        {
+            return config.max_inflight.max(1);
+        }
         let stable_cap = if is_severe_stopping_recovery_run(config) {
             IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP
         } else {
@@ -4558,12 +4566,18 @@ async fn sample_sumeragi_status_digest(
     if peers.is_empty() {
         return Err("no peers available for status sampling".to_owned());
     }
-    let peers = peers.to_vec();
+    let peers = peers
+        .iter()
+        .take(IZANAMI_STATUS_SAMPLE_MAX_PEERS)
+        .cloned()
+        .collect::<Vec<_>>();
     spawn_blocking(move || {
         let mut last_error = None;
         for peer in peers {
             let mut client = peer.client();
             client.set_operator_key_pair(sumeragi_phase_operator_keypair());
+            client.torii_request_timeout =
+                bounded_sumeragi_status_sample_request_timeout(client.torii_request_timeout);
             match client.get_sumeragi_status() {
                 Ok(status) => return Ok(SumeragiStatusDigest::from_wire(&status)),
                 Err(err) => {
@@ -4575,6 +4589,15 @@ async fn sample_sumeragi_status_digest(
     })
     .await
     .map_err(|err| format!("status sampling task failed: {err}"))?
+}
+
+fn bounded_sumeragi_status_sample_request_timeout(current: Duration) -> Duration {
+    let status_sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
+    if current.is_zero() || current > status_sample_timeout {
+        status_sample_timeout
+    } else {
+        current
+    }
 }
 
 impl BlockIntervalTracker {
@@ -8114,9 +8137,31 @@ mod tests {
         );
         assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
 
+        config.tps = 400.0;
+        assert_eq!(effective_submission_max_inflight(&config), 512);
+        assert!((effective_submission_tps(&config) - 400.0).abs() <= f64::EPSILON);
+
         config.workload_profile = WorkloadProfile::Chaos;
         assert_eq!(effective_submission_max_inflight(&config), 512);
-        assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
+        assert!((effective_submission_tps(&config) - 400.0).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn status_sample_request_timeout_is_short_and_bounded() {
+        let sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
+
+        assert_eq!(
+            bounded_sumeragi_status_sample_request_timeout(Duration::ZERO),
+            sample_timeout
+        );
+        assert_eq!(
+            bounded_sumeragi_status_sample_request_timeout(Duration::from_secs(70)),
+            sample_timeout
+        );
+        assert_eq!(
+            bounded_sumeragi_status_sample_request_timeout(Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
     }
 
     #[test]

@@ -84,6 +84,7 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert summary.exists()
     assert evidence.exists()
     assert "Mode: `stress-1200`" in report.read_text()
+    assert "throughput_evidence" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
 
     report.unlink()
@@ -108,7 +109,52 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert report.exists()
     assert "Iroha (Sumeragi permissioned)" in report.read_text()
     assert "targeted-load" in summary.read_text()
+    assert "throughput_evidence" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
+
+
+def test_stress_matrix_marks_throughput_under_delivery(tmp_path: Path) -> None:
+    out_dir = tmp_path / "matrix"
+    fake_izanami = tmp_path / "fake_izanami.sh"
+    fake_izanami.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo '2026-04-29T00:00:00Z INFO izanami::summary: izanami run complete "
+        "offered=83399 ingress_accepted=83399 submit_plans_started=83399 "
+        "submit_latency_p50_ms=411 submit_latency_p95_ms=1882 "
+        "submit_latency_p99_ms=3744 submit_latency_max_ms=10987 "
+        "final_quorum_min_height=Some(2) final_strict_min_height=Some(2) "
+        "final_max_peer_height_skew=Some(0)'\n"
+    )
+    fake_izanami.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--out",
+            str(out_dir),
+            "--mode",
+            "stress-20000",
+            "--only",
+            "targeted-load",
+            "--sumeragi-mode",
+            "permissioned",
+            "--izanami-cmd",
+            str(fake_izanami),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    summary_rows = (out_dir / "summary.tsv").read_text().splitlines()
+    assert summary_rows[1].split("\t")[3:5] == ["throughput-underdelivered", "degraded"]
+    evidence = (out_dir / "evidence.tsv").read_text()
+    assert "status=under-delivered" in evidence
+    assert "accepted_tps=104.25" in evidence
+    log = (out_dir / "permissioned-targeted-load.log").read_text()
+    assert "--tps 20000" in log
+    assert "--max-inflight 4096" in log
 
 
 def test_sweep_aggregates_profile_and_seed(tmp_path: Path) -> None:
