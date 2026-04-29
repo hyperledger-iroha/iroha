@@ -19390,6 +19390,51 @@ impl Actor {
         }
     }
 
+    fn handle_kura_replica_advert(
+        &self,
+        advert: super::message::KuraReplicaAdvert,
+        sender: Option<PeerId>,
+    ) {
+        let Some(peer) = sender else {
+            debug!(
+                height = advert.height,
+                block = %advert.block_hash,
+                "dropping Kura replica advert without authenticated sender"
+            );
+            return;
+        };
+        if &peer == self.common_config.peer.id() {
+            return;
+        }
+        self.kura.record_block_replica_advert(
+            peer,
+            advert.height,
+            advert.block_hash,
+            advert.payload_len,
+        );
+    }
+
+    fn maybe_cache_rehydrated_kura_body(&self, block: &SignedBlock) {
+        let block_hash = block.hash();
+        if !matches!(
+            self.kura.block_body_status_by_hash(block_hash),
+            Some(
+                crate::kura::BlockBodyStatus::RemoteOnly { .. }
+                    | crate::kura::BlockBodyStatus::Missing
+            )
+        ) {
+            return;
+        }
+        if let Err(err) = self.kura.cache_block_body(block) {
+            warn!(
+                ?err,
+                height = block.header().height().get(),
+                block = %block_hash,
+                "failed to cache rehydrated Kura block body"
+            );
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
         let queue_latency = msg.queue_latency_ms();
@@ -19606,6 +19651,10 @@ impl Actor {
             BlockMessage::FetchBlockBody(request) => self.handle_fetch_block_body(request),
             BlockMessage::BlockBodyResponse(response) => {
                 self.handle_block_body_response(response, sender)
+            }
+            BlockMessage::KuraReplicaAdvert(advert) => {
+                self.handle_kura_replica_advert(advert, sender);
+                Ok(())
             }
             BlockMessage::ProposalHint(hint) => self.handle_proposal_hint(hint),
             BlockMessage::QcVote(vote) => {
@@ -20128,6 +20177,7 @@ impl Actor {
             | BlockMessage::RbcDeliver(_)
             | BlockMessage::RbcReady(_) => self.consensus_payload_frame_cap,
             BlockMessage::FetchBlockBody(_)
+            | BlockMessage::KuraReplicaAdvert(_)
             | BlockMessage::ConsensusParams(_)
             | BlockMessage::ExecWitness(_)
             | BlockMessage::RbcInitRequest(_)
@@ -20421,7 +20471,8 @@ impl Actor {
             | BlockMessage::ConsensusParams(_)
             | BlockMessage::VrfCommit(_)
             | BlockMessage::VrfReveal(_)
-            | BlockMessage::FetchPendingBlock(_) => None,
+            | BlockMessage::FetchPendingBlock(_)
+            | BlockMessage::KuraReplicaAdvert(_) => None,
             BlockMessage::FetchBlockBody(request) => Some((request.height, request.view)),
             BlockMessage::BlockBodyResponse(response) => Some((response.height, response.view)),
             BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
@@ -20471,6 +20522,7 @@ impl Actor {
             BlockMessage::RbcReady(_) => "RbcReady",
             BlockMessage::RbcDeliver(_) => "RbcDeliver",
             BlockMessage::FetchPendingBlock(_) => "FetchPendingBlock",
+            BlockMessage::KuraReplicaAdvert(_) => "KuraReplicaAdvert",
             BlockMessage::ProposalHint(_) => "ProposalHint",
             BlockMessage::Proposal(_) => "Proposal",
         }

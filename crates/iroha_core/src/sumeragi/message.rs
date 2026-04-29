@@ -54,6 +54,8 @@ pub enum BlockMessage {
     RbcDeliver(#[skip_try_from] super::consensus::RbcDeliver),
     /// Request a pending (not-yet-committed) block payload by hash.
     FetchPendingBlock(#[skip_try_from] FetchPendingBlock),
+    /// Advertisement that a peer durably retains a canonical committed block body.
+    KuraReplicaAdvert(#[skip_try_from] KuraReplicaAdvert),
     /// Proposal hint: minimal header carrying `HighestQC` reference for the proposal.
     ProposalHint(#[skip_try_from] ProposalHint),
     /// Full proposal header + payload hash. Used for on-wire parent/HighestQC checks.
@@ -618,6 +620,17 @@ pub struct FetchPendingBlock {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub requester_roster_proof_known: Option<bool>,
+}
+
+/// Peer-local durable replica advertisement for canonical Kura block bodies.
+#[derive(Debug, Clone, Copy, Decode, Encode)]
+pub struct KuraReplicaAdvert {
+    /// Height of the advertised canonical block.
+    pub height: u64,
+    /// Hash of the advertised canonical block.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Canonical framed block-body length retained by the peer.
+    pub payload_len: u64,
 }
 
 #[cfg(test)]

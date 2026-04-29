@@ -1374,9 +1374,37 @@ fn execute_register(
     validate_registration(state_transaction, &multisig_account_id, &spec)?;
 
     if account_exists(state_transaction, &multisig_account_id)? {
-        return Err(ValidationFail::NotPermitted(format!(
-            "multisig account `{multisig_account_id}` already exists"
-        )));
+        let expected_account = AccountId::new_multisig(
+            multisig_policy_from_spec(&spec).map_err(ValidationFail::InstructionFailed)?,
+        );
+        if expected_account != multisig_account_id {
+            return Err(ValidationFail::NotPermitted(format!(
+                "multisig account `{multisig_account_id}` already exists and cannot be rekeyed to `{expected_account}` by registration"
+            )));
+        }
+        ensure_multisig_account_state_materialized(state_transaction, &multisig_account_id)?;
+        let previous_state = load_multisig_account_state(state_transaction, &multisig_account_id)?;
+        if previous_state.home_domain != home_domain {
+            return Err(ValidationFail::NotPermitted(format!(
+                "multisig account `{multisig_account_id}` already exists with a different home domain"
+            )));
+        }
+        if previous_state.spec.signatories != spec.signatories
+            || previous_state.spec.quorum != spec.quorum
+        {
+            return Err(ValidationFail::NotPermitted(format!(
+                "multisig account `{multisig_account_id}` already exists with a different signatory policy"
+            )));
+        }
+        let next_state = MultisigAccountState::new(multisig_account_id.clone(), home_domain, spec);
+        reconcile_multisig_transition(
+            authority,
+            state_transaction,
+            &multisig_account_id,
+            Some(&previous_state),
+            Some(&next_state),
+        )?;
+        return Ok(());
     }
 
     let register_account = iroha_data_model::account::NewAccount::new(multisig_account_id.clone());
@@ -2991,6 +3019,89 @@ mod tests {
                 .expect("stored spec must include expected signatory subject");
             assert_eq!(actual_weight, *expected_weight);
         }
+    }
+
+    #[test]
+    fn register_existing_multisig_account_refreshes_ttl() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-register-refresh-ttl"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
+
+        let owner = KeyPair::random();
+        let owner_id = new_account_id(&owner);
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &owner_id,
+            "register owner",
+        );
+
+        let signer = KeyPair::random();
+        let signer_id = new_account_id(&signer);
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer_id,
+            "register signer",
+        );
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(
+                new_account_id(&KeyPair::random()),
+                domain_id.clone(),
+                spec.clone(),
+            ),
+        )
+        .expect("initial register");
+
+        let registered_multisig_id =
+            AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
+        let refreshed_ttl = NonZeroU64::new(86_400_000).unwrap();
+        let refreshed_spec = MultisigSpec {
+            transaction_ttl_ms: refreshed_ttl,
+            ..spec
+        };
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(
+                registered_multisig_id.clone(),
+                domain_id.clone(),
+                refreshed_spec.clone(),
+            ),
+        )
+        .expect("refresh existing multisig ttl");
+
+        let stored_spec = multisig_spec(&state_transaction, &registered_multisig_id)
+            .expect("refreshed spec must decode");
+        assert_eq!(stored_spec.transaction_ttl_ms, refreshed_ttl);
+        assert_eq!(stored_spec.signatories, refreshed_spec.signatories);
+        assert_eq!(stored_spec.quorum, refreshed_spec.quorum);
     }
 
     #[test]

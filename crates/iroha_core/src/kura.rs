@@ -3,7 +3,7 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZeroUsize,
@@ -23,8 +23,9 @@ use iroha_config::{
     parameters::{
         actual::{Kura as Config, LaneConfig, LaneConfigEntry},
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES,
-            MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
+            FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+            ROSTER_SIDECAR_RETENTION,
         },
     },
 };
@@ -75,6 +76,7 @@ const ROSTER_SIDECARS_INDEX_FILE: &str = "roster_sidecars.index";
 const PIPELINE_INDEX_ENTRY_SIZE: usize = core::mem::size_of::<u64>() * 2;
 const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const BLOCK_REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
@@ -110,9 +112,13 @@ pub struct Kura {
     active_merge_path: Mutex<PathBuf>,
     /// Maximum on-disk footprint for Kura block storage (0 = unlimited).
     max_disk_usage_bytes: u64,
-    /// Cached disk usage for budget enforcement (excludes DA payloads).
+    /// Distinct remote peers required before Kura may evict a local canonical block body.
+    eviction_required_replicas: NonZeroUsize,
+    /// Recently advertised remote canonical block replicas, keyed by height and hash.
+    replica_registry: Mutex<BlockReplicaRegistry>,
+    /// Cached disk usage for budget enforcement.
     disk_usage: AtomicU64,
-    /// Cached total disk usage including DA payloads.
+    /// Cached total disk usage.
     disk_usage_total: AtomicU64,
     /// Cached sum of budgeted bytes for in-memory blocks not yet durably indexed.
     pending_budget_bytes: AtomicU64,
@@ -148,6 +154,32 @@ pub struct Kura {
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
+type BlockReplicaKey = (u64, HashOf<BlockHeader>);
+type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+
+#[derive(Clone, Copy, Debug)]
+struct BlockReplicaAdvert {
+    payload_len: u64,
+    observed_at: Instant,
+}
+
+/// Local body availability for a canonical block known to Kura.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BlockBodyStatus {
+    /// Body is cached in memory.
+    Cached,
+    /// Body is present in `blocks.data`.
+    Inline,
+    /// Body is present only in the local sidecar cache.
+    LocalSidecar,
+    /// Body is not local, but enough peers have advertised replicas.
+    RemoteOnly {
+        /// Number of distinct matching peer adverts.
+        replicas: usize,
+    },
+    /// Body is neither local nor sufficiently replicated.
+    Missing,
+}
 
 #[derive(Clone, Copy, Debug)]
 enum FsyncTarget {
@@ -476,8 +508,8 @@ enum BlockNotify {
 }
 
 impl Kura {
-    /// Return `true` when the block payload is available locally (in memory, on disk, or in the
-    /// DA payload store).
+    /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
+    /// local sidecar cache).
     pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
         let Some(height) = self.get_block_height_by_hash(hash) else {
             return false;
@@ -486,19 +518,58 @@ impl Kura {
     }
 
     fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
+        matches!(
+            self.block_body_status_by_height(block_height),
+            Some(BlockBodyStatus::Cached | BlockBodyStatus::Inline | BlockBodyStatus::LocalSidecar)
+        )
+    }
+
+    /// Record that a remote peer advertised a canonical block body replica.
+    pub(crate) fn record_block_replica_advert(
+        &self,
+        peer: PeerId,
+        height: u64,
+        hash: HashOf<BlockHeader>,
+        payload_len: u64,
+    ) {
+        if height == 0 || payload_len == 0 {
+            return;
+        }
+        let now = Instant::now();
+        let mut registry = self.replica_registry.lock();
+        Self::prune_expired_replica_adverts(&mut registry, now);
+        registry.entry((height, hash)).or_default().insert(
+            peer,
+            BlockReplicaAdvert {
+                payload_len,
+                observed_at: now,
+            },
+        );
+    }
+
+    /// Return local/remote body status for a canonical block hash known to Kura.
+    pub(crate) fn block_body_status_by_hash(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<BlockBodyStatus> {
+        let height = self.get_block_height_by_hash(hash)?;
+        self.block_body_status_by_height(height)
+    }
+
+    fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
         let (block_index, has_cached) = {
             let data = self.block_data.lock();
             let idx = block_height.get().saturating_sub(1);
             if data.len() <= idx {
-                return false;
+                return None;
             }
             (idx, data[idx].1.is_some())
         };
         if has_cached {
-            return true;
+            return Some(BlockBodyStatus::Cached);
         }
 
-        let (index, da_path) = {
+        let (index, expected_hash, da_path) = {
             let mut store = self.block_store.lock();
             let index = match store.read_block_index(block_index as u64) {
                 Ok(index) => index,
@@ -508,24 +579,86 @@ impl Kura {
                         block_index,
                         "failed to read block index while checking payload availability"
                     );
-                    return false;
+                    return Some(BlockBodyStatus::Missing);
+                }
+            };
+            let expected_hash = match store.read_block_hashes(block_index as u64, 1) {
+                Ok(hashes) => hashes.first().copied(),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        block_index,
+                        "failed to read block hash while checking payload availability"
+                    );
+                    None
                 }
             };
             let da_path = store.da_block_path(block_height.get() as u64);
-            (index, da_path)
+            (index, expected_hash, da_path)
         };
 
         if index.length == 0 {
-            return false;
+            return Some(BlockBodyStatus::Missing);
         }
         if !index.is_evicted() {
-            return true;
+            return Some(BlockBodyStatus::Inline);
         }
 
-        let Ok(metadata) = std::fs::metadata(&da_path) else {
-            return false;
+        if let Ok(metadata) = std::fs::metadata(&da_path)
+            && metadata.len() == index.length
+        {
+            return Some(BlockBodyStatus::LocalSidecar);
+        }
+
+        let Some(expected_hash) = expected_hash else {
+            return Some(BlockBodyStatus::Missing);
         };
-        metadata.len() == index.length
+        let replicas =
+            self.matching_replica_count(block_height.get() as u64, expected_hash, index.length);
+        if replicas >= self.eviction_required_replicas.get() {
+            Some(BlockBodyStatus::RemoteOnly { replicas })
+        } else {
+            Some(BlockBodyStatus::Missing)
+        }
+    }
+
+    fn prune_expired_replica_adverts(registry: &mut BlockReplicaRegistry, now: Instant) {
+        registry.retain(|_, peers| {
+            peers.retain(|_, advert| {
+                now.saturating_duration_since(advert.observed_at) <= BLOCK_REPLICA_ADVERT_TTL
+            });
+            !peers.is_empty()
+        });
+    }
+
+    fn matching_replica_count(
+        &self,
+        height: u64,
+        hash: HashOf<BlockHeader>,
+        payload_len: u64,
+    ) -> usize {
+        let now = Instant::now();
+        let mut registry = self.replica_registry.lock();
+        Self::prune_expired_replica_adverts(&mut registry, now);
+        registry
+            .get(&(height, hash))
+            .map(|peers| {
+                peers
+                    .values()
+                    .filter(|advert| advert.payload_len == payload_len)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    fn has_required_remote_replicas(
+        &self,
+        height: u64,
+        hash: HashOf<BlockHeader>,
+        payload_len: u64,
+    ) -> bool {
+        self.matching_replica_count(height, hash, payload_len)
+            >= self.eviction_required_replicas.get()
     }
 
     /// Initialize Kura.
@@ -606,6 +739,8 @@ impl Kura {
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
+            eviction_required_replicas: config.eviction_required_replicas,
+            replica_registry: Mutex::new(BTreeMap::new()),
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
             pending_budget_bytes: AtomicU64::new(0),
@@ -685,6 +820,8 @@ impl Kura {
             active_blocks_dir: Mutex::new(blocks_root),
             active_merge_path: Mutex::new(PathBuf::new()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
+            eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
+            replica_registry: Mutex::new(BTreeMap::new()),
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
             pending_budget_bytes: AtomicU64::new(0),
@@ -721,9 +858,8 @@ impl Kura {
 
     /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///
-    /// This includes DA-backed payloads, which are excluded from budget accounting.
-    /// Use [`Self::refresh_disk_usage_bytes`] to resync budget usage, and
-    /// [`Self::refresh_total_disk_usage_bytes`] for the full on-disk view.
+    /// Local sidecar payloads count toward the same budget as canonical block files.
+    /// Use [`Self::refresh_disk_usage_bytes`] to resync the cached value.
     pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
         self.maybe_refresh_total_disk_usage_bytes()?;
         Ok(self.disk_usage_total.load(Ordering::Relaxed))
@@ -738,7 +874,7 @@ impl Kura {
         Ok(usage)
     }
 
-    /// Recompute total on-disk bytes (including DA payloads) and refresh the cached value.
+    /// Recompute total on-disk bytes and refresh the cached value.
     pub(crate) fn refresh_total_disk_usage_bytes(&self) -> Result<u64> {
         let usage = self.kura_total_disk_usage_bytes()?;
         self.disk_usage_total.store(usage, Ordering::Relaxed);
@@ -779,17 +915,6 @@ impl Kura {
             self.add_disk_usage_bytes(after - before);
         } else {
             self.sub_disk_usage_bytes(before - after);
-        }
-    }
-
-    fn update_total_disk_usage_delta(&self, before: u64, after: u64) {
-        if before == after {
-            return;
-        }
-        if after > before {
-            self.add_total_disk_usage_bytes(after - before);
-        } else {
-            self.sub_total_disk_usage_bytes(before - after);
         }
     }
 
@@ -861,7 +986,7 @@ impl Kura {
         }
     }
 
-    /// Evict persisted block bodies into DA-backed storage to reclaim disk budget.
+    /// Evict persisted block bodies after enough remote replicas advertise the same height/hash.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn evict_block_bodies(&self, bytes_needed: u64) -> Result<u64> {
         if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
@@ -885,12 +1010,25 @@ impl Kura {
 
         let mut indices = vec![BlockIndex::default(); persisted];
         block_store.read_block_indices(0, &mut indices)?;
+        let hashes = block_store.read_block_hashes(0, persisted)?;
 
         let mut evict_mask = vec![false; persisted];
         let mut freed = 0u64;
         for idx in 1..evict_limit {
             let entry = indices[idx];
             if entry.is_evicted() {
+                continue;
+            }
+            let height = idx.saturating_add(1) as u64;
+            let hash = hashes[idx];
+            if !self.has_required_remote_replicas(height, hash, entry.length) {
+                debug!(
+                    height,
+                    block = %hash,
+                    required_replicas = self.eviction_required_replicas.get(),
+                    payload_len = entry.length,
+                    "skipping Kura body eviction without enough remote replicas"
+                );
                 continue;
             }
             freed = freed.saturating_add(entry.length);
@@ -905,9 +1043,6 @@ impl Kura {
         }
 
         let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
-        let mut da_added = 0u64;
-
-        block_store.ensure_da_blocks_dir()?;
         let mut buffer = Vec::new();
         for idx in 1..evict_limit {
             if !evict_mask[idx] {
@@ -919,26 +1054,15 @@ impl Kura {
             }
             let height = idx.saturating_add(1) as u64;
             let path = block_store.da_block_path(height);
-            if path.exists() {
-                continue;
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    if let Some(parent) = path.parent() {
+                        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                    }
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => return Err(Error::IO(err, path)),
             }
-            let length: usize = entry.length.try_into()?;
-            buffer.resize(length, 0);
-            block_store.read_block_data(entry.start, &mut buffer)?;
-            let tmp_path = path.with_extension("norito.tmp");
-            let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
-                opts.write(true).create(true).truncate(true);
-            })?;
-            tmp_file.try_io(|file| {
-                file.write_all(&buffer)?;
-                file.flush()?;
-                file.sync_data()
-            })?;
-            std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-            if let Some(parent) = path.parent() {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-            da_added = da_added.saturating_add(entry.length);
         }
 
         let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
@@ -1001,7 +1125,6 @@ impl Kura {
         block_store.drop_cached_handles();
         let after_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
-        self.add_total_disk_usage_bytes(da_added);
 
         if freed > 0 {
             if let Some(telemetry) = self.telemetry.get() {
@@ -1390,6 +1513,25 @@ impl Kura {
         Ok(())
     }
 
+    fn append_merge_entry_for_existing_block_if_missing(
+        &self,
+        height: u64,
+        entry: &MergeLedgerEntry,
+    ) -> Result<()> {
+        let total_entries = self.merge_log.lock().total_entries;
+        let expected_entries = usize::try_from(height)?;
+        if total_entries >= expected_entries {
+            return Ok(());
+        }
+        if total_entries.saturating_add(1) != expected_entries {
+            return Err(Error::BlockHeightGap {
+                expected_next_height: u64::try_from(total_entries.saturating_add(1))?,
+                actual_height: height,
+            });
+        }
+        self.append_merge_entry(entry)
+    }
+
     /// Snapshot merge-ledger entries retained in the in-memory cache.
     pub fn merge_ledger_snapshot(&self) -> Vec<MergeLedgerEntry> {
         self.merge_log.lock().snapshot()
@@ -1504,8 +1646,22 @@ impl Kura {
     ) -> Result<ChainValidation, Error> {
         let mut block_indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut block_indices)?;
+        let hashes_count = block_store.read_hashes_count()?;
+        let expected_hashes = if hashes_count == block_index_count as u64 {
+            Some(block_store.read_block_hashes(0, block_index_count)?)
+        } else {
+            if hashes_count > 0 {
+                warn!(
+                    hashes_count,
+                    index_count = block_index_count,
+                    "strict Kura init cannot use hashes file for remote-only block metadata"
+                );
+            }
+            None
+        };
 
-        let validation = Self::validate_block_chain(block_store, &block_indices, None)?;
+        let validation =
+            Self::validate_block_chain(block_store, &block_indices, expected_hashes.as_deref())?;
         block_store.overwrite_block_hashes(&validation.hashes)?;
 
         Ok(validation)
@@ -1550,11 +1706,23 @@ impl Kura {
                 );
                 break;
             }
-            let decoded_block =
-                if block.is_evicted() {
-                    let payload = match block_store.read_da_block_bytes(height, block.length) {
-                        Ok(payload) => payload,
-                        Err(error) => {
+            let decoded_block = if block.is_evicted() {
+                let payload = match block_store.read_da_block_bytes(height, block.length) {
+                    Ok(payload) => Some(payload),
+                    Err(error) => {
+                        if let Some(expected_hashes) = expected_hashes {
+                            let expected = expected_hashes[idx];
+                            debug!(
+                                ?error,
+                                block_index = idx,
+                                height,
+                                block = %expected,
+                                "preserving remote-only evicted block metadata from hashes file"
+                            );
+                            prev_block_hash = Some(expected);
+                            block_hashes.push(expected);
+                            continue;
+                        } else {
                             truncated = Some(true);
                             error!(
                                 ?error,
@@ -1564,69 +1732,119 @@ impl Kura {
                             );
                             break;
                         }
-                    };
-                    match decode_framed_signed_block(&payload) {
+                    }
+                };
+                let Some(payload) = payload else {
+                    continue;
+                };
+                match decode_framed_signed_block(&payload) {
+                    Ok(decoded_block) => {
+                        if let Some(expected_hashes) = expected_hashes {
+                            let expected = expected_hashes[idx];
+                            let actual = decoded_block.hash();
+                            if actual != expected {
+                                warn!(
+                                    expected = %expected,
+                                    actual = %actual,
+                                    block_index = idx,
+                                    height,
+                                    "removing local sidecar with mismatched block hash and preserving remote-only metadata"
+                                );
+                                if let Err(remove_error) = block_store.remove_da_block_file(height)
+                                {
+                                    warn!(
+                                        ?remove_error,
+                                        height, "failed to remove hash-mismatched DA block sidecar"
+                                    );
+                                }
+                                prev_block_hash = Some(expected);
+                                block_hashes.push(expected);
+                                continue;
+                            }
+                        }
+                        decoded_block
+                    }
+                    Err(error) => {
+                        if let Some(expected_hashes) = expected_hashes {
+                            let expected = expected_hashes[idx];
+                            warn!(
+                                ?error,
+                                block_index = idx,
+                                height,
+                                block = %expected,
+                                "removing malformed local sidecar and preserving remote-only block metadata"
+                            );
+                            if let Err(remove_error) = block_store.remove_da_block_file(height) {
+                                warn!(
+                                    ?remove_error,
+                                    height, "failed to remove malformed DA block sidecar"
+                                );
+                            }
+                            prev_block_hash = Some(expected);
+                            block_hashes.push(expected);
+                            continue;
+                        }
+                        truncated = Some(true);
+                        error!(
+                            ?error,
+                            block_index = idx,
+                            height,
+                            "Malformed evicted block payload; pruning to last valid block"
+                        );
+                        break;
+                    }
+                }
+            } else {
+                let end =
+                    block
+                        .start
+                        .checked_add(block.length)
+                        .ok_or(Error::CorruptedBlockRange {
+                            start: block.start,
+                            length: block.length,
+                            data_len: data_file_len,
+                        })?;
+                if end > data_file_len {
+                    truncated = Some(true);
+                    error!(
+                        start = block.start,
+                        length = block.length,
+                        data_len = data_file_len,
+                        "Block index points past data file; pruning to last valid block"
+                    );
+                    break;
+                }
+                let length: usize = block.length.try_into()?;
+                let additional = length.saturating_sub(block_data_buffer.len());
+                if additional > 0 {
+                    block_data_buffer.try_reserve(additional)?;
+                }
+                block_data_buffer.resize(length, 0);
+
+                match block_store.read_block_data(block.start, &mut block_data_buffer) {
+                    Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
                         Ok(decoded_block) => decoded_block,
                         Err(error) => {
                             truncated = Some(true);
                             error!(
                                 ?error,
                                 block_index = idx,
-                                height,
-                                "Malformed evicted block payload; pruning to last valid block"
+                                "Malformed block payload; pruning to last valid block"
                             );
                             break;
                         }
-                    }
-                } else {
-                    let end = block.start.checked_add(block.length).ok_or(
-                        Error::CorruptedBlockRange {
-                            start: block.start,
-                            length: block.length,
-                            data_len: data_file_len,
-                        },
-                    )?;
-                    if end > data_file_len {
+                    },
+                    Err(error) => {
                         truncated = Some(true);
                         error!(
-                            start = block.start,
-                            length = block.length,
-                            data_len = data_file_len,
-                            "Block index points past data file; pruning to last valid block"
+                            ?error,
+                            block_index = idx,
+                            "Failed to read block payload; pruning to last valid block"
                         );
                         break;
                     }
-                    let length: usize = block.length.try_into()?;
-                    let additional = length.saturating_sub(block_data_buffer.len());
-                    if additional > 0 {
-                        block_data_buffer.try_reserve(additional)?;
-                    }
-                    block_data_buffer.resize(length, 0);
-
-                    match block_store.read_block_data(block.start, &mut block_data_buffer) {
-                        Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
-                            Ok(decoded_block) => decoded_block,
-                            Err(error) => {
-                                truncated = Some(true);
-                                error!(
-                                    ?error,
-                                    block_index = idx,
-                                    "Malformed block payload; pruning to last valid block"
-                                );
-                                break;
-                            }
-                        },
-                        Err(error) => {
-                            truncated = Some(true);
-                            error!(
-                                ?error,
-                                block_index = idx,
-                                "Failed to read block payload; pruning to last valid block"
-                            );
-                            break;
-                        }
-                    }
-                };
+                }
+            };
 
             if prev_block_hash != decoded_block.header().prev_block_hash() {
                 truncated = Some(true);
@@ -1758,6 +1976,18 @@ impl Kura {
         Some(hash_data_guard[block_index].0)
     }
 
+    /// Get the committed hash at the provided height from Kura's durable hash journal.
+    pub fn get_durable_block_hash(
+        &self,
+        block_height: NonZeroUsize,
+    ) -> Option<HashOf<BlockHeader>> {
+        let height = u64::try_from(block_height.get()).ok()?;
+        let mut block_store = self.block_store.lock();
+        Self::read_durable_hash_at_height(&mut block_store, height)
+            .ok()
+            .flatten()
+    }
+
     /// Search through blocks for the height of the block with the given hash.
     pub fn get_block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
         self.block_data
@@ -1766,6 +1996,53 @@ impl Kura {
             .position(|(block_hash, _block_arc)| *block_hash == hash)
             .and_then(|idx| idx.checked_add(1))
             .and_then(NonZeroUsize::new)
+    }
+
+    /// Return the durable height and encoded payload length for a known canonical block hash.
+    pub(crate) fn durable_block_payload_len_by_hash(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<(u64, u64)> {
+        let height = self.get_block_height_by_hash(hash)?;
+        let height_u64 = u64::try_from(height.get()).ok()?;
+        let mut store = self.block_store.lock();
+        let durable_hash = Self::read_durable_hash_at_height(&mut store, height_u64).ok()??;
+        if durable_hash != hash {
+            return None;
+        }
+        let index = store.read_block_index(height_u64.saturating_sub(1)).ok()?;
+        (index.length > 0).then_some((height_u64, index.length))
+    }
+
+    /// Cache a canonical block body in the local sidecar store after remote rehydration.
+    ///
+    /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
+    /// are left untouched.
+    pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
+        let height = block.header().height().get();
+        let hash = block.hash();
+        self.ensure_durable_block_at_height(height, hash)?;
+        let mut store = self.block_store.lock();
+        let index = store.read_block_index(height.saturating_sub(1))?;
+        if !index.is_evicted() {
+            return Ok(());
+        }
+        let wire = block.canonical_wire()?;
+        let (frame, _versioned) = wire.into_parts();
+        let expected_len = u64::try_from(frame.len())?;
+        if index.length != expected_len {
+            return Err(Error::CorruptedBlockRange {
+                start: index.start,
+                length: expected_len,
+                data_len: index.length,
+            });
+        }
+        let before = Self::block_store_tracked_bytes(&mut store)?;
+        store.write_da_block_bytes(height, &frame)?;
+        let after = Self::block_store_tracked_bytes(&mut store)?;
+        drop(store);
+        self.update_disk_usage_delta(before, after);
+        Ok(())
     }
 
     /// Get a reference to block by height, loading it from disk if needed.
@@ -1961,18 +2238,6 @@ impl Kura {
                 None
             }
         };
-        let da_before = if self.disk_usage_total_initialized.load(Ordering::Relaxed) {
-            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    warn!(?err, "failed to measure DA payload bytes before append");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         block_store.append_block_batch_at(
             start_height,
             std::slice::from_ref(block),
@@ -1984,12 +2249,6 @@ impl Kura {
             match Self::block_store_tracked_bytes(&mut block_store) {
                 Ok(after_bytes) => self.update_disk_usage_delta(block_store_before, after_bytes),
                 Err(err) => warn!(?err, "failed to measure block store bytes after append"),
-            }
-        }
-        if let Some(da_before) = da_before {
-            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
-                Ok(da_after) => self.update_total_disk_usage_delta(da_before, da_after),
-                Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
             }
         }
         Ok(())
@@ -2015,6 +2274,9 @@ impl Kura {
             if actual_height <= u64::try_from(block_data.len())? {
                 drop(block_data);
                 self.ensure_durable_block_at_height(actual_height, block_hash)?;
+                if let Some(entry) = merge_entry {
+                    self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
+                }
                 debug!(
                     height = actual_height,
                     ?block_hash,
@@ -2036,6 +2298,9 @@ impl Kura {
         if actual_height <= u64::try_from(block_data.len())? {
             drop(block_data);
             self.ensure_durable_block_at_height(actual_height, block_hash)?;
+            if let Some(entry) = merge_entry {
+                self.append_merge_entry_for_existing_block_if_missing(actual_height, entry)?;
+            }
             debug!(
                 height = actual_height,
                 ?block_hash,
@@ -2158,6 +2423,7 @@ impl Kura {
                 .path_to_blockchain
                 .join(format!("{HASHES_FILE_NAME}.tmp")),
         )?;
+        let da_len = Self::dir_file_bytes(&block_store.da_blocks_dir)?;
         Ok(data_len
             .saturating_add(index_len)
             .saturating_add(hashes_len)
@@ -2165,24 +2431,8 @@ impl Kura {
             .saturating_add(marker_tmp_len)
             .saturating_add(data_tmp_len)
             .saturating_add(index_tmp_len)
-            .saturating_add(hashes_tmp_len))
-    }
-
-    fn da_payload_bytes_for_range(
-        block_store: &BlockStore,
-        start_height: u64,
-        count: usize,
-    ) -> Result<u64> {
-        if block_store.da_blocks_dir.as_os_str().is_empty() || count == 0 {
-            return Ok(0);
-        }
-        let mut total = 0u64;
-        for offset in 0..count {
-            let height = start_height.saturating_add(offset as u64).saturating_add(1);
-            let path = block_store.da_block_path(height);
-            total = total.saturating_add(Self::file_len_or_zero(&path)?);
-        }
-        Ok(total)
+            .saturating_add(hashes_tmp_len)
+            .saturating_add(da_len))
     }
 
     fn merge_log_tracked_bytes(&self) -> Result<u64> {
@@ -2234,18 +2484,9 @@ impl Kura {
         Ok(encoded_len.saturating_add(std::mem::size_of::<u32>() as u64))
     }
 
-    fn evicted_block_required_bytes() -> u64 {
-        BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH)
-    }
-
-    // Budget accounting treats oversized blocks as evicted-on-write.
-    fn block_required_bytes_for_budget(block: &SignedBlock, limit: u64) -> Result<u64> {
+    fn block_required_bytes_for_budget(block: &SignedBlock, _limit: u64) -> Result<u64> {
         let required = Self::block_required_bytes(block)?;
-        if limit > 0 && required > limit {
-            Ok(Self::evicted_block_required_bytes())
-        } else {
-            Ok(required)
-        }
+        Ok(required)
     }
 
     fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
@@ -2418,9 +2659,9 @@ impl Kura {
         let retired_merge_root = retired_root.join("merge_ledger");
 
         let mut used = 0u64;
-        used = used.saturating_add(Self::blocks_root_bytes(&blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_total_bytes(&blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
-        used = used.saturating_add(Self::blocks_root_bytes(&retired_blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_total_bytes(&retired_blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
         used = used.saturating_add(Self::file_len_or_zero(&roster_journal)?);
@@ -3004,6 +3245,16 @@ impl Kura {
     pub fn blocks_count(&self) -> usize {
         self.block_data.lock().len()
     }
+
+    /// Returns count of blocks Kura has durably committed to disk.
+    pub fn durable_blocks_count(&self) -> usize {
+        let mut block_store = self.block_store.lock();
+        block_store
+            .read_durable_index_count()
+            .ok()
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_else(|| self.blocks_count())
+    }
 }
 
 #[cfg(test)]
@@ -3026,6 +3277,15 @@ impl Kura {
 
     pub(crate) fn fail_next_block_write_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn block_file_lengths_for_tests(&self) -> (u64, u64, u64) {
+        let mut store = self.block_store.lock();
+        (
+            store.index_file_len().expect("index len"),
+            store.data_file_len().expect("data len"),
+            store.hashes_file_len().expect("hashes len"),
+        )
     }
 }
 
@@ -5001,6 +5261,74 @@ impl BlockStore {
         Ok(bytes)
     }
 
+    fn write_da_block_bytes(&self, height: u64, bytes: &[u8]) -> Result<()> {
+        self.ensure_da_blocks_dir()?;
+        let path = self.da_block_path(height);
+        let tmp_path = path.with_extension("norito.tmp");
+        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+            opts.write(true).create(true).truncate(true);
+        })?;
+        tmp_file.try_io(|file| {
+            file.write_all(bytes)?;
+            file.flush()?;
+            file.sync_data()
+        })?;
+        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        Ok(())
+    }
+
+    fn remove_da_block_file(&self, height: u64) -> Result<()> {
+        self.ensure_da_blocks_dir()?;
+        let path = self.da_block_path(height);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                if let Some(parent) = path.parent() {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+                Ok(())
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(Error::IO(err, path)),
+        }
+    }
+
+    fn prune_da_block_files_above(&self, height: u64) -> Result<()> {
+        if self.da_blocks_dir.as_os_str().is_empty() || !self.da_blocks_dir.exists() {
+            return Ok(());
+        }
+
+        for entry in std::fs::read_dir(&self.da_blocks_dir)
+            .map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?
+        {
+            let entry = entry.map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, entry.path()))?;
+            if !file_type.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("norito") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let Ok(sidecar_height) = stem.parse::<u64>() else {
+                continue;
+            };
+            if sidecar_height > height {
+                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
+            }
+        }
+
+        sync_dir(&self.da_blocks_dir).map_err(|err| Error::IO(err, self.da_blocks_dir.clone()))?;
+        Ok(())
+    }
+
     fn ensure_data_file(&mut self) -> Result<&mut FileWrap> {
         if self.data_file.is_none() {
             let path = self.path_to_blockchain.join(DATA_FILE_NAME);
@@ -5156,7 +5484,7 @@ impl BlockStore {
         Ok(aligned / SIZE_OF_BLOCK_HASH)
     }
 
-    fn data_backed_count(&mut self, mut candidate: u64) -> Result<u64> {
+    fn data_backed_count(&mut self, mut candidate: u64, hashes_count: u64) -> Result<u64> {
         if candidate == 0 {
             return Ok(0);
         }
@@ -5168,6 +5496,16 @@ impl BlockStore {
         while candidate > 0 {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
+                    if index.is_evicted() {
+                        if index.length == 0
+                            || index.length > STRICT_INIT_MAX_BLOCK_BYTES
+                            || candidate > hashes_count
+                        {
+                            candidate = candidate.saturating_sub(1);
+                            continue;
+                        }
+                        break;
+                    }
                     let end = if let Some(end) = index.start.checked_add(index.length) {
                         end
                     } else {
@@ -5223,8 +5561,8 @@ impl BlockStore {
             }
             aligned / BlockIndex::SIZE
         };
-        self.align_hashes_len()?;
-        let data_backed_count = self.data_backed_count(logical_count)?;
+        let hashes_count = self.align_hashes_len()?;
+        let data_backed_count = self.data_backed_count(logical_count, hashes_count)?;
         if matches!(self.fsync.mode, FsyncMode::Off) {
             self.write_commit_marker(data_backed_count)?;
             self.truncate_hashes_to_count(data_backed_count)?;
@@ -5604,6 +5942,26 @@ impl BlockStore {
         Ok(())
     }
 
+    fn data_end_for_index_prefix(&mut self, count: u64) -> Result<u64> {
+        let mut data_end = 0u64;
+        for index_pos in 0..count {
+            let index = self.read_block_index(index_pos)?;
+            if index.is_evicted() {
+                continue;
+            }
+            let end = index
+                .start
+                .checked_add(index.length)
+                .ok_or(Error::CorruptedBlockRange {
+                    start: index.start,
+                    length: index.length,
+                    data_len: self.data_file_len()?,
+                })?;
+            data_end = data_end.max(end);
+        }
+        Ok(data_end)
+    }
+
     fn truncate_data_to_index(&mut self, count: u64) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
@@ -5614,17 +5972,16 @@ impl BlockStore {
             data_file.try_io(|file| file.set_len(0))?;
             return Ok(());
         }
-        let last_index = match self.read_block_index(count.saturating_sub(1)) {
+        let target_len = match self.data_end_for_index_prefix(count) {
             Ok(index) => index,
             Err(err) => {
                 warn!(
                     ?err,
-                    count, "failed to read last block index while trimming data file"
+                    count, "failed to read block indices while trimming data file"
                 );
                 return Ok(());
             }
         };
-        let target_len = last_index.start.saturating_add(last_index.length);
         let current_len = {
             let data_file = self.ensure_data_file()?;
             data_file.try_io(|file| file.metadata().map(|meta| meta.len()))?
@@ -5843,7 +6200,7 @@ impl BlockStore {
         &mut self,
         start_height: u64,
         blocks: &[Arc<SignedBlock>],
-        max_disk_usage_bytes: u64,
+        _max_disk_usage_bytes: u64,
     ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
@@ -5896,10 +6253,10 @@ impl BlockStore {
             let wire = block.canonical_wire()?;
             let (frame, versioned) = wire.into_parts();
             let frame_len = u64::try_from(frame.len())?;
-            let required = frame_len
+            let _required = frame_len
                 .saturating_add(BlockIndex::SIZE)
                 .saturating_add(SIZE_OF_BLOCK_HASH);
-            let evict = max_disk_usage_bytes > 0 && required > max_disk_usage_bytes;
+            let evict = false;
             frames.push(frame);
             lengths.push(frame_len);
             hashes.push(block.hash());
@@ -6070,7 +6427,6 @@ impl BlockStore {
     /// - Other IO errors
     pub fn prune(&mut self, height: u64) -> Result<()> {
         self.invalidate_data_mmap();
-        let last_block_index: Option<BlockIndex>;
         let pruned_index_count;
 
         {
@@ -6080,15 +6436,10 @@ impl BlockStore {
             let new_len = (BlockIndex::SIZE * height).min(len);
             file.try_io(|f| f.set_len(new_len))?;
 
-            last_block_index = if new_len > 0 {
-                let actual_height = new_len / BlockIndex::SIZE;
-                pruned_index_count = actual_height;
-                file.try_io(|f| f.seek(SeekFrom::Start((actual_height - 1) * BlockIndex::SIZE)))?;
-                let mut buff = [0; 8];
-                Some(file.try_io(|f| BlockIndex::read(f, &mut buff))?)
+            pruned_index_count = if new_len > 0 {
+                new_len / BlockIndex::SIZE
             } else {
-                pruned_index_count = 0;
-                None
+                0
             };
         }
 
@@ -6103,9 +6454,11 @@ impl BlockStore {
         {
             let mut file = FileWrap::open_read_write(self.path_to_blockchain.join(DATA_FILE_NAME))?;
             let len = file.try_io(|f| f.metadata().map(|x| x.len()))?;
-            let new_len = last_block_index.map_or(0, |x| x.start + x.length).min(len);
+            let new_len = self.data_end_for_index_prefix(pruned_index_count)?.min(len);
             file.try_io(|f| f.set_len(new_len))?;
         }
+
+        self.prune_da_block_files_above(height)?;
 
         self.commit_marker_pending = None;
         self.commit_marker_count = self.commit_marker_count.min(pruned_index_count);
@@ -6385,6 +6738,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
 
         let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
@@ -6520,6 +6875,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
 
         let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
@@ -6589,6 +6946,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
 
         let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
@@ -6801,6 +7160,23 @@ mod tests {
         BlockStore::new(&blocks_dir)
     }
 
+    fn kura_config_for_dir(dir: &TempDir, blocks_in_memory: NonZeroUsize) -> KuraConfig {
+        KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        }
+    }
+
     fn populate_store(dir: &TempDir, count: usize) {
         let blocks_dir = primary_blocks_dir(dir);
         let mut block_store = BlockStore::new(&blocks_dir);
@@ -6818,6 +7194,90 @@ mod tests {
             prev_hash = Some(block.hash());
             block_store.append_block_to_chain(&block).unwrap();
         }
+    }
+
+    fn advertised_block_metadata(kura: &Kura, height: NonZeroUsize) -> (HashOf<BlockHeader>, u64) {
+        let block_hash = kura
+            .get_block_hash(height)
+            .or_else(|| kura.get_durable_block_hash(height))
+            .expect("hash available");
+        let payload_len = {
+            let mut store = kura.block_store.lock();
+            store
+                .read_block_index(u64::try_from(height.get() - 1).expect("height fits"))
+                .expect("block index")
+                .length
+        };
+        (block_hash, payload_len)
+    }
+
+    fn advertise_required_replicas(
+        kura: &Kura,
+        height: NonZeroUsize,
+    ) -> (HashOf<BlockHeader>, u64) {
+        let (block_hash, payload_len) = advertised_block_metadata(kura, height);
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(
+                peer,
+                u64::try_from(height.get()).expect("height fits"),
+                block_hash,
+                payload_len,
+            );
+        }
+        (block_hash, payload_len)
+    }
+
+    #[test]
+    fn replica_adverts_ignore_zero_height_and_zero_payload() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(1_usize);
+        let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
+
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        kura.record_block_replica_advert(peer.clone(), 0, block_hash, payload_len);
+        kura.record_block_replica_advert(peer, height.get() as u64, block_hash, 0);
+        assert!(
+            kura.replica_registry.lock().is_empty(),
+            "invalid adverts must not enter the replica registry"
+        );
+
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
+        assert_eq!(
+            kura.matching_replica_count(height.get() as u64, block_hash, payload_len),
+            1,
+            "valid adverts should still be recorded after ignored invalid inputs"
+        );
+    }
+
+    #[test]
+    fn unknown_hash_has_no_body_status_or_durable_payload_len() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let unknown_hash: HashOf<BlockHeader> = HashOf::from_untyped_unchecked(Hash::new([0xEE]));
+
+        assert_eq!(kura.get_block_height_by_hash(unknown_hash), None);
+        assert_eq!(kura.block_body_status_by_hash(unknown_hash), None);
+        assert!(!kura.block_payload_available_by_hash(unknown_hash));
+        assert_eq!(kura.durable_block_payload_len_by_hash(unknown_hash), None);
+    }
+
+    fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
+        let mut generator = DummyBlocks::new();
+        let blocks: Vec<_> = (0..count).map(|_| generator.next()).collect();
+        for block in &blocks {
+            kura.store_block(Arc::clone(block))
+                .expect("store dummy block through durable Kura path");
+        }
+        blocks
     }
 
     fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
@@ -6931,6 +7391,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
@@ -6972,6 +7434,195 @@ mod tests {
     }
 
     #[test]
+    fn store_block_with_merge_entry_backfills_missing_log_for_existing_block() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let entry = sample_merge_entry(7);
+        let expected = entry.clone();
+
+        kura.store_block(block.clone()).expect("store block");
+        kura.store_block_with_merge_entry(block.clone(), &entry)
+            .expect("backfill merge entry");
+        kura.store_block_with_merge_entry(block, &entry)
+            .expect("idempotent retry");
+
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
+    }
+
+    #[test]
+    fn store_block_with_merge_entry_rejects_out_of_order_existing_backfill() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let block1 = blocks.next();
+        let block2 = blocks.next();
+        let entry1 = sample_merge_entry(1);
+        let entry2 = sample_merge_entry(2);
+
+        kura.store_block(Arc::clone(&block1))
+            .expect("store block1 without merge entry");
+        kura.store_block(Arc::clone(&block2))
+            .expect("store block2 without merge entry");
+
+        let err = kura
+            .store_block_with_merge_entry(block2.clone(), &entry2)
+            .expect_err("merge log backfill must be sequential");
+        assert!(matches!(
+            err,
+            Error::BlockHeightGap {
+                expected_next_height: 1,
+                actual_height: 2,
+            }
+        ));
+        assert!(
+            kura.merge_ledger_snapshot().is_empty(),
+            "out-of-order backfill must not append a merge entry"
+        );
+
+        kura.store_block_with_merge_entry(block1, &entry1)
+            .expect("backfill first merge entry");
+        kura.store_block_with_merge_entry(block2, &entry2)
+            .expect("backfill second merge entry after first");
+
+        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(kura.merge_ledger_snapshot(), vec![entry1, entry2]);
+    }
+
+    #[test]
+    fn store_block_with_merge_entry_conflict_does_not_append_log() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let stored_hash = block.hash();
+        let entry = sample_merge_entry(7);
+        let expected = entry.clone();
+
+        kura.store_block_with_merge_entry(block, &entry)
+            .expect("store block with merge entry");
+
+        let conflicting: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let conflicting_hash = conflicting.hash();
+        assert_ne!(stored_hash, conflicting_hash);
+
+        let err = kura
+            .store_block_with_merge_entry(conflicting, &sample_merge_entry(8))
+            .expect_err("same-height different hash must fail");
+
+        assert!(matches!(
+            err,
+            Error::BlockHeightConflict {
+                height: 1,
+                expected,
+                actual,
+            } if expected == stored_hash && actual == conflicting_hash
+        ));
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
+    }
+
+    #[test]
+    fn durable_block_payload_len_requires_committed_marker() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Batched;
+        config.fsync_interval = Duration::from_secs(3600);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let block = DummyBlocks::new().next();
+        let block_hash = block.hash();
+
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .append_block_to_chain(block.as_ref())
+                .expect("append block without forced fsync");
+            assert_eq!(store.read_index_count().expect("index count"), 1);
+            assert_eq!(
+                store
+                    .read_durable_index_count()
+                    .expect("durable index count"),
+                0,
+                "batched append should leave the commit marker behind"
+            );
+        }
+        kura.block_data
+            .lock()
+            .push((block_hash, Some(Arc::clone(&block))));
+
+        assert_eq!(
+            kura.durable_block_payload_len_by_hash(block_hash),
+            None,
+            "replica metadata must not be advertised before the block is durable"
+        );
+
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .flush_pending_fsync(true)
+                .expect("force pending fsync");
+        }
+        let (height, payload_len) = kura
+            .durable_block_payload_len_by_hash(block_hash)
+            .expect("durable payload metadata after marker advances");
+        let index_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(0).expect("block index").length
+        };
+        assert_eq!(height, 1);
+        assert_eq!(payload_len, index_len);
+    }
+
+    #[test]
+    fn replace_top_block_same_hash_requires_durable_marker() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Batched;
+        config.fsync_interval = Duration::from_secs(3600);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let block = DummyBlocks::new().next();
+        let block_hash = block.hash();
+
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .append_block_to_chain(block.as_ref())
+                .expect("append block without forced fsync");
+        }
+        kura.block_data
+            .lock()
+            .push((block_hash, Some(Arc::clone(&block))));
+
+        let err = kura
+            .replace_top_block(Arc::clone(&block))
+            .expect_err("idempotent replace still needs durable Kura marker");
+        assert!(matches!(
+            err,
+            Error::BlockHeightGap {
+                expected_next_height: 1,
+                actual_height: 1,
+            }
+        ));
+
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .flush_pending_fsync(true)
+                .expect("force pending fsync");
+        }
+        kura.replace_top_block(block)
+            .expect("idempotent replace succeeds after durable marker");
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(block_hash)
+        );
+    }
+
+    #[test]
     fn store_block_is_durable_before_return() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = KuraConfig {
@@ -6985,6 +7636,8 @@ mod tests {
             fsync_interval: Duration::from_secs(3600),
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize kura");
         let block = DummyBlocks::new().next();
@@ -7134,6 +7787,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7205,6 +7860,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7235,6 +7892,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7269,6 +7928,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7286,7 +7947,7 @@ mod tests {
     }
 
     #[test]
-    fn store_block_evicts_when_block_exceeds_budget() {
+    fn store_block_rejects_when_single_block_exceeds_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -7299,6 +7960,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7310,11 +7973,6 @@ mod tests {
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
             .max_disk_usage_bytes = budget_limit;
-        let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let _handle = {
-            let _rt_guard = rt.enter();
-            Kura::start(kura.clone(), ShutdownSignal::new())
-        };
 
         let make_block = |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
             let tx = TransactionBuilder::new(
@@ -7335,54 +7993,87 @@ mod tests {
 
         let payload = "x".repeat(4096);
         let block1 = make_block(&payload, None);
-        let block2 = make_block(&payload, Some(block1.as_ref()));
         let block1_required = Kura::block_required_bytes(&block1).expect("block1 bytes");
         assert!(
             block1_required > budget_limit,
             "expected block to exceed budget"
         );
 
-        kura.store_block(Arc::clone(&block1))
-            .expect("store oversized block1");
-        kura.store_block(Arc::clone(&block2))
-            .expect("store oversized block2");
-        wait_for_block_hash(&kura, 2, block2.hash());
+        let err = kura
+            .store_block(Arc::clone(&block1))
+            .expect_err("single block larger than the budget should be rejected");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+        assert_eq!(kura.blocks_count(), 0);
+    }
+
+    #[test]
+    fn store_block_evicts_old_replicated_body_when_budget_exceeded() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (mut kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let mut blocks = DummyBlocks::new();
+        let block1 = blocks.next();
+        let block2 = blocks.next();
+        let block3 = blocks.next();
+        let block4 = blocks.next();
+
+        kura.store_block(Arc::clone(&block1)).expect("store block1");
+        kura.store_block(Arc::clone(&block2)).expect("store block2");
+        kura.store_block(Arc::clone(&block3)).expect("store block3");
+
+        let block2_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block2 index").length
+        };
+        advertise_required_replicas(&kura, nonzero!(2_usize));
+
+        let used = kura.kura_disk_usage_bytes().expect("usage after block3");
+        let block4_required = Kura::block_required_bytes(&block4).expect("block4 bytes");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = used
+            .saturating_sub(block2_len)
+            .saturating_add(block4_required);
+
+        kura.store_block(Arc::clone(&block4))
+            .expect("store block4 after evicting block2");
+        wait_for_block_hash(&kura, 4, block4.hash());
 
         let (index, da_path) = {
             let mut store = kura.block_store.lock();
             (
-                store.read_block_index(0).expect("block index"),
-                store.da_block_path(1),
+                store.read_block_index(1).expect("block2 index"),
+                store.da_block_path(2),
             )
         };
         assert!(index.is_evicted());
-        assert!(da_path.exists(), "expected DA payload for block1");
-        let da_path2 = {
-            let store = kura.block_store.lock();
-            store.da_block_path(2)
-        };
-        assert!(da_path2.exists(), "expected DA payload for block2");
-        let da_len1 = std::fs::metadata(&da_path)
-            .expect("da payload metadata")
-            .len();
-        let da_len2 = std::fs::metadata(&da_path2)
-            .expect("da payload metadata")
-            .len();
-        let budget_used = kura.kura_disk_usage_bytes().expect("budget usage");
-        let total_used = kura.disk_usage_bytes().expect("total usage");
-        let expected_total = budget_used.saturating_add(da_len1).saturating_add(da_len2);
-        assert_eq!(
-            total_used, expected_total,
-            "total usage should include DA payloads"
+        assert!(
+            !da_path.exists(),
+            "budget eviction should not create a local sidecar cache"
         );
-
-        let height = NonZeroUsize::new(1).expect("non-zero");
-        let block = kura.get_block(height).expect("rehydrate block1");
-        assert_eq!(block.hash(), block1.hash());
+        assert!(
+            kura.get_block(nonzero!(2_usize)).is_none(),
+            "evicted remote-only body should not be locally readable"
+        );
     }
 
     #[test]
-    fn replace_top_block_evicts_when_budget_exceeded() {
+    fn replace_top_block_rejects_when_replacement_exceeds_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -7395,6 +8086,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7434,15 +8127,17 @@ mod tests {
             Kura::start(kura.clone(), ShutdownSignal::new())
         };
 
+        let small_hash = small_block.hash();
         kura.store_block(small_block).expect("store small block");
 
         assert!(
             large_bytes > limit,
             "expected replacement block to exceed budget"
         );
-        kura.replace_top_block(large_block.clone())
-            .expect("replacement should evict oversized block");
-        wait_for_block_hash(&kura, 1, large_block.hash());
+        let err = kura
+            .replace_top_block(large_block.clone())
+            .expect_err("replacement larger than the budget should be rejected");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
         let (index, da_path) = {
             let mut store = kura.block_store.lock();
             (
@@ -7450,8 +8145,16 @@ mod tests {
                 store.da_block_path(1),
             )
         };
-        assert!(index.is_evicted());
-        assert!(da_path.exists(), "expected DA payload for evicted block");
+        assert!(!index.is_evicted());
+        assert!(
+            !da_path.exists(),
+            "rejected replacement must not create a sidecar payload"
+        );
+        assert_eq!(
+            kura.get_block_hash(nonzero!(1_usize)),
+            Some(small_hash),
+            "rejected replacement must leave the original top block visible"
+        );
     }
 
     #[test]
@@ -7470,6 +8173,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7504,6 +8209,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7551,6 +8258,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7596,6 +8305,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
 
@@ -7627,6 +8338,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7698,6 +8411,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let lane_cfg = RuntimeLaneConfig::default();
         let merge_path = lane_cfg.primary().merge_log_path(dir.path());
@@ -8164,6 +8879,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -8208,6 +8925,8 @@ mod tests {
                         iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                     roster_sidecar_retention:
                         iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                    eviction_required_replicas:
+                        iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
                 },
                 &RuntimeLaneConfig::default(),
             )
@@ -8255,6 +8974,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -8353,6 +9074,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -8364,6 +9087,418 @@ mod tests {
         assert!(
             kura.get_block(nonzero!(1_usize)).is_none(),
             "expected missing block to yield None"
+        );
+    }
+
+    #[test]
+    fn eviction_requires_remote_replicas() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let (kura, _) = Kura::new(
+            &KuraConfig {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: FsyncMode::Batched,
+                fsync_interval: FSYNC_INTERVAL,
+                block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
+
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        let freed = kura
+            .evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+        assert_eq!(freed, 0, "eviction must wait for remote replicas");
+
+        let index = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index")
+        };
+        assert!(
+            !index.is_evicted(),
+            "block body should remain inline without replica adverts"
+        );
+    }
+
+    #[test]
+    fn eviction_requires_distinct_matching_replica_adverts() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+
+        let height = nonzero!(2_usize);
+        let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
+        let wrong_hash = DummyBlocks::new().next().hash();
+        assert_ne!(wrong_hash, block_hash);
+
+        let repeated_peer = PeerId::new(KeyPair::random().public_key().clone());
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            kura.record_block_replica_advert(
+                repeated_peer.clone(),
+                height.get() as u64,
+                block_hash,
+                payload_len,
+            );
+        }
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(
+                peer,
+                height.get() as u64,
+                block_hash,
+                payload_len.saturating_add(1),
+            );
+        }
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, height.get() as u64, wrong_hash, payload_len);
+        }
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("attempt eviction with bad adverts");
+        assert_eq!(
+            freed, 0,
+            "duplicate peers, wrong hashes, and wrong lengths must not satisfy replica quorum"
+        );
+        let index = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index")
+        };
+        assert!(!index.is_evicted());
+
+        for _ in 1..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
+        }
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict with enough matching adverts");
+        assert!(freed >= payload_len);
+        let index = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index")
+        };
+        assert!(index.is_evicted());
+    }
+
+    #[test]
+    fn replica_adverts_ignore_zero_height_and_payload_len() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
+
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, 0, block_hash, payload_len);
+        }
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, height.get() as u64, block_hash, 0);
+        }
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("attempt eviction with ignored adverts");
+        assert_eq!(freed, 0);
+        let index = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index")
+        };
+        assert!(
+            !index.is_evicted(),
+            "invalid replica adverts must not make a body evictable"
+        );
+    }
+
+    #[test]
+    fn replica_advert_overwrite_replaces_peer_payload_len() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
+
+        let overwritten_peer = PeerId::new(KeyPair::random().public_key().clone());
+        kura.record_block_replica_advert(
+            overwritten_peer.clone(),
+            height.get() as u64,
+            block_hash,
+            payload_len,
+        );
+        kura.record_block_replica_advert(
+            overwritten_peer,
+            height.get() as u64,
+            block_hash,
+            payload_len.saturating_add(1),
+        );
+        for _ in 1..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
+        }
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("attempt eviction with one overwritten peer");
+        assert_eq!(
+            freed, 0,
+            "a later advert from the same peer with a wrong length must replace the old match"
+        );
+
+        let replacement_peer = PeerId::new(KeyPair::random().public_key().clone());
+        kura.record_block_replica_advert(
+            replacement_peer,
+            height.get() as u64,
+            block_hash,
+            payload_len,
+        );
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict after restoring distinct matching quorum");
+        assert!(freed >= payload_len);
+    }
+
+    #[test]
+    fn expired_replica_adverts_do_not_allow_eviction() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
+        let expired_at = Instant::now()
+            .checked_sub(BLOCK_REPLICA_ADVERT_TTL + Duration::from_secs(1))
+            .expect("expired instant");
+
+        {
+            let mut registry = kura.replica_registry.lock();
+            for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+                let peer = PeerId::new(KeyPair::random().public_key().clone());
+                registry
+                    .entry((height.get() as u64, block_hash))
+                    .or_default()
+                    .insert(
+                        peer,
+                        BlockReplicaAdvert {
+                            payload_len,
+                            observed_at: expired_at,
+                        },
+                    );
+            }
+        }
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("attempt eviction with expired adverts");
+        assert_eq!(
+            freed, 0,
+            "expired adverts must not satisfy the remote replica quorum"
+        );
+        assert!(
+            kura.replica_registry.lock().is_empty(),
+            "eviction check should prune expired replica adverts"
+        );
+        let index = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index")
+        };
+        assert!(!index.is_evicted());
+
+        advertise_required_replicas(&kura, height);
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict with fresh adverts");
+        assert!(freed >= payload_len);
+    }
+
+    #[test]
+    fn evict_block_bodies_zero_request_is_noop() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        advertise_required_replicas(&kura, nonzero!(2_usize));
+
+        let before_indices = {
+            let mut store = kura.block_store.lock();
+            let mut indices = vec![BlockIndex::default(); 4];
+            store
+                .read_block_indices(0, &mut indices)
+                .expect("read indices before zero eviction");
+            indices
+        };
+        let freed = kura
+            .evict_block_bodies(0)
+            .expect("zero-byte eviction request");
+        assert_eq!(freed, 0);
+
+        let after_indices = {
+            let mut store = kura.block_store.lock();
+            let mut indices = vec![BlockIndex::default(); 4];
+            store
+                .read_block_indices(0, &mut indices)
+                .expect("read indices after zero eviction");
+            indices
+        };
+        assert_eq!(after_indices, before_indices);
+    }
+
+    #[test]
+    fn evict_block_bodies_is_idempotent_for_already_evicted_body() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let (_block_hash, payload_len) = advertise_required_replicas(&kura, height);
+
+        let first = kura
+            .evict_block_bodies(payload_len)
+            .expect("first eviction");
+        assert!(first >= payload_len);
+        let second = kura
+            .evict_block_bodies(payload_len)
+            .expect("repeat eviction");
+        assert_eq!(
+            second, 0,
+            "already-evicted bodies should not be counted as newly freed"
+        );
+
+        let index = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index")
+        };
+        assert!(index.is_evicted());
+    }
+
+    #[test]
+    fn remote_only_status_requires_canonical_hash_and_exact_length() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let (block_hash, payload_len) = advertise_required_replicas(&kura, height);
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict block body");
+        assert!(freed >= payload_len);
+        kura.replica_registry.lock().clear();
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "evicted block should be missing without fresh matching replica evidence"
+        );
+
+        let wrong_hash = {
+            let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+            block.hash()
+        };
+        assert_ne!(wrong_hash, block_hash);
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, height.get() as u64, wrong_hash, payload_len);
+        }
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "replica evidence for a different hash must not satisfy the canonical block"
+        );
+
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(
+                peer,
+                height.get() as u64,
+                block_hash,
+                payload_len.saturating_add(1),
+            );
+        }
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "replica evidence with the wrong payload length must not mark the body remote-only"
+        );
+
+        for _ in 0..EVICTION_REQUIRED_REPLICAS.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            kura.record_block_replica_advert(peer, height.get() as u64, block_hash, payload_len);
+        }
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::RemoteOnly {
+                replicas: EVICTION_REQUIRED_REPLICAS.get()
+            })
+        );
+    }
+
+    #[test]
+    fn eviction_keeps_genesis_and_retained_tail_inline() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 3);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        for height in [nonzero!(1_usize), nonzero!(2_usize), nonzero!(3_usize)] {
+            advertise_required_replicas(&kura, height);
+        }
+        let requested = {
+            let mut store = kura.block_store.lock();
+            (0..3)
+                .map(|idx| store.read_block_index(idx).expect("block index").length)
+                .sum::<u64>()
+        };
+
+        let freed = kura
+            .evict_block_bodies(requested)
+            .expect("attempt full eviction");
+        assert!(freed > 0);
+
+        let indices = {
+            let mut store = kura.block_store.lock();
+            let mut indices = vec![BlockIndex::default(); 3];
+            store
+                .read_block_indices(0, &mut indices)
+                .expect("read block indices");
+            indices
+        };
+        assert!(
+            !indices[0].is_evicted(),
+            "genesis body must remain inline even if advertised"
+        );
+        assert!(indices[1].is_evicted(), "eligible middle body should evict");
+        assert!(
+            !indices[2].is_evicted(),
+            "recent retained tail body must remain inline"
         );
     }
 
@@ -8381,6 +9516,8 @@ mod tests {
             fsync_interval: Duration::from_secs(3600),
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -8415,6 +9552,8 @@ mod tests {
         assert_eq!(durable_before, 3);
         assert_eq!(index_before, 4);
 
+        advertise_required_replicas(&kura, nonzero!(2_usize));
+
         let evict_len = {
             let mut store = kura.block_store.lock();
             store.read_block_index(1).expect("block index").length
@@ -8435,7 +9574,7 @@ mod tests {
     }
 
     #[test]
-    fn evicted_block_rehydrates_from_da_store() {
+    fn evicted_block_caches_after_remote_rehydrate() {
         let temp_dir = TempDir::new().unwrap();
         populate_store(&temp_dir, 4);
 
@@ -8452,10 +9591,18 @@ mod tests {
                 fsync_interval: FSYNC_INTERVAL,
                 block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
         .expect("kura init");
+
+        let height = NonZeroUsize::new(2).expect("non-zero");
+        let block = kura
+            .get_block(height)
+            .expect("inline block before eviction");
+        let (block_hash, _) = advertise_required_replicas(&kura, height);
 
         let evict_len = {
             let mut store = kura.block_store.lock();
@@ -8477,16 +9624,600 @@ mod tests {
             )
         };
         assert!(evicted_index.is_evicted());
-        assert!(da_path.exists(), "expected DA block payload to exist");
+        assert!(
+            !da_path.exists(),
+            "eviction should not create a local sidecar without rehydration"
+        );
 
-        let height = NonZeroUsize::new(2).expect("non-zero");
-        let expected_hash = kura.get_block_hash(height).expect("hash available");
-        let block = kura.get_block(height).expect("rehydrated block");
-        assert_eq!(block.hash(), expected_hash);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::RemoteOnly {
+                replicas: EVICTION_REQUIRED_REPLICAS.get()
+            })
+        );
+        assert!(
+            kura.get_block(height).is_none(),
+            "remote-only bodies are not available until fetched and cached"
+        );
+
+        kura.cache_block_body(block.as_ref())
+            .expect("cache rehydrated block");
+        assert!(da_path.exists(), "expected local cache after rehydration");
+        let rehydrated = kura.get_block(height).expect("rehydrated block");
+        assert_eq!(rehydrated.hash(), block_hash);
     }
 
     #[test]
-    fn block_payload_available_by_hash_tracks_evicted_da_payload() {
+    fn evicted_block_status_becomes_local_sidecar_after_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let block = kura
+            .get_block(height)
+            .expect("inline block before eviction");
+        let block_hash = block.hash();
+        let (advertised_hash, payload_len) = advertise_required_replicas(&kura, height);
+        assert_eq!(advertised_hash, block_hash);
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict block body");
+        assert!(freed >= payload_len);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::RemoteOnly {
+                replicas: EVICTION_REQUIRED_REPLICAS.get()
+            })
+        );
+        assert_eq!(
+            kura.durable_block_payload_len_by_hash(block_hash),
+            Some((height.get() as u64, payload_len)),
+            "durable metadata must still expose payload length for remote-only bodies"
+        );
+
+        kura.cache_block_body(block.as_ref())
+            .expect("cache rehydrated block body");
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::LocalSidecar)
+        );
+        assert!(kura.block_payload_available_by_hash(block_hash));
+    }
+
+    #[test]
+    fn inline_body_status_is_available_after_memory_eviction() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 3);
+        let height = nonzero!(2_usize);
+        let block_hash = blocks[1].hash();
+
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Inline),
+            "old persisted bodies outside the memory window should still be inline before eviction"
+        );
+        assert!(kura.block_payload_available_by_hash(block_hash));
+        let block = kura.get_block(height).expect("read inline body from disk");
+        assert_eq!(block.hash(), block_hash);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Inline),
+            "deep inline reads should not pin the body in memory outside the retention window"
+        );
+    }
+
+    #[test]
+    fn cache_block_body_is_idempotent_for_existing_local_sidecar() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let height = nonzero!(2_usize);
+        let block = Arc::clone(&blocks[1]);
+        let block_hash = block.hash();
+        let (_hash, payload_len) = advertise_required_replicas(&kura, height);
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict block body");
+        assert!(freed >= payload_len);
+        kura.cache_block_body(block.as_ref())
+            .expect("cache rehydrated body");
+        let (da_path, first_len, first_usage) = {
+            let mut store = kura.block_store.lock();
+            let da_path = store.da_block_path(2);
+            let first_len = std::fs::metadata(&da_path).expect("sidecar metadata").len();
+            let usage = Kura::block_store_tracked_bytes(&mut store).expect("tracked bytes");
+            (da_path, first_len, usage)
+        };
+
+        kura.cache_block_body(block.as_ref())
+            .expect("cache same body again");
+        let (second_len, second_usage) = {
+            let mut store = kura.block_store.lock();
+            let second_len = std::fs::metadata(&da_path).expect("sidecar metadata").len();
+            let usage = Kura::block_store_tracked_bytes(&mut store).expect("tracked bytes");
+            (second_len, usage)
+        };
+
+        assert_eq!(second_len, first_len);
+        assert_eq!(
+            second_usage, first_usage,
+            "rewriting the same sidecar should not inflate tracked storage"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::LocalSidecar)
+        );
+        let loaded = kura.get_block(height).expect("read cached sidecar");
+        assert_eq!(loaded.hash(), block_hash);
+    }
+
+    #[test]
+    fn cache_block_body_is_noop_for_inline_block() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let block = store_dummy_block_arcs(&kura, 1)
+            .pop()
+            .expect("stored block");
+        let block_hash = block.hash();
+        let da_path = {
+            let store = kura.block_store.lock();
+            store.da_block_path(1)
+        };
+
+        kura.cache_block_body(block.as_ref())
+            .expect("inline cache should be a no-op");
+
+        assert!(
+            !da_path.exists(),
+            "inline blocks must not be duplicated into the sidecar cache"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Cached)
+        );
+        assert!(kura.block_payload_available_by_hash(block_hash));
+    }
+
+    #[test]
+    fn cache_block_body_rejects_wrong_rehydrated_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let block_hash = kura
+            .get_block_hash(height)
+            .expect("canonical block hash before eviction");
+        advertise_required_replicas(&kura, height);
+
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        kura.evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+
+        let conflicting: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(nonzero!(2_u64));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let conflicting_hash = conflicting.hash();
+        assert_ne!(block_hash, conflicting_hash);
+
+        let err = kura
+            .cache_block_body(&conflicting)
+            .expect_err("wrong rehydrated body must be rejected");
+        assert!(matches!(
+            err,
+            Error::BlockHeightConflict {
+                height: 2,
+                expected,
+                actual,
+            } if expected == block_hash && actual == conflicting_hash
+        ));
+
+        let da_path = {
+            let store = kura.block_store.lock();
+            store.da_block_path(2)
+        };
+        assert!(
+            !da_path.exists(),
+            "rejected remote body must not be cached locally"
+        );
+        assert!(
+            kura.get_block(height).is_none(),
+            "wrong remote body must not make the evicted block readable"
+        );
+    }
+
+    #[test]
+    fn cache_block_body_rejects_height_gap_before_sidecar_write() {
+        let kura = Kura::blank_kura_for_testing();
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let height = block.header().height().get();
+        let da_path = {
+            let store = kura.block_store.lock();
+            store.da_block_path(height)
+        };
+
+        let err = kura
+            .cache_block_body(&block)
+            .expect_err("non-durable block body must not be cached");
+        assert!(matches!(
+            err,
+            Error::BlockHeightGap {
+                expected_next_height: 1,
+                actual_height,
+            } if actual_height == height
+        ));
+        assert!(
+            !da_path.exists(),
+            "height-gap body must not be written into the sidecar cache"
+        );
+        assert_eq!(kura.blocks_count(), 0);
+    }
+
+    #[test]
+    fn cache_block_body_rejects_length_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = nonzero!(2_usize);
+        let block = kura
+            .get_block(height)
+            .expect("inline block before eviction");
+        advertise_required_replicas(&kura, height);
+
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        kura.evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+        {
+            let mut store = kura.block_store.lock();
+            let tampered_len = evict_len.saturating_add(1);
+            store
+                .write_block_index(1, EVICTED_BLOCK_START, tampered_len)
+                .expect("tamper evicted block length");
+        }
+
+        let err = kura
+            .cache_block_body(block.as_ref())
+            .expect_err("length mismatch must be rejected");
+        assert!(matches!(
+            err,
+            Error::CorruptedBlockRange {
+                start: EVICTED_BLOCK_START,
+                length,
+                data_len,
+            } if length == evict_len && data_len == evict_len.saturating_add(1)
+        ));
+
+        let da_path = {
+            let store = kura.block_store.lock();
+            store.da_block_path(2)
+        };
+        assert!(
+            !da_path.exists(),
+            "length-mismatched body must not be cached locally"
+        );
+    }
+
+    #[test]
+    fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let height = nonzero!(2_usize);
+        let (block, block_hash) = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let block = Arc::clone(&blocks[1]);
+            let block_hash = block.hash();
+            advertise_required_replicas(&kura, height);
+            let evict_len = {
+                let mut store = kura.block_store.lock();
+                store.read_block_index(1).expect("block index").length
+            };
+            kura.evict_block_bodies(evict_len)
+                .expect("evict block bodies");
+            assert!(
+                kura.get_block(height).is_none(),
+                "evicted remote body should not be readable before rehydrate"
+            );
+            (block, block_hash)
+        };
+
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
+        assert_eq!(
+            kura.get_durable_block_hash(height),
+            Some(block_hash),
+            "durable hash metadata should survive restart"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "remote-only body needs fresh replica evidence after restart"
+        );
+
+        advertise_required_replicas(&kura, height);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::RemoteOnly {
+                replicas: EVICTION_REQUIRED_REPLICAS.get()
+            })
+        );
+
+        kura.cache_block_body(block.as_ref())
+            .expect("cache block after fresh adverts");
+        let rehydrated = kura.get_block(height).expect("rehydrated block");
+        assert_eq!(rehydrated.hash(), block_hash);
+    }
+
+    #[test]
+    fn fast_init_preserves_remote_only_metadata_after_restart() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        config.init_mode = InitMode::Fast;
+        let height = nonzero!(2_usize);
+
+        let block_hash = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let block_hash = blocks[1].hash();
+            advertise_required_replicas(&kura, height);
+            let evict_len = {
+                let mut store = kura.block_store.lock();
+                store.read_block_index(1).expect("block index").length
+            };
+            kura.evict_block_bodies(evict_len)
+                .expect("evict block bodies");
+            block_hash
+        };
+
+        let (kura, block_count) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("fast reopen");
+        assert_eq!(block_count.0, 4);
+        assert_eq!(
+            kura.get_durable_block_hash(height),
+            Some(block_hash),
+            "fast init should preserve hash metadata for remote-only blocks"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "fresh process has no replica evidence for the remote-only body yet"
+        );
+    }
+
+    #[test]
+    fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let height = nonzero!(2_usize);
+        let block_hash = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let block_hash = blocks[1].hash();
+            advertise_required_replicas(&kura, height);
+            let evict_len = {
+                let mut store = kura.block_store.lock();
+                store.read_block_index(1).expect("block index").length
+            };
+            kura.evict_block_bodies(evict_len)
+                .expect("evict block bodies");
+            assert_eq!(kura.get_durable_block_hash(height), Some(block_hash));
+            block_hash
+        };
+
+        let hashes_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
+        let hashes_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&hashes_path)
+            .expect("open hashes file");
+        hashes_file
+            .set_len(SIZE_OF_BLOCK_HASH)
+            .expect("truncate hashes below index height");
+
+        let (kura, block_count) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("strict reopen");
+        assert_eq!(
+            block_count.0, 1,
+            "strict init must prune remote-only entries when their hashes are unavailable"
+        );
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.get_durable_block_hash(height), None);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            None,
+            "pruned remote-only hash must not remain addressable"
+        );
+    }
+
+    #[test]
+    fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let height = nonzero!(2_usize);
+        let (block_hash, da_path) = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let block = Arc::clone(&blocks[1]);
+            let block_hash = block.hash();
+            advertise_required_replicas(&kura, height);
+            let evict_len = {
+                let mut store = kura.block_store.lock();
+                store.read_block_index(1).expect("block index").length
+            };
+            kura.evict_block_bodies(evict_len)
+                .expect("evict block bodies");
+            kura.cache_block_body(block.as_ref())
+                .expect("cache rehydrated block");
+            let da_path = {
+                let store = kura.block_store.lock();
+                store.da_block_path(2)
+            };
+            (block_hash, da_path)
+        };
+
+        std::fs::write(&da_path, b"short").expect("corrupt local sidecar length");
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
+
+        assert_eq!(
+            kura.get_durable_block_hash(height),
+            Some(block_hash),
+            "corrupted sidecar should not erase durable hash metadata"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "bad local sidecar without fresh adverts should be treated as unavailable"
+        );
+        assert!(
+            !kura.block_payload_available_by_hash(block_hash),
+            "malformed sidecar must not count as local payload availability"
+        );
+    }
+
+    #[test]
+    fn strict_init_removes_malformed_sidecar_with_matching_length() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let height = nonzero!(2_usize);
+        let (block_hash, da_path) = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let block = Arc::clone(&blocks[1]);
+            let block_hash = block.hash();
+            advertise_required_replicas(&kura, height);
+            let evict_len = {
+                let mut store = kura.block_store.lock();
+                store.read_block_index(1).expect("block index").length
+            };
+            kura.evict_block_bodies(evict_len)
+                .expect("evict block bodies");
+            kura.cache_block_body(block.as_ref())
+                .expect("cache rehydrated block");
+            let da_path = {
+                let store = kura.block_store.lock();
+                store.da_block_path(2)
+            };
+            let mut payload = std::fs::read(&da_path).expect("read local sidecar");
+            assert!(
+                payload.len() > 1,
+                "stored block frame should include a header"
+            );
+            let original_len = payload.len();
+            payload[1] = payload[1].wrapping_add(1);
+            std::fs::write(&da_path, &payload).expect("corrupt local sidecar");
+            assert_eq!(
+                std::fs::metadata(&da_path).expect("sidecar metadata").len(),
+                original_len as u64,
+                "test corruption must preserve payload length"
+            );
+            (block_hash, da_path)
+        };
+
+        let (kura, block_count) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("strict reopen");
+        assert_eq!(
+            block_count.0, 4,
+            "malformed sidecar cache must not truncate canonical hash metadata"
+        );
+        assert_eq!(kura.get_durable_block_hash(height), Some(block_hash));
+        assert!(
+            !da_path.exists(),
+            "strict init should remove malformed local sidecar cache files"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing)
+        );
+        assert!(!kura.block_payload_available_by_hash(block_hash));
+        assert!(
+            kura.get_block(height).is_none(),
+            "removed malformed sidecar should not be readable until rehydrated"
+        );
+    }
+
+    #[test]
+    fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let height = nonzero!(2_usize);
+        let (canonical_hash, conflicting_hash, da_path) = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let genesis_hash = blocks[0].hash();
+            let canonical_hash = blocks[1].hash();
+            advertise_required_replicas(&kura, height);
+            let evict_len = {
+                let mut store = kura.block_store.lock();
+                store.read_block_index(1).expect("block index").length
+            };
+            kura.evict_block_bodies(evict_len)
+                .expect("evict block bodies");
+
+            let conflicting: SignedBlock = ValidBlock::new_dummy_and_modify_header(
+                KeyPair::random().private_key(),
+                |header| {
+                    header.set_height(nonzero!(2_u64));
+                    header.set_prev_block_hash(Some(genesis_hash));
+                    header.set_view_change_index(header.view_change_index().saturating_add(1));
+                },
+            )
+            .into();
+            let conflicting_hash = conflicting.hash();
+            assert_ne!(canonical_hash, conflicting_hash);
+            let (frame, _versioned) = conflicting
+                .canonical_wire()
+                .expect("encode conflicting sidecar")
+                .into_parts();
+            let da_path = {
+                let store = kura.block_store.lock();
+                store
+                    .write_da_block_bytes(2, &frame)
+                    .expect("write conflicting DA sidecar");
+                store.da_block_path(2)
+            };
+            assert!(da_path.exists());
+            (canonical_hash, conflicting_hash, da_path)
+        };
+
+        let (kura, block_count) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("strict reopen");
+        assert_eq!(
+            block_count.0, 4,
+            "conflicting sidecar cache must not truncate the canonical chain"
+        );
+        assert_eq!(kura.get_durable_block_hash(height), Some(canonical_hash));
+        assert_ne!(kura.get_durable_block_hash(height), Some(conflicting_hash));
+        assert!(
+            !da_path.exists(),
+            "strict init should remove local sidecars whose hash conflicts with Kura metadata"
+        );
+        assert_eq!(
+            kura.block_body_status_by_hash(canonical_hash),
+            Some(BlockBodyStatus::Missing)
+        );
+    }
+
+    #[test]
+    fn block_payload_available_by_hash_requires_local_body_after_eviction() {
         let temp_dir = TempDir::new().unwrap();
         populate_store(&temp_dir, 4);
 
@@ -8503,10 +10234,18 @@ mod tests {
                 fsync_interval: FSYNC_INTERVAL,
                 block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
         .expect("kura init");
+
+        let height = nonzero!(2_usize);
+        let block = kura
+            .get_block(height)
+            .expect("inline block before eviction");
+        let (block_hash, _) = advertise_required_replicas(&kura, height);
 
         let evict_len = {
             let mut store = kura.block_store.lock();
@@ -8515,24 +10254,26 @@ mod tests {
         kura.evict_block_bodies(evict_len)
             .expect("evict block bodies");
 
-        let (da_path, block_hash) = {
+        let da_path = {
             let store = kura.block_store.lock();
-            (
-                store.da_block_path(2),
-                kura.get_block_hash(nonzero!(2_usize))
-                    .expect("hash available"),
-            )
+            store.da_block_path(2)
         };
 
         assert!(
-            da_path.exists(),
-            "expected DA payload to exist after eviction"
+            !da_path.exists(),
+            "local sidecar cache should be absent immediately after eviction"
         );
         assert!(
-            kura.block_payload_available_by_hash(block_hash),
-            "payload should be available when DA payload exists"
+            !kura.block_payload_available_by_hash(block_hash),
+            "remote-only payloads are not locally available"
         );
 
+        kura.cache_block_body(block.as_ref())
+            .expect("cache rehydrated block");
+        assert!(
+            kura.block_payload_available_by_hash(block_hash),
+            "payload should be available when local sidecar cache exists"
+        );
         std::fs::remove_file(&da_path).expect("remove DA payload");
         assert!(
             !kura.block_payload_available_by_hash(block_hash),
@@ -8556,19 +10297,28 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let height = NonZeroUsize::new(2).expect("non-zero");
+        let block = kura
+            .get_block(height)
+            .expect("inline block before eviction");
+        advertise_required_replicas(&kura, height);
+
         let evict_len = {
             let mut store = kura.block_store.lock();
             store.read_block_index(1).expect("block index").length
         };
         kura.evict_block_bodies(evict_len)
             .expect("evict block bodies");
+        kura.cache_block_body(block.as_ref())
+            .expect("cache rehydrated block");
         drop(kura);
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
-        let height = NonZeroUsize::new(2).expect("non-zero");
         let expected_hash = kura.get_block_hash(height).expect("hash available");
         let block = kura
             .get_block(height)
@@ -8612,6 +10362,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -8670,6 +10422,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -8744,6 +10498,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -8992,6 +10748,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9035,6 +10793,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9079,6 +10839,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9144,6 +10906,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9242,6 +11006,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9293,6 +11059,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9351,6 +11119,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9412,6 +11182,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9441,6 +11213,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9494,6 +11268,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9615,6 +11391,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9688,6 +11466,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9763,6 +11543,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9820,6 +11602,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -9864,6 +11648,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10092,6 +11878,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10157,6 +11945,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10211,6 +12001,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10255,6 +12047,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10320,6 +12114,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10577,6 +12373,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10654,6 +12452,95 @@ mod tests {
     }
 
     #[test]
+    fn prune_to_height_removes_sidecars_above_new_tip() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let block2_hash = blocks[1].hash();
+        let block3_hash = blocks[2].hash();
+
+        let (_, block2_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        let (_, block3_len) = advertise_required_replicas(&kura, nonzero!(3_usize));
+        let freed = kura
+            .evict_block_bodies(block2_len.saturating_add(block3_len))
+            .expect("evict middle bodies");
+        assert!(freed >= block2_len.saturating_add(block3_len));
+        kura.cache_block_body(blocks[1].as_ref())
+            .expect("cache block 2 sidecar");
+        kura.cache_block_body(blocks[2].as_ref())
+            .expect("cache block 3 sidecar");
+
+        let (block2_sidecar, block3_sidecar) = {
+            let store = kura.block_store.lock();
+            (store.da_block_path(2), store.da_block_path(3))
+        };
+        assert!(block2_sidecar.exists());
+        assert!(block3_sidecar.exists());
+
+        kura.prune_to_height(2).expect("prune to height 2");
+
+        assert!(
+            block2_sidecar.exists(),
+            "sidecar at the retained tip should stay available"
+        );
+        assert!(
+            !block3_sidecar.exists(),
+            "sidecar above the pruned tip should be removed"
+        );
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(2_usize)),
+            Some(block2_hash)
+        );
+        assert_eq!(kura.get_durable_block_hash(nonzero!(3_usize)), None);
+        assert_eq!(
+            kura.block_body_status_by_hash(block2_hash),
+            Some(BlockBodyStatus::LocalSidecar)
+        );
+        assert_eq!(kura.block_body_status_by_hash(block3_hash), None);
+    }
+
+    #[test]
+    fn prune_sidecars_ignores_noncanonical_da_artifacts() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = new_block_store(&temp_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        store
+            .write_da_block_bytes(1, b"retained")
+            .expect("write retained sidecar");
+        store
+            .write_da_block_bytes(3, b"pruned")
+            .expect("write pruned sidecar");
+        let da_dir = primary_blocks_dir(&temp_dir).join("da_blocks");
+        let retained = store.da_block_path(1);
+        let pruned = store.da_block_path(3);
+        let invalid_height = da_dir.join("not-a-height.norito");
+        let temp_artifact = da_dir.join("00000000000000000004.norito.tmp");
+        let directory_artifact = da_dir.join("00000000000000000005.norito");
+        std::fs::write(&invalid_height, b"operator note").expect("write invalid sidecar name");
+        std::fs::write(&temp_artifact, b"partial temp").expect("write temp artifact");
+        std::fs::create_dir(&directory_artifact).expect("create directory artifact");
+
+        store.prune(2).expect("prune sidecars");
+
+        assert!(retained.exists(), "retained height sidecar should stay");
+        assert!(!pruned.exists(), "above-tip sidecar should be removed");
+        assert!(
+            invalid_height.exists(),
+            "non-height .norito artifacts should be ignored"
+        );
+        assert!(
+            temp_artifact.exists(),
+            "temporary artifacts should not be treated as canonical sidecars"
+        );
+        assert!(
+            directory_artifact.exists(),
+            "non-file artifacts should be ignored during sidecar pruning"
+        );
+    }
+
+    #[test]
     fn fast_init_rewrites_tampered_hash_file() {
         let temp_dir = TempDir::new().unwrap();
         populate_store(&temp_dir, 3);
@@ -10687,6 +12574,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )
@@ -10729,6 +12618,8 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas:
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             &RuntimeLaneConfig::default(),
         )

@@ -18408,7 +18408,7 @@ impl State {
     /// verify that the state height is backed by durable block storage.
     #[track_caller]
     pub fn durable_block_count(&self) -> usize {
-        self.kura.blocks_count()
+        self.kura.durable_blocks_count()
     }
 
     /// Snapshot committed block hashes from the block-hash journal.
@@ -18434,7 +18434,7 @@ impl State {
     /// that state and Kura agree on the latest durable block.
     #[track_caller]
     pub fn durable_block_hash(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
-        self.kura.get_block_hash(height)
+        self.kura.get_durable_block_hash(height)
     }
 
     /// Resolve a committed block height by block hash using Kura's index.
@@ -24754,6 +24754,8 @@ mod replay_validation_tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
 
@@ -25578,6 +25580,8 @@ mod permission_cache_tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let lane_config = LaneConfig::default();
 
@@ -31033,6 +31037,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -31122,6 +31128,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -31234,6 +31242,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -34242,6 +34252,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -34740,6 +34752,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -35058,6 +35072,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -35153,6 +35169,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -35367,6 +35385,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -35438,6 +35458,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -35523,6 +35545,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -35586,6 +35610,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let state = State::new_for_testing(
@@ -35658,6 +35684,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let state = State::new_for_testing(
@@ -35730,6 +35758,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let state = State::new_for_testing(
@@ -35824,6 +35854,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let state = State::new_for_testing(
@@ -35907,6 +35939,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let state = State::new_for_testing(
@@ -35988,6 +36022,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
 
@@ -36075,6 +36111,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
 
@@ -36431,6 +36469,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let state = State::new_for_testing(
@@ -36535,6 +36575,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -37109,6 +37151,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
