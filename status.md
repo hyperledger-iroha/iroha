@@ -2,6 +2,25 @@
 
 Last updated: 2026-04-29
 
+## 2026-04-29 SORA Minamoto mainnet Codex skill
+
+- Added a standalone `sora-minamoto-mainnet` Codex skill for the public
+  Minamoto Torii MCP endpoint at `https://minamoto.sora.org/v1/mcp`, mirroring
+  the Taira skill structure while making mainnet write handling explicitly
+  conservative.
+- Expanded the skill with a concrete Minamoto transaction workflow, write
+  confirmation policy, required write inputs, default no-agent-side-signing
+  posture, common read payload examples, failure-to-action map, Taira
+  difference table, and agent output requirements.
+- Updated Codex integration docs and agent guidance so Minamoto workflows point
+  at the new skill, prefer curated `iroha.*` tools, keep signing inputs
+  runtime-only, and avoid Taira testnet faucet/bootstrap assumptions on
+  mainnet.
+- Focused validation for this slice:
+  - `git diff --check`
+  - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/SKILL.md`
+  - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/agents/openai.yaml`
+
 ## 2026-04-29 Mandatory Kura durability before state commit
 
 - Made Kura block storage synchronous and canonical-height checked: duplicate same-height/same-hash stores are idempotent, gaps and same-height hash conflicts are hard errors, and successful returns mean the block is present in the durable block files.

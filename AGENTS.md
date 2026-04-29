@@ -170,6 +170,17 @@ Note: First release policy
 - If a live Taira signed canary fails with `Failed to find asset`, check the
   faucet/bootstrap path before changing deploy topology: the signer may simply
   be unfunded for the fee asset.
+- When the user asks about the live SORA Minamoto mainnet or deployed Torii MCP
+  workflows, consult `skills/sora-minamoto-mainnet/SKILL.md` in this repo and
+  prefer the curated `iroha.*` tool surface. Treat
+  `https://minamoto.sora.org/v1/mcp` as the current primary public Minamoto MCP
+  endpoint unless the user or operator gives you a different public Torii
+  root for the deployment under test.
+- For Minamoto mainnet work, stay read-only until the user explicitly asks to
+  mutate live state. Do not use Taira testnet faucet/bootstrap/canary
+  assumptions on Minamoto; prefer pre-signed transaction envelopes for
+  irreversible or value-moving operations, and keep any Minamoto signing inputs
+  runtime-only.
 
 ## Navigation tips
 - Search code: `rg '<term>'` and list files: `fd <name>`.

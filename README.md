@@ -132,22 +132,29 @@ public, while higher-risk app-facing surfaces are opt-in:
 
 ## Codex Integration
 
-This repo includes two Codex-facing Taira surfaces:
+This repo includes Codex-facing SORA live-network surfaces:
 
 - [`plugins/iroha/`](./plugins/iroha): an installable Codex app/plugin with the
   built-in Taira MCP preset.
 - [`skills/sora-taira-testnet/`](./skills/sora-taira-testnet): a standalone
   Codex skill for live Taira testnet workflows.
+- [`skills/sora-minamoto-mainnet/`](./skills/sora-minamoto-mainnet): a
+  standalone Codex skill for live Minamoto mainnet workflows.
 
-Install the standalone skill from a GitHub checkout of this repo with:
+Install a standalone skill from a GitHub checkout of this repo with:
 
 ```bash
 python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo <owner>/<repo> \
   --path skills/sora-taira-testnet
+
+python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo <owner>/<repo> \
+  --path skills/sora-minamoto-mainnet
 ```
 
-Restart Codex after installation so the skill appears in the Skills tab.
+Restart Codex after installation so the selected skill appears in the Skills
+tab.
 
 If you are operating the public Taira deployment itself, render per-validator
 configs from `configs/soranexus/taira/validator_roster.example.toml` plus
