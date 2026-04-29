@@ -1359,7 +1359,7 @@ enum TryWriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, num::NonZeroUsize};
+    use std::{fs::File, io::Write, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{ChainId, peer::PeerId};
@@ -1375,8 +1375,7 @@ mod tests {
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
 
-    fn state_factory() -> State {
-        let kura = Kura::blank_kura_for_testing();
+    fn state_factory_with_kura(kura: Arc<Kura>) -> State {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(
             crate::queue::tests::world_with_test_domains(),
@@ -1385,6 +1384,10 @@ mod tests {
         );
         state.chain_id = ChainId::from(TEST_CHAIN_ID);
         state
+    }
+
+    fn state_factory() -> State {
+        state_factory_with_kura(Kura::blank_kura_for_testing())
     }
 
     #[test]
@@ -2099,7 +2102,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory();
+        let state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = KeyPair::random();
 
         let peer_key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -2166,7 +2169,7 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let state = state_factory();
+        let state = state_factory_with_kura(Arc::clone(&kura));
         let key_pair = KeyPair::random();
 
         let peer_key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -2210,6 +2213,8 @@ mod tests {
         kura.store_block(committed_block)
             .expect("store second block");
 
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
         // Store inside kura different block at the same height with different view change
         // index. This imitates a snapshot created for a block which is later discarded as a
         // soft-fork.
@@ -2225,8 +2230,6 @@ mod tests {
             .unwrap();
         kura.replace_top_block(committed_block)
             .expect("replace top block");
-
-        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
         let state = try_read_snapshot(
             &store_dir,

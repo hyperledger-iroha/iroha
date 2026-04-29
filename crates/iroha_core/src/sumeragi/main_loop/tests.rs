@@ -11785,14 +11785,7 @@ async fn precommit_qc_rejects_same_height_conflict_even_when_nonextending_allowe
 
     let locked_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 1, None);
-    actor
-        .kura
-        .store_block(locked_block.clone())
-        .expect("store locked block");
-    actor
-        .kura
-        .store_block(conflicting_block.clone())
-        .expect("store conflicting block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), locked_block.clone());
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(locked_block.hash());
     actor.locked_qc = Some(QcHeaderRef {
@@ -13291,7 +13284,7 @@ async fn block_sync_update_known_block_reuses_cached_block_signers() {
         "block signers should exclude the missing QC signer"
     );
 
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
     let block_hash = block.hash();
     let canonical_topology = super::network_topology::Topology::new(canonical_roster.clone());
     let mut qc_signers = BTreeSet::new();
@@ -14022,7 +14015,7 @@ async fn fetch_pending_block_attaches_cached_qc() {
 
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, None);
     let block_hash = block.hash();
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers_bitmap = vec![0b0000_0111];
@@ -14389,7 +14382,7 @@ async fn fetch_pending_block_highest_qc_bypasses_background_queue() {
     let view = 0u64;
     let block = sample_block(height, view, None);
     let block_hash = block.hash();
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
 
     actor.highest_qc = Some(QcHeaderRef {
         height,
@@ -14556,7 +14549,7 @@ async fn fetch_block_body_responds_with_exact_block_created() {
     let block_hash = block.hash();
     let height = block.header().height().get();
     let view = block.header().view_change_index();
-    actor.kura.store_block(block).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
 
     let requester = actor
         .effective_commit_topology()
@@ -14696,7 +14689,7 @@ async fn fetch_block_body_releases_dedup_after_miss_for_same_requester_retry() {
         "missing local payload should not answer the first exact-body fetch"
     );
 
-    actor.kura.store_block(block).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
     {
         let mut guard = actor
             .block_payload_dedup
@@ -16203,7 +16196,7 @@ async fn fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled() {
     );
     let block_hash = block.hash();
     let block_clone = block.clone();
-    actor.kura.store_block(block).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block);
 
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
@@ -16243,7 +16236,7 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
 
     let block = sample_block(2, 0, None);
     let block_hash = block.hash();
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers_bitmap = vec![0b0000_0111];
@@ -17036,7 +17029,7 @@ async fn fetch_pending_block_responses_do_not_enqueue_rbc_sidecars() {
 
     let block = sample_block(3, 0, None);
     let block_hash = block.hash();
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
 
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -29161,7 +29154,7 @@ async fn materialize_qc_for_header_recovers_with_empty_roster() {
     let view = block.header().view_change_index();
     let epoch = actor.epoch_for_height(height);
 
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
 
     let mut snapshot_roster = actor.effective_commit_topology();
     let local_peer = actor.common_config.peer.id().clone();
@@ -32769,10 +32762,7 @@ async fn handle_vote_drops_nonextending_precommit_for_known_block() {
 
     let parent = sample_block(1, 0, None);
     let locked_block = sample_block(2, 0, Some(parent.hash()));
-    actor
-        .kura
-        .store_block(locked_block.clone())
-        .expect("store locked block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), locked_block.clone());
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(locked_block.hash());
 
@@ -38369,7 +38359,7 @@ async fn known_local_kura_rbc_session_stays_collecting_until_chunks_hydrate() {
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "commit roster should be non-empty");
 
-    actor.kura.store_block(block.clone()).expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), block.clone());
     assert!(
         actor.pending.pending_blocks.get(&key.0).is_none(),
         "test precondition: block must not be active in pending storage"
@@ -54501,15 +54491,6 @@ async fn committed_edge_sidecar_conflict_emits_one_bundle_per_window() {
     let now = Instant::now();
     let _ = seed_genesis_block_for_state(&actor.state);
     let stale = now.checked_sub(Duration::from_secs(45)).unwrap_or(now);
-    let committed_block = sample_block(1, 0, None);
-    let committed_hash = committed_block.hash();
-    actor
-        .kura
-        .store_block(committed_block)
-        .expect("store committed block");
-    Arc::get_mut(&mut actor.state)
-        .expect("state uniquely held")
-        .push_block_hash_for_testing(committed_hash);
     let committed_height = 1_u64;
     let frontier_height = committed_height.saturating_add(1);
     let _ =
@@ -62937,10 +62918,7 @@ async fn lock_lag_recovery_uses_cached_qc_head_and_exact_frontier_body_repair() 
     let locked_height = 6_u64;
     let locked_block = sample_block(locked_height, 0, None);
     let locked_hash = locked_block.hash();
-    actor
-        .kura
-        .store_block(locked_block)
-        .expect("store locked block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), locked_block);
     actor.locked_qc = Some(QcHeaderRef {
         height: locked_height,
         view: 0,
@@ -62972,10 +62950,7 @@ async fn lock_lag_recovery_uses_cached_qc_head_and_exact_frontier_body_repair() 
     let cached_view = 0_u64;
     let cached_block = sample_block(cached_height, cached_view, Some(locked_hash));
     let cached_hash = cached_block.hash();
-    actor
-        .kura
-        .store_block(cached_block)
-        .expect("store cached block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), cached_block);
     let cached_epoch = actor.epoch_for_height(cached_height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let cached_qc = qc_with_bitmap(
@@ -74439,10 +74414,7 @@ async fn prune_stale_view_state_prunes_delivered_rbc_when_payload_available() {
 
     let parent = actor.state.view().latest_block_hash();
     let stale_block = sample_block(height, 0, parent);
-    actor
-        .kura
-        .store_block(stale_block.clone())
-        .expect("store block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), stale_block.clone());
     let payload_hash = Hash::prehashed([0x30; Hash::LENGTH]);
     let chunk_root = Hash::prehashed([0x31; Hash::LENGTH]);
     let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
@@ -78235,10 +78207,7 @@ async fn force_view_change_if_idle_suppresses_missing_qc_round_stale_against_cac
     let cached_view = 0_u64;
     let cached_block = sample_block(cached_height, cached_view, None);
     let cached_hash = cached_block.hash();
-    actor
-        .kura
-        .store_block(cached_block)
-        .expect("store cached block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), cached_block);
     let cached_epoch = actor.epoch_for_height(cached_height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let cached_qc = qc_with_bitmap(
@@ -97248,10 +97217,7 @@ async fn assemble_proposal_reanchors_lock_lag_highest_qc_catchup() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x57; Hash::LENGTH]));
     let highest_block = sample_block(highest_height, 0, Some(missing_parent));
     let highest_hash = highest_block.hash();
-    actor
-        .kura
-        .store_block(highest_block)
-        .expect("store highest block");
+    actor.pending.pending_processing.set(Some(highest_hash));
 
     let tx = sample_transaction();
     actor
@@ -97302,7 +97268,7 @@ async fn assemble_proposal_reanchors_lock_lag_highest_qc_catchup() {
     };
     assert!(
         actor.block_known_locally(highest_hash),
-        "test setup requires the highest-QC block to be available locally"
+        "test setup requires the highest-QC hash to be tracked locally"
     );
     assert!(
         !actor.highest_qc_extends_locked(highest_qc),
@@ -97366,14 +97332,14 @@ async fn assemble_proposal_reanchors_lock_lag_highest_qc_catchup() {
             .propose
             .highest_qc_missing_defer_markers
             .contains(&(proposal_height, proposal_view, highest_hash)),
-        "locally known highest-QC payload should recover through range pull rather than leaving a missing-hash defer marker behind"
+        "locally tracked highest-QC hash should recover through range pull rather than leaving a missing-hash defer marker behind"
     );
     assert!(
-        !actor
+        actor
             .pending
             .missing_block_requests
             .contains_key(&highest_hash),
-        "locally known highest-QC payload should not fall back to direct hash fetch"
+        "tracked highest-QC hash without local payload should keep exact repair active alongside the locked+1 range pull"
     );
 
     super::status::set_locked_qc(0, 0, None);
@@ -108179,10 +108145,13 @@ async fn block_created_without_hint_realigns_lock_to_committed_chain() {
     state.push_block_hash_for_testing(committed_block.hash());
 
     let stale_locked_block = sample_block(1, 1, None);
+    let stale_payload_hash = Hash::new(super::proposals::block_payload_bytes(&stale_locked_block));
+    let mut stale_pending = PendingBlock::new(stale_locked_block.clone(), stale_payload_hash, 1, 1);
+    stale_pending.validation_status = ValidationStatus::Valid;
     actor
-        .kura
-        .store_block(stale_locked_block.clone())
-        .expect("store stale locked block");
+        .pending
+        .pending_blocks
+        .insert(stale_locked_block.hash(), stale_pending);
 
     let locked_epoch = actor.epoch_for_height(1);
     actor.locked_qc = Some(QcHeaderRef {
@@ -132747,10 +132716,7 @@ async fn highest_qc_extends_locked_accepts_newer_view_when_locked_payload_missin
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
     let candidate_block = sample_block(2, 3, None);
     let candidate_hash = candidate_block.hash();
-    actor
-        .kura
-        .store_block(candidate_block)
-        .expect("store candidate block");
+    store_block_with_test_ancestors(actor.kura.as_ref(), candidate_block);
 
     let lock = QcHeaderRef {
         height: 1,
@@ -133360,6 +133326,24 @@ fn sample_block_with_signature_index(
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
     builder.build_with_signature(signatory_index, ALICE_KEYPAIR.private_key())
+}
+
+fn store_block_with_test_ancestors(kura: &Kura, block: impl Into<Arc<SignedBlock>>) {
+    let block = block.into();
+    let height = block.header().height().get();
+    let current_count = kura.blocks_count();
+    let current_height = u64::try_from(current_count).expect("Kura height fits in u64");
+    let mut parent =
+        NonZeroUsize::new(current_count).and_then(|height| kura.get_block_hash(height));
+
+    for missing_height in current_height.saturating_add(1)..height {
+        let ancestor = empty_block(missing_height, 0, parent);
+        parent = Some(ancestor.hash());
+        kura.store_block(ancestor)
+            .expect("store canonical test ancestor");
+    }
+
+    kura.store_block(block).expect("store test block");
 }
 
 fn insert_pending_block(actor: &mut Actor, height: u64, view: u64) -> SessionKey {
@@ -137847,11 +137831,7 @@ async fn rbc_message_stale_ignores_uncommitted_kura_blocks() {
     );
 
     let block_hash = block.hash();
-    harness
-        .actor
-        .kura
-        .store_block(Arc::new(block))
-        .expect("store block");
+    store_block_with_test_ancestors(harness.actor.kura.as_ref(), block);
 
     assert!(
         !harness.actor.rbc_message_stale(&block_hash, block_height),
