@@ -1,12 +1,27 @@
 # Status
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
+
+## 2026-04-29 Izanami seed-7 stress rerun closure
+
+- Reran the real seed-7 `stress-400` and `stress-800` communication-vulnerability matrices with fresh `target/codex-stress` binaries and row-isolated execution so each scenario has its own completed log before being merged into the report artifact.
+- Both refreshed artifact directories are now fully resilient: `dist/izanami-stress-400-seed7-20260428` and `dist/izanami-stress-800-seed7-20260428` each contain 14 data rows plus the header in `summary.tsv` / `evidence.tsv`; every permissioned and NPoS row has `exit_code=0`, `status=ok`, and `paper_outcome=resilient`.
+- The previously degraded NPoS transient-failure, packet-loss, and leader-isolation rows now report `confirmation_queue_dropped=0`, `confirmation_failed=0`, hard `failures=0`, no unexpected successes, and no RBC/pending pressure. Late sampled confirmations are counted as `confirmation_budget_skipped` or shutdown noise instead of degrading completed runs.
+- Rebuilt `summary.md`, `evidence.tsv`, and `paper-style-final-report.md` for both stress directories from the completed row logs; artifact-wide scans over the fresh report directories found no nonzero queue-drop/failure counters, panics, route errors, confirmation timeouts, stuck-queued transaction markers, or queue-pressure markers.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p izanami confirmation_audit_scheduler -- --nocapture`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh && git diff --check`
+  - `CARGO_TARGET_DIR=target/codex-stress cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
+  - Row-isolated real seed-7 `stress-400` reruns for missing/degraded NPoS rows plus report rebuild for `dist/izanami-stress-400-seed7-20260428`
+  - Row-isolated real seed-7 `stress-800` reruns for all permissioned and NPoS rows plus report rebuild for `dist/izanami-stress-800-seed7-20260428`
 
 ## 2026-04-28 Izanami stress audit queue root-cause fix
 
 - Root-caused the seed-7 stress degraded rows to Izanami's sampled confirmation audit queue, not Sumeragi consensus state: the completed stress logs show `confirmation_queue_dropped` hits while Sumeragi status deltas report no RBC store pressure, no RBC evictions, no pending-RBC drops, no persist drops, and accepted submissions equal started submissions.
 - Fixed the audit scheduler so sampled confirmations are not enqueued when the remaining run window cannot cover the configured audit timeout. Late samples now count as `confirmation_budget_skipped`; genuine bounded queue overflow still increments `confirmation_queue_dropped`, and an unexpected early audit-channel close now increments `confirmation_failed`.
-- This improves the next stress rerun's classification path without rewriting the completed `dist/izanami-stress-400-seed7-20260428` / `dist/izanami-stress-800-seed7-20260428` logs. Re-run the stress matrices with fresh binaries to confirm the previously degraded rows move to resilient when no real queue overflow occurs.
+- The fresh 2026-04-29 stress rerun above confirms the previously degraded audit-queue-only rows move to resilient when no real queue overflow occurs.
 - Validation:
   - `cargo fmt --all`
   - `cargo test -p izanami confirmation_audit_scheduler -- --nocapture`
@@ -29,7 +44,7 @@ Last updated: 2026-04-28
 - Ran real 20-peer/800s stress matrices with fresh `target/codex-stress` binaries for seed `7`:
   - `dist/izanami-stress-400-seed7-20260428` (`stress-400`, both Sumeragi modes)
   - `dist/izanami-stress-800-seed7-20260428` (`stress-800`, both Sumeragi modes)
-- Stress results are margin evidence, not paper-mode acceptance replacements. The permissioned profile stayed resilient across all 800 TPS rows and all but the 400 TPS 25% packet-loss subrow; that 400 TPS row degraded on one queue drop with no submission failures. NPoS stayed resilient for targeted-load and stopping, while transient-failure, packet-loss subrows, and leader-isolation degraded from bounded queue drops; all completed rows had `exit_code=0`, `status=ok`, accepted submissions equal to started submissions, zero hard failures, and final strict/quorum height evidence.
+- Stress results are margin evidence, not paper-mode acceptance replacements. This initial pre-fix run showed permissioned resilient across all 800 TPS rows and all but the 400 TPS 25% packet-loss subrow; NPoS targeted-load/stopping were resilient while transient-failure, packet-loss subrows, and leader-isolation degraded from bounded confirmation-audit queue drops without hard submission failures. The 2026-04-29 rerun closure above supersedes these classifications with fresh fully resilient artifacts.
 - Added `--report-only` to the matrix runner so completed raw logs can regenerate `summary.md`, `evidence.tsv`, and `paper-style-final-report.md` after a post-run report assembly failure. Rebuilt both stress artifact directories with the new path.
 - Focused validation for this slice:
   - `CARGO_TARGET_DIR=target/codex-stress cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
