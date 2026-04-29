@@ -27053,6 +27053,9 @@ async fn known_block_commit_qc_recovery_targets_fall_back_to_cached_vote_roster(
 async fn known_block_commit_qc_recovery_targets_fall_back_to_effective_commit_topology() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
     let committed_height = actor.committed_height_snapshot();
     let height = committed_height.saturating_add(2);
     let view = 0_u64;
