@@ -1621,6 +1621,7 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
+        self.maybe_cache_rehydrated_kura_body(&block);
         let parent_hash = block.header().prev_block_hash();
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let expected_epoch = self.epoch_for_height(block_height);
