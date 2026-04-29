@@ -2,6 +2,14 @@
 
 Last updated: 2026-04-29
 
+## 2026-04-29 Iroha config minimal snapshot Kura default
+
+- Refreshed `minimal_config_snapshot` so the expected Kura defaults include
+  `eviction_required_replicas: 3`.
+- Focused validation for this fix:
+  - `cargo test -p iroha_config --test fixtures`
+  - `cargo fmt --all`
+
 ## 2026-04-29 Canonical Kura test fixture repair
 
 - Updated snapshot tests so WSV state and snapshot writing share the same Kura
