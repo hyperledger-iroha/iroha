@@ -3358,6 +3358,7 @@ impl IzanamiRunner {
             &submission_counter,
             confirmation_audit_tx.clone(),
             confirmation_audit_seed,
+            confirmation_audit_wait_options.clone(),
         );
         drop(confirmation_audit_tx);
 
@@ -3791,6 +3792,7 @@ impl IzanamiRunner {
         submission_counter: &Arc<AtomicU64>,
         confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
         confirmation_audit_seed: u64,
+        confirmation_audit_wait_options: TransactionWaitOptions,
     ) -> Vec<JoinHandle<()>> {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
@@ -3829,6 +3831,7 @@ impl IzanamiRunner {
                 let workload = Arc::clone(&workload);
                 let semaphore = Arc::clone(&semaphore);
                 let confirmation_audit_tx = confirmation_audit_tx.clone();
+                let confirmation_audit_wait_options = confirmation_audit_wait_options.clone();
                 tokio::spawn(async move {
                     let start = Instant::now();
                     let mut next_tick = start + phase_delay;
@@ -3968,6 +3971,9 @@ impl IzanamiRunner {
                         let workload = Arc::clone(&workload);
                         let semaphore = Arc::clone(&semaphore);
                         let confirmation_audit_tx = confirmation_audit_tx.clone();
+                        let run_control = Arc::clone(&run_control);
+                        let confirmation_audit_wait_options =
+                            confirmation_audit_wait_options.clone();
                         submissions.spawn(async move {
                             let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics));
                             submit_plan(
@@ -3981,6 +3987,8 @@ impl IzanamiRunner {
                                 submitter_idx,
                                 confirmation_audit_tx,
                                 confirmation_audit_seed,
+                                &run_control,
+                                &confirmation_audit_wait_options,
                             )
                             .await;
                         });
@@ -5322,14 +5330,66 @@ fn try_schedule_submission_audit(
     confirmation_audit_tx: &mpsc::Sender<SubmissionAuditCandidate>,
     metrics: &Metrics,
     candidate: SubmissionAuditCandidate,
+    run_control: &RunControl,
+    wait_options: &TransactionWaitOptions,
 ) {
+    let endpoint_idx = candidate.endpoint_idx;
+    let hash = candidate.hash;
+    let plan_label = candidate.plan_label;
+    let now = Instant::now();
+    if run_control.stop_requested() {
+        metrics.record_confirmation_audit_shutdown_noise();
+        debug!(
+            target: "izanami::audit",
+            endpoint_idx,
+            hash = %hash,
+            plan = plan_label,
+            "skipping sampled confirmation because the run is stopping"
+        );
+        return;
+    }
+    if !confirmation_audit_has_deadline_budget(now, run_control.deadline(), wait_options) {
+        metrics.record_confirmation_audit_budget_skipped();
+        debug!(
+            target: "izanami::audit",
+            endpoint_idx,
+            hash = %hash,
+            plan = plan_label,
+            remaining_ms = run_control
+                .deadline()
+                .checked_duration_since(now)
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default(),
+            timeout_ms = wait_options.timeout.as_millis(),
+            "skipping sampled confirmation before enqueue because the remaining run window is too short"
+        );
+        return;
+    }
     match confirmation_audit_tx.try_send(candidate) {
         Ok(()) => metrics.record_confirmation_audit_sampled(),
         Err(mpsc::error::TrySendError::Full(_)) => {
             metrics.record_confirmation_audit_queue_dropped();
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
-            metrics.record_confirmation_audit_queue_dropped();
+            if run_control.should_stop() {
+                metrics.record_confirmation_audit_shutdown_noise();
+                debug!(
+                    target: "izanami::audit",
+                    endpoint_idx,
+                    hash = %hash,
+                    plan = plan_label,
+                    "sampled confirmation audit channel closed during shutdown"
+                );
+            } else {
+                metrics.record_confirmation_audit_failed();
+                warn!(
+                    target: "izanami::audit",
+                    endpoint_idx,
+                    hash = %hash,
+                    plan = plan_label,
+                    "sampled confirmation audit channel closed before the run deadline"
+                );
+            }
         }
     }
 }
@@ -5416,6 +5476,8 @@ async fn submit_plan(
     submitter_idx: usize,
     confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
     confirmation_audit_seed: u64,
+    run_control: &RunControl,
+    confirmation_audit_wait_options: &TransactionWaitOptions,
 ) {
     let ingress_pool = Arc::clone(ingress_pool);
     let signer = plan.signer.clone();
@@ -5724,6 +5786,8 @@ async fn submit_plan(
                         hash: submission_outcome.hash,
                         plan_label,
                     },
+                    run_control,
+                    confirmation_audit_wait_options,
                 );
             }
             if let (Some(endpoint_idx), Some(trigger_id)) =
@@ -6598,6 +6662,7 @@ mod tests {
     use std::{env, io};
 
     use color_eyre::eyre::{WrapErr, eyre};
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         isi::SetParameter,
         parameter::{Parameter, SumeragiParameter},
@@ -6623,6 +6688,20 @@ mod tests {
                 )
             })
             .unwrap_or(false)
+    }
+
+    fn synthetic_audit_candidate(byte: u8) -> SubmissionAuditCandidate {
+        let key_pair = KeyPair::random();
+        SubmissionAuditCandidate {
+            endpoint_idx: 0,
+            signer: AccountRecord {
+                id: AccountId::new(key_pair.public_key().clone()),
+                key_pair,
+                uaid: None,
+            },
+            hash: HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH])),
+            plan_label: "synthetic_audit",
+        }
     }
 
     struct EnvGuard {
@@ -10636,6 +10715,75 @@ mod tests {
             first < 100,
             "sample bucket must stay within the fixed percentage range"
         );
+    }
+
+    #[test]
+    fn confirmation_audit_scheduler_skips_when_deadline_budget_is_gone() {
+        let metrics = Metrics::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let run_control = RunControl::new(Instant::now() + Duration::from_millis(1));
+        let wait_options = throughput_confirmation_wait_options();
+
+        try_schedule_submission_audit(
+            &tx,
+            &metrics,
+            synthetic_audit_candidate(0xA1),
+            &run_control,
+            &wait_options,
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.confirmation_sampled, 0);
+        assert_eq!(snapshot.confirmation_budget_skipped, 1);
+        assert_eq!(snapshot.confirmation_queue_dropped, 0);
+        assert_eq!(snapshot.confirmation_failed, 0);
+    }
+
+    #[test]
+    fn confirmation_audit_scheduler_counts_full_queue_as_drop() {
+        let metrics = Metrics::default();
+        let (tx, _rx) = mpsc::channel(1);
+        tx.try_send(synthetic_audit_candidate(0xB1))
+            .expect("seeded audit queue should have capacity");
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(300));
+        let wait_options = throughput_confirmation_wait_options();
+
+        try_schedule_submission_audit(
+            &tx,
+            &metrics,
+            synthetic_audit_candidate(0xB2),
+            &run_control,
+            &wait_options,
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.confirmation_sampled, 0);
+        assert_eq!(snapshot.confirmation_budget_skipped, 0);
+        assert_eq!(snapshot.confirmation_queue_dropped, 1);
+        assert_eq!(snapshot.confirmation_failed, 0);
+    }
+
+    #[test]
+    fn confirmation_audit_scheduler_marks_early_channel_close_as_failure() {
+        let metrics = Metrics::default();
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(300));
+        let wait_options = throughput_confirmation_wait_options();
+
+        try_schedule_submission_audit(
+            &tx,
+            &metrics,
+            synthetic_audit_candidate(0xC1),
+            &run_control,
+            &wait_options,
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.confirmation_sampled, 0);
+        assert_eq!(snapshot.confirmation_budget_skipped, 0);
+        assert_eq!(snapshot.confirmation_queue_dropped, 0);
+        assert_eq!(snapshot.confirmation_failed, 1);
     }
 
     #[test]
