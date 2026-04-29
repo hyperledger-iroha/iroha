@@ -1,6 +1,20 @@
 # Status
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
+
+## 2026-04-29 Mandatory Kura durability before state commit
+
+- Made Kura block storage synchronous and canonical-height checked: duplicate same-height/same-hash stores are idempotent, gaps and same-height hash conflicts are hard errors, and successful returns mean the block is present in the durable block files.
+- Removed the Sumeragi commit-path `persist_required` bypass so every commit worker stores/verifies the block in Kura before applying and committing WSV state; `PendingBlock::kura_persisted` is retained only as retry/logging state.
+- Kept the Kura writer thread on sidecar flushing and shutdown fsync handling instead of making it authoritative for block appends, and added regression coverage for merge-log rollback and `kura_persisted` retry behavior.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core kura::tests`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::state_commit_failure_after_kura_store_keeps_partial_head_hidden`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::pending_kura_persisted_still_checks_kura_before_state_commit`
+  - `cargo test -p iroha_core --lib snapshot::tests::snapshot_write_rejects_state_ahead_of_kura`
+  - `cargo test -p irohad snapshot_read_error_tests::snapshot_read_error_is_recoverable_classifies_errors`
+  - `git diff --check`
 
 ## 2026-04-28 SDK compatibility matrix gap closure
 

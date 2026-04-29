@@ -20220,7 +20220,6 @@ fn start_commit_job_fixture(
         commit_qc: None,
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: false,
         events_sender: actor.events_sender.clone(),
     };
     (block_hash, height, block, inflight, work)
@@ -20358,6 +20357,54 @@ async fn start_commit_job_disconnected_worker_executes_inline_and_clears_worker_
         committed_height == height || pending_present,
         "inline disconnected fallback should leave the block recoverable as either committed state or queued pending work"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_kura_persisted_still_checks_kura_before_state_commit() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.persistence.kura_retry_max_attempts = 3;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (block_hash, _height, _block, mut inflight, work) =
+        start_commit_job_fixture(actor, &harness.key_pairs, 94);
+
+    let committed_height_before = actor.state.committed_height();
+    let kura_count_before = actor.kura.blocks_count();
+    inflight.pending.mark_kura_persisted();
+    actor.kura.fail_next_store_for_tests();
+    actor.subsystems.commit.work_tx = None;
+    actor.subsystems.commit.result_rx = None;
+
+    assert!(
+        !actor.start_commit_job(inflight, work),
+        "Kura failure should prevent the commit from reporting progress"
+    );
+    assert_eq!(
+        actor.state.committed_height(),
+        committed_height_before,
+        "state must not advance when the mandatory Kura check fails"
+    );
+    assert_eq!(
+        actor.kura.blocks_count(),
+        kura_count_before,
+        "failed durable store must not append the pending block"
+    );
+    assert!(
+        actor.subsystems.commit.inflight.is_none(),
+        "inline failure should clear inflight state"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("failed block should remain pending for retry");
+    assert!(
+        pending.kura_persisted,
+        "the flag may remain as retry state, but it must not bypass Kura"
+    );
+    assert_eq!(pending.kura_retry_attempts, 1);
 
     harness.shutdown.send();
 }
@@ -21784,7 +21831,6 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         commit_qc: None,
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
     let (outcome, timings) = commit::execute_commit_work(
@@ -22022,7 +22068,6 @@ async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_
         commit_qc: None,
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
     let (outcome, timings) = commit::execute_commit_work(
@@ -22166,7 +22211,6 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
         commit_qc: None,
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
     let (outcome, timings) = commit::execute_commit_work(
@@ -22346,7 +22390,6 @@ async fn commit_outcome_kickstarts_next_proposal_and_records_round_gap() {
         commit_qc: Some(commit_qc.clone()),
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
     let (outcome, timings) = commit::execute_commit_work(
@@ -22718,7 +22761,6 @@ async fn successful_commit_keeps_latest_block_aligned_with_committed_height() {
         commit_qc: None,
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
     let (outcome, timings) = commit::execute_commit_work(
@@ -22906,7 +22948,6 @@ async fn cached_future_proposal_does_not_immediately_timeout_after_parent_commit
         commit_qc: None,
         allow_quorum_bypass: false,
         allow_signature_index_recovery: false,
-        persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
     let (outcome, timings) = commit::execute_commit_work(
@@ -136708,7 +136749,6 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         },
     );
@@ -136853,7 +136893,6 @@ async fn state_commit_height_mismatch_drops_stale_pending_when_state_advanced() 
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender: actor.events_sender.clone(),
         },
     );
