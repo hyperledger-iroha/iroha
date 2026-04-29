@@ -45724,7 +45724,7 @@ mod tests {
             let _events = state_block.apply(&block, Vec::new());
             state_block.commit().unwrap();
 
-            if height != 2 {
+            if height != 3 {
                 kura.store_block(block).expect("store block");
             }
         }
@@ -45734,7 +45734,7 @@ mod tests {
             .all_blocks(nonzero!(1_usize))
             .map(|block| block.header().height().get())
             .collect();
-        assert_eq!(heights, vec![1, 3]);
+        assert_eq!(heights, vec![1, 2]);
     }
 
     #[test]

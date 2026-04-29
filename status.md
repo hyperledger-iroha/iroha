@@ -2,6 +2,26 @@
 
 Last updated: 2026-04-29
 
+## 2026-04-29 Canonical Kura test fixture repair
+
+- Updated snapshot tests so WSV state and snapshot writing share the same Kura
+  instance under the new state/Kura alignment guard, and kept the intentional
+  last-block soft-fork read scenario as a read-side mismatch instead of a
+  write-side rejection.
+- Adjusted state and Sumeragi fixtures that intentionally modeled missing,
+  future, or conflicting blocks so Kura only stores canonical contiguous
+  chains; non-canonical payloads now live in pending/test state where the
+  behavior under test expects them.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib snapshot::tests::can_read -- --nocapture`
+  - `cargo test -p iroha_core --lib state::tests::all_blocks_skips_missing_kura_entries -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::fetch_pending_block_ -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::fetch_block_body_ -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests -- --nocapture` (`2001` passed, `20` ignored)
+  - `cargo fmt --all --check`
+  - `git diff --check`
+
 ## 2026-04-29 SORA Minamoto mainnet Codex skill
 
 - Added a standalone `sora-minamoto-mainnet` Codex skill for the public
