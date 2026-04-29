@@ -765,6 +765,8 @@ pub mod kura {
     pub const BLOCK_SYNC_ROSTER_RETENTION: NonZeroUsize = nonzero!(7_200_usize);
     /// Number of recent roster sidecars retained alongside the block store.
     pub const ROSTER_SIDECAR_RETENTION: NonZeroUsize = nonzero!(512_usize);
+    /// Distinct remote peers that must advertise a canonical block before local body eviction.
+    pub const EVICTION_REQUIRED_REPLICAS: NonZeroUsize = nonzero!(3_usize);
     /// Default number of merge-ledger entries cached in memory.
     pub const MERGE_LEDGER_CACHE_CAPACITY: usize = 256;
     /// Default fsync policy for block persistence.

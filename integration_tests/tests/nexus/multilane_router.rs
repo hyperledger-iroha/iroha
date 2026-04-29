@@ -183,6 +183,8 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
 
     let (kura, block_count) = Kura::new(&kura_cfg, &lane_config)?;
