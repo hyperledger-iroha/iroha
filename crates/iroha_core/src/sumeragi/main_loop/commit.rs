@@ -2140,6 +2140,19 @@ impl Actor {
                     pending_previously_marked_kura_persisted,
                     "stored committed block to kura"
                 );
+                if let Some((height, payload_len)) =
+                    self.kura.durable_block_payload_len_by_hash(block_hash)
+                {
+                    self.schedule_background(BackgroundRequest::Broadcast {
+                        msg: BlockMessageWire::new(BlockMessage::KuraReplicaAdvert(
+                            super::message::KuraReplicaAdvert {
+                                height,
+                                block_hash,
+                                payload_len,
+                            },
+                        )),
+                    });
+                }
                 #[cfg(feature = "telemetry")]
                 {
                     self.telemetry
@@ -4205,6 +4218,22 @@ impl Actor {
         commit_topology.to_vec()
     }
 
+    fn vote_emission_topology_for_height(
+        &self,
+        height: u64,
+        consensus_mode: ConsensusMode,
+        fallback: &super::network_topology::Topology,
+    ) -> super::network_topology::Topology {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height == committed_height.saturating_add(1) {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return super::network_topology::Topology::new(live);
+            }
+        }
+        fallback.clone()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn build_vote(
         &self,
@@ -4366,8 +4395,10 @@ impl Actor {
             );
             return false;
         }
+        self.process_committed_blocks_before_consensus("emit_precommit_vote");
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -4520,7 +4551,7 @@ impl Actor {
         };
         let chain_id = self.common_config.chain.clone();
         let evidence_context = super::evidence::EvidenceValidationContext {
-            topology,
+            topology: &topology,
             chain_id: &chain_id,
             mode_tag,
             prf_seed,
@@ -4662,9 +4693,11 @@ impl Actor {
         ) {
             return false;
         }
+        self.process_committed_blocks_before_consensus("emit_new_view_vote");
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -6728,7 +6761,16 @@ impl Actor {
                 return Ok(());
             };
             manager.on_block_commit(height);
-            let seed = manager.seed();
+            let mut seed = manager.seed();
+            if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
+                let world = self.state.world_view();
+                seed = super::prf_seed_for_height_from_world(
+                    &world,
+                    self.state.chain_id_ref(),
+                    height.saturating_add(1),
+                );
+                manager.set_epoch_seed(seed);
+            }
             let snapshot = manager.take_last_epoch_snapshot();
             let _ = manager.take_last_penalties();
             let _ = manager.take_last_penalties_detailed();
@@ -7329,6 +7371,72 @@ mod tests {
     // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
     const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(60);
 
+    struct CommitFixture {
+        genesis_key: KeyPair,
+        genesis_account_id: AccountId,
+        chain_id: ChainId,
+        state: State,
+        kura: Arc<Kura>,
+    }
+
+    fn commit_fixture_with_kura(kura: Arc<Kura>) -> CommitFixture {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
+        let chain_id = state.view().chain_id().clone();
+
+        CommitFixture {
+            genesis_key,
+            genesis_account_id,
+            chain_id,
+            state,
+            kura,
+        }
+    }
+
+    fn genesis_log_block(
+        chain_id: &ChainId,
+        genesis_account_id: &AccountId,
+        genesis_key: &KeyPair,
+        message: &str,
+    ) -> SignedBlock {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(Level::DEBUG, message.to_owned())])
+        .sign(genesis_key.private_key());
+        SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None)
+    }
+
+    fn single_peer_topology() -> Vec<PeerId> {
+        let peer_key = KeyPair::random();
+        vec![PeerId::new(peer_key.public_key().clone())]
+    }
+
+    fn commit_work(id: u64, block: SignedBlock, topology: Vec<PeerId>) -> CommitWork {
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
+        CommitWork {
+            id,
+            block,
+            validated_commit_artifact: None,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
+            qc_signers: None,
+            commit_qc: None,
+            allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
+            events_sender,
+        }
+    }
+
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
         for (byte_idx, byte) in signers_bitmap.iter().enumerate() {
@@ -7418,6 +7526,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7634,6 +7744,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -7738,6 +7850,109 @@ mod tests {
         assert_eq!(kura.blocks_count(), 1);
         let latest = state.view().latest_block().expect("latest committed block");
         assert_eq!(latest.hash(), committed_block.as_ref().hash());
+    }
+
+    #[test]
+    fn execute_commit_work_accepts_already_durable_block_without_duplicate_append() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let block = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "idempotent kura retry",
+        );
+        let block_hash = block.hash();
+        fixture
+            .kura
+            .store_block(block.clone())
+            .expect("pre-store committed block in Kura");
+        let lengths_before = fixture.kura.block_file_lengths_for_tests();
+
+        let (outcome, timings) = execute_commit_work(
+            &fixture.state,
+            fixture.kura.as_ref(),
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            commit_work(3, block, single_peer_topology()),
+        );
+        let CommitOutcome::Success { .. } = outcome else {
+            panic!("expected idempotent commit success");
+        };
+
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_commit_ms.is_some());
+        assert_eq!(fixture.state.view().height(), 1);
+        assert_eq!(fixture.kura.blocks_count(), 1);
+        assert_eq!(
+            fixture
+                .kura
+                .get_durable_block_hash(std::num::NonZeroUsize::new(1).expect("non-zero height")),
+            Some(block_hash)
+        );
+        let lengths_after = fixture.kura.block_file_lengths_for_tests();
+        assert_eq!(
+            lengths_after, lengths_before,
+            "retrying an already durable block must not append duplicate bytes"
+        );
+    }
+
+    #[test]
+    fn execute_commit_work_rejects_kura_height_conflict_before_state_commit() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let stored = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "stored competing genesis",
+        );
+        let candidate = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "candidate genesis",
+        );
+        let stored_hash = stored.hash();
+        let candidate_hash = candidate.hash();
+        assert_ne!(stored_hash, candidate_hash);
+        fixture
+            .kura
+            .store_block(stored)
+            .expect("pre-store conflicting block in Kura");
+
+        let (outcome, timings) = execute_commit_work(
+            &fixture.state,
+            fixture.kura.as_ref(),
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            commit_work(4, candidate, single_peer_topology()),
+        );
+        let CommitOutcome::KuraStoreFailed { error, .. } = outcome else {
+            panic!("expected Kura conflict before state commit");
+        };
+
+        assert!(matches!(
+            error,
+            crate::kura::Error::BlockHeightConflict {
+                height: 1,
+                expected,
+                actual,
+            } if expected == stored_hash && actual == candidate_hash
+        ));
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_apply_ms.is_none());
+        assert!(timings.state_commit_ms.is_none());
+        assert_eq!(
+            fixture.state.view().height(),
+            0,
+            "state must not advance when Kura rejects the canonical height"
+        );
+        assert_eq!(fixture.kura.blocks_count(), 1);
+        assert_eq!(
+            fixture
+                .kura
+                .get_durable_block_hash(std::num::NonZeroUsize::new(1).expect("non-zero height")),
+            Some(stored_hash)
+        );
     }
 
     #[test]

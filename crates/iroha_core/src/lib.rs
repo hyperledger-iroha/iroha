@@ -315,6 +315,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
                 | BlockMessage::ConsensusParams(_)
+                | BlockMessage::KuraReplicaAdvert(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)

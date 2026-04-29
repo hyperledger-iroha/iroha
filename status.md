@@ -17,6 +17,14 @@ Last updated: 2026-04-29
   - Row-isolated real seed-7 `stress-400` reruns for missing/degraded NPoS rows plus report rebuild for `dist/izanami-stress-400-seed7-20260428`
   - Row-isolated real seed-7 `stress-800` reruns for all permissioned and NPoS rows plus report rebuild for `dist/izanami-stress-800-seed7-20260428`
 
+## 2026-04-29 Iroha config minimal snapshot Kura default
+
+- Refreshed `minimal_config_snapshot` so the expected Kura defaults include
+  `eviction_required_replicas: 3`.
+- Focused validation for this fix:
+  - `cargo test -p iroha_config --test fixtures`
+  - `cargo fmt --all`
+
 ## 2026-04-29 Canonical Kura test fixture repair
 
 - Updated snapshot tests so WSV state and snapshot writing share the same Kura
@@ -47,6 +55,11 @@ Last updated: 2026-04-29
   confirmation policy, required write inputs, default no-agent-side-signing
   posture, common read payload examples, failure-to-action map, Taira
   difference table, and agent output requirements.
+- Incorporated live restart-smoke feedback: prefer the Minamoto MCP namespace
+  when multiple SORA servers are configured, avoid alias-index enumeration as a
+  health check, treat Musubi `404` as absent data when the tool is callable,
+  and verify explorer pagination against returned `pagination` plus
+  `inputSchema`.
 - Updated Codex integration docs and agent guidance so Minamoto workflows point
   at the new skill, prefer curated `iroha.*` tools, keep signing inputs
   runtime-only, and avoid Taira testnet faucet/bootstrap assumptions on
@@ -55,6 +68,8 @@ Last updated: 2026-04-29
   - `git diff --check`
   - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/SKILL.md`
   - `git diff --no-index --check /dev/null skills/sora-minamoto-mainnet/agents/openai.yaml`
+  - `diff -qr skills/sora-minamoto-mainnet "$HOME/.codex/skills/sora-minamoto-mainnet"`
+  - Read-only live MCP smoke: `mcp__sora_minamoto_mainnet__.iroha_sumeragi_status`
 
 ## 2026-04-29 Mandatory Kura durability before state commit
 

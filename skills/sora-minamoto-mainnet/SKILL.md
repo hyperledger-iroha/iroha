@@ -23,6 +23,9 @@ Use the Minamoto mainnet through native Torii MCP.
    Minamoto.
 8. When the user asks to transact, follow the "Transaction Workflow" section
    before submitting anything.
+9. In Codex sessions where multiple SORA MCP servers are available, use the
+   Minamoto namespace or server entry for Minamoto work. Do not call Taira tools
+   for Minamoto state.
 
 ## MCP Endpoint
 
@@ -58,6 +61,27 @@ consensus latency, or queue saturation first. Sample `/status` and
 `highest_qc_height`, `queue_size`, `tx_queue_depth`, `tx_queue_saturated`,
 `teu_dataspace_backlog`, and `view_change_causes.last_cause` before blaming
 the caller.
+
+## Restart Smoke Test
+
+After installing or updating this skill and restarting Codex, verify the live
+mainnet wiring with read-only calls only:
+
+1. Confirm the configured MCP server points at
+   `https://minamoto.sora.org/v1/mcp`.
+2. Confirm a Minamoto MCP namespace or server entry is visible in the current
+   session.
+3. Call `iroha.sumeragi.status` and check that `commit_qc.height` is present,
+   `tx_queue.saturated=false`, and queue depth is low.
+4. Fetch the latest known block with `iroha.blocks.get`.
+5. List recent transactions with `iroha.transactions.list`, then check one
+   listed hash with `iroha.transactions.status`.
+6. Optionally call a Musubi read such as `iroha.musubi.alias.resolve`; a
+   `404 not_found` means that alias is absent, not that the tool is broken.
+
+Do not use broad alias-index enumeration as a health check. It may be
+permission-bound on Minamoto and can legitimately return `403
+permission_denied`.
 
 ## Working Rules
 
@@ -248,10 +272,12 @@ value-moving or irreversible operations.
 | `route_unavailable` | Treat this as public ingress or authoritative-peer routing health first. Capture read-health evidence and stop before payload rewrites. |
 | `Transaction expired` | Sample `/status` and `/v1/sumeragi/status`; check queue saturation, finality lag, and TTL freshness before rebuilding the transaction. |
 | `404 not_found` from `iroha.transactions.status` | Report that the queried public node has no visibility for that hash. Do not infer commit, reject, or network-wide disappearance. |
+| `404 not_found` from Musubi alias/package reads | Treat the tool as reachable and the requested alias or package as absent unless discovery shows the Musubi tool is missing. |
 | MCP endpoint `404` | Report native Torii MCP is not enabled on the deployment. Do not attempt live-network actions through that endpoint. |
 | MCP endpoint or root `502` / `503` | Treat as edge or upstream rollout degradation. Avoid writes until health recovers. |
 | Tool missing from discovery | Re-run discovery once. If still absent, report that the Minamoto MCP profile does not expose that workflow. |
 | Schema validation error | Re-read the tool `inputSchema`, correct field names or body shape, and avoid guessing undocumented parameters. |
+| `403 permission_denied` from alias-index or broad explorer reads | Treat it as a route or permission boundary. Prefer narrower reads such as alias resolution by literal alias or by-account lookups. |
 | Successful submit but verification read is stale | Report the submitted status and the stale public-node observation separately; retry the read before claiming the mutation failed. |
 
 ## Preferred Triage Sequence
@@ -469,6 +495,23 @@ Tool: `iroha.blocks.list`
 }
 ```
 
+### Recent transactions
+
+Tool: `iroha.transactions.list`
+
+```json
+{
+  "query": {
+    "limit": 10
+  }
+}
+```
+
+Some deployments expose flat shortcuts such as `limit`, but explorer
+pagination may still return the default page size. Always inspect the returned
+`pagination` object and the discovered `inputSchema` before assuming a
+shortcut was honored.
+
 ### Transaction status
 
 Tool: `iroha.transactions.status`
@@ -500,21 +543,28 @@ actual name and schema with tool discovery before calling it.
 
 1. Use each tool's `inputSchema` as the source of truth for accepted fields.
 2. Re-run tool discovery if the MCP server reports that the tool list changed.
-3. When a write tool succeeds, summarize the resulting transaction hash or the
+3. Prefer namespaced Minamoto tools when Codex exposes multiple SORA MCP
+   servers in the same session.
+4. When a write tool succeeds, summarize the resulting transaction hash or the
    returned status, not just the request payload.
-4. When a write tool fails, surface the server error and say whether the issue
+5. When a write tool fails, surface the server error and say whether the issue
    looks like auth, validation, missing tool exposure, or endpoint availability.
-5. Treat `route_unavailable` as deployment health, not user input failure:
+6. Treat `route_unavailable` as deployment health, not user input failure:
    the public Torii node is up but the write route still cannot reach an
    authoritative peer.
-6. Treat `502` or `503` from the MCP endpoint or public Torii root as ingress
+7. Treat `502` or `503` from the MCP endpoint or public Torii root as ingress
    or rollout-health failures first.
-7. Treat `Transaction expired` as a likely stalled, saturated, or slow chain
+8. Treat `Transaction expired` as a likely stalled, saturated, or slow chain
    path first; report the public `/status` and `/v1/sumeragi/status` sample
    alongside the failure.
-8. Treat `403 Forbidden` as a likely signer-permission, authorization, or
-   mainnet policy problem first, not a malformed request.
-9. If public reads succeed but finality appears stalled, describe the issue as
+9. Treat `403 Forbidden` as a likely signer-permission, authorization, route,
+   or policy boundary first, not a malformed request.
+10. Treat a Musubi `404 not_found` as an absent alias/package when the Musubi
+   tool itself is callable.
+11. Treat ignored pagination shortcuts as a schema/pagination issue. Check the
+   returned `pagination` object and retry with the schema-supported query
+   shape before reporting surprising counts.
+12. If public reads succeed but finality appears stalled, describe the issue as
    a public-node or public-finality-path observation unless you have
    validator-side evidence. Avoid overstating that as a full-network outage.
 
