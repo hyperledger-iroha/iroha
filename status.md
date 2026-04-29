@@ -16,6 +16,44 @@ Last updated: 2026-04-29
   - `cargo test -p irohad snapshot_read_error_tests::snapshot_read_error_is_recoverable_classifies_errors`
   - `git diff --check`
 
+## 2026-04-28 Izanami stress audit queue root-cause fix
+
+- Root-caused the seed-7 stress degraded rows to Izanami's sampled confirmation audit queue, not Sumeragi consensus state: the completed stress logs show `confirmation_queue_dropped` hits while Sumeragi status deltas report no RBC store pressure, no RBC evictions, no pending-RBC drops, no persist drops, and accepted submissions equal started submissions.
+- Fixed the audit scheduler so sampled confirmations are not enqueued when the remaining run window cannot cover the configured audit timeout. Late samples now count as `confirmation_budget_skipped`; genuine bounded queue overflow still increments `confirmation_queue_dropped`, and an unexpected early audit-channel close now increments `confirmation_failed`.
+- This improves the next stress rerun's classification path without rewriting the completed `dist/izanami-stress-400-seed7-20260428` / `dist/izanami-stress-800-seed7-20260428` logs. Re-run the stress matrices with fresh binaries to confirm the previously degraded rows move to resilient when no real queue overflow occurs.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p izanami confirmation_audit_scheduler -- --nocapture`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh && git diff --check`
+
+## 2026-04-28 Sumeragi pacemaker low-online recovery gate
+
+- Narrowed the pacemaker's first-proposal low-online deferral so it still suppresses fresh view-0 startup proposals without an online commit quorum, but no longer blocks cached-slot cleanup, missing-QC committed-QC fallback proposals, recovery heartbeat proposals, stale/unknown precommit recovery, or future-NEW_VIEW reanchor catch-up.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::cached_recovery_proposal -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::force_view_change_if_idle_forces_missing_qc_frontier_proposal -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::pacemaker_ -- --nocapture`
+  - `git diff --check`
+
+## 2026-04-28 Izanami seed-7 stress evidence
+
+- Ran real 20-peer/800s stress matrices with fresh `target/codex-stress` binaries for seed `7`:
+  - `dist/izanami-stress-400-seed7-20260428` (`stress-400`, both Sumeragi modes)
+  - `dist/izanami-stress-800-seed7-20260428` (`stress-800`, both Sumeragi modes)
+- Stress results are margin evidence, not paper-mode acceptance replacements. The permissioned profile stayed resilient across all 800 TPS rows and all but the 400 TPS 25% packet-loss subrow; that 400 TPS row degraded on one queue drop with no submission failures. NPoS stayed resilient for targeted-load and stopping, while transient-failure, packet-loss subrows, and leader-isolation degraded from bounded queue drops; all completed rows had `exit_code=0`, `status=ok`, accepted submissions equal to started submissions, zero hard failures, and final strict/quorum height evidence.
+- Added `--report-only` to the matrix runner so completed raw logs can regenerate `summary.md`, `evidence.tsv`, and `paper-style-final-report.md` after a post-run report assembly failure. Rebuilt both stress artifact directories with the new path.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=target/codex-stress cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
+  - `TEST_NETWORK_BIN_IROHAD=target/codex-stress/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-400-seed7-20260428 --mode stress-400 --sumeragi-mode both --izanami-cmd target/codex-stress/debug/izanami -- --seed 7`
+  - `TEST_NETWORK_BIN_IROHAD=target/codex-stress/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-800-seed7-20260428 --mode stress-800 --sumeragi-mode both --izanami-cmd target/codex-stress/debug/izanami -- --seed 7`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-400-seed7-20260428 --mode stress-400 --sumeragi-mode both --report-only`
+  - `scripts/run_izanami_communication_vulnerability_matrix.sh --out dist/izanami-stress-800-seed7-20260428 --mode stress-800 --sumeragi-mode both --report-only`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh scripts/run_izanami_communication_vulnerability_sweep.sh`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+
 ## 2026-04-28 SDK compatibility matrix gap closure
 
 - Added `fixtures/sdk/compatibility_matrix.json` as the canonical public SDK compatibility matrix fixture for the `i23-features` branch, with every SDK/story cell populated.

@@ -65,7 +65,7 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
             "--out",
             str(out_dir),
             "--mode",
-            "stress-400",
+            "stress-1200",
             "--only",
             "targeted-load",
             "--sumeragi-mode",
@@ -83,7 +83,31 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert report.exists()
     assert summary.exists()
     assert evidence.exists()
-    assert "Mode: `stress-400`" in report.read_text()
+    assert "Mode: `stress-1200`" in report.read_text()
+    assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
+
+    report.unlink()
+    (out_dir / "summary.md").unlink()
+    evidence.unlink()
+    subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--out",
+            str(out_dir),
+            "--mode",
+            "stress-1200",
+            "--sumeragi-mode",
+            "permissioned",
+            "--report-only",
+        ],
+        check=True,
+        cwd=ROOT,
+    )
+
+    assert report.exists()
+    assert "Iroha (Sumeragi permissioned)" in report.read_text()
+    assert "targeted-load" in summary.read_text()
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
 
 
