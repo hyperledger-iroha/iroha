@@ -3482,6 +3482,7 @@ fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
         TryReadSnapshotError::NotFound => true,
         TryReadSnapshotError::IO(_, _) => false,
         TryReadSnapshotError::ChainIdMismatch { .. } => false,
+        TryReadSnapshotError::MismatchedHeight { .. } => false,
         _ => true,
     }
 }
@@ -3587,7 +3588,7 @@ mod snapshot_read_error_tests {
             }
         ));
 
-        assert!(snapshot_read_error_is_recoverable(
+        assert!(!snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MismatchedHeight {
                 snapshot_height: 2,
                 kura_height: 1,

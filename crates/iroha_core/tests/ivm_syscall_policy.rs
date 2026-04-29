@@ -32,6 +32,14 @@ fn program_with_scall(sys: u8) -> Vec<u8> {
     out
 }
 
+fn unlisted_syscall_number() -> u8 {
+    (0u8..=u8::MAX)
+        .find(|number| {
+            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
+        })
+        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+}
+
 fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
     let mut md = iroha_data_model::metadata::Metadata::default();
     md.insert(
@@ -44,7 +52,7 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 #[test]
 fn deny_unlisted_syscall_in_current() {
     // Choose a syscall number that is not in the ABI v1 allowlist.
-    let prog = program_with_scall(0xAB);
+    let prog = program_with_scall(unlisted_syscall_number());
     let mut vm = IVM::new(u64::MAX);
     // Any authority is fine; it won't be used
     let authority =
@@ -100,8 +108,8 @@ fn unknown_syscall_is_rejected_at_admission() {
         iroha_core::state::World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    // Program calls an unknown syscall number (0xAB) before halting.
-    let prog = program_with_scall(0xAB);
+    // Program calls an unknown syscall number before halting.
+    let prog = program_with_scall(unlisted_syscall_number());
     let chain: ChainId = "chain".parse().expect("chain id");
     let tx = TransactionBuilder::new(chain, account_id.clone())
         .with_metadata(metadata_with_gas_limit(1_000_000))
