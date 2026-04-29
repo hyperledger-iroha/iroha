@@ -6761,7 +6761,16 @@ impl Actor {
                 return Ok(());
             };
             manager.on_block_commit(height);
-            let seed = manager.seed();
+            let mut seed = manager.seed();
+            if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
+                let world = self.state.world_view();
+                seed = super::prf_seed_for_height_from_world(
+                    &world,
+                    self.state.chain_id_ref(),
+                    height.saturating_add(1),
+                );
+                manager.set_epoch_seed(seed);
+            }
             let snapshot = manager.take_last_epoch_snapshot();
             let _ = manager.take_last_penalties();
             let _ = manager.take_last_penalties_detailed();

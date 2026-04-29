@@ -95535,17 +95535,15 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
         .as_ref()
         .expect("epoch manager available")
         .seed();
-    let mut expected_manager = actor
-        .epoch_manager
-        .as_ref()
-        .expect("epoch manager available")
-        .clone();
-    expected_manager.on_block_commit(1);
-    let seed_epoch1 = expected_manager.seed();
-    assert_ne!(seed_epoch0, seed_epoch1);
-
     let height = 2u64;
     let epoch = 1u64;
+    let canonical_seed_epoch1 = crate::sumeragi::deterministic_npos_seed_for_epoch_from_world(
+        &actor.state.world_view(),
+        actor.state.chain_id_ref(),
+        epoch,
+    );
+    assert_ne!(seed_epoch0, canonical_seed_epoch1);
+
     let (stale_mode, stale_mode_tag, stale_seed) = actor.consensus_context_for_height(height);
     assert_eq!(stale_mode, ConsensusMode::Npos);
     assert_eq!(stale_mode_tag, super::NPOS_TAG);
@@ -95565,7 +95563,7 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
                 height,
                 view,
                 super::NPOS_TAG,
-                Some(seed_epoch1),
+                Some(canonical_seed_epoch1),
             );
             (stale_signature_topology.as_ref().first() != fresh_signature_topology.as_ref().first())
                 .then_some((view, fresh_signature_topology, stale_signature_topology))
@@ -95597,7 +95595,7 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
         &topology,
         &harness.key_pairs,
         super::NPOS_TAG,
-        Some(seed_epoch1),
+        Some(canonical_seed_epoch1),
     );
     assert!(
         super::vote_signature_check(
@@ -95629,7 +95627,7 @@ async fn inbound_vote_processes_committed_epoch_rollover_before_validation() {
 
     assert_eq!(actor.last_committed_height, 1);
     let (_, _, fresh_seed) = actor.consensus_context_for_height(height);
-    assert_eq!(fresh_seed, Some(seed_epoch1));
+    assert_eq!(fresh_seed, Some(canonical_seed_epoch1));
     let key = (Phase::NewView, height, view, epoch, signer);
     assert!(
         actor.vote_log.contains_key(&key),

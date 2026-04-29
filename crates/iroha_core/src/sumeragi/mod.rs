@@ -22,13 +22,9 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId,
-    block::BlockHeader,
-    consensus::{ValidatorElectionParameters, VrfEpochRecord},
-    merge::MergeCommitteeSignature,
-    nexus::LaneRelayEnvelope,
-    parameter::system::SumeragiConsensusMode,
-    peer::PeerId,
+    ChainId, block::BlockHeader, consensus::ValidatorElectionParameters,
+    merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope,
+    parameter::system::SumeragiConsensusMode, peer::PeerId,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
@@ -552,39 +548,51 @@ fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     <[u8; 32]>::from(hash)
 }
 
-fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
-    let mut seed_opt = None;
-    for (_epoch, record) in world.vrf_epochs().iter() {
-        seed_opt = Some(record.seed);
-    }
-    seed_opt
-        .or_else(|| {
-            world
-                .sumeragi_npos_parameters()
-                .map(|params| params.epoch_seed())
-        })
+fn npos_base_epoch_seed(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+    world
+        .sumeragi_npos_parameters()
+        .map(|params| params.epoch_seed())
         .unwrap_or_else(|| chain_epoch_seed(chain_id))
 }
 
-fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
+fn derive_npos_epoch_seed(base_seed: [u8; 32], epoch: u64) -> [u8; 32] {
+    if epoch == 0 {
+        return base_seed;
+    }
+
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
 
     let mut h = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut h, &record.seed);
-    let mut reveals: Vec<(u32, [u8; 32])> = record
-        .participants
-        .iter()
-        .filter_map(|p| p.reveal.map(|reveal| (p.signer, reveal)))
-        .collect();
-    reveals.sort_by_key(|(signer, _)| *signer);
-    for (signer, reveal) in reveals {
-        iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
-        iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
-    }
+    iroha_crypto::blake2::digest::Update::update(&mut h, b"iroha:npos:epoch-seed:v2");
+    iroha_crypto::blake2::digest::Update::update(&mut h, &base_seed);
+    iroha_crypto::blake2::digest::Update::update(&mut h, &epoch.to_be_bytes());
     let digest = iroha_crypto::blake2::Digest::finalize(h);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
+}
+
+pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
+    world: &impl WorldReadOnly,
+    chain_id: &ChainId,
+    epoch: u64,
+) -> [u8; 32] {
+    derive_npos_epoch_seed(npos_base_epoch_seed(world, chain_id), epoch)
+}
+
+fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+    let epoch = world
+        .vrf_epochs()
+        .iter()
+        .last()
+        .map_or(0, |(epoch, record)| {
+            if record.finalized {
+                epoch.saturating_add(1)
+            } else {
+                *epoch
+            }
+        });
+    deterministic_npos_seed_for_epoch_from_world(world, chain_id, epoch)
 }
 
 /// Resolve the epoch index for a height using finalized VRF epoch boundaries when available.
@@ -610,17 +618,8 @@ pub fn npos_seed_for_height_from_world(
 ) -> [u8; 32] {
     if let Some(params) = world.sumeragi_npos_parameters() {
         let epoch = epoch_for_height_from_world(world, height);
-        if let Some(record) = world.vrf_epochs().get(&epoch) {
-            return record.seed;
-        }
-        if let Some((_last_epoch, record)) = world.vrf_epochs().iter().last() {
-            if record.finalized && epoch == record.epoch.saturating_add(1) {
-                // Crash recovery: derive the next-epoch seed if the in-progress snapshot
-                // was not persisted before restart.
-                return next_epoch_seed_from_record(record);
-            }
-        }
-        return params.epoch_seed();
+        let base_seed = params.epoch_seed();
+        return derive_npos_epoch_seed(base_seed, epoch);
     }
     latest_epoch_seed_from_world(world, chain_id)
 }
@@ -919,6 +918,40 @@ mod tests {
         assert!(schedule.is_epoch_boundary(10));
         assert!(schedule.is_epoch_boundary(22));
         assert!(!schedule.is_epoch_boundary(21));
+    }
+
+    #[test]
+    fn npos_seed_for_height_ignores_node_local_vrf_record_seed() {
+        fn seed_with_local_record_seed(record_seed: [u8; 32]) -> [u8; 32] {
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            {
+                let mut world = state.world.block();
+                let params = SumeragiNposParameters {
+                    epoch_length_blocks: 10,
+                    ..SumeragiNposParameters::default().with_epoch_seed([0x44; 32])
+                };
+                world
+                    .parameters
+                    .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+                let mut record = vrf_record(1, 0, 10, false);
+                record.seed = record_seed;
+                world.vrf_epochs.insert(1, record);
+                world.commit();
+            }
+            let view = state.world_view();
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 11)
+        }
+
+        let seed_a = seed_with_local_record_seed([0xAA; 32]);
+        let seed_b = seed_with_local_record_seed([0xBB; 32]);
+
+        assert_eq!(seed_a, seed_b);
+        assert_ne!(seed_a, [0xAA; 32]);
+        assert_ne!(seed_a, [0xBB; 32]);
     }
 
     #[test]
