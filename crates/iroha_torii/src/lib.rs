@@ -36827,19 +36827,52 @@ pub(crate) mod tests_runtime_handlers {
                 .expect("register asset domain");
         }
 
-        Register::asset_definition(
+        let mut asset_definition =
             iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
                 .with_name(
                     asset_definition_id
                         .try_name()
                         .map_or_else(String::new, ToString::to_string),
-                ),
-        )
-        .execute(&ALICE_ID, &mut tx)
-        .expect("register asset definition");
+                );
+        if asset_definition_requires_restricted_balance_policy_for_test(app, asset_definition_id) {
+            asset_definition =
+                asset_definition.with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted);
+        }
+
+        Register::asset_definition(asset_definition)
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register asset definition");
 
         tx.apply();
         block.commit().expect("commit asset definition seed");
+    }
+
+    fn asset_definition_requires_restricted_balance_policy_for_test(
+        app: &SharedAppState,
+        asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    ) -> bool {
+        let Some(domain_id) = asset_definition_id.try_domain() else {
+            return false;
+        };
+        let dataspace_alias = domain_id.dataspace().as_ref();
+        let state_view = app.state.view();
+        let nexus = state_view.nexus();
+        let Some(dataspace_id) = (if dataspace_alias.eq_ignore_ascii_case("universal") {
+            Some(DataSpaceId::UNIVERSAL)
+        } else {
+            nexus
+                .dataspace_catalog
+                .by_alias(dataspace_alias)
+                .map(|entry| entry.id)
+        }) else {
+            return false;
+        };
+
+        dataspace_id != DataSpaceId::UNIVERSAL
+            && !nexus.lane_catalog.lanes().iter().any(|lane| {
+                lane.dataspace_id == dataspace_id
+                    && lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
+            })
     }
 
     fn configure_nexus_fee_admission_for_test(
@@ -38759,10 +38792,6 @@ pub(crate) mod tests_runtime_handlers {
             .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
             .sign(keypair.private_key());
 
-        let _ = app
-            .queue
-            .set_pressure_age_budget_for_tests(Duration::from_millis(1));
-
         let first = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
@@ -38776,7 +38805,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let snapshot = app
             .queue
-            .backdate_queued_transactions_for_tests(Duration::from_millis(2));
+            .backdate_queued_transactions_for_tests(Duration::from_secs(3));
         assert!(
             snapshot.saturated_by_age,
             "test setup should make queue age saturation observable"
@@ -54350,7 +54379,7 @@ mod tests {
                 .headers()
                 .get("x-iroha-fanout-routes-attempted")
                 .and_then(|value| value.to_str().ok()),
-            Some("2")
+            Some("3")
         );
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await
