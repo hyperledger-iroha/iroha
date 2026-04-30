@@ -3,6 +3,7 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
+    future::Future,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -142,6 +143,7 @@ const IZANAMI_INGRESS_STATUS_TIMEOUT_MS: u64 = 60_000;
 const IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS: u64 = 150_000;
 const IZANAMI_NPOS_RECOVERY_CONFIRMATION_TIMEOUT_MS: u64 = 180_000;
 const IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP: usize = 64;
+const IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS: f64 = 200.0;
 const IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP: usize = 8;
 const IZANAMI_STABLE_SEVERE_STOPPING_TPS_CAP: f64 = 10.0;
 const IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS: u32 = 2;
@@ -163,6 +165,8 @@ const IZANAMI_THROUGHPUT_CONFIRMATION_WINDOW_SECS: u64 = 60;
 const IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP: usize = 4_096;
 const IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS: u64 = 100;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
+const IZANAMI_STATUS_SAMPLE_MAX_PEERS: usize = 3;
+const IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS: u64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
 // Shared-host permissioned stable soak still needs enough DA slack for late commit votes and
@@ -1273,6 +1277,7 @@ struct IngressEndpoint {
 struct IngressEndpointPool {
     endpoints: Arc<Vec<IngressEndpoint>>,
     endpoint_index_by_peer: Arc<BTreeMap<PeerId, usize>>,
+    submit_client_cache: Arc<StdMutex<BTreeMap<(usize, String), Client>>>,
     health: EndpointHealthPool,
 }
 
@@ -1309,6 +1314,7 @@ impl IngressEndpointPool {
         Self {
             endpoints: Arc::new(endpoints),
             endpoint_index_by_peer: Arc::new(endpoint_index_by_peer),
+            submit_client_cache: Arc::new(StdMutex::new(BTreeMap::new())),
             health,
         }
     }
@@ -1386,6 +1392,121 @@ impl IngressEndpointPool {
         )
     }
 
+    async fn run_with_failover_preferred_with_endpoint_async<T, F, Fut>(
+        &self,
+        op_name: &'static str,
+        submitter_idx: usize,
+        mut operation: F,
+    ) -> Result<(usize, T)>
+    where
+        F: FnMut(usize, NetworkPeer) -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        let preferred_endpoint_idx = self.preferred_endpoint_index(submitter_idx).unwrap_or(0);
+        let attempt_order = self
+            .health
+            .attempt_order_at_with_preference(Instant::now(), Some(preferred_endpoint_idx));
+        if attempt_order.is_empty() {
+            return Err(eyre!(
+                "no ingress endpoints available for operation `{op_name}`"
+            ));
+        }
+
+        let max_attempts = self
+            .health
+            .config
+            .max_attempts
+            .max(1)
+            .min(attempt_order.len());
+        let mut last_error = None;
+        let mut attempted = 0usize;
+        for (attempt_idx, endpoint_idx) in attempt_order.into_iter().take(max_attempts).enumerate()
+        {
+            if attempt_idx > 0 {
+                self.health.ingress_stats.record_failover(endpoint_idx);
+            }
+            let endpoint = self
+                .endpoints
+                .get(endpoint_idx)
+                .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?
+                .clone();
+            attempted = attempted.saturating_add(1);
+            match operation(endpoint_idx, endpoint.peer).await {
+                Ok(value) => {
+                    self.health.mark_success_at(endpoint_idx, Instant::now());
+                    return Ok((endpoint_idx, value));
+                }
+                Err(err) => {
+                    let failure_class = classify_ingress_failure(&err);
+                    let retryable = failure_class.is_retryable();
+                    let transitioned_unhealthy = ingress_failure_affects_submit_health(op_name)
+                        && self
+                            .health
+                            .mark_failure_at(endpoint_idx, Instant::now(), failure_class);
+                    if transitioned_unhealthy {
+                        self.health
+                            .ingress_stats
+                            .record_endpoint_unhealthy(endpoint_idx);
+                        if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                            debug!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = %endpoint.label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        } else {
+                            warn!(
+                                target: "izanami::ingress",
+                                operation = op_name,
+                                endpoint = %endpoint.label,
+                                attempt = attempt_idx + 1,
+                                failure_class = failure_class.as_str(),
+                                "marking ingress endpoint unhealthy"
+                            );
+                        }
+                    }
+                    if should_log_ingress_retry_at_debug(op_name, failure_class, retryable) {
+                        debug!(
+                            target: "izanami::ingress",
+                            ?err,
+                            operation = op_name,
+                            endpoint = %endpoint.label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            retryable,
+                            "ingress endpoint request failed; trying failover"
+                        );
+                    } else {
+                        warn!(
+                            target: "izanami::ingress",
+                            ?err,
+                            operation = op_name,
+                            endpoint = %endpoint.label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            retryable,
+                            "ingress endpoint request failed"
+                        );
+                    }
+                    last_error = Some(err);
+                    if !retryable {
+                        break;
+                    }
+                }
+            }
+        }
+        match last_error {
+            Some(err) => Err(err).wrap_err_with(|| {
+                format!("ingress operation `{op_name}` failed after {attempted} attempt(s)")
+            }),
+            None => Err(eyre!(
+                "ingress operation `{op_name}` failed without making an endpoint attempt"
+            )),
+        }
+    }
+
     fn run_with_failover_excluding<T, F>(
         &self,
         op_name: &'static str,
@@ -1435,6 +1556,35 @@ impl IngressEndpointPool {
                     .ok_or_else(|| eyre!("endpoint index {idx} out of range"))?;
                 operation(&endpoint.peer)
             })
+    }
+
+    fn cached_submit_client_for(
+        &self,
+        endpoint_idx: usize,
+        signer: &AccountRecord,
+        mode: SubmissionConfirmationMode,
+    ) -> Result<Client> {
+        let cache_key = (endpoint_idx, signer.id.to_string());
+        if let Ok(guard) = self.submit_client_cache.lock()
+            && let Some(client) = guard.get(&cache_key)
+        {
+            return Ok(client.clone());
+        }
+
+        let endpoint = self
+            .endpoints
+            .get(endpoint_idx)
+            .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+        let client = tune_ingress_client(
+            endpoint
+                .peer
+                .client_for(&signer.id, signer.key_pair.private_key().clone()),
+            mode,
+        );
+        if let Ok(mut guard) = self.submit_client_cache.lock() {
+            guard.insert(cache_key, client.clone());
+        }
+        Ok(client)
     }
 
     fn endpoint_count(&self) -> usize {
@@ -1773,6 +1923,89 @@ where
                     "retrying after ingress queue timeout"
                 );
                 std::thread::sleep(delay);
+                if !endpoint_backpressure {
+                    backoff = backoff.saturating_mul(2);
+                }
+            }
+            Err(err) if is_idempotent_duplicate_submission(&err) => {
+                warn!(
+                    target: "izanami::workload",
+                    plan = plan_label,
+                    ?err,
+                    "duplicate submission rejected because the caller requires a concrete outcome"
+                );
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+async fn run_with_queue_timeout_retry_with_policy_and_delay_result_async<T, F, Fut, G>(
+    plan_label: &'static str,
+    max_retry_attempts: u32,
+    initial_backoff: Duration,
+    mut no_endpoint_backpressure_delay: G,
+    mut submit: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+    G: FnMut() -> Option<Duration>,
+{
+    let mut backoff = initial_backoff;
+    let mut retryable_attempts = 0_u32;
+    let mut endpoint_backpressure_retries = 0_u32;
+    let max_endpoint_backpressure_retries = max_retry_attempts
+        .saturating_mul(IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER)
+        .max(1);
+    loop {
+        match submit().await {
+            Ok(value) => return Ok(value),
+            Err(err) if is_ingress_queue_timeout_retryable(&err) => {
+                let error_message = ingress_error_message(&err);
+                let endpoint_backpressure =
+                    is_ingress_endpoint_backpressure_message(&error_message);
+                let retry_budget_available = if endpoint_backpressure {
+                    endpoint_backpressure_retries < max_endpoint_backpressure_retries
+                } else {
+                    retryable_attempts < max_retry_attempts
+                };
+                if !retry_budget_available {
+                    warn!(
+                        target: "izanami::workload",
+                        plan = plan_label,
+                        endpoint_backpressure,
+                        retryable_attempts,
+                        endpoint_backpressure_retries,
+                        max_retry_attempts,
+                        max_endpoint_backpressure_retries,
+                        ?err,
+                        "ingress queue timeout retry budget exhausted"
+                    );
+                    return Err(err);
+                }
+                if endpoint_backpressure {
+                    endpoint_backpressure_retries = endpoint_backpressure_retries.saturating_add(1);
+                } else {
+                    retryable_attempts = retryable_attempts.saturating_add(1);
+                }
+                let delay = no_endpoint_backpressure_delay().unwrap_or(backoff);
+                debug!(
+                    target: "izanami::workload",
+                    plan = plan_label,
+                    retryable_attempts,
+                    endpoint_backpressure_retries,
+                    max_retry_attempts,
+                    max_endpoint_backpressure_retries,
+                    delay_ms = delay.as_millis(),
+                    endpoint_backpressure,
+                    ?err,
+                    "retrying after ingress queue timeout"
+                );
+                if !delay.is_zero() {
+                    time::sleep(delay).await;
+                }
                 if !endpoint_backpressure {
                     backoff = backoff.saturating_mul(2);
                 }
@@ -2195,6 +2428,11 @@ fn effective_submission_max_inflight(config: &ChaosConfig) -> usize {
         submission_confirmation_mode(config),
         SubmissionConfirmationMode::AcceptedByIngress
     ) {
+        if !is_severe_stopping_recovery_run(config)
+            && config.tps > IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS
+        {
+            return config.max_inflight.max(1);
+        }
         let stable_cap = if is_severe_stopping_recovery_run(config) {
             IZANAMI_STABLE_SEVERE_STOPPING_MAX_INFLIGHT_CAP
         } else {
@@ -4558,12 +4796,18 @@ async fn sample_sumeragi_status_digest(
     if peers.is_empty() {
         return Err("no peers available for status sampling".to_owned());
     }
-    let peers = peers.to_vec();
+    let peers = peers
+        .iter()
+        .take(IZANAMI_STATUS_SAMPLE_MAX_PEERS)
+        .cloned()
+        .collect::<Vec<_>>();
     spawn_blocking(move || {
         let mut last_error = None;
         for peer in peers {
             let mut client = peer.client();
             client.set_operator_key_pair(sumeragi_phase_operator_keypair());
+            client.torii_request_timeout =
+                bounded_sumeragi_status_sample_request_timeout(client.torii_request_timeout);
             match client.get_sumeragi_status() {
                 Ok(status) => return Ok(SumeragiStatusDigest::from_wire(&status)),
                 Err(err) => {
@@ -4575,6 +4819,15 @@ async fn sample_sumeragi_status_digest(
     })
     .await
     .map_err(|err| format!("status sampling task failed: {err}"))?
+}
+
+fn bounded_sumeragi_status_sample_request_timeout(current: Duration) -> Duration {
+    let status_sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
+    if current.is_zero() || current > status_sample_timeout {
+        status_sample_timeout
+    } else {
+        current
+    }
 }
 
 impl BlockIntervalTracker {
@@ -5701,6 +5954,82 @@ async fn submit_plan(
             },
         )
         .await
+    } else if matches!(
+        effective_submission_confirmation,
+        SubmissionConfirmationMode::AcceptedByIngress
+    ) {
+        let ingress_pool_for_submit = Arc::clone(&ingress_pool);
+        let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool);
+        let signer_for_submit = signer.clone();
+        let instructions_for_submit = instructions.clone();
+        let submission_counter_for_submit = Arc::clone(&submission_counter);
+        run_submission_future_result(
+            plan_label,
+            expect_success,
+            Arc::clone(&metrics),
+            effective_submission_confirmation,
+            async move {
+                run_with_queue_timeout_retry_with_policy_and_delay_result_async(
+                    plan_label,
+                    IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
+                    Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
+                    move || {
+                        ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now())
+                    },
+                    move || {
+                        let ingress_pool_for_submit = Arc::clone(&ingress_pool_for_submit);
+                        let signer_for_submit = signer_for_submit.clone();
+                        let instructions_for_submit = instructions_for_submit.clone();
+                        let submission_counter_for_submit =
+                            Arc::clone(&submission_counter_for_submit);
+                        async move {
+                            let ingress_pool_for_operation = Arc::clone(&ingress_pool_for_submit);
+                            ingress_pool_for_submit
+                                .run_with_failover_preferred_with_endpoint_async(
+                                    "submit_transaction_plan",
+                                    submitter_idx,
+                                    move |endpoint_idx, _peer| {
+                                        let ingress_pool_for_submit =
+                                            Arc::clone(&ingress_pool_for_operation);
+                                        let signer_for_submit = signer_for_submit.clone();
+                                        let instructions_for_submit =
+                                            instructions_for_submit.clone();
+                                        let submission_counter_for_submit =
+                                            Arc::clone(&submission_counter_for_submit);
+                                        async move {
+                                            let client = ingress_pool_for_submit
+                                                .cached_submit_client_for(
+                                                    endpoint_idx,
+                                                    &signer_for_submit,
+                                                    SubmissionConfirmationMode::AcceptedByIngress,
+                                                )?;
+                                            let metadata = submission_metadata(
+                                                submission_counter_for_submit.as_ref(),
+                                            );
+                                            let transaction = client.build_transaction_from_items(
+                                                instructions_for_submit,
+                                                metadata,
+                                            );
+                                            let hash = transaction.hash();
+                                            client
+                                                .submit_transaction_async(&transaction)
+                                                .await
+                                                .map(|_| hash)
+                                        }
+                                    },
+                                )
+                                .await
+                                .map(|(endpoint_idx, hash)| SubmissionOutcome {
+                                    endpoint_idx,
+                                    hash,
+                                })
+                        }
+                    },
+                )
+                .await
+            },
+        )
+        .await
     } else {
         let ingress_pool_for_submit = Arc::clone(&ingress_pool);
         let signer_for_submit = signer.clone();
@@ -6317,6 +6646,46 @@ where
         Err(err) => Err(err.into()),
     };
     metrics.record_submit_latency(started_at.elapsed());
+    record_submission_result_metrics(
+        plan_label,
+        expect_success,
+        &metrics,
+        confirmation_mode,
+        &result,
+    );
+    result
+}
+
+async fn run_submission_future_result<T, Fut>(
+    plan_label: &'static str,
+    expect_success: bool,
+    metrics: Arc<Metrics>,
+    confirmation_mode: SubmissionConfirmationMode,
+    future: Fut,
+) -> Result<T>
+where
+    Fut: Future<Output = Result<T>>,
+{
+    let started_at = Instant::now();
+    let result = future.await;
+    metrics.record_submit_latency(started_at.elapsed());
+    record_submission_result_metrics(
+        plan_label,
+        expect_success,
+        &metrics,
+        confirmation_mode,
+        &result,
+    );
+    result
+}
+
+fn record_submission_result_metrics<T>(
+    plan_label: &'static str,
+    expect_success: bool,
+    metrics: &Metrics,
+    confirmation_mode: SubmissionConfirmationMode,
+    result: &Result<T>,
+) {
     let succeeded = result.is_ok();
     debug!(
         target: "izanami::workload",
@@ -6348,7 +6717,6 @@ where
             "plan submission failed"
         );
     }
-    result
 }
 
 #[allow(dead_code)] // Retained for workload helpers that need success-only submission semantics.
@@ -8114,9 +8482,31 @@ mod tests {
         );
         assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
 
+        config.tps = 400.0;
+        assert_eq!(effective_submission_max_inflight(&config), 512);
+        assert!((effective_submission_tps(&config) - 400.0).abs() <= f64::EPSILON);
+
         config.workload_profile = WorkloadProfile::Chaos;
         assert_eq!(effective_submission_max_inflight(&config), 512);
-        assert!((effective_submission_tps(&config) - 200.0).abs() <= f64::EPSILON);
+        assert!((effective_submission_tps(&config) - 400.0).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn status_sample_request_timeout_is_short_and_bounded() {
+        let sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
+
+        assert_eq!(
+            bounded_sumeragi_status_sample_request_timeout(Duration::ZERO),
+            sample_timeout
+        );
+        assert_eq!(
+            bounded_sumeragi_status_sample_request_timeout(Duration::from_secs(70)),
+            sample_timeout
+        );
+        assert_eq!(
+            bounded_sumeragi_status_sample_request_timeout(Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
     }
 
     #[test]
@@ -8800,6 +9190,40 @@ mod tests {
             attempts.load(Ordering::Relaxed),
             2,
             "helper should perform one retry before succeeding"
+        );
+    }
+
+    #[tokio::test]
+    async fn async_queue_timeout_retry_retries_and_succeeds() {
+        let attempts = Arc::new(AtomicU64::new(0));
+        let attempts_for_submit = Arc::clone(&attempts);
+        let result = run_with_queue_timeout_retry_with_policy_and_delay_result_async(
+            "retry_success_async",
+            2,
+            Duration::ZERO,
+            || None,
+            move || {
+                let attempts_for_submit = Arc::clone(&attempts_for_submit);
+                async move {
+                    let attempt = attempts_for_submit.fetch_add(1, Ordering::Relaxed);
+                    if attempt == 0 {
+                        Err(eyre!("transaction queued for too long"))
+                    } else {
+                        Ok("accepted")
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            result.expect("async queue-timeout retry should recover"),
+            "accepted"
+        );
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            2,
+            "async helper should perform one retry before succeeding"
         );
     }
 
