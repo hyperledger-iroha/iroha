@@ -2,6 +2,21 @@
 
 Last updated: 2026-04-30
 
+## 2026-04-30 queue router and Sumeragi focused regression fixes
+
+- Fixed the focused `iroha_core` regression cluster where opaque
+  asset-definition IDs in queue routing fell back to the default dataspace
+  instead of resolving the stored canonical asset definition and its alias
+  binding.
+- Tightened Sumeragi quorum-timeout frontier recovery ownership checks to the
+  active view so stale owner state from an earlier post-rotation view no
+  longer suppresses the direct empty-view rotation path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::router::tests:: -- --nocapture`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner -- --nocapture`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::force_view_change_if_idle_ignores_stale_quorum_timeout_owner_after_frontier_grace -- --nocapture`
+
 ## 2026-04-30 Izanami 20k ingress restored; committed TPS still blocked
 
 - Replaced the queue pressure age scan with an amortized FIFO age ring, so
