@@ -9712,6 +9712,123 @@ mod tests {
     }
 
     #[test]
+    fn zero_length_index_entry_makes_payload_unavailable() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 3);
+        let height = nonzero!(2_usize);
+        let block_hash = blocks[1].hash();
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .write_block_index(1, 0, 0)
+                .expect("zero block index length");
+        }
+
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing)
+        );
+        assert!(!kura.block_payload_available_by_hash(block_hash));
+        assert_eq!(kura.durable_block_payload_len_by_hash(block_hash), None);
+        assert!(
+            kura.get_block(height).is_none(),
+            "zero-length block index entries must not be decoded"
+        );
+    }
+
+    #[test]
+    fn evicted_body_without_hash_metadata_is_missing_even_with_adverts() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let height = nonzero!(2_usize);
+        let block_hash = blocks[1].hash();
+        let (_hash, payload_len) = advertise_required_replicas(&kura, height);
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict block body");
+        assert!(freed >= payload_len);
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .truncate_hashes_to_count(1)
+                .expect("remove hash metadata for evicted body");
+        }
+
+        advertise_required_replicas(&kura, height);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Missing),
+            "remote adverts must not make a body available when Kura lacks durable hash metadata"
+        );
+        assert!(!kura.block_payload_available_by_hash(block_hash));
+        assert_eq!(kura.durable_block_payload_len_by_hash(block_hash), None);
+    }
+
+    #[test]
+    fn get_block_rejects_hash_mismatched_local_sidecar() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let height = nonzero!(2_usize);
+        let block_hash = blocks[1].hash();
+        let conflicting = Arc::clone(&blocks[2]);
+        assert_ne!(block_hash, conflicting.hash());
+        let (_hash, payload_len) = advertise_required_replicas(&kura, height);
+
+        let freed = kura
+            .evict_block_bodies(payload_len)
+            .expect("evict block body");
+        assert!(freed >= payload_len);
+        let (frame, _versioned) = conflicting
+            .canonical_wire()
+            .expect("encode conflicting sidecar")
+            .into_parts();
+        {
+            let store = kura.block_store.lock();
+            store
+                .write_da_block_bytes(height.get() as u64, &frame)
+                .expect("write conflicting sidecar");
+        }
+
+        assert!(
+            kura.get_block(height).is_none(),
+            "Kura must reject a sidecar whose decoded hash differs from canonical metadata"
+        );
+    }
+
+    #[test]
+    fn recent_disk_loaded_body_is_cached_after_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(2).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let height = nonzero!(3_usize);
+        let block_hash = blocks[2].hash();
+        {
+            let mut data = kura.block_data.lock();
+            data[height.get() - 1].1 = None;
+        }
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Inline)
+        );
+
+        let loaded = kura.get_block(height).expect("read recent inline body");
+        assert_eq!(loaded.hash(), block_hash);
+        assert_eq!(
+            kura.block_body_status_by_hash(block_hash),
+            Some(BlockBodyStatus::Cached),
+            "recent disk-loaded bodies should be cached in memory after read"
+        );
+    }
+
+    #[test]
     fn cache_block_body_is_idempotent_for_existing_local_sidecar() {
         let temp_dir = TempDir::new().unwrap();
         let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));

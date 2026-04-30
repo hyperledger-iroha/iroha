@@ -3515,21 +3515,23 @@ impl Actor {
         height: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
+        let canonicalize =
+            |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         if height > committed_height.saturating_add(1) {
             return Vec::new();
         }
         if let Some(pending) = self.pending_activation_roster_for_height(height, consensus_mode) {
-            return pending;
+            return canonicalize(pending);
         }
         let world = self.state.world_view();
         let commit_topology = self.state.commit_topology_snapshot();
-        self.active_topology_with_genesis_fallback_from_world(
+        canonicalize(self.active_topology_with_genesis_fallback_from_world(
             &world,
             commit_topology.as_slice(),
             committed_height,
             consensus_mode,
-        )
+        ))
     }
 
     /// Canonical roster derivation for a consensus round.
