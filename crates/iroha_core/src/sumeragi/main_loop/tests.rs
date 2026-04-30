@@ -79877,7 +79877,12 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
         actor.latest_committed_qc(),
         committed_height,
     );
-    let current_view = 1_u64;
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let current_view = (1..search_limit)
+        .find(|candidate_view| !actor.local_is_round_leader(height, *candidate_view))
+        .expect("find non-zero post-rotation view where local peer is not leader");
     let now = Instant::now();
     let timeout = super::idle_view_timeout(
         false,
@@ -79913,6 +79918,10 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     assert!(
         !actor.slot_has_proposal_evidence(height, current_view),
         "stale old-view frontier ownership must not count as proposal evidence for the post-rotation round"
+    );
+    assert!(
+        !actor.local_is_round_leader(height, current_view),
+        "test setup must avoid the forced leader self-proposal path"
     );
 
     let before = super::status::snapshot();
@@ -100230,6 +100239,9 @@ async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_
 async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_rotation() {
     use std::borrow::Cow;
 
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -100346,6 +100358,7 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_ro
         "idle missing-QC handling should assemble the frontier proposal from committed QC"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -100353,6 +100366,9 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_ro
 async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_after_stall_with_dependencies()
  {
     use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -100469,6 +100485,7 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_after_sta
         "stalled missing-QC recovery should populate the current-view proposal cache"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -129766,6 +129783,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let sweep_now = Instant::now();
 
     for peer in signature_topology
         .as_ref()
@@ -129817,7 +129835,9 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
         near_timeout < quorum_timeout,
         "test requires reduced near-quorum timeout to be smaller than quorum timeout"
     );
-    let now = Instant::now();
+    // Use an explicit sweep instant so slow parallel test execution cannot age the
+    // missing-block recovery budget into a separate frontier-recovery branch.
+    let now = sweep_now;
     let pending_age = near_timeout + Duration::from_millis(1);
     let near_quorum_recent_progress_grace =
         super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
@@ -129834,7 +129854,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(None),
+        actor.reschedule_stale_pending_blocks_with_now(now, None),
         "near-quorum missing payload should reschedule before full quorum timeout"
     );
     let pending_after = actor
