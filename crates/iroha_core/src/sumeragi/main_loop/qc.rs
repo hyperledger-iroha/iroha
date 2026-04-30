@@ -1809,29 +1809,53 @@ impl Actor {
                 && stored.epoch == epoch
         }) {
             stats.raw_votes = stats.raw_votes.saturating_add(1);
-            if self
-                .vote_validation_entry_for_vote(vote)
-                .is_some_and(|entry| entry.membership_hash != membership_hash)
-            {
+            let validation_entry = self.vote_validation_entry_for_vote(vote);
+            if validation_entry.is_some_and(|entry| entry.membership_hash != membership_hash) {
                 stats.roster_mismatch = stats.roster_mismatch.saturating_add(1);
                 continue;
             }
-            let cache_matches = self
-                .vote_validation_entry_for_vote(vote)
-                .is_some_and(|entry| {
-                    entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
-                });
-            if !cache_matches && !vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
+            let cache_matches = validation_entry.is_some_and(|entry| {
+                entry.membership_hash == membership_hash && entry.roster_hash == roster_hash
+            });
+            let accepted_signer = if cache_matches
+                || vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
             {
+                if canonical_signer_for_view(vote.signer, signature_topology).is_none() {
+                    stats.invalid_signature = stats.invalid_signature.saturating_add(1);
+                    continue;
+                }
+                vote.signer
+            } else if validation_entry.is_some_and(|entry| entry.membership_hash == membership_hash)
+            {
+                // A vote can be verified before the PRF seed for this height advances. Keep it
+                // eligible by remapping the recorded signer identity onto the current topology.
+                let Some(identity_key) = self
+                    .vote_log_identities
+                    .iter()
+                    .find_map(|(key, stored)| (stored == vote).then_some(key))
+                else {
+                    stats.invalid_signature = stats.invalid_signature.saturating_add(1);
+                    continue;
+                };
+                let Some(current_idx) = signature_topology
+                    .as_ref()
+                    .iter()
+                    .position(|peer| peer.public_key() == &identity_key.5)
+                else {
+                    stats.roster_mismatch = stats.roster_mismatch.saturating_add(1);
+                    continue;
+                };
+                let Ok(current_signer) = ValidatorIndex::try_from(current_idx) else {
+                    stats.invalid_signature = stats.invalid_signature.saturating_add(1);
+                    continue;
+                };
+                current_signer
+            } else {
                 stats.invalid_signature = stats.invalid_signature.saturating_add(1);
                 continue;
-            }
-            if canonical_signer_for_view(vote.signer, signature_topology).is_none() {
-                stats.invalid_signature = stats.invalid_signature.saturating_add(1);
-                continue;
-            }
+            };
             accepted_votes
-                .entry(vote.signer)
+                .entry(accepted_signer)
                 .or_insert_with(|| vote.clone());
         }
         (accepted_votes, stats)
@@ -6262,7 +6286,9 @@ impl Actor {
         err: &QcValidationError,
     ) -> Option<QcValidationOutcome> {
         match err {
-            QcValidationError::MissingVotes { .. } | QcValidationError::SubjectMismatch { .. } => {}
+            QcValidationError::MissingVotes { .. }
+            | QcValidationError::SubjectMismatch { .. }
+            | QcValidationError::InvalidSignature { .. } => {}
             _ => return None,
         }
         if qc.phase == crate::sumeragi::consensus::Phase::NewView {
