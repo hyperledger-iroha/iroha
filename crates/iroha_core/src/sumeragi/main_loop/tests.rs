@@ -129774,6 +129774,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let sweep_now = Instant::now();
 
     for peer in signature_topology
         .as_ref()
@@ -129825,7 +129826,9 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
         near_timeout < quorum_timeout,
         "test requires reduced near-quorum timeout to be smaller than quorum timeout"
     );
-    let now = Instant::now();
+    // Use an explicit sweep instant so slow parallel test execution cannot age the
+    // missing-block recovery budget into a separate frontier-recovery branch.
+    let now = sweep_now;
     let pending_age = near_timeout + Duration::from_millis(1);
     let near_quorum_recent_progress_grace =
         super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
@@ -129842,7 +129845,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(None),
+        actor.reschedule_stale_pending_blocks_with_now(now, None),
         "near-quorum missing payload should reschedule before full quorum timeout"
     );
     let pending_after = actor
