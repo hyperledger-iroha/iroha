@@ -22,9 +22,13 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId, block::BlockHeader, consensus::ValidatorElectionParameters,
-    merge::MergeCommitteeSignature, nexus::LaneRelayEnvelope,
-    parameter::system::SumeragiConsensusMode, peer::PeerId,
+    ChainId,
+    block::BlockHeader,
+    consensus::{ValidatorElectionParameters, VrfEpochRecord},
+    merge::MergeCommitteeSignature,
+    nexus::LaneRelayEnvelope,
+    parameter::system::SumeragiConsensusMode,
+    peer::PeerId,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
@@ -555,21 +559,36 @@ fn npos_base_epoch_seed(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 
         .unwrap_or_else(|| chain_epoch_seed(chain_id))
 }
 
-fn derive_npos_epoch_seed(base_seed: [u8; 32], epoch: u64) -> [u8; 32] {
-    if epoch == 0 {
-        return base_seed;
-    }
-
+fn next_epoch_seed_from_seed_and_reveals(
+    seed: [u8; 32],
+    reveals: impl IntoIterator<Item = (u32, [u8; 32])>,
+) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
 
     let mut h = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut h, b"iroha:npos:epoch-seed:v2");
-    iroha_crypto::blake2::digest::Update::update(&mut h, &base_seed);
-    iroha_crypto::blake2::digest::Update::update(&mut h, &epoch.to_be_bytes());
+    iroha_crypto::blake2::digest::Update::update(&mut h, &seed);
+    for (signer, reveal) in reveals {
+        iroha_crypto::blake2::digest::Update::update(&mut h, &signer.to_be_bytes());
+        iroha_crypto::blake2::digest::Update::update(&mut h, &reveal);
+    }
     let digest = iroha_crypto::blake2::Digest::finalize(h);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
+}
+
+fn next_epoch_seed_from_seed(seed: [u8; 32]) -> [u8; 32] {
+    next_epoch_seed_from_seed_and_reveals(seed, [])
+}
+
+fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
+    let mut reveals: Vec<(u32, [u8; 32])> = record
+        .participants
+        .iter()
+        .filter_map(|p| p.reveal.map(|reveal| (p.signer, reveal)))
+        .collect();
+    reveals.sort_by_key(|(signer, _)| *signer);
+    next_epoch_seed_from_seed_and_reveals(record.seed, reveals)
 }
 
 pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
@@ -577,22 +596,22 @@ pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
     chain_id: &ChainId,
     epoch: u64,
 ) -> [u8; 32] {
-    derive_npos_epoch_seed(npos_base_epoch_seed(world, chain_id), epoch)
+    let mut seed = npos_base_epoch_seed(world, chain_id);
+    for _ in 0..epoch {
+        seed = next_epoch_seed_from_seed(seed);
+    }
+    seed
 }
 
 fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
-    let epoch = world
-        .vrf_epochs()
-        .iter()
-        .last()
-        .map_or(0, |(epoch, record)| {
-            if record.finalized {
-                epoch.saturating_add(1)
-            } else {
-                *epoch
-            }
-        });
-    deterministic_npos_seed_for_epoch_from_world(world, chain_id, epoch)
+    if let Some((_epoch, record)) = world.vrf_epochs().iter().last() {
+        return if record.finalized {
+            next_epoch_seed_from_record(record)
+        } else {
+            record.seed
+        };
+    }
+    npos_base_epoch_seed(world, chain_id)
 }
 
 /// Resolve the epoch index for a height using finalized VRF epoch boundaries when available.
@@ -616,12 +635,29 @@ pub fn npos_seed_for_height_from_world(
     chain_id: &ChainId,
     height: u64,
 ) -> [u8; 32] {
-    if let Some(params) = world.sumeragi_npos_parameters() {
-        let epoch = epoch_for_height_from_world(world, height);
-        let base_seed = params.epoch_seed();
-        return derive_npos_epoch_seed(base_seed, epoch);
+    let epoch = epoch_for_height_from_world(world, height);
+    if let Some(record) = world.vrf_epochs().get(&epoch) {
+        return record.seed;
     }
-    latest_epoch_seed_from_world(world, chain_id)
+    if let Some((last_epoch, record)) = world
+        .vrf_epochs()
+        .iter()
+        .filter(|(record_epoch, record)| **record_epoch < epoch && record.finalized)
+        .last()
+    {
+        // Crash recovery: derive missing epoch seeds if in-progress seed-only snapshots
+        // were not persisted before restart.
+        let mut seed = next_epoch_seed_from_record(record);
+        for _ in last_epoch.saturating_add(1)..epoch {
+            seed = next_epoch_seed_from_seed(seed);
+        }
+        return seed;
+    }
+    if world.sumeragi_npos_parameters().is_some() {
+        deterministic_npos_seed_for_epoch_from_world(world, chain_id, epoch)
+    } else {
+        latest_epoch_seed_from_world(world, chain_id)
+    }
 }
 
 /// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
@@ -1000,68 +1036,89 @@ mod tests {
             epoch_length_blocks: 5,
             ..SumeragiNposParameters::default().with_epoch_seed(base_seed)
         });
+        let record0 = vrf_record(0, 3, 3, true);
+        let record1 = vrf_record(1, 9, 6, true);
         {
             let mut world = state.world.block();
-            world.vrf_epochs.insert(0, vrf_record(0, 3, 3, true));
-            world.vrf_epochs.insert(1, vrf_record(1, 9, 6, true));
+            world.vrf_epochs.insert(0, record0.clone());
+            world.vrf_epochs.insert(1, record1.clone());
             world.commit();
         }
 
         let view = state.world_view();
         assert_eq!(
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 3),
-            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 0)
+            record0.seed
         );
         assert_eq!(
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 4),
-            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 1)
+            record1.seed
         );
+        let epoch2_seed = next_epoch_seed_from_record(&record1);
         assert_eq!(
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 10),
-            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 2)
+            epoch2_seed
         );
         assert_eq!(
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 14),
-            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 2)
+            epoch2_seed
         );
         assert_eq!(
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 15),
-            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 3)
+            next_epoch_seed_from_seed(epoch2_seed)
         );
     }
 
     #[test]
-    fn npos_seed_for_height_ignores_node_local_vrf_record_seed() {
-        fn seed_with_local_record_seed(record_seed: [u8; 32]) -> [u8; 32] {
-            let state = State::new_for_testing(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            {
-                let mut world = state.world.block();
-                let params = SumeragiNposParameters {
-                    epoch_length_blocks: 10,
-                    ..SumeragiNposParameters::default().with_epoch_seed([0x44; 32])
-                };
-                world
-                    .parameters
-                    .set_parameter(Parameter::Custom(params.into_custom_parameter()));
-                let mut record = vrf_record(1, 0, 10, false);
-                record.seed = record_seed;
-                world.vrf_epochs.insert(1, record);
-                world.commit();
-            }
-            let view = state.world_view();
-            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 11)
+    fn npos_seed_for_height_restores_unfinalized_vrf_record_seed() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut world = state.world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 10,
+                ..SumeragiNposParameters::default().with_epoch_seed([0x44; 32])
+            };
+            world
+                .parameters
+                .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+            let mut record = vrf_record(1, 0, 10, false);
+            record.seed = [0xAA; 32];
+            world.vrf_epochs.insert(1, record);
+            world.commit();
         }
+        let view = state.world_view();
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 11),
+            [0xAA; 32]
+        );
+    }
 
-        let seed_a = seed_with_local_record_seed([0xAA; 32]);
-        let seed_b = seed_with_local_record_seed([0xBB; 32]);
-
-        assert_eq!(seed_a, seed_b);
-        assert_ne!(seed_a, [0xAA; 32]);
-        assert_ne!(seed_a, [0xBB; 32]);
+    #[test]
+    fn npos_seed_for_height_empty_rolls_config_seed_without_records() {
+        let base_seed = [0x44; 32];
+        let state = state_with_npos_params(SumeragiNposParameters {
+            epoch_length_blocks: 5,
+            ..SumeragiNposParameters::default().with_epoch_seed(base_seed)
+        });
+        let view = state.world_view();
+        let epoch1_seed = next_epoch_seed_from_seed(base_seed);
+        let epoch2_seed = next_epoch_seed_from_seed(epoch1_seed);
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 1),
+            base_seed
+        );
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 6),
+            epoch1_seed
+        );
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 11),
+            epoch2_seed
+        );
     }
 
     #[test]

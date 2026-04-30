@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-29
 
+## 2026-04-29 NPoS PRF seed recovery repair
+
+- Restored NPoS PRF seed recovery to use persisted VRF epoch records as the
+  source of truth, deriving restart-gap seeds by replaying finalized record
+  reveals and empty epoch rollovers instead of re-hashing the configured base
+  seed by epoch number.
+- Kept `EpochManager::restore_from_record` seeds intact during actor startup,
+  mode rebuilds, and post-commit boundary refresh so unfinalized/finalized VRF
+  record state is not clobbered by schedule-derived fallback seeds.
+- Updated Sumeragi vote fixtures to cache signer identity metadata with their
+  test rosters, and aligned the stale-view commit-vote fixture with the
+  actor's committed-block catch-up before signing votes.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib npos_seed_for_height -- --nocapture`
+  - `cargo test -p iroha_core --lib load_npos_collector_config_uses_vrf_seed -- --nocapture`
+  - `cargo test -p iroha_core --lib event_driven_precommit -- --nocapture`
+  - `cargo test -p iroha_core --lib stale_view_async_commit_votes_for_known_pending_block_still_form_qc -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_stale_frontier_with_commit_votes_keeps_recovery_active_for_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib apply_mode_flip_to -- --nocapture`
+  - `cargo test -p iroha_core --lib refresh_npos_seed -- --nocapture`
+  - `cargo test -p iroha_core --lib on_block_commit_persists_new_epoch_seed_record -- --nocapture`
+  - `cargo test -p iroha_core --lib finalize_pending_block_commits_retired_same_height_with_conflicting_local_vote -- --nocapture`
+  - `cargo test -p iroha_core --lib`
+  - `git diff --check`
+
 ## 2026-04-29 NPoS epoch transition coverage
 
 - Added focused `EpochManager` unit coverage for non-boundary block commits,
