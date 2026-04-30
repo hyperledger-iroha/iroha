@@ -2747,15 +2747,27 @@ impl ChaosState {
     }
 
     fn random_user_except(&self, rng: &mut StdRng, excluded: &AccountId) -> Result<AccountRecord> {
-        let candidates: Vec<_> = self
-            .users
+        let candidate_count = self.users.len().saturating_add(1);
+        if candidate_count <= 1 {
+            return Err(eyre!("no alternative accounts available"));
+        }
+
+        for _ in 0..8 {
+            let idx = rng.random_range(0..candidate_count);
+            let candidate = if idx < self.users.len() {
+                &self.users[idx]
+            } else {
+                &self.treasury
+            };
+            if &candidate.id != excluded {
+                return Ok(candidate.clone());
+            }
+        }
+
+        self.users
             .iter()
             .chain(std::iter::once(&self.treasury))
-            .filter(|record| &record.id != excluded)
-            .cloned()
-            .collect();
-        candidates
-            .choose(rng)
+            .find(|record| &record.id != excluded)
             .cloned()
             .ok_or_else(|| eyre!("no alternative accounts available"))
     }
@@ -3053,6 +3065,22 @@ mod tests {
         assert!(prepared.state.users.len() >= 3);
         let expected: DomainId = DomainId::parse_fully_qualified("chaosnet.universal").unwrap();
         assert_eq!(prepared.state.base_domain(), &expected);
+    }
+
+    #[test]
+    fn random_user_except_never_returns_excluded_account() {
+        let prepared =
+            prepare_state(128, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let excluded = prepared.state.users[0].id.clone();
+        let mut rng = StdRng::seed_from_u64(17);
+
+        for _ in 0..256 {
+            let selected = prepared
+                .state
+                .random_user_except(&mut rng, &excluded)
+                .expect("alternative account should exist");
+            assert_ne!(selected.id, excluded);
+        }
     }
 
     #[test]

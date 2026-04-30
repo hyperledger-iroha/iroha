@@ -30,6 +30,7 @@ use iroha_data_model::{
         register::RegisterPeerWithPop,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
+    parameter::custom::{CustomParameter, CustomParameterId},
     parameter::system::SumeragiNposParameters,
     parameter::{BlockParameter, SumeragiParameter},
     prelude::*,
@@ -40,6 +41,7 @@ use iroha_executor_data_model::permission::{
     asset::CanMintAssetWithDefinition, nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::GenesisBlock;
+use iroha_primitives::json::Json;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
@@ -61,14 +63,14 @@ use crate::{
     },
 };
 
-const IZANAMI_BLOCK_PAYLOAD_QUEUE: i64 = 512;
+const IZANAMI_BLOCK_PAYLOAD_QUEUE: i64 = 4_096;
 const IZANAMI_RBC_PENDING_TTL_MS: i64 = 300_000;
 const IZANAMI_RBC_SESSION_TTL_MS: i64 = 900_000;
-const IZANAMI_RBC_PENDING_MAX_CHUNKS: i64 = 512;
-const IZANAMI_RBC_PENDING_MAX_BYTES: i64 = 32 * 1024 * 1024;
-const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 512;
-const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 12;
-const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 96;
+const IZANAMI_RBC_PENDING_MAX_CHUNKS: i64 = 16_384;
+const IZANAMI_RBC_PENDING_MAX_BYTES: i64 = 512 * 1024 * 1024;
+const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 2_048;
+const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 64;
+const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 4_096;
 const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
 const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
@@ -78,11 +80,17 @@ const IZANAMI_TORII_PREAUTH_RATE_PER_IP_PER_SEC: i64 = 1_000_000;
 const IZANAMI_TORII_PREAUTH_BURST_PER_IP: i64 = 2_000_000;
 const IZANAMI_TORII_DISABLED_RATE_LIMIT: i64 = 0;
 const IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE: usize = 32;
+const IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD: f64 = 1_000.0;
+const IZANAMI_HIGH_TPS_ACCOUNT_COUNT: usize = 4_096;
 const IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS: i64 = 250;
 const IZANAMI_TRANSACTION_GOSSIP_SIZE: i64 = 1024;
 const IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS: i64 = 1;
 const IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP: i64 = 64;
-const IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS: i64 = 8_192;
+const IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS: i64 = 4_096;
+const IZANAMI_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER: i64 = 1;
+const IZANAMI_NEXUS_FUSION_FLOOR_TEU: i64 = 16_000_000;
+const IZANAMI_NEXUS_FUSION_EXIT_TEU: i64 = 24_000_000;
+const IZANAMI_IVM_GAS_LIMIT_PER_BLOCK: u64 = 2_000_000_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
 const IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS: i64 = 300;
@@ -2623,6 +2631,15 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
     );
 }
 
+fn workload_account_count(config: &ChaosConfig) -> usize {
+    let baseline = config.peer_count.saturating_mul(3).max(6);
+    if config.tps >= IZANAMI_HIGH_TPS_ACCOUNT_THRESHOLD || config.prebuild_tx_buffer > baseline {
+        baseline.max(IZANAMI_HIGH_TPS_ACCOUNT_COUNT)
+    } else {
+        baseline
+    }
+}
+
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
     let nexus_bootstrap_post_topology = config
@@ -2733,14 +2750,24 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         .expect("Izanami block transaction cap fits u64");
     let block_max_transactions =
         NonZeroU64::new(block_max_transactions).expect("Izanami block transaction cap non-zero");
-    if let Some(last_tx) = genesis.last_mut() {
-        last_tx.push(InstructionBox::from(SetParameter::new(Parameter::Block(
+    let block_gas_limit = CustomParameter::new(
+        CustomParameterId::new(
+            "ivm_gas_limit_per_block"
+                .parse()
+                .expect("static gas-limit parameter name is valid"),
+        ),
+        Json::new(IZANAMI_IVM_GAS_LIMIT_PER_BLOCK),
+    );
+    let mut injected_block_limits = vec![
+        InstructionBox::from(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(block_max_transactions),
-        ))));
+        ))),
+        InstructionBox::from(SetParameter::new(Parameter::Custom(block_gas_limit))),
+    ];
+    if let Some(last_tx) = genesis.last_mut() {
+        last_tx.append(&mut injected_block_limits);
     } else {
-        genesis.push(vec![InstructionBox::from(SetParameter::new(
-            Parameter::Block(BlockParameter::MaxTransactions(block_max_transactions)),
-        ))]);
+        genesis.push(injected_block_limits);
     }
     if config.nexus.is_some() {
         let mut injected = Vec::new();
@@ -2899,6 +2926,18 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "block", "max_transactions"],
                 IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
+            )
+            .write(
+                ["sumeragi", "block", "proposal_queue_scan_multiplier"],
+                IZANAMI_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            )
+            .write(
+                ["nexus", "fusion", "floor_teu"],
+                IZANAMI_NEXUS_FUSION_FLOOR_TEU,
+            )
+            .write(
+                ["nexus", "fusion", "exit_teu"],
+                IZANAMI_NEXUS_FUSION_EXIT_TEU,
             )
             .write(
                 ["sumeragi", "advanced", "queues", "block_payload"],
@@ -3565,7 +3604,7 @@ impl IzanamiRunner {
                 "allow_net=false: enable networking via --allow-net or persisted configuration"
             ));
         }
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let account_qty = workload_account_count(&config);
         let PreparedChaos {
             state,
             genesis,
@@ -3870,6 +3909,9 @@ impl IzanamiRunner {
                 final_quorum_min_height = progress_snapshot.map(|progress| progress.quorum_min_height),
                 final_strict_min_height = progress_snapshot.map(|progress| progress.strict_min_height),
                 final_max_peer_height_skew = progress_snapshot.map(|progress| progress.max_peer_height_skew),
+                final_quorum_min_txs_approved = progress_snapshot.map(|progress| progress.quorum_min_txs_approved),
+                final_strict_min_txs_approved = progress_snapshot.map(|progress| progress.strict_min_txs_approved),
+                final_max_peer_txs_approved_skew = progress_snapshot.map(|progress| progress.max_peer_txs_approved_skew),
                 first_progress_after_fault_start_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_start_height),
                 first_progress_after_fault_end_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_end_height),
                 ?sumeragi_status_delta,
@@ -3921,6 +3963,9 @@ impl IzanamiRunner {
                 final_quorum_min_height = progress_snapshot.map(|progress| progress.quorum_min_height),
                 final_strict_min_height = progress_snapshot.map(|progress| progress.strict_min_height),
                 final_max_peer_height_skew = progress_snapshot.map(|progress| progress.max_peer_height_skew),
+                final_quorum_min_txs_approved = progress_snapshot.map(|progress| progress.quorum_min_txs_approved),
+                final_strict_min_txs_approved = progress_snapshot.map(|progress| progress.strict_min_txs_approved),
+                final_max_peer_txs_approved_skew = progress_snapshot.map(|progress| progress.max_peer_txs_approved_skew),
                 first_progress_after_fault_start_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_start_height),
                 first_progress_after_fault_end_height = progress_snapshot.and_then(|progress| progress.first_progress_after_fault_end_height),
                 ?sumeragi_status_delta,
@@ -4908,6 +4953,37 @@ fn sampled_peer_heights_with_ids(peers: &[NetworkPeer]) -> Vec<(PeerId, u64)> {
         .collect()
 }
 
+async fn sampled_peer_txs_approved(peers: &[NetworkPeer]) -> Vec<u64> {
+    let mut approved = Vec::with_capacity(peers.len());
+    for peer in peers {
+        match time::timeout(
+            Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS),
+            peer.status(),
+        )
+        .await
+        {
+            Ok(Ok(status)) => approved.push(status.txs_approved),
+            Ok(Err(err)) => {
+                warn!(
+                    target: "izanami::progress",
+                    peer = peer.mnemonic(),
+                    ?err,
+                    "failed to sample final tx approval count"
+                );
+            }
+            Err(_) => {
+                warn!(
+                    target: "izanami::progress",
+                    peer = peer.mnemonic(),
+                    timeout_ms = IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS,
+                    "timed out sampling final tx approval count"
+                );
+            }
+        }
+    }
+    approved
+}
+
 fn tolerated_peer_failures(peer_count: usize) -> usize {
     if peer_count < 4 {
         0
@@ -5604,8 +5680,20 @@ struct TargetProgressResult {
     quorum_min_height: u64,
     strict_min_height: u64,
     max_peer_height_skew: u64,
+    quorum_min_txs_approved: u64,
+    strict_min_txs_approved: u64,
+    max_peer_txs_approved_skew: u64,
     first_progress_after_fault_start_height: Option<u64>,
     first_progress_after_fault_end_height: Option<u64>,
+}
+
+impl TargetProgressResult {
+    fn attach_txs_approved_samples(&mut self, samples: &[u64], tolerated_failures: usize) {
+        self.quorum_min_txs_approved =
+            quorum_min_height_from_samples(samples.to_vec(), tolerated_failures);
+        self.strict_min_txs_approved = samples.iter().copied().min().unwrap_or(0);
+        self.max_peer_txs_approved_skew = max_peer_height_skew_from_samples(samples);
+    }
 }
 
 fn duration_deadline_progress_result(
@@ -5620,6 +5708,9 @@ fn duration_deadline_progress_result(
         quorum_min_height,
         strict_min_height,
         max_peer_height_skew,
+        quorum_min_txs_approved: 0,
+        strict_min_txs_approved: 0,
+        max_peer_txs_approved_skew: 0,
         first_progress_after_fault_start_height: None,
         first_progress_after_fault_end_height: None,
     }
@@ -5656,7 +5747,10 @@ async fn wait_for_duration_deadline(
             let heights: Vec<_> = sampled_heights.iter().map(|(_, height)| *height).collect();
             let tolerated_failures =
                 effective_tolerated_peer_failures(peers.len(), configured_faulty_peers);
-            let progress = duration_deadline_progress_result(&heights, tolerated_failures);
+            let mut progress = duration_deadline_progress_result(&heights, tolerated_failures);
+            run_control.stop();
+            let txs_approved_samples = sampled_peer_txs_approved(peers).await;
+            progress.attach_txs_approved_samples(&txs_approved_samples, tolerated_failures);
             let now = Instant::now();
             if let Some(ingress_pool) = ingress_pool {
                 ingress_pool.update_lag_snapshot(
@@ -5670,10 +5764,14 @@ async fn wait_for_duration_deadline(
                 quorum_min_height = progress.quorum_min_height,
                 strict_min_height = progress.strict_min_height,
                 max_peer_height_skew = progress.max_peer_height_skew,
+                quorum_min_txs_approved = progress.quorum_min_txs_approved,
+                strict_min_txs_approved = progress.strict_min_txs_approved,
+                max_peer_txs_approved_skew = progress.max_peer_txs_approved_skew,
                 first_progress_after_fault_start_height = progress.first_progress_after_fault_start_height,
                 first_progress_after_fault_end_height = progress.first_progress_after_fault_end_height,
                 tolerated_failures,
                 sampled_peers = heights.len(),
+                sampled_statuses = txs_approved_samples.len(),
                 "duration deadline reached with sampled block heights"
             );
             Ok(progress)
@@ -5794,14 +5892,21 @@ async fn wait_for_target_blocks(
                     now.duration_since(start),
                     "duration_deadline",
                 )?;
-                return Ok(TargetProgressResult {
+                let mut result = TargetProgressResult {
                     target_reached,
                     quorum_min_height: min_height,
                     strict_min_height,
                     max_peer_height_skew,
+                    quorum_min_txs_approved: 0,
+                    strict_min_txs_approved: 0,
+                    max_peer_txs_approved_skew: 0,
                     first_progress_after_fault_start_height,
                     first_progress_after_fault_end_height,
-                });
+                };
+                run_control.stop();
+                let txs_approved_samples = sampled_peer_txs_approved(peers).await;
+                result.attach_txs_approved_samples(&txs_approved_samples, tolerated_failures);
+                return Ok(result);
             }
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
@@ -5976,14 +6081,21 @@ async fn wait_for_target_blocks(
                 }
             }
             if !target_blocks_soft_kpi {
-                return Ok(TargetProgressResult {
+                let mut result = TargetProgressResult {
                     target_reached: true,
                     quorum_min_height: min_height,
                     strict_min_height,
                     max_peer_height_skew,
+                    quorum_min_txs_approved: 0,
+                    strict_min_txs_approved: 0,
+                    max_peer_txs_approved_skew: 0,
                     first_progress_after_fault_start_height,
                     first_progress_after_fault_end_height,
-                });
+                };
+                run_control.stop();
+                let txs_approved_samples = sampled_peer_txs_approved(peers).await;
+                result.attach_txs_approved_samples(&txs_approved_samples, tolerated_failures);
+                return Ok(result);
             }
             info!(
                 target: "izanami::progress",
@@ -6151,14 +6263,21 @@ async fn wait_for_target_blocks(
                     now.duration_since(start),
                     "duration_deadline",
                 )?;
-                return Ok(TargetProgressResult {
+                let mut result = TargetProgressResult {
                     target_reached,
                     quorum_min_height: min_height,
                     strict_min_height,
                     max_peer_height_skew,
+                    quorum_min_txs_approved: 0,
+                    strict_min_txs_approved: 0,
+                    max_peer_txs_approved_skew: 0,
                     first_progress_after_fault_start_height,
                     first_progress_after_fault_end_height,
-                });
+                };
+                run_control.stop();
+                let txs_approved_samples = sampled_peer_txs_approved(peers).await;
+                result.attach_txs_approved_samples(&txs_approved_samples, tolerated_failures);
+                return Ok(result);
             }
             return Err(eyre!(
                 "timed out before reaching target blocks (quorum min height {}, strict min {}, target {}, tolerated_failures {})",
@@ -9848,6 +9967,10 @@ mod tests {
         };
 
         assert_eq!(effective_network_queue_capacity(&config), 2_400_000);
+        assert_eq!(
+            workload_account_count(&config),
+            IZANAMI_HIGH_TPS_ACCOUNT_COUNT
+        );
         config.shutdown_drain_timeout = Duration::from_secs(120);
         assert_eq!(
             effective_ingress_request_timeout(&config),
@@ -9871,9 +9994,16 @@ mod tests {
             IZANAMI_QUEUE_CAPACITY
         );
         assert_eq!(
+            workload_account_count(&config),
+            IZANAMI_HIGH_TPS_ACCOUNT_COUNT
+        );
+        assert_eq!(
             effective_ingress_request_timeout(&config),
             Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
         );
+
+        config.tps = 100.0;
+        assert_eq!(workload_account_count(&config), config.peer_count * 3);
     }
 
     #[test]
@@ -13190,6 +13320,8 @@ mod tests {
         assert!(!result.target_reached);
         assert_eq!(result.quorum_min_height, 0);
         assert_eq!(result.strict_min_height, 0);
+        assert_eq!(result.quorum_min_txs_approved, 0);
+        assert_eq!(result.strict_min_txs_approved, 0);
         assert_eq!(result.first_progress_after_fault_start_height, None);
         assert_eq!(result.first_progress_after_fault_end_height, None);
     }
@@ -13202,6 +13334,8 @@ mod tests {
         assert_eq!(result.quorum_min_height, 7);
         assert_eq!(result.strict_min_height, 5);
         assert_eq!(result.max_peer_height_skew, 3);
+        assert_eq!(result.quorum_min_txs_approved, 0);
+        assert_eq!(result.strict_min_txs_approved, 0);
         assert_eq!(result.first_progress_after_fault_start_height, None);
         assert_eq!(result.first_progress_after_fault_end_height, None);
     }
@@ -13400,6 +13534,28 @@ mod tests {
         };
 
         assert_eq!(network.pipeline_time(), pipeline_time);
+        let mut params = Parameters::default();
+        for tx in network.genesis_isi() {
+            for isi in tx {
+                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
+                    continue;
+                };
+                params.set_parameter(set_param.inner().clone());
+            }
+        }
+        let gas_limit_parameter = params
+            .custom()
+            .get(&CustomParameterId::new(
+                "ivm_gas_limit_per_block"
+                    .parse()
+                    .expect("static gas-limit parameter name is valid"),
+            ))
+            .expect("Izanami genesis should pin a high block gas limit");
+        let gas_limit = gas_limit_parameter
+            .payload()
+            .try_into_any_norito::<u64>()
+            .expect("gas limit payload should decode as u64");
+        assert_eq!(gas_limit, IZANAMI_IVM_GAS_LIMIT_PER_BLOCK);
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let read_i64 = |layer: &Table, path: &[&str]| -> Option<i64> {
             let mut current = layer;
@@ -13598,6 +13754,18 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "block", "max_transactions"]),
             Some(IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "block", "proposal_queue_scan_multiplier"]),
+            Some(IZANAMI_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&["nexus", "fusion", "floor_teu"]),
+            Some(IZANAMI_NEXUS_FUSION_FLOOR_TEU)
+        );
+        assert_eq!(
+            lookup(&["nexus", "fusion", "exit_teu"]),
+            Some(IZANAMI_NEXUS_FUSION_EXIT_TEU)
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "queues", "block_payload"]),

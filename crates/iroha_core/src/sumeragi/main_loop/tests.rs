@@ -86888,6 +86888,40 @@ async fn proposal_backpressure_allows_starved_queue_only_saturation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_ingress_grace_shortens_when_transactions_are_waiting() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let idle_grace = actor.frontier_ingress_drain_grace(actor.runtime_da_enabled());
+    assert!(
+        idle_grace >= super::FRONTIER_INGRESS_IDLE_DRAIN_GRACE_FLOOR,
+        "idle consensus ingress should keep the conservative drain window"
+    );
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let backlog_grace = actor.frontier_ingress_drain_grace(actor.runtime_da_enabled());
+    assert!(
+        backlog_grace <= super::FRONTIER_INGRESS_BACKLOG_DRAIN_GRACE_CEILING,
+        "transaction backlog should cap the consensus-ingress drain window"
+    );
+    assert!(
+        backlog_grace >= super::PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL,
+        "backlog drain window must still respect pacemaker nudge pacing"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_backpressure_allows_starved_payload_only_pending_under_saturation() {
     use std::borrow::Cow;
 
