@@ -2407,7 +2407,19 @@ impl Actor {
             );
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
-        let mut commit_topology = self
+        let qc_key = (
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            pending_height,
+            pending_view,
+            lock.epoch,
+        );
+        let cached_commit_qc = self.qc_cache.get(&qc_key).cloned();
+        let certified_roster = cached_commit_qc
+            .as_ref()
+            .map(|qc| qc.validator_set.clone())
+            .filter(|roster| !roster.is_empty());
+        let cached_vote_roster = self
             .vote_roster_cache
             .get(&block_hash)
             .filter(|cached| {
@@ -2417,7 +2429,11 @@ impl Actor {
             })
             .map(|cached| {
                 super::roster::canonicalize_roster_for_mode(cached.roster.clone(), consensus_mode)
-            })
+            });
+        let mut commit_topology = cached_vote_roster
+            // A cached QC's validator_set is order-sensitive: block and aggregate
+            // signature indices are validated against this exact roster.
+            .or(certified_roster)
             .unwrap_or_else(|| {
                 self.roster_for_vote_with_mode(
                     block_hash,
@@ -2462,13 +2478,6 @@ impl Actor {
             return false;
         }
         let signature_topology = topology.as_ref().to_vec();
-        let qc_key = (
-            crate::sumeragi::consensus::Phase::Commit,
-            block_hash,
-            pending_height,
-            pending_view,
-            lock.epoch,
-        );
         let quorum_signers = self
             .qc_signer_tally
             .get(&qc_key)
@@ -2503,15 +2512,17 @@ impl Actor {
                 None
             }
         });
-        let mut commit_qc = commit_qc_from_cache_or_history(
-            &self.qc_cache,
-            block_hash,
-            pending_height,
-            pending_view,
-            lock.epoch,
-            mode_tag,
-            &commit_topology,
-        );
+        let mut commit_qc = cached_commit_qc.or_else(|| {
+            commit_qc_from_cache_or_history(
+                &self.qc_cache,
+                block_hash,
+                pending_height,
+                pending_view,
+                lock.epoch,
+                mode_tag,
+                &commit_topology,
+            )
+        });
         if !allow_quorum_bypass && commit_qc.is_none() {
             if let (Some(signers), Some(view_signers)) =
                 (quorum_signers.as_ref(), view_signers.as_ref())
@@ -6760,16 +6771,7 @@ impl Actor {
                 return Ok(());
             };
             manager.on_block_commit(height);
-            let mut seed = manager.seed();
-            if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
-                let world = self.state.world_view();
-                seed = super::prf_seed_for_height_from_world(
-                    &world,
-                    self.state.chain_id_ref(),
-                    height.saturating_add(1),
-                );
-                manager.set_epoch_seed(seed);
-            }
+            let seed = manager.seed();
             let snapshot = manager.take_last_epoch_snapshot();
             let _ = manager.take_last_penalties();
             let _ = manager.take_last_penalties_detailed();
