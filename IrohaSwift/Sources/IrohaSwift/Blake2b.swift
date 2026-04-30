@@ -163,7 +163,7 @@ public enum Blake2b {
         hash(data: data, outputLength: 32, personal: personal)
     }
 
-    public static func hash512(_ data: Data) -> Data {
-        hash(data: data, outputLength: 64)
+    public static func hash512(_ data: Data, personal: Data? = nil) -> Data {
+        hash(data: data, outputLength: 64, personal: personal)
     }
 }

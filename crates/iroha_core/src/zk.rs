@@ -6216,6 +6216,17 @@ mod offline_note_v2_real_prover_tests {
     }
 
     #[test]
+    fn swift_native_offline_note_v2_proof_verifies_against_rust() {
+        let Some(path) = std::env::var_os("SWIFT_OFFLINE_V2_PROOF") else {
+            return;
+        };
+        let bytes = std::fs::read(path).expect("swift proof artifact");
+        let proof = ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes);
+        let vk_box = offline_note_v2_vk_box();
+        assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
+    }
+
+    #[test]
     fn prove_offline_note_v2_redeem_emits_real_halo2_ipa_proof() {
         let vk_box = offline_note_v2_vk_box();
         let proving_key = derive_halo2_ipa_offline_note_v2_proving_key_bytes(&vk_box)
@@ -7388,7 +7399,7 @@ mod pasta_tiny {
                 );
                 cons.push(
                     s.clone()
-                        * (public[4].clone() - constant(super::OFFLINE_NOTE_V2_MODE_REDEEM))
+                        * (public[4].clone() - constant(super::OFFLINE_NOTE_V2_MODE_AUDIT))
                         * (output_count.clone() - constant(1)),
                 );
 
