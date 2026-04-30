@@ -3539,8 +3539,7 @@ impl Actor {
         let canonical_signature_topology =
             topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
         let local_peer = self.common_config.peer.id();
-        self.vote_log
-            .values()
+        self.stored_votes()
             .find(|vote| {
                 if vote.phase != crate::sumeragi::consensus::Phase::Commit
                     || vote.height != height

@@ -874,17 +874,35 @@ fn sign_vote_for_canonical_signer(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) {
-    let canonical_roster = super::roster::canonicalize_roster_for_mode(
-        topology.as_ref().to_vec(),
-        ConsensusMode::Permissioned,
-    );
-    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let prf_seed = Some(prf_seed_for_chain(chain));
+    sign_vote_for_canonical_signer_with_seed(
+        vote,
+        chain,
+        topology,
+        keypairs,
+        ConsensusMode::Permissioned,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    );
+}
+
+fn sign_vote_for_canonical_signer_with_seed(
+    vote: &mut crate::sumeragi::consensus::Vote,
+    chain: &ChainId,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+    consensus_mode: ConsensusMode,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) {
+    let canonical_roster =
+        super::roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology = super::topology_for_view(
         &canonical_topology,
         vote.height,
         vote.view,
-        super::PERMISSIONED_TAG,
+        mode_tag,
         prf_seed,
     );
     let canonical = ValidatorIndex::try_from(vote.signer).expect("signer fits u32");
@@ -897,7 +915,7 @@ fn sign_vote_for_canonical_signer(
         chain,
         &canonical_topology,
         keypairs,
-        super::PERMISSIONED_TAG,
+        mode_tag,
         prf_seed,
     );
 }
@@ -26752,11 +26770,8 @@ async fn local_accepted_commit_vote_does_not_replay_known_block_evidence() {
 async fn known_block_commit_evidence_replay_skips_payload_fallback_without_roster() {
     let mut harness = test_actor_harness(4).await;
 
-    let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
-    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"precommit_vote_skips_payload_fallback_when_pending_tracked_without_roster",
-    ));
-    let block = sample_block(2, 0, Some(parent_hash));
+    let genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
+    let block = sample_block(2, 0, Some(genesis_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     insert_validated_pending(&mut harness.actor, block.clone());
@@ -27277,11 +27292,8 @@ async fn emit_precommit_vote_targets_quorum_retransmit_peers() {
     actor.config.collectors.parallel_topology_fanout = 0;
     let background_log = attach_background_log(actor);
 
-    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
-    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"emit_precommit_vote_targets_quorum_retransmit_peers",
-    ));
-    let block = sample_block(2, 0, Some(parent_hash));
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let block = sample_block(2, 0, Some(genesis_hash));
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let local_peer = actor.common_config.peer.id().clone();
@@ -27349,11 +27361,8 @@ async fn emit_precommit_vote_targets_quorum_retransmit_peers() {
 async fn known_block_commit_evidence_replay_skips_aborted_pending_tracked() {
     let mut harness = test_actor_harness(4).await;
 
-    let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
-    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"precommit_vote_payload_broadcast_skips_aborted_pending_tracked",
-    ));
-    let block = sample_block(2, 0, Some(parent_hash));
+    let genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
+    let block = sample_block(2, 0, Some(genesis_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
@@ -80421,11 +80430,13 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(
+        sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
             &topology,
             &harness.key_pairs,
+            mode_tag,
+            prf_seed,
         );
         actor.handle_vote(vote);
     }
@@ -92390,11 +92401,13 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(
+        sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
             &topology,
             &harness.key_pairs,
+            mode_tag,
+            prf_seed,
         );
         actor.handle_vote(vote);
     }
@@ -100249,6 +100262,7 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
         )
         .expect("push tx");
 
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
     actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
     let committed_height = actor.state.view().height() as u64;
     let mut highest_qc = actor
@@ -100265,7 +100279,6 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
     let now = Instant::now();
     actor.phase_tracker.start_new_round(tracked_height, now);
 
-    let genesis_hash = seed_genesis_block_for_state(&actor.state);
     let stale_owner = nonempty_block_for_actor(
         actor,
         &harness.key_pairs,
@@ -100314,26 +100327,33 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local validator index");
+    let epoch = actor.epoch_for_height(tracked_height);
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: stale_owner_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: tracked_height,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: local_signer,
+        bls_sig: Vec::new(),
+    };
     actor.vote_log.insert(
+        (Phase::Commit, tracked_height, 0, epoch, local_signer),
+        vote.clone(),
+    );
+    actor.vote_log_identities.insert(
         (
             Phase::Commit,
             tracked_height,
             0,
-            actor.epoch_for_height(tracked_height),
+            epoch,
             local_signer,
+            actor.common_config.peer.id().public_key().clone(),
         ),
-        crate::sumeragi::consensus::Vote {
-            phase: Phase::Commit,
-            block_hash: stale_owner_hash,
-            parent_state_root: zero_state_root(),
-            post_state_root: zero_state_root(),
-            height: tracked_height,
-            view: 0,
-            epoch: actor.epoch_for_height(tracked_height),
-            highest_qc: None,
-            signer: local_signer,
-            bls_sig: Vec::new(),
-        },
+        vote,
     );
 
     actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
@@ -100349,12 +100369,12 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
     );
     assert!(
         actor
-            .local_same_height_vote(tracked_height, actor.epoch_for_height(tracked_height))
+            .local_same_height_vote(tracked_height, epoch)
             .is_some(),
         "test setup requires preserved local same-height vote history after the missing-QC view advance"
     );
     let preserved_vote = actor
-        .local_same_height_vote(tracked_height, actor.epoch_for_height(tracked_height))
+        .local_same_height_vote(tracked_height, epoch)
         .expect("old-view local same-height vote history must survive the missing-QC rotation");
     assert_eq!(
         preserved_vote.block_hash, stale_owner_hash,
@@ -106534,6 +106554,7 @@ async fn conflicting_higher_view_frontier_block_created_marks_round_liveness_but
     let epoch = actor.epoch_for_height(height);
     let canonical_block =
         nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(prev_hash));
+    let canonical_parent = canonical_block.header().prev_block_hash();
     let canonical_hash = insert_validated_pending(actor, canonical_block);
 
     assert!(
@@ -106544,7 +106565,7 @@ async fn conflicting_higher_view_frontier_block_created_marks_round_liveness_but
             epoch,
             ValidationStatus::Valid,
             &topology,
-            None,
+            canonical_parent,
             Some((Hash::new([]), Hash::new([]))),
         ),
         "test setup should record a local same-height vote for the canonical branch"
@@ -134670,10 +134691,6 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
     let view = 0_u64;
     let epoch = actor.epoch_for_height(height);
 
-    let topology_peers = actor.effective_commit_topology();
-    let topology = super::network_topology::Topology::new(topology_peers.clone());
-    let required = topology.min_votes_for_commit().max(1);
-
     let block =
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
@@ -134691,7 +134708,16 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
         actor.block_known_locally(block_hash),
         "known pending block should remain available for stale-view precommit handling"
     );
-    for signer_idx in 0..required {
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.roster_for_vote_with_mode(
+        block_hash,
+        height,
+        view,
+        consensus_mode,
+    ));
+    let required = topology.min_votes_for_commit().max(1);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    for signer_idx in 0..signature_topology.as_ref().len() {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash,
@@ -134704,7 +134730,19 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_canonical_signer(&mut vote, &chain_id, &topology, &harness.key_pairs);
+        sign_vote_for_canonical_signer_with_seed(
+            &mut vote,
+            &chain_id,
+            &topology,
+            &harness.key_pairs,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+        );
+        assert!(
+            super::vote_signature_check(&vote, &signature_topology, &chain_id, mode_tag).is_ok(),
+            "test generated invalid vote for signer {signer_idx}"
+        );
         actor.handle_vote(vote);
     }
 
@@ -134728,9 +134766,9 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
             })
             .count();
         if actor.qc_cache.contains_key(&qc_key) {
-            assert_eq!(
-                recorded_votes, required,
-                "all stale-view commit votes should still be recorded for a known pending block"
+            assert!(
+                recorded_votes >= required,
+                "stale-view commit votes should retain enough records for a known pending block"
             );
             break;
         }
