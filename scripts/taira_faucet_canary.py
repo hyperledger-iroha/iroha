@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from urllib import error, request
 
 
 FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
+OPENSSL_ENV = "TAIRA_FAUCET_OPENSSL"
 
 
 def leading_zero_bits(data: bytes) -> int:
@@ -46,16 +49,48 @@ def build_challenge(
     return hasher.digest()
 
 
-def scrypt_digest(password: bytes, *, salt: bytes, n: int, r: int, p: int, dklen: int) -> bytes:
-    """Derive an scrypt digest, falling back to OpenSSL when Python omits it."""
+def openssl_candidates() -> list[str]:
+    """Return OpenSSL binaries to try for scrypt derivation."""
 
-    native_scrypt = getattr(hashlib, "scrypt", None)
-    if native_scrypt is not None:
-        return native_scrypt(password, salt=salt, n=n, r=r, p=p, dklen=dklen)
+    candidates: list[str] = []
+    env_bin = os.environ.get(OPENSSL_ENV)
+    if env_bin:
+        candidates.append(env_bin)
+    candidates.extend(
+        [
+            "/opt/homebrew/bin/openssl",
+            "/usr/local/opt/openssl@3/bin/openssl",
+            "/usr/local/bin/openssl",
+        ]
+    )
+    path_bin = shutil.which("openssl")
+    if path_bin:
+        candidates.append(path_bin)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def openssl_scrypt_digest(
+    openssl_bin: str,
+    password: bytes,
+    *,
+    salt: bytes,
+    n: int,
+    r: int,
+    p: int,
+    dklen: int,
+) -> bytes:
+    """Derive an scrypt digest using an OpenSSL 3-compatible kdf command."""
 
     proc = subprocess.run(
         [
-            "openssl",
+            openssl_bin,
             "kdf",
             "-keylen",
             str(dklen),
@@ -77,17 +112,52 @@ def scrypt_digest(password: bytes, *, salt: bytes, n: int, r: int, p: int, dklen
         encoding="utf-8",
         errors="replace",
     )
+    detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
     if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
-        raise RuntimeError(f"openssl scrypt derivation failed: {detail}")
+        raise RuntimeError(detail)
     rendered = "".join(ch for ch in proc.stdout if ch in "0123456789abcdefABCDEF")
+    if not rendered:
+        raise RuntimeError(detail)
     try:
         digest = bytes.fromhex(rendered)
     except ValueError as exc:
-        raise RuntimeError(f"openssl scrypt output was not hex: {proc.stdout!r}") from exc
+        raise RuntimeError(f"output was not hex: {proc.stdout!r}") from exc
     if len(digest) != dklen:
-        raise RuntimeError(f"openssl scrypt output length mismatch: expected {dklen}, got {len(digest)}")
+        raise RuntimeError(f"output length mismatch: expected {dklen}, got {len(digest)}")
     return digest
+
+
+def scrypt_digest(password: bytes, *, salt: bytes, n: int, r: int, p: int, dklen: int) -> bytes:
+    """Derive an scrypt digest, falling back to OpenSSL when Python omits it."""
+
+    native_scrypt = getattr(hashlib, "scrypt", None)
+    if native_scrypt is not None:
+        return native_scrypt(password, salt=salt, n=n, r=r, p=p, dklen=dklen)
+
+    errors: list[str] = []
+    for candidate in openssl_candidates():
+        if not Path(candidate).exists() and shutil.which(candidate) is None:
+            continue
+        try:
+            return openssl_scrypt_digest(
+                candidate,
+                password,
+                salt=salt,
+                n=n,
+                r=r,
+                p=p,
+                dklen=dklen,
+            )
+        except OSError as exc:
+            errors.append(f"{candidate}: {exc}")
+        except RuntimeError as exc:
+            errors.append(f"{candidate}: {exc}")
+
+    detail = "; ".join(errors) if errors else "no openssl binary found"
+    raise RuntimeError(
+        "scrypt derivation is unavailable: Python hashlib.scrypt is missing and "
+        f"no usable OpenSSL SCRYPT KDF was found ({detail})"
+    )
 
 
 def solve_puzzle(account_id: str, puzzle: dict[str, Any]) -> dict[str, Any]:

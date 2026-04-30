@@ -2,6 +2,48 @@
 
 Last updated: 2026-04-29
 
+## 2026-04-29 NPoS epoch transition coverage
+
+- Added focused `EpochManager` unit coverage for non-boundary block commits,
+  explicit `next_epoch` state clearing, clamped epoch window/height mapping,
+  unfinalized VRF epoch record restore, and finalized epoch-boundary snapshots
+  that preserve commits, regular reveals, late reveals, and penalty inputs
+  before state is cleared.
+- Extended `EpochManager` edge coverage for epoch-mismatched VRF notes, late
+  reveal rejection without a matching commitment, height-zero commit no-ops,
+  and zero-length epoch parameters clamping to single-block epochs.
+- Added epoch-schedule and PRF seed coverage for skipped unfinished VRF epoch
+  records, non-monotonic finalized epoch ends, post-finalized fallback epoch
+  lengths, and seed selection across finalized NPoS epoch boundaries.
+- Added actor-level coverage for runtime mode flip restoring an unfinalized
+  target VRF epoch record, and for pre-commit seed refresh preserving in-flight
+  epoch participation while applying updated on-chain epoch parameters.
+- Added reverse mode-flip and post-commit boundary refresh coverage: NPoS to
+  permissioned rebuilds the epoch manager while clearing collectors, and an
+  epoch-boundary post-commit refresh advances to the next epoch while clearing
+  stale VRF inputs.
+- Added actor epoch-resolution coverage for scheduled permissioned cutovers,
+  finalized VRF schedule precedence over a stale local manager, and active
+  NPoS manager use after the last finalized epoch boundary.
+- Added VRF epoch snapshot persistence coverage for participant merge ordering,
+  late reveal serialization, finalized penalty field retention, and preserving
+  existing penalty-application markers on unfinalized snapshot updates.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib apply_mode_flip_to_npos_restores_unfinalized_target_epoch_record`
+  - `cargo test -p iroha_core --lib apply_mode_flip_to_permissioned_restores_epoch_record_but_clears_collectors`
+  - `cargo test -p iroha_core --lib refresh_npos_seed_precommit_preserves_epoch_state_during_schedule_change`
+  - `cargo test -p iroha_core --lib refresh_npos_seed_postcommit_boundary_advances_epoch_and_clears_inputs`
+  - `cargo test -p iroha_core --lib epoch_for_height_returns_zero_for_permissioned_target_after_scheduled_flip`
+  - `cargo test -p iroha_core --lib epoch_for_height_prefers_finalized_schedule_over_stale_manager`
+  - `cargo test -p iroha_core --lib epoch_for_height_uses_manager_after_finalized_boundary_when_npos_active`
+  - `cargo test -p iroha_core --lib epoch_schedule_`
+  - `cargo test -p iroha_core --lib npos_seed_for_height_tracks_finalized_epoch_schedule`
+  - `cargo test -p iroha_core --lib vrf_snapshot_record_merges_participants_and_finalized_penalties`
+  - `cargo test -p iroha_core --lib unfinalized_vrf_snapshot_strips_penalties_but_preserves_application_marker`
+  - `cargo test -p iroha_core --lib sumeragi::epoch`
+  - `git diff --check`
+
 ## 2026-04-29 Iroha config minimal snapshot Kura default
 
 - Refreshed `minimal_config_snapshot` so the expected Kura defaults include

@@ -921,6 +921,116 @@ mod tests {
     }
 
     #[test]
+    fn epoch_schedule_ignores_unfinished_epoch_records() {
+        let state = state_with_npos_params(SumeragiNposParameters {
+            epoch_length_blocks: 5,
+            ..SumeragiNposParameters::default()
+        });
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(0, vrf_record(0, 3, 5, false));
+            world.vrf_epochs.insert(1, vrf_record(1, 0, 5, true));
+            world.commit();
+        }
+
+        let view = state.view();
+        let schedule = EpochScheduleSnapshot::from_world(view.world());
+        assert_eq!(schedule.last_finalized_end(), 0);
+        assert_eq!(schedule.epoch_for_height(1), 0);
+        assert_eq!(schedule.epoch_for_height(5), 0);
+        assert_eq!(schedule.epoch_for_height(6), 1);
+        assert!(!schedule.is_epoch_boundary(3));
+        assert!(schedule.is_epoch_boundary(5));
+    }
+
+    #[test]
+    fn epoch_schedule_stops_before_non_monotonic_finalized_end() {
+        let state = state_with_npos_params(SumeragiNposParameters {
+            epoch_length_blocks: 5,
+            ..SumeragiNposParameters::default()
+        });
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(0, vrf_record(0, 10, 10, true));
+            world.vrf_epochs.insert(1, vrf_record(1, 8, 8, true));
+            world.commit();
+        }
+
+        let view = state.view();
+        let schedule = EpochScheduleSnapshot::from_world(view.world());
+        assert_eq!(schedule.last_finalized_end(), 10);
+        assert_eq!(schedule.epoch_for_height(8), 0);
+        assert_eq!(schedule.epoch_for_height(10), 0);
+        assert_eq!(schedule.epoch_for_height(11), 1);
+        assert_eq!(schedule.epoch_for_height(15), 1);
+        assert_eq!(schedule.epoch_for_height(16), 2);
+        assert!(!schedule.is_epoch_boundary(8));
+        assert!(schedule.is_epoch_boundary(10));
+        assert!(schedule.is_epoch_boundary(15));
+    }
+
+    #[test]
+    fn epoch_schedule_uses_latest_record_length_after_finalized_boundaries() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(0, vrf_record(0, 4, 4, true));
+            world.vrf_epochs.insert(1, vrf_record(1, 0, 6, false));
+            world.commit();
+        }
+
+        let view = state.view();
+        let schedule = EpochScheduleSnapshot::from_world_with_fallback(view.world(), 99);
+        assert_eq!(schedule.last_finalized_end(), 4);
+        assert_eq!(schedule.epoch_for_height(4), 0);
+        assert_eq!(schedule.epoch_for_height(5), 1);
+        assert_eq!(schedule.epoch_for_height(10), 1);
+        assert_eq!(schedule.epoch_for_height(11), 2);
+        assert!(schedule.is_epoch_boundary(10));
+    }
+
+    #[test]
+    fn npos_seed_for_height_tracks_finalized_epoch_schedule() {
+        let base_seed = [0x44; 32];
+        let state = state_with_npos_params(SumeragiNposParameters {
+            epoch_length_blocks: 5,
+            ..SumeragiNposParameters::default().with_epoch_seed(base_seed)
+        });
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(0, vrf_record(0, 3, 3, true));
+            world.vrf_epochs.insert(1, vrf_record(1, 9, 6, true));
+            world.commit();
+        }
+
+        let view = state.world_view();
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 3),
+            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 0)
+        );
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 4),
+            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 1)
+        );
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 10),
+            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 2)
+        );
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 14),
+            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 2)
+        );
+        assert_eq!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 15),
+            deterministic_npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 3)
+        );
+    }
+
+    #[test]
     fn npos_seed_for_height_ignores_node_local_vrf_record_seed() {
         fn seed_with_local_record_seed(record_seed: [u8; 32]) -> [u8; 32] {
             let state = State::new_for_testing(

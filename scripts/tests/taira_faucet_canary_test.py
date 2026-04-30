@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "taira_faucet_canary.py"
@@ -38,6 +39,35 @@ def test_scrypt_digest_matches_rfc_vector() -> None:
         "fcd0069ded0948f8326a753a0fc81f17"
         "e8d3e0fb2e0d3628cf35e20c38d18906"
     )
+
+
+def test_scrypt_digest_skips_libressl_empty_output(monkeypatch) -> None:
+    expected = bytes(range(32))
+    calls: list[str] = []
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(cmd[0])
+        if cmd[0] == "/usr/bin/openssl":
+            return SimpleNamespace(
+                returncode=0,
+                stdout="",
+                stderr="openssl:Error: 'kdf' is an invalid command.",
+            )
+        return SimpleNamespace(returncode=0, stdout=expected.hex(), stderr="")
+
+    monkeypatch.setattr(MODULE.hashlib, "scrypt", None, raising=False)
+    monkeypatch.setattr(
+        MODULE,
+        "openssl_candidates",
+        lambda: ["/usr/bin/openssl", "/opt/homebrew/bin/openssl"],
+    )
+    monkeypatch.setattr(MODULE.Path, "exists", lambda self: True)
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+
+    digest = MODULE.scrypt_digest(b"pw", salt=b"salt", n=16, r=1, p=1, dklen=32)
+
+    assert digest == expected
+    assert calls == ["/usr/bin/openssl", "/opt/homebrew/bin/openssl"]
 
 
 def test_solve_puzzle_returns_expected_nonce_for_easy_case() -> None:
