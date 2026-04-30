@@ -3298,7 +3298,7 @@ mod tests {
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
-        isi::error::InstructionExecutionError,
+        isi::error::{InstructionExecutionError, InvalidParameterError},
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -7418,6 +7418,94 @@ mod tests {
     }
 
     #[test]
+    fn asset_home_extra_coverage_register_global_allows_universal_alias_home() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let bpng = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("digital-kina", "bpng").expect("domain");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "kina#universal".parse().expect("alias");
+        let new_definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "kina".to_owned(),
+            description: None,
+            alias: Some(alias.clone()),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+
+        Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect("universal alias may home a global asset");
+
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_more_coverage_register_restricted_policy_allows_restricted_alias_home() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let bpng = DataSpaceId::new(7);
+        let domain_id: DomainId =
+            DomainId::try_new("restricted-kina", "universal").expect("domain");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "kina".parse().expect("name"));
+        let alias: AssetDefinitionAlias = "kina#bpng".parse().expect("alias");
+        let new_definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "kina".to_owned(),
+            description: None,
+            alias: Some(alias.clone()),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        tx.current_dataspace_id = Some(bpng);
+        tx.world.current_dataspace_id = Some(bpng);
+
+        Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect("restricted-policy definition may use a restricted alias home");
+
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
+        );
+        assert_eq!(
+            tx.world
+                .asset_definition(&definition_id)
+                .expect("definition exists")
+                .balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
+        );
+    }
+
+    #[test]
     fn register_asset_definition_rejects_missing_explicit_name() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -7686,6 +7774,84 @@ mod tests {
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_extra_coverage_set_alias_allows_global_move_to_universal() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = DomainId::try_new("alias-universal", "bpng").expect("domain");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let bpng = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        tx.world.asset_definitions.insert(
+            definition_id.clone(),
+            AssetDefinition::numeric(definition_id.clone())
+                .with_name("pgk".to_owned())
+                .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+                .build(&authority),
+        );
+
+        let alias: AssetDefinitionAlias = "pgk#universal".parse().expect("alias");
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("universal dataspace may home a global asset alias");
+
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_extra_coverage_clear_alias_keeps_global_home_universal() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("alias-clear-universal", "universal").expect("domain");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "pgk".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+
+        let alias: AssetDefinitionAlias = "pgk#universal".parse().expect("alias");
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("bind universal alias");
+        SetAssetDefinitionAlias::clear(definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("clearing alias should leave universal domain fallback");
+
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
+        assert!(
+            tx.world
+                .asset_definition_alias_bindings
+                .get(&definition_id)
+                .is_none()
         );
     }
 
@@ -7979,6 +8145,101 @@ mod tests {
         };
         assert!(
             message.contains("only accepted when changing Global to DataspaceRestricted"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn asset_home_coverage_balance_policy_noop_without_migration_succeeds() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("policy-noop-ok", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+
+        SetAssetDefinitionBalancePolicy::new(
+            definition_id.clone(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect("policy no-op without migration dataspace should succeed");
+
+        assert_eq!(
+            tx.world
+                .asset_definition(&definition_id)
+                .expect("definition exists")
+                .balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::Global
+        );
+    }
+
+    #[test]
+    fn asset_home_coverage_balance_policy_rejects_unknown_migration_dataspace() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("policy-unknown-migration", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+
+        let err = SetAssetDefinitionBalancePolicy::new(
+            definition_id,
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(DataSpaceId::new(99)),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("unknown migration dataspace must fail");
+
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message,
+        )) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(
+            message.contains("unknown migration dataspace 99"),
             "unexpected error: {message}"
         );
     }
