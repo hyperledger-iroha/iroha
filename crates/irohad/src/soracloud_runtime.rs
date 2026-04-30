@@ -67,10 +67,11 @@ use iroha_data_model::{
         SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
-        SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
-        SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1,
-        SoraModelHostViolationKindV1, SoraModelPrivacyModeV1, SoraNetworkPolicyV1,
-        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1,
+        SoraModelPrivacyModeV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1,
         SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
@@ -4925,16 +4926,13 @@ impl SoracloudRuntimeManager {
 
     fn read_committed_sorafs_payload(
         &self,
-        view: &StateView<'_>,
+        _view: &StateView<'_>,
         stored_manifests: &[StoredManifest],
         remote_sources: &[RemoteHydrationSource],
         expected_hash: Hash,
     ) -> eyre::Result<Option<Vec<u8>>> {
         if let Some(sorafs_node) = self.sorafs_node.as_ref() {
             for manifest in stored_manifests {
-                if !manifest_is_committed(view, &self.state, manifest.manifest_digest()) {
-                    continue;
-                }
                 let Ok(content_length) = usize::try_from(manifest.content_length()) else {
                     iroha_logger::warn!(
                         manifest_id = %manifest.manifest_id(),
@@ -5094,10 +5092,6 @@ impl SoracloudRuntimeManager {
         remote_sources: &[RemoteHydrationSource],
         manifest_digest: [u8; 32],
     ) -> eyre::Result<Option<(Vec<u8>, Vec<SorafsHydratedFileLayout>)>> {
-        if !manifest_is_committed(view, &self.state, &manifest_digest) {
-            return Ok(None);
-        }
-
         if let Some(sorafs_node) = self.sorafs_node.as_ref()
             && sorafs_node.is_enabled()
             && let Ok(manifest) = sorafs_node.manifest_metadata_by_digest(&manifest_digest)
@@ -5126,6 +5120,10 @@ impl SoracloudRuntimeManager {
                 })
                 .collect();
             return Ok(Some((payload, files)));
+        }
+
+        if !manifest_is_committed(view, &self.state, &manifest_digest) {
+            return Ok(None);
         }
 
         self.read_committed_remote_sorafs_directory_payload(
@@ -5293,32 +5291,44 @@ impl SoracloudRuntimeManager {
         let manifest_digest = parse_sorafs_manifest_digest_hex(&artifact.manifest_digest_hex)?;
         let view = self.state.view();
         let remote_sources = collect_remote_hydration_sources(&view, &self.state);
-        let hydrated = self
-            .read_committed_sorafs_directory_payload_by_digest(
+        let hydrated =
+            self.read_committed_sorafs_directory_payload_by_digest(
                 &view,
                 &remote_sources,
                 manifest_digest,
-            )?
-            .ok_or_else(|| {
-                eyre::eyre!(
-                    "published Inrou guest-image artifact {} for {} is not available in local or remote SoraFS storage",
-                    artifact.manifest_digest_hex,
-                    selected_guest_isa.as_str()
-                )
-            })?;
+            )?;
         drop(view);
 
-        let inrou_root = bundle_root.join("inrou");
-        materialize_sorafs_payload_files(&hydrated.0, &hydrated.1, &inrou_root).wrap_err_with(
-            || {
+        if let Some((payload, files)) = hydrated {
+            let inrou_root = bundle_root.join("inrou");
+            materialize_sorafs_payload_files(&payload, &files, &inrou_root).wrap_err_with(|| {
                 format!(
                     "hydrate published Inrou guest-image artifact {} into {}",
                     artifact.manifest_digest_hex,
                     inrou_root.display()
                 )
-            },
-        )?;
-        Ok(())
+            })?;
+            return Ok(());
+        }
+
+        if let Some(host_paths) =
+            inrou_guest_image_host_paths_from_env(selected_guest_isa, image)?
+        {
+            iroha_logger::warn!(
+                guest_isa = selected_guest_isa.as_str(),
+                source = %host_paths.source,
+                manifest_digest = %artifact.manifest_digest_hex,
+                "published Inrou guest-image artifact is unavailable in SoraFS; hydrating from explicit host-local asset paths"
+            );
+            materialize_inrou_guest_image_from_host_paths(bundle_root, image, &host_paths)?;
+            return Ok(());
+        }
+
+        Err(eyre::eyre!(
+            "published Inrou guest-image artifact {} for {} is not available in local or remote SoraFS storage",
+            artifact.manifest_digest_hex,
+            selected_guest_isa.as_str()
+        ))
     }
 
     fn remote_provider_base_url(&self, provider_id: &[u8; 32]) -> Option<reqwest::Url> {
@@ -11937,6 +11947,7 @@ fn serve_portable_vm_metadata_request(
 ) -> io::Result<()> {
     use io::{Read as _, Write as _};
 
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut request = [0_u8; 4096];
     let read = stream.read(&mut request)?;
@@ -13057,6 +13068,127 @@ fn sanitize_env_var_component(value: &str) -> String {
 
 fn strip_leading_slashes(path: &str) -> &str {
     path.trim_start_matches('/')
+}
+
+#[derive(Debug)]
+struct InrouGuestImageHostPaths {
+    kernel: PathBuf,
+    rootfs: PathBuf,
+    initrd: Option<PathBuf>,
+    source: String,
+}
+
+fn inrou_guest_image_host_paths_from_env(
+    selected_guest_isa: SoraInrouGuestIsaV1,
+    image: &SoraInrouGuestImageV1,
+) -> eyre::Result<Option<InrouGuestImageHostPaths>> {
+    let isa_prefix = match selected_guest_isa {
+        SoraInrouGuestIsaV1::X8664 => "X86_64",
+        SoraInrouGuestIsaV1::Aarch64 => "AARCH64",
+    };
+    let mut prefixes = vec![
+        format!("IROHA_INROU_{isa_prefix}"),
+        format!("HAYAHI_TAIRA_INROU_{isa_prefix}"),
+    ];
+    if selected_guest_isa == current_host_inrou_guest_isa() {
+        prefixes.push("IROHA_INROU_PORTABLE".to_owned());
+    }
+
+    for prefix in prefixes {
+        let kernel_var = format!("{prefix}_KERNEL_IMAGE");
+        let rootfs_var = format!("{prefix}_ROOTFS_IMAGE");
+        let initrd_var = format!("{prefix}_INITRD_IMAGE");
+        let configured = [&kernel_var, &rootfs_var, &initrd_var]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some());
+        if !configured {
+            continue;
+        }
+
+        let kernel = required_inrou_guest_image_env_path(&kernel_var)?;
+        let rootfs = required_inrou_guest_image_env_path(&rootfs_var)?;
+        let initrd = if image.initrd_image_path.is_some() {
+            Some(required_inrou_guest_image_env_path(&initrd_var)?)
+        } else {
+            optional_inrou_guest_image_env_path(&initrd_var)?
+        };
+
+        return Ok(Some(InrouGuestImageHostPaths {
+            kernel,
+            rootfs,
+            initrd,
+            source: prefix,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn required_inrou_guest_image_env_path(name: &str) -> eyre::Result<PathBuf> {
+    optional_inrou_guest_image_env_path(name)?
+        .ok_or_else(|| eyre::eyre!("required Inrou guest asset env var {name} is not set"))
+}
+
+fn optional_inrou_guest_image_env_path(name: &str) -> eyre::Result<Option<PathBuf>> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    if !path.is_file() {
+        eyre::bail!(
+            "Inrou guest asset env var {name} points to missing file {}",
+            path.display()
+        );
+    }
+    Ok(Some(path))
+}
+
+fn materialize_inrou_guest_image_from_host_paths(
+    bundle_root: &Path,
+    image: &SoraInrouGuestImageV1,
+    host_paths: &InrouGuestImageHostPaths,
+) -> eyre::Result<()> {
+    copy_inrou_guest_image_member(
+        &host_paths.kernel,
+        bundle_root,
+        &image.kernel_image_path,
+        "kernel",
+    )?;
+    copy_inrou_guest_image_member(
+        &host_paths.rootfs,
+        bundle_root,
+        &image.rootfs_image_path,
+        "rootfs",
+    )?;
+    if let Some((source, destination)) = host_paths
+        .initrd
+        .as_ref()
+        .zip(image.initrd_image_path.as_deref())
+    {
+        copy_inrou_guest_image_member(source, bundle_root, destination, "initrd")?;
+    }
+    Ok(())
+}
+
+fn copy_inrou_guest_image_member(
+    source: &Path,
+    bundle_root: &Path,
+    declared_path: &str,
+    label: &str,
+) -> eyre::Result<()> {
+    let destination = bundle_root.join(strip_leading_slashes(declared_path));
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("create {}", parent.display()))?;
+    }
+    fs::copy(source, &destination).wrap_err_with(|| {
+        format!(
+            "copy Inrou {label} image {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn ensure_native_bundle_extracted(
@@ -20068,8 +20200,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_once_skips_uncommitted_sorafs_artifacts_and_keeps_service_hydrating() -> Result<()>
-    {
+    fn reconcile_once_hydrates_hash_matched_local_sorafs_artifacts_without_pin_registry()
+    -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
@@ -20116,20 +20248,33 @@ mod tests {
             .get("web_portal")
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("service plan");
-        assert!(!plan.bundle_available_locally);
-        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
+        assert!(plan.bundle_available_locally);
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
         assert!(
             plan.artifacts
                 .iter()
-                .all(|artifact| !artifact.available_locally)
+                .all(|artifact| artifact.available_locally)
         );
-        assert!(
-            !temp_dir
-                .path()
-                .join("artifacts")
-                .join(hash_cache_name(bundle.container.bundle_hash))
-                .exists()
+        assert_eq!(
+            fs::read(
+                temp_dir
+                    .path()
+                    .join("artifacts")
+                    .join(hash_cache_name(bundle.container.bundle_hash))
+            )?,
+            bundle_bytes
         );
+        for (artifact, payload) in bundle.service.artifacts.iter().zip(artifact_payloads) {
+            assert_eq!(
+                fs::read(
+                    temp_dir
+                        .path()
+                        .join("artifacts")
+                        .join(hash_cache_name(artifact.artifact_hash))
+                )?,
+                payload
+            );
+        }
         Ok(())
     }
 
