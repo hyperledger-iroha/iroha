@@ -91,8 +91,6 @@ impl Actor {
         );
         if let Some(record) = record_for_target_epoch.as_ref() {
             manager.restore_from_record(record);
-            let seed = super::prf_seed_for_height_from_world(&world, &chain_id, height);
-            manager.set_epoch_seed(seed);
         } else {
             let seed = super::prf_seed_for_height_from_world(&world, &chain_id, height);
             manager.set_epoch_seed(seed);

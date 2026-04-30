@@ -17073,7 +17073,6 @@ impl Actor {
             );
             if let Some(record) = record_for_target_epoch.as_ref() {
                 em.restore_from_record(record);
-                em.set_epoch_seed(epoch_seed_for_height);
             } else {
                 em.set_epoch_seed(epoch_seed_for_height);
                 em.set_epoch(target_epoch);
