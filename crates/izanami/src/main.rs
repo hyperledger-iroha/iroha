@@ -114,6 +114,12 @@ fn merge_with_overrides(
     if is_cli_source(matches, "submitters") {
         base.submitters = overrides.submitters;
     }
+    if is_cli_source(matches, "prebuild_tx_buffer") {
+        base.prebuild_tx_buffer = overrides.prebuild_tx_buffer;
+    }
+    if is_cli_source(matches, "prebuild_tx_workers") {
+        base.prebuild_tx_workers = overrides.prebuild_tx_workers;
+    }
     if is_cli_source(matches, "workload_profile") {
         base.workload_profile = overrides.workload_profile;
     }
@@ -158,6 +164,9 @@ fn merge_with_overrides(
     }
     if is_cli_source(matches, "nexus") {
         base.nexus = overrides.nexus;
+    }
+    if is_cli_source(matches, "diagnostic_dir") {
+        base.diagnostic_dir.clone_from(&overrides.diagnostic_dir);
     }
     base.tui = overrides.tui;
     base

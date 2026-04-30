@@ -13,6 +13,7 @@ use std::{
 };
 
 use base64::Engine as _;
+use bytes::Bytes;
 use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{Stream, StreamExt, stream};
@@ -2125,8 +2126,20 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         Value::from(wire.view_change_causes.quorum_timeout_total),
     );
     view_change_causes.insert(
+        "stake_quorum_timeout_total".into(),
+        Value::from(wire.view_change_causes.stake_quorum_timeout_total),
+    );
+    view_change_causes.insert(
+        "roster_unavailable_total".into(),
+        Value::from(wire.view_change_causes.roster_unavailable_total),
+    );
+    view_change_causes.insert(
         "da_gate_total".into(),
         Value::from(wire.view_change_causes.da_gate_total),
+    );
+    view_change_causes.insert(
+        "censorship_evidence_total".into(),
+        Value::from(wire.view_change_causes.censorship_evidence_total),
     );
     view_change_causes.insert(
         "missing_payload_total".into(),
@@ -2150,6 +2163,48 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     view_change_causes.insert(
         "last_cause_timestamp_ms".into(),
         Value::from(wire.view_change_causes.last_cause_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_commit_failure_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_commit_failure_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_quorum_timeout_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_quorum_timeout_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_stake_quorum_timeout_timestamp_ms".into(),
+        Value::from(
+            wire.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
+        ),
+    );
+    view_change_causes.insert(
+        "last_roster_unavailable_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_roster_unavailable_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_da_gate_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_da_gate_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_censorship_evidence_timestamp_ms".into(),
+        Value::from(
+            wire.view_change_causes
+                .last_censorship_evidence_timestamp_ms,
+        ),
+    );
+    view_change_causes.insert(
+        "last_missing_payload_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_missing_payload_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_missing_qc_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_missing_qc_timestamp_ms),
+    );
+    view_change_causes.insert(
+        "last_validation_reject_timestamp_ms".into(),
+        Value::from(wire.view_change_causes.last_validation_reject_timestamp_ms),
     );
 
     let mut validation_rejects = Map::new();
@@ -2945,6 +3000,54 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "da_reschedule_total".into(),
         Value::from(wire.da_reschedule_total),
+    );
+    root.insert(
+        "qc_deferred_missing_payload_total".into(),
+        Value::from(wire.qc_deferred_missing_payload_total),
+    );
+    root.insert(
+        "qc_deferred_resolved_total".into(),
+        Value::from(wire.qc_deferred_resolved_total),
+    );
+    root.insert(
+        "qc_deferred_expired_total".into(),
+        Value::from(wire.qc_deferred_expired_total),
+    );
+    root.insert(
+        "consensus_missing_qc_reacquire_attempt_total".into(),
+        Value::from(wire.consensus_missing_qc_reacquire_attempt_total),
+    );
+    root.insert(
+        "consensus_missing_qc_reacquire_success_total".into(),
+        Value::from(wire.consensus_missing_qc_reacquire_success_total),
+    );
+    root.insert(
+        "consensus_missing_qc_reacquire_exhausted_total".into(),
+        Value::from(wire.consensus_missing_qc_reacquire_exhausted_total),
+    );
+    root.insert(
+        "consensus_forced_proposal_attempt_total".into(),
+        Value::from(wire.consensus_forced_proposal_attempt_total),
+    );
+    root.insert(
+        "consensus_forced_proposal_success_total".into(),
+        Value::from(wire.consensus_forced_proposal_success_total),
+    );
+    root.insert(
+        "blocksync_range_pull_escalation_total".into(),
+        Value::from(wire.blocksync_range_pull_escalation_total),
+    );
+    root.insert(
+        "blocksync_range_pull_success_total".into(),
+        Value::from(wire.blocksync_range_pull_success_total),
+    );
+    root.insert(
+        "blocksync_range_pull_failure_total".into(),
+        Value::from(wire.blocksync_range_pull_failure_total),
+    );
+    root.insert(
+        "blocksync_range_pull_candidate_exhausted_total".into(),
+        Value::from(wire.blocksync_range_pull_candidate_exhausted_total),
     );
     root.insert("rbc_store".into(), Value::Object(rbc_store));
     root.insert("rbc_mismatch".into(), Value::Object(rbc_mismatch));
@@ -6245,6 +6348,29 @@ pub struct Client {
     pub data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
 }
 
+/// A signed transaction prepared for repeated or high-throughput submission.
+///
+/// The payload stores the canonical versioned `SignedTransaction` bytes together
+/// with the matching signed transaction hash, so submitters can avoid re-encoding
+/// and re-hashing while preserving the normal Torii transaction endpoint.
+#[derive(Clone, Debug)]
+pub struct PreparedTransactionPayload {
+    bytes: Bytes,
+    hash: HashOf<SignedTransaction>,
+}
+
+impl PreparedTransactionPayload {
+    /// Return the signed transaction hash associated with this payload.
+    pub fn hash(&self) -> HashOf<SignedTransaction> {
+        self.hash.clone()
+    }
+
+    /// Return the canonical versioned `SignedTransaction` bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
+}
+
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
@@ -6679,6 +6805,17 @@ impl Client {
             .sign(self.key_pair.private_key())
     }
 
+    /// Encode and hash a signed transaction once for later submission.
+    pub fn prepare_transaction_payload(
+        &self,
+        transaction: &SignedTransaction,
+    ) -> PreparedTransactionPayload {
+        PreparedTransactionPayload {
+            bytes: Bytes::from(transaction.encode_versioned()),
+            hash: transaction.hash(),
+        }
+    }
+
     /// Signs transaction
     ///
     /// # Errors
@@ -6916,8 +7053,30 @@ impl Client {
     ) -> Result<HashOf<SignedTransaction>> {
         self.ensure_transaction_submit_compatibility()?;
         iroha_logger::trace!(tx=?transaction, "Submitting");
-        let (req, hash) = self.prepare_transaction_request::<DefaultRequestBuilder>(transaction);
+        let payload = self.prepare_transaction_payload(transaction);
+        let hash = payload.hash();
+        let req = self.prepare_transaction_payload_request::<DefaultRequestBuilder>(&payload);
         let response = req
+            .build()?
+            .send()
+            .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
+        TransactionResponseHandler::handle(&response)?;
+        Ok(hash)
+    }
+
+    /// Submit an already encoded transaction payload.
+    ///
+    /// # Errors
+    /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
+    /// response, or if the submit compatibility advert is missing or incompatible.
+    pub fn submit_prepared_transaction_payload(
+        &self,
+        payload: &PreparedTransactionPayload,
+    ) -> Result<HashOf<SignedTransaction>> {
+        self.ensure_transaction_submit_compatibility()?;
+        let hash = payload.hash();
+        let response = self
+            .prepare_transaction_payload_request::<DefaultRequestBuilder>(payload)
             .build()?
             .send()
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
@@ -6936,24 +7095,36 @@ impl Client {
         &self,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
-        self.ensure_transaction_submit_compatibility()?;
-        iroha_logger::trace!(tx=?transaction, "Submitting");
+        let payload = self.prepare_transaction_payload(transaction);
+        self.submit_prepared_transaction_payload_async(&payload)
+            .await
+    }
 
-        let transaction_bytes: Vec<u8> = transaction.encode_versioned();
-        let hash = transaction.hash();
-        let mut headers = self.headers.clone();
-        headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+    /// Submit an already encoded transaction payload with the asynchronous HTTP transport.
+    ///
+    /// Returns the submitted transaction's hash once Torii accepts the request.
+    ///
+    /// # Errors
+    /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
+    /// response, or if the submit compatibility advert is missing or incompatible.
+    pub async fn submit_prepared_transaction_payload_async(
+        &self,
+        payload: &PreparedTransactionPayload,
+    ) -> Result<HashOf<SignedTransaction>> {
+        self.ensure_transaction_submit_compatibility()?;
+        let hash = payload.hash();
+        iroha_logger::trace!(%hash, "Submitting prepared transaction payload");
 
         let mut request = async_http_client()
             .post(join_torii_url(&self.torii_url, torii_uri::TRANSACTION))
             .timeout(self.torii_request_timeout)
             .header("Content-Type", APPLICATION_NORITO);
-        for (name, value) in headers {
+        for (name, value) in self.transaction_headers_without_content_type() {
             request = request.header(name, value);
         }
 
         let response = request
-            .body(transaction_bytes)
+            .body(payload.bytes.clone())
             .send()
             .await
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
@@ -7576,33 +7747,25 @@ impl Client {
         Ok(outcome)
     }
 
-    /// Lower-level Instructions API entry point.
-    ///
-    /// Returns a tuple with a provided request builder, a hash of the transaction, and a response handler.
-    /// Despite the fact that response handling can be implemented just by asserting that status code is 200,
-    /// it is better to use a response handler anyway. It allows to abstract from implementation details.
-    ///
-    /// For general usage example see [`Client::prepare_query_request`].
-    fn prepare_transaction_request<B: RequestBuilder>(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> (B, HashOf<SignedTransaction>) {
-        // Public Torii ingress accepts a versioned SignedTransaction; internal
-        // TransactionEntrypoint wrapping happens on the server boundary.
-        let transaction_bytes: Vec<u8> = transaction.encode_versioned();
+    fn transaction_headers_without_content_type(&self) -> HashMap<String, String> {
         let mut headers = self.headers.clone();
         headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+        headers
+    }
 
-        (
-            B::new(
-                HttpMethod::POST,
-                join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
-            )
-            .headers(headers)
-            .header("Content-Type", APPLICATION_NORITO)
-            .body(transaction_bytes),
-            transaction.hash(),
+    fn prepare_transaction_payload_request<B: RequestBuilder>(
+        &self,
+        payload: &PreparedTransactionPayload,
+    ) -> B {
+        // Public Torii ingress accepts a versioned SignedTransaction; internal
+        // TransactionEntrypoint wrapping happens on the server boundary.
+        B::new(
+            HttpMethod::POST,
+            join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
         )
+        .headers(self.transaction_headers_without_content_type())
+        .header("Content-Type", APPLICATION_NORITO)
+        .body(payload.as_bytes().to_vec())
     }
 
     /// Submits and waits until the transaction is either rejected or committed.
@@ -13928,7 +14091,28 @@ mod tests {
             view_change_proof_rejected_total: 7,
             view_change_suggest_total: 8,
             view_change_install_total: 9,
-            view_change_causes: SumeragiViewChangeCauseStatus::default(),
+            view_change_causes: SumeragiViewChangeCauseStatus {
+                commit_failure_total: 1,
+                quorum_timeout_total: 2,
+                stake_quorum_timeout_total: 3,
+                roster_unavailable_total: 4,
+                da_gate_total: 5,
+                censorship_evidence_total: 6,
+                missing_payload_total: 7,
+                missing_qc_total: 8,
+                validation_reject_total: 9,
+                last_cause: Some("missing_qc".to_owned()),
+                last_cause_timestamp_ms: 10,
+                last_commit_failure_timestamp_ms: 11,
+                last_quorum_timeout_timestamp_ms: 12,
+                last_stake_quorum_timeout_timestamp_ms: 13,
+                last_roster_unavailable_timestamp_ms: 14,
+                last_da_gate_timestamp_ms: 15,
+                last_censorship_evidence_timestamp_ms: 16,
+                last_missing_payload_timestamp_ms: 17,
+                last_missing_qc_timestamp_ms: 18,
+                last_validation_reject_timestamp_ms: 19,
+            },
             gossip_fallback_total: 3,
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 2,
@@ -13964,6 +14148,18 @@ mod tests {
                 last_targets: 0,
                 last_dwell_ms: 0,
             },
+            qc_deferred_missing_payload_total: 0,
+            qc_deferred_resolved_total: 0,
+            qc_deferred_expired_total: 0,
+            consensus_missing_qc_reacquire_attempt_total: 0,
+            consensus_missing_qc_reacquire_success_total: 0,
+            consensus_missing_qc_reacquire_exhausted_total: 0,
+            consensus_forced_proposal_attempt_total: 0,
+            consensus_forced_proposal_success_total: 0,
+            blocksync_range_pull_escalation_total: 0,
+            blocksync_range_pull_success_total: 0,
+            blocksync_range_pull_failure_total: 0,
+            blocksync_range_pull_candidate_exhausted_total: 0,
             committed_edge_conflict_obsolete_total: 0,
             roster_sidecar_mismatch_obsolete_total: 0,
             da_gate: SumeragiDaGateStatus {
@@ -15989,6 +16185,67 @@ mod tests {
     }
 
     #[test]
+    fn prepared_transaction_payload_preserves_hash_and_versioned_bytes() {
+        let client = client_with_base_url(base_url());
+        let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+        let prepared = client.prepare_transaction_payload(&tx);
+
+        assert_eq!(prepared.hash(), tx.hash());
+        SignedTransaction::decode_all_versioned(prepared.as_bytes())
+            .expect("prepared payload must be a versioned SignedTransaction");
+        assert!(
+            TransactionEntrypoint::decode_all_versioned(prepared.as_bytes()).is_err(),
+            "prepared payload must not use internal TransactionEntrypoint envelopes"
+        );
+    }
+
+    #[test]
+    fn submit_prepared_transaction_payload_reuses_encoded_body() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let capabilities_body = compatible_capabilities_body();
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("snapshot lock").push(snapshot);
+                let response = if path == "/v1/node/capabilities" {
+                    json_response(StatusCode::OK, &capabilities_body)
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .body(Vec::new())
+                        .expect("response build")
+                };
+                Ok(response)
+            }
+        };
+
+        let expected_hash = with_mock_http(responder, || {
+            let mut client = client_with_base_url(base_url());
+            client
+                .headers
+                .insert("Content-Type".to_string(), "text/plain".to_string());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            let prepared = client.prepare_transaction_payload(&tx);
+            let hash = client
+                .submit_prepared_transaction_payload(&prepared)
+                .expect("prepared transaction submission succeeds");
+            assert_eq!(hash, prepared.hash());
+            hash
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        let snapshot = store_guard
+            .iter()
+            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .cloned()
+            .expect("transaction snapshot captured");
+        let submitted = SignedTransaction::decode_all_versioned(&snapshot.body)
+            .expect("transaction request body must be a versioned SignedTransaction");
+        assert_eq!(submitted.hash(), expected_hash);
+    }
+
+    #[test]
     fn submit_transaction_rejects_mismatched_data_model_version() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mismatched = DATA_MODEL_VERSION + 1;
@@ -16859,7 +17116,28 @@ mod tests {
             view_change_proof_rejected_total: 0,
             view_change_suggest_total: 0,
             view_change_install_total: 0,
-            view_change_causes: SumeragiViewChangeCauseStatus::default(),
+            view_change_causes: SumeragiViewChangeCauseStatus {
+                commit_failure_total: 1,
+                quorum_timeout_total: 2,
+                stake_quorum_timeout_total: 3,
+                roster_unavailable_total: 4,
+                da_gate_total: 5,
+                censorship_evidence_total: 6,
+                missing_payload_total: 7,
+                missing_qc_total: 8,
+                validation_reject_total: 9,
+                last_cause: Some("missing_qc".to_owned()),
+                last_cause_timestamp_ms: 10,
+                last_commit_failure_timestamp_ms: 11,
+                last_quorum_timeout_timestamp_ms: 12,
+                last_stake_quorum_timeout_timestamp_ms: 13,
+                last_roster_unavailable_timestamp_ms: 14,
+                last_da_gate_timestamp_ms: 15,
+                last_censorship_evidence_timestamp_ms: 16,
+                last_missing_payload_timestamp_ms: 17,
+                last_missing_qc_timestamp_ms: 18,
+                last_validation_reject_timestamp_ms: 19,
+            },
             gossip_fallback_total: 0,
             block_created_dropped_by_lock_total: 0,
             block_created_hint_mismatch_total: 0,
@@ -16879,6 +17157,18 @@ mod tests {
                 last_targets: 0,
                 last_dwell_ms: 0,
             },
+            qc_deferred_missing_payload_total: 0,
+            qc_deferred_resolved_total: 0,
+            qc_deferred_expired_total: 0,
+            consensus_missing_qc_reacquire_attempt_total: 0,
+            consensus_missing_qc_reacquire_success_total: 0,
+            consensus_missing_qc_reacquire_exhausted_total: 0,
+            consensus_forced_proposal_attempt_total: 0,
+            consensus_forced_proposal_success_total: 0,
+            blocksync_range_pull_escalation_total: 0,
+            blocksync_range_pull_success_total: 0,
+            blocksync_range_pull_failure_total: 0,
+            blocksync_range_pull_candidate_exhausted_total: 0,
             committed_edge_conflict_obsolete_total: 0,
             roster_sidecar_mismatch_obsolete_total: 0,
             da_gate: SumeragiDaGateStatus {
@@ -17244,7 +17534,28 @@ mod tests {
             view_change_proof_rejected_total: 7,
             view_change_suggest_total: 8,
             view_change_install_total: 9,
-            view_change_causes: SumeragiViewChangeCauseStatus::default(),
+            view_change_causes: SumeragiViewChangeCauseStatus {
+                commit_failure_total: 1,
+                quorum_timeout_total: 2,
+                stake_quorum_timeout_total: 3,
+                roster_unavailable_total: 4,
+                da_gate_total: 5,
+                censorship_evidence_total: 6,
+                missing_payload_total: 7,
+                missing_qc_total: 8,
+                validation_reject_total: 9,
+                last_cause: Some("missing_qc".to_owned()),
+                last_cause_timestamp_ms: 10,
+                last_commit_failure_timestamp_ms: 11,
+                last_quorum_timeout_timestamp_ms: 12,
+                last_stake_quorum_timeout_timestamp_ms: 13,
+                last_roster_unavailable_timestamp_ms: 14,
+                last_da_gate_timestamp_ms: 15,
+                last_censorship_evidence_timestamp_ms: 16,
+                last_missing_payload_timestamp_ms: 17,
+                last_missing_qc_timestamp_ms: 18,
+                last_validation_reject_timestamp_ms: 19,
+            },
             gossip_fallback_total: 3,
             block_created_dropped_by_lock_total: 1,
             block_created_hint_mismatch_total: 2,
@@ -17274,6 +17585,18 @@ mod tests {
                 last_targets: 0,
                 last_dwell_ms: 0,
             },
+            qc_deferred_missing_payload_total: 20,
+            qc_deferred_resolved_total: 21,
+            qc_deferred_expired_total: 22,
+            consensus_missing_qc_reacquire_attempt_total: 23,
+            consensus_missing_qc_reacquire_success_total: 24,
+            consensus_missing_qc_reacquire_exhausted_total: 25,
+            consensus_forced_proposal_attempt_total: 26,
+            consensus_forced_proposal_success_total: 27,
+            blocksync_range_pull_escalation_total: 28,
+            blocksync_range_pull_success_total: 29,
+            blocksync_range_pull_failure_total: 30,
+            blocksync_range_pull_candidate_exhausted_total: 31,
             committed_edge_conflict_obsolete_total: 0,
             roster_sidecar_mismatch_obsolete_total: 0,
             da_gate: SumeragiDaGateStatus {
@@ -17409,6 +17732,18 @@ mod tests {
             ("block_created_proposal_mismatch_total", 0),
             ("pacemaker_backpressure_deferrals_total", 6),
             ("commit_pipeline_tick_total", 0),
+            ("qc_deferred_missing_payload_total", 20),
+            ("qc_deferred_resolved_total", 21),
+            ("qc_deferred_expired_total", 22),
+            ("consensus_missing_qc_reacquire_attempt_total", 23),
+            ("consensus_missing_qc_reacquire_success_total", 24),
+            ("consensus_missing_qc_reacquire_exhausted_total", 25),
+            ("consensus_forced_proposal_attempt_total", 26),
+            ("consensus_forced_proposal_success_total", 27),
+            ("blocksync_range_pull_escalation_total", 28),
+            ("blocksync_range_pull_success_total", 29),
+            ("blocksync_range_pull_failure_total", 30),
+            ("blocksync_range_pull_candidate_exhausted_total", 31),
         ] {
             assert_eq!(
                 root.get(key).and_then(Value::as_u64),
@@ -17416,6 +17751,41 @@ mod tests {
                 "{key} mismatch"
             );
         }
+        let view_change_causes = root
+            .get("view_change_causes")
+            .and_then(Value::as_object)
+            .expect("view_change_causes object");
+        for (key, expected) in [
+            ("commit_failure_total", 1),
+            ("quorum_timeout_total", 2),
+            ("stake_quorum_timeout_total", 3),
+            ("roster_unavailable_total", 4),
+            ("da_gate_total", 5),
+            ("censorship_evidence_total", 6),
+            ("missing_payload_total", 7),
+            ("missing_qc_total", 8),
+            ("validation_reject_total", 9),
+            ("last_cause_timestamp_ms", 10),
+            ("last_commit_failure_timestamp_ms", 11),
+            ("last_quorum_timeout_timestamp_ms", 12),
+            ("last_stake_quorum_timeout_timestamp_ms", 13),
+            ("last_roster_unavailable_timestamp_ms", 14),
+            ("last_da_gate_timestamp_ms", 15),
+            ("last_censorship_evidence_timestamp_ms", 16),
+            ("last_missing_payload_timestamp_ms", 17),
+            ("last_missing_qc_timestamp_ms", 18),
+            ("last_validation_reject_timestamp_ms", 19),
+        ] {
+            assert_eq!(
+                view_change_causes.get(key).and_then(Value::as_u64),
+                Some(expected),
+                "{key} mismatch"
+            );
+        }
+        assert_eq!(
+            view_change_causes.get("last_cause").and_then(Value::as_str),
+            Some("missing_qc")
+        );
         let npos_timeouts = root
             .get("effective_npos_timeouts")
             .and_then(Value::as_object)

@@ -85,7 +85,10 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert evidence.exists()
     assert "Mode: `stress-1200`" in report.read_text()
     assert "throughput_evidence" in evidence.read_text().splitlines()[0]
+    assert "stress_labels" in evidence.read_text().splitlines()[0]
+    assert "dominant_view_change_cause" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
+    assert (out_dir / "root-cause.md").exists()
 
     report.unlink()
     (out_dir / "summary.md").unlink()
@@ -110,10 +113,11 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "Iroha (Sumeragi permissioned)" in report.read_text()
     assert "targeted-load" in summary.read_text()
     assert "throughput_evidence" in evidence.read_text().splitlines()[0]
+    assert "stress_labels" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
 
 
-def test_stress_matrix_marks_throughput_under_delivery(tmp_path: Path) -> None:
+def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Path) -> None:
     out_dir = tmp_path / "matrix"
     fake_izanami = tmp_path / "fake_izanami.sh"
     fake_izanami.write_text(
@@ -122,8 +126,17 @@ def test_stress_matrix_marks_throughput_under_delivery(tmp_path: Path) -> None:
         "offered=83399 ingress_accepted=83399 submit_plans_started=83399 "
         "submit_latency_p50_ms=411 submit_latency_p95_ms=1882 "
         "submit_latency_p99_ms=3744 submit_latency_max_ms=10987 "
-        "final_quorum_min_height=Some(2) final_strict_min_height=Some(2) "
-        "final_max_peer_height_skew=Some(0)'\n"
+        "final_quorum_min_height=Some(1) final_strict_min_height=Some(1) "
+        "final_max_peer_height_skew=Some(0) "
+        "sumeragi_status_delta=Some(SumeragiStatusDigest { "
+        "view_change_install_total: 5, view_change_cause_total: 5, "
+        "view_change_missing_qc_total: 0, view_change_quorum_timeout_total: 5, "
+        "view_change_last_cause: Some(\"quorum_timeout\"), "
+        "missing_block_fetch_total: 3, missing_block_fetch_last_targets: 5, "
+        "missing_block_fetch_last_dwell_ms: 1200, tx_queue_depth: 4096, "
+        "tx_queue_capacity: 4096, tx_queue_saturated: true, "
+        "pacemaker_backpressure_deferrals_total: 7, "
+        "worker_loop_stage: \"idle\" })'\n"
     )
     fake_izanami.chmod(0o755)
 
@@ -148,13 +161,20 @@ def test_stress_matrix_marks_throughput_under_delivery(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     summary_rows = (out_dir / "summary.tsv").read_text().splitlines()
-    assert summary_rows[1].split("\t")[3:5] == ["throughput-underdelivered", "degraded"]
+    assert summary_rows[1].split("\t")[3:5] == [
+        "driver-saturated,consensus-stalled,overload-admission",
+        "degraded",
+    ]
     evidence = (out_dir / "evidence.tsv").read_text()
-    assert "status=under-delivered" in evidence
+    assert "status=driver-saturated" in evidence
+    assert "driver-saturated,consensus-stalled,overload-admission" in evidence
+    assert "\tquorum_timeout\t" in evidence
+    assert "offered_ratio=" in evidence
     assert "accepted_tps=104.25" in evidence
     log = (out_dir / "permissioned-targeted-load.log").read_text()
     assert "--tps 20000" in log
     assert "--max-inflight 20000" in log
+    assert "--diagnostic-dir" in log
 
 
 def test_sweep_aggregates_profile_and_seed(tmp_path: Path) -> None:

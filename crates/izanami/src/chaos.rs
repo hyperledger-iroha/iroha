@@ -3,7 +3,10 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
+    fs,
     future::Future,
+    io::Write,
+    path::Path,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -16,8 +19,8 @@ use color_eyre::{
     eyre::{WrapErr, eyre},
 };
 use iroha::client::{
-    Client, DataModelCompatibility, TransactionWaitOptions, TransactionWaitOutcome,
-    TransactionWaitTerminalStatus,
+    Client, DataModelCompatibility, PreparedTransactionPayload, TransactionWaitOptions,
+    TransactionWaitOutcome, TransactionWaitTerminalStatus,
 };
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
@@ -39,7 +42,7 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
-    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc},
+    sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time,
 };
@@ -1723,6 +1726,7 @@ fn classify_ingress_failure(error: &color_eyre::Report) -> IngressFailureClass {
         || message.contains("connection refused")
         || message.contains("connection reset")
         || message.contains("connection closed before message completed")
+        || message.contains("can't assign requested address")
         || message.contains("broken pipe")
         || contains_http_5xx_status(&message)
     {
@@ -3700,6 +3704,24 @@ impl IzanamiRunner {
         if run_error.is_none() {
             self.network.shutdown().await;
         }
+        if let Some(diagnostic_dir) = &self.config.diagnostic_dir {
+            if let Err(err) =
+                copy_network_diagnostics(&self.network, &self.peers, diagnostic_dir.as_path())
+            {
+                warn!(
+                    target: "izanami::diagnostics",
+                    diagnostic_dir = %diagnostic_dir.display(),
+                    ?err,
+                    "failed to copy test-network diagnostic artifacts"
+                );
+            } else {
+                info!(
+                    target: "izanami::diagnostics",
+                    diagnostic_dir = %diagnostic_dir.display(),
+                    "copied test-network diagnostic artifacts"
+                );
+            }
+        }
 
         let snapshot = metrics.snapshot();
         let ingress_snapshot = ingress_stats.snapshot();
@@ -3726,6 +3748,13 @@ impl IzanamiRunner {
                 submit_latency_p95_ms = snapshot.submit_latency_p95_ms,
                 submit_latency_p99_ms = snapshot.submit_latency_p99_ms,
                 submit_latency_max_ms = snapshot.submit_latency_max_ms,
+                prebuilt_tx_buffer_capacity = snapshot.prebuilt_tx_buffer_capacity,
+                prebuilt_tx_workers = snapshot.prebuilt_tx_workers,
+                prebuilt_tx_built = snapshot.prebuilt_tx_built,
+                prebuilt_tx_used = snapshot.prebuilt_tx_used,
+                prebuilt_tx_fallback = snapshot.prebuilt_tx_fallback,
+                prebuilt_tx_skipped = snapshot.prebuilt_tx_skipped,
+                prebuilt_tx_build_failures = snapshot.prebuilt_tx_build_failures,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
@@ -3770,6 +3799,13 @@ impl IzanamiRunner {
                 submit_latency_p95_ms = snapshot.submit_latency_p95_ms,
                 submit_latency_p99_ms = snapshot.submit_latency_p99_ms,
                 submit_latency_max_ms = snapshot.submit_latency_max_ms,
+                prebuilt_tx_buffer_capacity = snapshot.prebuilt_tx_buffer_capacity,
+                prebuilt_tx_workers = snapshot.prebuilt_tx_workers,
+                prebuilt_tx_built = snapshot.prebuilt_tx_built,
+                prebuilt_tx_used = snapshot.prebuilt_tx_used,
+                prebuilt_tx_fallback = snapshot.prebuilt_tx_fallback,
+                prebuilt_tx_skipped = snapshot.prebuilt_tx_skipped,
+                prebuilt_tx_build_failures = snapshot.prebuilt_tx_build_failures,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
@@ -4021,6 +4057,134 @@ impl IzanamiRunner {
         })]
     }
 
+    fn spawn_prebuilt_transaction_workers(
+        &self,
+        metrics: &Arc<Metrics>,
+        ingress_pool: &Arc<IngressEndpointPool>,
+        run_control: &Arc<RunControl>,
+        rng: &mut StdRng,
+        submission_counter: &Arc<AtomicU64>,
+        submission_confirmation: SubmissionConfirmationMode,
+    ) -> (Option<PrebuiltTransactionPool>, Vec<JoinHandle<()>>) {
+        let buffer_capacity = self.config.prebuild_tx_buffer;
+        if buffer_capacity == 0 {
+            return (None, Vec::new());
+        }
+        if !matches!(
+            submission_confirmation,
+            SubmissionConfirmationMode::AcceptedByIngress
+        ) {
+            warn!(
+                target: "izanami::prebuild",
+                buffer_capacity,
+                "prebuilt transaction buffer is enabled but the workload requires blocking confirmation; disabling prebuild"
+            );
+            return (None, Vec::new());
+        }
+
+        let worker_count = effective_prebuild_tx_workers(&self.config);
+        if worker_count == 0 || ingress_pool.endpoint_count() == 0 {
+            warn!(
+                target: "izanami::prebuild",
+                worker_count,
+                endpoints = ingress_pool.endpoint_count(),
+                "prebuilt transaction buffer could not start"
+            );
+            return (None, Vec::new());
+        }
+
+        metrics.configure_prebuilt_tx_buffer(buffer_capacity, worker_count);
+        let (tx, rx) = mpsc::channel(buffer_capacity);
+        let pool = PrebuiltTransactionPool {
+            receiver: Arc::new(TokioMutex::new(rx)),
+        };
+        info!(
+            target: "izanami::prebuild",
+            buffer_capacity,
+            worker_count,
+            "prebuilt transaction buffer enabled"
+        );
+
+        let mut handles = Vec::with_capacity(worker_count);
+        for worker_idx in 0..worker_count {
+            let mut prebuild_rng = StdRng::seed_from_u64(rng.next_u64());
+            let tx = tx.clone();
+            let workload = Arc::clone(&self.workload);
+            let ingress_pool = Arc::clone(ingress_pool);
+            let run_control = Arc::clone(run_control);
+            let stop_notify = run_control.stop_notifier();
+            let deadline = run_control.deadline();
+            let metrics = Arc::clone(metrics);
+            let submission_counter = Arc::clone(submission_counter);
+            let endpoint_idx = worker_idx % ingress_pool.endpoint_count();
+            handles.push(tokio::spawn(async move {
+                loop {
+                    if run_control.should_stop() || Instant::now() >= deadline {
+                        break;
+                    }
+                    let plan = match workload.next_plan(&mut prebuild_rng).await {
+                        Ok(plan) => plan,
+                        Err(err) => {
+                            metrics.record_prebuilt_tx_build_failure();
+                            warn!(
+                                target: "izanami::prebuild",
+                                ?err,
+                                worker_idx,
+                                "failed to build prebuilt transaction plan"
+                            );
+                            continue;
+                        }
+                    };
+                    if !plan_is_prebuild_safe(&plan, submission_confirmation) {
+                        metrics.record_prebuilt_tx_skipped();
+                        continue;
+                    }
+                    let client = match ingress_pool.cached_submit_client_for(
+                        endpoint_idx,
+                        &plan.signer,
+                        SubmissionConfirmationMode::AcceptedByIngress,
+                    ) {
+                        Ok(client) => client,
+                        Err(err) => {
+                            metrics.record_prebuilt_tx_build_failure();
+                            warn!(
+                                target: "izanami::prebuild",
+                                ?err,
+                                worker_idx,
+                                endpoint_idx,
+                                "failed to resolve client for prebuilt transaction"
+                            );
+                            continue;
+                        }
+                    };
+                    let metadata = submission_metadata(submission_counter.as_ref());
+                    let transaction =
+                        client.build_transaction_from_items(plan.instructions.clone(), metadata);
+                    let payload = client.prepare_transaction_payload(&transaction);
+                    let prepared = PreparedTransactionSubmission { plan, payload };
+                    tokio::select! {
+                        send_result = tx.send(prepared) => {
+                            if send_result.is_err() {
+                                break;
+                            }
+                            metrics.record_prebuilt_tx_built();
+                            tokio::task::yield_now().await;
+                        },
+                        () = stop_notify.notified() => break,
+                        () = time::sleep_until(deadline.into()) => break,
+                    }
+                }
+                debug!(
+                    target: "izanami::prebuild",
+                    worker_idx,
+                    "prebuilt transaction worker stopped"
+                );
+            }));
+        }
+        drop(tx);
+        (Some(pool), handles)
+    }
+
     fn spawn_load_supervisors(
         &self,
         metrics: &Arc<Metrics>,
@@ -4034,6 +4198,14 @@ impl IzanamiRunner {
     ) -> Vec<JoinHandle<()>> {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
+        let (prebuilt_pool, mut handles) = self.spawn_prebuilt_transaction_workers(
+            metrics,
+            ingress_pool,
+            run_control,
+            rng,
+            submission_counter,
+            submission_confirmation,
+        );
         let submission_max_inflight = effective_submission_max_inflight(&self.config);
         let submission_tps = effective_submission_tps(&self.config);
         if submission_max_inflight != self.config.max_inflight
@@ -4055,8 +4227,7 @@ impl IzanamiRunner {
         let per_submitter_interval =
             Duration::from_secs_f64(self.config.submitters as f64 / submission_tps);
         let shutdown_drain_timeout = self.config.shutdown_drain_timeout;
-        (0..self.config.submitters)
-            .map(|submitter_idx| {
+        handles.extend((0..self.config.submitters).map(|submitter_idx| {
                 let mut load_rng = StdRng::seed_from_u64(rng.next_u64());
                 let phase_delay =
                     Duration::from_secs_f64(submitter_idx as f64 / submission_tps);
@@ -4067,6 +4238,7 @@ impl IzanamiRunner {
                 let deadline = run_control.deadline();
                 let submission_counter = Arc::clone(submission_counter);
                 let workload = Arc::clone(&workload);
+                let prebuilt_pool = prebuilt_pool.clone();
                 let semaphore = Arc::clone(&semaphore);
                 let confirmation_audit_tx = confirmation_audit_tx.clone();
                 let confirmation_audit_wait_options = confirmation_audit_wait_options.clone();
@@ -4172,6 +4344,65 @@ impl IzanamiRunner {
                             }
                             continue;
                         }
+                        if let Some(prebuilt) =
+                            prebuilt_pool.as_ref().and_then(PrebuiltTransactionPool::try_pop)
+                        {
+                            metrics.record_prebuilt_tx_used();
+                            let effective_submission_confirmation = effective_submission_confirmation(
+                                submission_confirmation,
+                                &prebuilt.plan.state_updates,
+                            );
+                            if !submission_has_deadline_budget(
+                                Instant::now(),
+                                deadline,
+                                effective_submission_confirmation,
+                            ) {
+                                record_submit_plan_shutdown_skip_once(
+                                    &metrics,
+                                    &mut shutdown_skip_recorded,
+                                );
+                                debug!(
+                                    target: "izanami::workload",
+                                    submitter_idx,
+                                    plan = prebuilt.plan.label,
+                                    "dropping late prebuilt workload plan because it requires more confirmation budget than remains"
+                                );
+                                wait_until_deadline_or_stop(stop_notify.as_ref(), deadline).await;
+                                break;
+                            }
+                            metrics.record_submit_plan_started();
+                            metrics.record_backlog_spawn();
+                            let metrics = Arc::clone(&metrics);
+                            let ingress_pool = Arc::clone(&ingress_pool);
+                            let workload = Arc::clone(&workload);
+                            let semaphore = Arc::clone(&semaphore);
+                            let confirmation_audit_tx = confirmation_audit_tx.clone();
+                            let run_control = Arc::clone(&run_control);
+                            let confirmation_audit_wait_options =
+                                confirmation_audit_wait_options.clone();
+                            submissions.spawn(async move {
+                                let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics));
+                                submit_prebuilt_plan(
+                                    &ingress_pool,
+                                    prebuilt,
+                                    submission_confirmation,
+                                    semaphore,
+                                    &metrics,
+                                    &workload,
+                                    submitter_idx,
+                                    confirmation_audit_tx,
+                                    confirmation_audit_seed,
+                                    &run_control,
+                                    &confirmation_audit_wait_options,
+                                )
+                                .await;
+                            });
+                            continue;
+                        }
+                        if prebuilt_pool.is_some() {
+                            metrics.record_prebuilt_tx_fallback();
+                        }
+
                         let plan = match workload.next_plan(&mut load_rng).await {
                             Ok(plan) => plan,
                             Err(err) => {
@@ -4245,8 +4476,8 @@ impl IzanamiRunner {
                         );
                     }
                 })
-            })
-            .collect()
+            }));
+        handles
     }
 
     fn spawn_confirmation_audit_worker(
@@ -4383,6 +4614,31 @@ fn submission_backlog_limit(max_inflight: usize) -> usize {
     max_inflight
         .max(1)
         .saturating_mul(IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER)
+}
+
+fn effective_prebuild_tx_workers(config: &ChaosConfig) -> usize {
+    if config.prebuild_tx_buffer == 0 {
+        return 0;
+    }
+    if config.prebuild_tx_workers > 0 {
+        return config.prebuild_tx_workers;
+    }
+    let host_parallelism = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    host_parallelism.min(config.submitters.max(1)).max(1)
+}
+
+fn plan_is_prebuild_safe(
+    plan: &TransactionPlan,
+    submission_confirmation: SubmissionConfirmationMode,
+) -> bool {
+    plan.expect_success
+        && matches!(
+            effective_submission_confirmation(submission_confirmation, &plan.state_updates),
+            SubmissionConfirmationMode::AcceptedByIngress
+        )
+        && plan.state_updates.is_empty()
 }
 
 const fn should_run_trigger_precheck(submission_confirmation: SubmissionConfirmationMode) -> bool {
@@ -4687,13 +4943,49 @@ async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSn
     .map_err(|err| format!("phase sampling task failed: {err}"))?
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SumeragiStatusDigest {
     view_change_install_total: u64,
     view_change_cause_total: u64,
+    view_change_commit_failure_total: u64,
+    view_change_quorum_timeout_total: u64,
+    view_change_stake_quorum_timeout_total: u64,
+    view_change_roster_unavailable_total: u64,
+    view_change_da_gate_total: u64,
+    view_change_censorship_evidence_total: u64,
+    view_change_missing_payload_total: u64,
+    view_change_missing_qc_total: u64,
+    view_change_validation_reject_total: u64,
+    view_change_last_cause: Option<String>,
     commit_pipeline_last_total_ms: u64,
     commit_pipeline_ema_total_ms: u64,
     missing_block_fetch_total: u64,
+    missing_block_fetch_last_targets: u64,
+    missing_block_fetch_last_dwell_ms: u64,
+    tx_queue_depth: u64,
+    tx_queue_capacity: u64,
+    tx_queue_saturated: bool,
+    pacemaker_backpressure_deferrals_total: u64,
+    commit_inflight_active: bool,
+    commit_inflight_height: u64,
+    commit_inflight_view: u64,
+    commit_inflight_elapsed_ms: u64,
+    commit_inflight_timeout_total: u64,
+    worker_loop_stage: String,
+    worker_loop_last_iteration_ms: u64,
+    worker_loop_queue_depth_total: u64,
+    qc_deferred_missing_payload_total: u64,
+    qc_deferred_resolved_total: u64,
+    qc_deferred_expired_total: u64,
+    consensus_missing_qc_reacquire_attempt_total: u64,
+    consensus_missing_qc_reacquire_success_total: u64,
+    consensus_missing_qc_reacquire_exhausted_total: u64,
+    consensus_forced_proposal_attempt_total: u64,
+    consensus_forced_proposal_success_total: u64,
+    blocksync_range_pull_escalation_total: u64,
+    blocksync_range_pull_success_total: u64,
+    blocksync_range_pull_failure_total: u64,
+    blocksync_range_pull_candidate_exhausted_total: u64,
     rbc_store_pressure_level: u64,
     rbc_store_evictions_total: u64,
     rbc_store_backpressure_deferrals_total: u64,
@@ -4707,16 +4999,17 @@ struct SumeragiStatusDigest {
 
 impl SumeragiStatusDigest {
     fn from_wire(wire: &iroha_data_model::block::consensus::SumeragiStatusWire) -> Self {
-        let view_change_cause_total = wire
-            .view_change_causes
+        let view_change = &wire.view_change_causes;
+        let view_change_cause_total = view_change
             .commit_failure_total
-            .saturating_add(wire.view_change_causes.quorum_timeout_total)
-            .saturating_add(wire.view_change_causes.stake_quorum_timeout_total)
-            .saturating_add(wire.view_change_causes.da_gate_total)
-            .saturating_add(wire.view_change_causes.censorship_evidence_total)
-            .saturating_add(wire.view_change_causes.missing_payload_total)
-            .saturating_add(wire.view_change_causes.missing_qc_total)
-            .saturating_add(wire.view_change_causes.validation_reject_total);
+            .saturating_add(view_change.quorum_timeout_total)
+            .saturating_add(view_change.stake_quorum_timeout_total)
+            .saturating_add(view_change.roster_unavailable_total)
+            .saturating_add(view_change.da_gate_total)
+            .saturating_add(view_change.censorship_evidence_total)
+            .saturating_add(view_change.missing_payload_total)
+            .saturating_add(view_change.missing_qc_total)
+            .saturating_add(view_change.validation_reject_total);
         let block_sync_roster_source_total = wire
             .block_sync_roster
             .commit_qc_hint_total
@@ -4725,12 +5018,62 @@ impl SumeragiStatusDigest {
             .saturating_add(wire.block_sync_roster.checkpoint_history_total)
             .saturating_add(wire.block_sync_roster.roster_sidecar_total)
             .saturating_add(wire.block_sync_roster.commit_roster_journal_total);
+        let worker_queue_depth_total = wire
+            .worker_loop
+            .queue_depths
+            .vote_rx
+            .saturating_add(wire.worker_loop.queue_depths.block_payload_rx)
+            .saturating_add(wire.worker_loop.queue_depths.rbc_chunk_rx)
+            .saturating_add(wire.worker_loop.queue_depths.block_rx)
+            .saturating_add(wire.worker_loop.queue_depths.consensus_rx)
+            .saturating_add(wire.worker_loop.queue_depths.lane_relay_rx)
+            .saturating_add(wire.worker_loop.queue_depths.background_rx);
         Self {
             view_change_install_total: wire.view_change_install_total,
             view_change_cause_total,
+            view_change_commit_failure_total: view_change.commit_failure_total,
+            view_change_quorum_timeout_total: view_change.quorum_timeout_total,
+            view_change_stake_quorum_timeout_total: view_change.stake_quorum_timeout_total,
+            view_change_roster_unavailable_total: view_change.roster_unavailable_total,
+            view_change_da_gate_total: view_change.da_gate_total,
+            view_change_censorship_evidence_total: view_change.censorship_evidence_total,
+            view_change_missing_payload_total: view_change.missing_payload_total,
+            view_change_missing_qc_total: view_change.missing_qc_total,
+            view_change_validation_reject_total: view_change.validation_reject_total,
+            view_change_last_cause: view_change.last_cause.clone(),
             commit_pipeline_last_total_ms: wire.commit_pipeline.last_total_ms,
             commit_pipeline_ema_total_ms: wire.commit_pipeline.ema_total_ms,
             missing_block_fetch_total: wire.missing_block_fetch.total,
+            missing_block_fetch_last_targets: wire.missing_block_fetch.last_targets,
+            missing_block_fetch_last_dwell_ms: wire.missing_block_fetch.last_dwell_ms,
+            tx_queue_depth: wire.tx_queue_depth,
+            tx_queue_capacity: wire.tx_queue_capacity,
+            tx_queue_saturated: wire.tx_queue_saturated,
+            pacemaker_backpressure_deferrals_total: wire.pacemaker_backpressure_deferrals_total,
+            commit_inflight_active: wire.commit_inflight.active,
+            commit_inflight_height: wire.commit_inflight.height,
+            commit_inflight_view: wire.commit_inflight.view,
+            commit_inflight_elapsed_ms: wire.commit_inflight.elapsed_ms,
+            commit_inflight_timeout_total: wire.commit_inflight.timeout_total,
+            worker_loop_stage: wire.worker_loop.stage.clone(),
+            worker_loop_last_iteration_ms: wire.worker_loop.last_iteration_ms,
+            worker_loop_queue_depth_total: worker_queue_depth_total,
+            qc_deferred_missing_payload_total: wire.qc_deferred_missing_payload_total,
+            qc_deferred_resolved_total: wire.qc_deferred_resolved_total,
+            qc_deferred_expired_total: wire.qc_deferred_expired_total,
+            consensus_missing_qc_reacquire_attempt_total: wire
+                .consensus_missing_qc_reacquire_attempt_total,
+            consensus_missing_qc_reacquire_success_total: wire
+                .consensus_missing_qc_reacquire_success_total,
+            consensus_missing_qc_reacquire_exhausted_total: wire
+                .consensus_missing_qc_reacquire_exhausted_total,
+            consensus_forced_proposal_attempt_total: wire.consensus_forced_proposal_attempt_total,
+            consensus_forced_proposal_success_total: wire.consensus_forced_proposal_success_total,
+            blocksync_range_pull_escalation_total: wire.blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total: wire.blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total: wire.blocksync_range_pull_failure_total,
+            blocksync_range_pull_candidate_exhausted_total: wire
+                .blocksync_range_pull_candidate_exhausted_total,
             rbc_store_pressure_level: u64::from(wire.rbc_store.pressure_level),
             rbc_store_evictions_total: wire.rbc_store.evictions_total,
             rbc_store_backpressure_deferrals_total: wire.rbc_store.backpressure_deferrals_total,
@@ -4759,11 +5102,95 @@ impl SumeragiStatusDigest {
             view_change_cause_total: self
                 .view_change_cause_total
                 .saturating_sub(start.view_change_cause_total),
+            view_change_commit_failure_total: self
+                .view_change_commit_failure_total
+                .saturating_sub(start.view_change_commit_failure_total),
+            view_change_quorum_timeout_total: self
+                .view_change_quorum_timeout_total
+                .saturating_sub(start.view_change_quorum_timeout_total),
+            view_change_stake_quorum_timeout_total: self
+                .view_change_stake_quorum_timeout_total
+                .saturating_sub(start.view_change_stake_quorum_timeout_total),
+            view_change_roster_unavailable_total: self
+                .view_change_roster_unavailable_total
+                .saturating_sub(start.view_change_roster_unavailable_total),
+            view_change_da_gate_total: self
+                .view_change_da_gate_total
+                .saturating_sub(start.view_change_da_gate_total),
+            view_change_censorship_evidence_total: self
+                .view_change_censorship_evidence_total
+                .saturating_sub(start.view_change_censorship_evidence_total),
+            view_change_missing_payload_total: self
+                .view_change_missing_payload_total
+                .saturating_sub(start.view_change_missing_payload_total),
+            view_change_missing_qc_total: self
+                .view_change_missing_qc_total
+                .saturating_sub(start.view_change_missing_qc_total),
+            view_change_validation_reject_total: self
+                .view_change_validation_reject_total
+                .saturating_sub(start.view_change_validation_reject_total),
+            view_change_last_cause: (self.view_change_cause_total > start.view_change_cause_total)
+                .then(|| self.view_change_last_cause.clone())
+                .flatten(),
             commit_pipeline_last_total_ms: self.commit_pipeline_last_total_ms,
             commit_pipeline_ema_total_ms: self.commit_pipeline_ema_total_ms,
             missing_block_fetch_total: self
                 .missing_block_fetch_total
                 .saturating_sub(start.missing_block_fetch_total),
+            missing_block_fetch_last_targets: self.missing_block_fetch_last_targets,
+            missing_block_fetch_last_dwell_ms: self.missing_block_fetch_last_dwell_ms,
+            tx_queue_depth: self.tx_queue_depth,
+            tx_queue_capacity: self.tx_queue_capacity,
+            tx_queue_saturated: self.tx_queue_saturated,
+            pacemaker_backpressure_deferrals_total: self
+                .pacemaker_backpressure_deferrals_total
+                .saturating_sub(start.pacemaker_backpressure_deferrals_total),
+            commit_inflight_active: self.commit_inflight_active,
+            commit_inflight_height: self.commit_inflight_height,
+            commit_inflight_view: self.commit_inflight_view,
+            commit_inflight_elapsed_ms: self.commit_inflight_elapsed_ms,
+            commit_inflight_timeout_total: self
+                .commit_inflight_timeout_total
+                .saturating_sub(start.commit_inflight_timeout_total),
+            worker_loop_stage: self.worker_loop_stage.clone(),
+            worker_loop_last_iteration_ms: self.worker_loop_last_iteration_ms,
+            worker_loop_queue_depth_total: self.worker_loop_queue_depth_total,
+            qc_deferred_missing_payload_total: self
+                .qc_deferred_missing_payload_total
+                .saturating_sub(start.qc_deferred_missing_payload_total),
+            qc_deferred_resolved_total: self
+                .qc_deferred_resolved_total
+                .saturating_sub(start.qc_deferred_resolved_total),
+            qc_deferred_expired_total: self
+                .qc_deferred_expired_total
+                .saturating_sub(start.qc_deferred_expired_total),
+            consensus_missing_qc_reacquire_attempt_total: self
+                .consensus_missing_qc_reacquire_attempt_total
+                .saturating_sub(start.consensus_missing_qc_reacquire_attempt_total),
+            consensus_missing_qc_reacquire_success_total: self
+                .consensus_missing_qc_reacquire_success_total
+                .saturating_sub(start.consensus_missing_qc_reacquire_success_total),
+            consensus_missing_qc_reacquire_exhausted_total: self
+                .consensus_missing_qc_reacquire_exhausted_total
+                .saturating_sub(start.consensus_missing_qc_reacquire_exhausted_total),
+            consensus_forced_proposal_attempt_total: self
+                .consensus_forced_proposal_attempt_total
+                .saturating_sub(start.consensus_forced_proposal_attempt_total),
+            consensus_forced_proposal_success_total: self
+                .consensus_forced_proposal_success_total
+                .saturating_sub(start.consensus_forced_proposal_success_total),
+            blocksync_range_pull_escalation_total: self
+                .blocksync_range_pull_escalation_total
+                .saturating_sub(start.blocksync_range_pull_escalation_total),
+            blocksync_range_pull_success_total: self
+                .blocksync_range_pull_success_total
+                .saturating_sub(start.blocksync_range_pull_success_total),
+            blocksync_range_pull_failure_total: self
+                .blocksync_range_pull_failure_total
+                .saturating_sub(start.blocksync_range_pull_failure_total),
+            blocksync_range_pull_candidate_exhausted_total: self
+                .blocksync_range_pull_candidate_exhausted_total
+                .saturating_sub(start.blocksync_range_pull_candidate_exhausted_total),
             rbc_store_pressure_level: self.rbc_store_pressure_level,
             rbc_store_evictions_total: self
                 .rbc_store_evictions_total
@@ -4819,6 +5246,137 @@ async fn sample_sumeragi_status_digest(
     })
     .await
     .map_err(|err| format!("status sampling task failed: {err}"))?
+}
+
+fn copy_network_diagnostics(
+    network: &Network,
+    peers: &[NetworkPeer],
+    diagnostic_dir: &Path,
+) -> Result<()> {
+    fs::create_dir_all(diagnostic_dir).wrap_err_with(|| {
+        format!(
+            "failed to create diagnostic directory {}",
+            diagnostic_dir.display()
+        )
+    })?;
+    let source_root = network.env_dir();
+    let copied_root = diagnostic_dir.join("test-network");
+    copy_selected_diagnostic_files(source_root, source_root, &copied_root)?;
+
+    let mut index = fs::File::create(diagnostic_dir.join("peer-log-index.tsv"))
+        .wrap_err("failed to create peer diagnostic log index")?;
+    writeln!(
+        index,
+        "peer_index\tmnemonic\tapi_address\tp2p_address\tstdout\tstderr"
+    )?;
+    for (peer_index, peer) in peers.iter().enumerate() {
+        let stdout = peer.latest_stdout_log_path();
+        let stderr = peer.latest_stderr_log_path();
+        for path in stdout.iter().chain(stderr.iter()) {
+            copy_diagnostic_file(source_root, path, &copied_root)?;
+        }
+        writeln!(
+            index,
+            "{peer_index}\t{}\t{}\t{}\t{}\t{}",
+            peer.mnemonic(),
+            peer.api_address(),
+            peer.p2p_address(),
+            stdout
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            stderr
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default()
+        )?;
+    }
+    Ok(())
+}
+
+fn copy_selected_diagnostic_files(
+    source_root: &Path,
+    current: &Path,
+    copied_root: &Path,
+) -> Result<()> {
+    let entries = fs::read_dir(current).wrap_err_with(|| {
+        format!(
+            "failed to read diagnostic source directory {}",
+            current.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.wrap_err("failed to read diagnostic directory entry")?;
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .wrap_err_with(|| format!("failed to inspect {}", path.display()))?;
+        if metadata.is_dir() {
+            if should_skip_diagnostic_dir(&path) {
+                continue;
+            }
+            copy_selected_diagnostic_files(source_root, &path, copied_root)?;
+        } else if metadata.is_file() && diagnostic_file_should_copy(&path) {
+            copy_diagnostic_file(source_root, &path, copied_root)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_diagnostic_file(source_root: &Path, source: &Path, copied_root: &Path) -> Result<()> {
+    if !source.is_file() {
+        return Ok(());
+    }
+    let destination =
+        match source.strip_prefix(source_root) {
+            Ok(relative) => copied_root.join(relative),
+            Err(_) => copied_root.join(source.file_name().ok_or_else(|| {
+                eyre!("diagnostic source has no file name: {}", source.display())
+            })?),
+        };
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).wrap_err_with(|| {
+            format!(
+                "failed to create diagnostic destination directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::copy(source, &destination).wrap_err_with(|| {
+        format!(
+            "failed to copy diagnostic artifact {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn diagnostic_file_should_copy(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let lower_name = name.to_ascii_lowercase();
+    if lower_name.contains("genesis") || lower_name.contains("config") {
+        return true;
+    }
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("log" | "toml" | "json" | "nrt")
+    )
+}
+
+fn should_skip_diagnostic_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "storage" | "store" | "kura" | "blocks" | "blockstore" | "pipeline_sidecars"
+    )
 }
 
 fn bounded_sumeragi_status_sample_request_timeout(current: Duration) -> Duration {
@@ -5505,6 +6063,25 @@ struct SubmissionAuditCandidate {
     plan_label: &'static str,
 }
 
+struct PreparedTransactionSubmission {
+    plan: TransactionPlan,
+    payload: PreparedTransactionPayload,
+}
+
+#[derive(Clone)]
+struct PrebuiltTransactionPool {
+    receiver: Arc<TokioMutex<mpsc::Receiver<PreparedTransactionSubmission>>>,
+}
+
+impl PrebuiltTransactionPool {
+    fn try_pop(&self) -> Option<PreparedTransactionSubmission> {
+        let Ok(mut receiver) = self.receiver.try_lock() else {
+            return None;
+        };
+        receiver.try_recv().ok()
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SubmissionAuditBudget {
     window_started_at: Option<Instant>,
@@ -5715,6 +6292,147 @@ fn record_plan_skip(
         metrics.record_failure();
     } else {
         metrics.record_expected_failure();
+    }
+}
+
+async fn submit_prebuilt_plan(
+    ingress_pool: &Arc<IngressEndpointPool>,
+    prepared: PreparedTransactionSubmission,
+    submission_confirmation: SubmissionConfirmationMode,
+    semaphore: Arc<Semaphore>,
+    metrics: &Arc<Metrics>,
+    workload: &Arc<WorkloadEngine>,
+    submitter_idx: usize,
+    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+    confirmation_audit_seed: u64,
+    run_control: &RunControl,
+    confirmation_audit_wait_options: &TransactionWaitOptions,
+) {
+    let PreparedTransactionSubmission { plan, payload } = prepared;
+    let signer = plan.signer.clone();
+    let plan_label = plan.label;
+    let expect_success = plan.expect_success;
+    let effective_submission_confirmation =
+        effective_submission_confirmation(submission_confirmation, &plan.state_updates);
+    if !matches!(
+        effective_submission_confirmation,
+        SubmissionConfirmationMode::AcceptedByIngress
+    ) {
+        warn!(
+            target: "izanami::prebuild",
+            plan = plan_label,
+            "prebuilt plan required blocking confirmation; falling back to failure accounting"
+        );
+        if expect_success {
+            metrics.record_failure();
+        } else {
+            metrics.record_expected_failure();
+        }
+        workload.record_result(&plan, false).await;
+        return;
+    }
+
+    let permit = match semaphore.acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            warn!(
+                target: "izanami::workload",
+                plan = plan_label,
+                submitter_idx,
+                "submission permit channel closed before prebuilt submit"
+            );
+            if expect_success {
+                metrics.record_failure();
+            } else {
+                metrics.record_expected_failure();
+            }
+            workload.record_result(&plan, false).await;
+            return;
+        }
+    };
+    metrics.record_inflight_acquired();
+    let _inflight_guard = InflightGuard::new(Arc::clone(metrics), permit);
+
+    let ingress_pool_for_submit = Arc::clone(ingress_pool);
+    let ingress_pool_for_retry_delay = Arc::clone(ingress_pool);
+    let signer_for_submit = signer.clone();
+    let submission_result = run_submission_future_result(
+        plan_label,
+        expect_success,
+        Arc::clone(metrics),
+        effective_submission_confirmation,
+        async move {
+            run_with_queue_timeout_retry_with_policy_and_delay_result_async(
+                plan_label,
+                IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
+                Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
+                move || ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now()),
+                move || {
+                    let ingress_pool_for_submit = Arc::clone(&ingress_pool_for_submit);
+                    let payload = payload.clone();
+                    let signer_for_submit = signer_for_submit.clone();
+                    async move {
+                        let ingress_pool_for_operation = Arc::clone(&ingress_pool_for_submit);
+                        ingress_pool_for_submit
+                            .run_with_failover_preferred_with_endpoint_async(
+                                "submit_prebuilt_transaction_plan",
+                                submitter_idx,
+                                move |endpoint_idx, _peer| {
+                                    let ingress_pool_for_submit =
+                                        Arc::clone(&ingress_pool_for_operation);
+                                    let payload = payload.clone();
+                                    let signer_for_submit = signer_for_submit.clone();
+                                    async move {
+                                        let client = ingress_pool_for_submit
+                                            .cached_submit_client_for(
+                                                endpoint_idx,
+                                                &signer_for_submit,
+                                                SubmissionConfirmationMode::AcceptedByIngress,
+                                            )?;
+                                        client
+                                            .submit_prepared_transaction_payload_async(&payload)
+                                            .await
+                                    }
+                                },
+                            )
+                            .await
+                            .map(|(endpoint_idx, hash)| SubmissionOutcome { endpoint_idx, hash })
+                    }
+                },
+            )
+            .await
+        },
+    )
+    .await;
+
+    match submission_result {
+        Ok(submission_outcome) => {
+            workload.record_result(&plan, true).await;
+            if should_audit_throughput_confirmation(
+                effective_submission_confirmation,
+                expect_success,
+            ) && should_sample_throughput_confirmation(
+                &submission_outcome.hash,
+                confirmation_audit_seed,
+            ) && let Some(confirmation_audit_tx) = confirmation_audit_tx.as_ref()
+            {
+                try_schedule_submission_audit(
+                    confirmation_audit_tx,
+                    metrics.as_ref(),
+                    SubmissionAuditCandidate {
+                        endpoint_idx: submission_outcome.endpoint_idx,
+                        signer,
+                        hash: submission_outcome.hash,
+                        plan_label,
+                    },
+                    run_control,
+                    confirmation_audit_wait_options,
+                );
+            }
+        }
+        Err(_err) => {
+            workload.record_result(&plan, false).await;
+        }
     }
 }
 
@@ -6747,6 +7465,13 @@ struct Metrics {
     submit_plans_shutdown_skipped: AtomicU64,
     submit_tasks_shutdown_aborted: AtomicU64,
     submit_latency_ms: StdMutex<Vec<u64>>,
+    prebuilt_tx_buffer_capacity: AtomicU64,
+    prebuilt_tx_workers: AtomicU64,
+    prebuilt_tx_built: AtomicU64,
+    prebuilt_tx_used: AtomicU64,
+    prebuilt_tx_fallback: AtomicU64,
+    prebuilt_tx_skipped: AtomicU64,
+    prebuilt_tx_build_failures: AtomicU64,
     ingress_accepted: AtomicU64,
     blocking_applied_success: AtomicU64,
     confirmation_sampled: AtomicU64,
@@ -6793,6 +7518,34 @@ impl Metrics {
         if let Ok(mut samples) = self.submit_latency_ms.lock() {
             samples.push(latency_ms);
         }
+    }
+
+    fn configure_prebuilt_tx_buffer(&self, capacity: usize, workers: usize) {
+        self.prebuilt_tx_buffer_capacity
+            .store(capacity as u64, Ordering::Relaxed);
+        self.prebuilt_tx_workers
+            .store(workers as u64, Ordering::Relaxed);
+    }
+
+    fn record_prebuilt_tx_built(&self) {
+        self.prebuilt_tx_built.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_prebuilt_tx_used(&self) {
+        self.prebuilt_tx_used.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_prebuilt_tx_fallback(&self) {
+        self.prebuilt_tx_fallback.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_prebuilt_tx_skipped(&self) {
+        self.prebuilt_tx_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_prebuilt_tx_build_failure(&self) {
+        self.prebuilt_tx_build_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     fn record_ingress_accepted(&self) {
@@ -6894,6 +7647,13 @@ impl Metrics {
             submit_latency_p95_ms: submit_latency.p95_ms,
             submit_latency_p99_ms: submit_latency.p99_ms,
             submit_latency_max_ms: submit_latency.max_ms,
+            prebuilt_tx_buffer_capacity: self.prebuilt_tx_buffer_capacity.load(Ordering::Relaxed),
+            prebuilt_tx_workers: self.prebuilt_tx_workers.load(Ordering::Relaxed),
+            prebuilt_tx_built: self.prebuilt_tx_built.load(Ordering::Relaxed),
+            prebuilt_tx_used: self.prebuilt_tx_used.load(Ordering::Relaxed),
+            prebuilt_tx_fallback: self.prebuilt_tx_fallback.load(Ordering::Relaxed),
+            prebuilt_tx_skipped: self.prebuilt_tx_skipped.load(Ordering::Relaxed),
+            prebuilt_tx_build_failures: self.prebuilt_tx_build_failures.load(Ordering::Relaxed),
             ingress_accepted: self.ingress_accepted.load(Ordering::Relaxed),
             blocking_applied_success: self.blocking_applied_success.load(Ordering::Relaxed),
             confirmation_sampled: self.confirmation_sampled.load(Ordering::Relaxed),
@@ -7004,6 +7764,13 @@ struct MetricsSnapshot {
     submit_latency_p95_ms: u64,
     submit_latency_p99_ms: u64,
     submit_latency_max_ms: u64,
+    prebuilt_tx_buffer_capacity: u64,
+    prebuilt_tx_workers: u64,
+    prebuilt_tx_built: u64,
+    prebuilt_tx_used: u64,
+    prebuilt_tx_fallback: u64,
+    prebuilt_tx_skipped: u64,
+    prebuilt_tx_build_failures: u64,
     ingress_accepted: u64,
     blocking_applied_success: u64,
     confirmation_sampled: u64,
@@ -7266,6 +8033,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -7273,6 +8042,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -7337,6 +8107,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7344,6 +8116,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(profile),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -7411,6 +8184,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7418,6 +8193,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(profile),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -7484,6 +8260,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7491,6 +8269,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let timing = derive_npos_timing(&config);
@@ -7521,6 +8300,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7528,6 +8309,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let timing = derive_npos_timing(&config);
@@ -7571,6 +8353,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7578,6 +8362,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(profile),
+            diagnostic_dir: None,
         };
 
         let timing = derive_npos_timing(&config);
@@ -7625,6 +8410,8 @@ mod tests {
             tps: 2.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7632,6 +8419,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -7695,6 +8483,8 @@ mod tests {
             tps: 2.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7702,6 +8492,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile.clone()),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -7779,6 +8570,8 @@ mod tests {
             tps: 2.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7786,6 +8579,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile.clone()),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -7954,6 +8748,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7961,6 +8757,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(is_shared_host_stable_soak(&config));
@@ -8051,6 +8848,8 @@ mod tests {
             tps: 7.0,
             max_inflight: 13,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8058,6 +8857,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert!(is_shared_host_stable_soak(&config));
@@ -8103,6 +8903,8 @@ mod tests {
             tps: 7.0,
             max_inflight: 13,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8110,9 +8912,11 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
         let mut npos = ChaosConfig {
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
             ..permissioned.clone()
         };
 
@@ -8164,6 +8968,8 @@ mod tests {
             tps: 3.0,
             max_inflight: 6,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8171,6 +8977,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(is_shared_host_stable_soak(&config));
@@ -8205,6 +9012,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8212,6 +9021,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(!is_shared_host_stable_soak(&config));
@@ -8243,6 +9053,8 @@ mod tests {
             tps: 4.0,
             max_inflight: 6,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8250,6 +9062,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(
@@ -8301,6 +9114,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8308,6 +9123,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert_eq!(
@@ -8335,6 +9151,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8342,6 +9160,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert_eq!(
@@ -8375,6 +9194,8 @@ mod tests {
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8382,6 +9203,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert_eq!(
@@ -8418,6 +9240,8 @@ mod tests {
             tps: 200.0,
             max_inflight: 512,
             submitters: 20,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8427,6 +9251,7 @@ mod tests {
                 true, false, false, false, false, false, false,
             ]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert!(is_severe_stopping_recovery_run(&config));
@@ -8464,6 +9289,8 @@ mod tests {
             tps: 200.0,
             max_inflight: 512,
             submitters: 20,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8473,6 +9300,7 @@ mod tests {
                 false, false, false, true, true, false, false,
             ]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert!(!is_severe_stopping_recovery_run(&config));
@@ -8528,6 +9356,8 @@ mod tests {
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8535,6 +9365,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert_eq!(
@@ -8624,6 +9455,80 @@ mod tests {
             ),
             SubmissionConfirmationMode::AcceptedByIngress
         );
+    }
+
+    #[test]
+    fn stable_transfer_plan_is_prebuild_safe() {
+        let PreparedChaos { mut state, .. } =
+            instructions::prepare_state(3, None, None, WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(19);
+        let plan = state
+            .produce_plan_for_test(instructions::RecipeKind::TransferAsset, &mut rng)
+            .expect("transfer plan");
+
+        assert!(plan_is_prebuild_safe(
+            &plan,
+            SubmissionConfirmationMode::AcceptedByIngress
+        ));
+    }
+
+    #[test]
+    fn stateful_plans_are_not_prebuild_safe() {
+        let PreparedChaos { mut state, .. } =
+            instructions::prepare_state(3, None, None, WorkloadProfile::Chaos, false)
+                .expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(23);
+        let plan = state
+            .produce_plan_for_test(instructions::RecipeKind::RegisterAccount, &mut rng)
+            .expect("register account plan");
+
+        assert!(!plan_is_prebuild_safe(
+            &plan,
+            SubmissionConfirmationMode::AcceptedByIngress
+        ));
+    }
+
+    #[test]
+    fn prebuild_worker_count_uses_auto_parallelism_when_enabled() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: Duration::from_secs(1),
+            progress_timeout: Duration::from_secs(2),
+            shutdown_drain_timeout: Duration::from_secs(1),
+            latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            submitters: 7,
+            prebuild_tx_buffer: 128,
+            prebuild_tx_workers: 0,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: 0,
+            log_filter: "info".to_string(),
+            faults: FaultToggles::default(),
+            nexus: None,
+            diagnostic_dir: None,
+        };
+
+        let workers = effective_prebuild_tx_workers(&config);
+        assert!(workers >= 1);
+        assert!(workers <= config.submitters);
+
+        config.prebuild_tx_workers = 11;
+        assert_eq!(effective_prebuild_tx_workers(&config), 11);
+
+        config.prebuild_tx_buffer = 0;
+        assert_eq!(effective_prebuild_tx_workers(&config), 0);
     }
 
     #[test]
@@ -8811,6 +9716,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8818,6 +9725,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(!is_shared_host_stable_soak(&config));
@@ -8847,6 +9755,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8854,6 +9764,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         assert!(!is_shared_host_stable_soak(&config));
@@ -8883,6 +9794,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8890,6 +9803,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(!is_shared_host_stable_recovery_run(&config));
@@ -8916,6 +9830,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8923,6 +9839,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -9010,6 +9927,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -9017,6 +9936,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         };
 
         assert!(is_shared_host_stable_soak(&config));
@@ -9051,6 +9971,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -9058,6 +9980,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: Some(nexus.clone()),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -9355,6 +10278,15 @@ mod tests {
         assert!(
             is_ingress_failover_retryable(&err),
             "closed transport sends should trigger endpoint failover"
+        );
+    }
+
+    #[test]
+    fn ingress_failover_marks_local_port_exhaustion_retryable() {
+        let err = eyre!("tcp connect error: Can't assign requested address (os error 49)");
+        assert!(
+            is_ingress_failover_retryable(&err),
+            "local port exhaustion is transient driver pressure, not a payload failure"
         );
     }
 
@@ -10590,6 +11522,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -10597,6 +11531,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -10675,6 +11610,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -10682,6 +11619,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -10767,6 +11705,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -10774,6 +11714,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -10881,6 +11822,8 @@ mod tests {
             tps: 0.1,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10888,6 +11831,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let err = IzanamiRunner::new(config)
@@ -11064,6 +12008,12 @@ mod tests {
         metrics.record_submit_latency(Duration::from_millis(10));
         metrics.record_submit_latency(Duration::from_millis(20));
         metrics.record_submit_latency(Duration::from_millis(30));
+        metrics.configure_prebuilt_tx_buffer(128, 4);
+        metrics.record_prebuilt_tx_built();
+        metrics.record_prebuilt_tx_used();
+        metrics.record_prebuilt_tx_fallback();
+        metrics.record_prebuilt_tx_skipped();
+        metrics.record_prebuilt_tx_build_failure();
         metrics.record_ingress_accepted();
         metrics.record_blocking_applied_success();
         metrics.record_confirmation_audit_sampled();
@@ -11094,6 +12044,13 @@ mod tests {
         assert_eq!(snapshot.submit_latency_p95_ms, 30);
         assert_eq!(snapshot.submit_latency_p99_ms, 30);
         assert_eq!(snapshot.submit_latency_max_ms, 30);
+        assert_eq!(snapshot.prebuilt_tx_buffer_capacity, 128);
+        assert_eq!(snapshot.prebuilt_tx_workers, 4);
+        assert_eq!(snapshot.prebuilt_tx_built, 1);
+        assert_eq!(snapshot.prebuilt_tx_used, 1);
+        assert_eq!(snapshot.prebuilt_tx_fallback, 1);
+        assert_eq!(snapshot.prebuilt_tx_skipped, 1);
+        assert_eq!(snapshot.prebuilt_tx_build_failures, 1);
         assert_eq!(snapshot.ingress_accepted, 1);
         assert_eq!(snapshot.blocking_applied_success, 1);
         assert_eq!(snapshot.confirmation_sampled, 1);
@@ -11113,6 +12070,162 @@ mod tests {
         assert_eq!(snapshot.backlog_depth, 0);
         assert_eq!(snapshot.backlog_peak, 1);
         assert_eq!(snapshot.submitters, 3);
+    }
+
+    #[test]
+    fn sumeragi_status_digest_preserves_detailed_liveness_evidence() {
+        use iroha_data_model::block::consensus::{
+            SumeragiNposRepairCoverageStatus, SumeragiStatusWire, SumeragiWorkerQueueDepths,
+        };
+
+        let mut start = SumeragiStatusWire {
+            view_change_install_total: 2,
+            ..Default::default()
+        };
+        start.view_change_causes.quorum_timeout_total = 1;
+        start.view_change_causes.missing_qc_total = 2;
+        start.missing_block_fetch.total = 3;
+        start.pacemaker_backpressure_deferrals_total = 4;
+        start.commit_inflight.timeout_total = 5;
+        start.qc_deferred_missing_payload_total = 6;
+        start.qc_deferred_resolved_total = 7;
+        start.qc_deferred_expired_total = 8;
+        start.consensus_missing_qc_reacquire_attempt_total = 9;
+        start.consensus_missing_qc_reacquire_success_total = 10;
+        start.consensus_missing_qc_reacquire_exhausted_total = 11;
+        start.consensus_forced_proposal_attempt_total = 12;
+        start.consensus_forced_proposal_success_total = 13;
+        start.blocksync_range_pull_escalation_total = 14;
+        start.blocksync_range_pull_success_total = 15;
+        start.blocksync_range_pull_failure_total = 16;
+        start.blocksync_range_pull_candidate_exhausted_total = 17;
+
+        let mut end = start.clone();
+        end.view_change_install_total = 9;
+        end.view_change_causes.commit_failure_total = 1;
+        end.view_change_causes.quorum_timeout_total = 3;
+        end.view_change_causes.stake_quorum_timeout_total = 4;
+        end.view_change_causes.roster_unavailable_total = 5;
+        end.view_change_causes.da_gate_total = 6;
+        end.view_change_causes.censorship_evidence_total = 7;
+        end.view_change_causes.missing_payload_total = 8;
+        end.view_change_causes.missing_qc_total = 11;
+        end.view_change_causes.validation_reject_total = 10;
+        end.view_change_causes.last_cause = Some("missing_qc".to_owned());
+        end.missing_block_fetch.total = 19;
+        end.missing_block_fetch.last_targets = 5;
+        end.missing_block_fetch.last_dwell_ms = 1_200;
+        end.tx_queue_depth = 73;
+        end.tx_queue_capacity = 128;
+        end.tx_queue_saturated = true;
+        end.pacemaker_backpressure_deferrals_total = 24;
+        end.commit_inflight.active = true;
+        end.commit_inflight.height = 42;
+        end.commit_inflight.view = 3;
+        end.commit_inflight.elapsed_ms = 456;
+        end.commit_inflight.timeout_total = 35;
+        end.worker_loop.stage = "proposal_wait".to_owned();
+        end.worker_loop.last_iteration_ms = 987;
+        end.worker_loop.queue_depths = SumeragiWorkerQueueDepths {
+            vote_rx: 1,
+            block_payload_rx: 2,
+            rbc_chunk_rx: 3,
+            block_rx: 4,
+            consensus_rx: 5,
+            lane_relay_rx: 6,
+            background_rx: 7,
+        };
+        end.qc_deferred_missing_payload_total = 16;
+        end.qc_deferred_resolved_total = 27;
+        end.qc_deferred_expired_total = 38;
+        end.consensus_missing_qc_reacquire_attempt_total = 49;
+        end.consensus_missing_qc_reacquire_success_total = 60;
+        end.consensus_missing_qc_reacquire_exhausted_total = 71;
+        end.consensus_forced_proposal_attempt_total = 82;
+        end.consensus_forced_proposal_success_total = 93;
+        end.blocksync_range_pull_escalation_total = 104;
+        end.blocksync_range_pull_success_total = 115;
+        end.blocksync_range_pull_failure_total = 126;
+        end.blocksync_range_pull_candidate_exhausted_total = 137;
+        end.npos_repair_coverage = Some(SumeragiNposRepairCoverageStatus {
+            last_repair_height: 44,
+            last_repair_view: 2,
+            reason: "missing_qc".to_owned(),
+            selected_repair_peer_count: 7,
+            required_stake_quorum_bps: 6_667,
+            selected_stake_coverage_bps: 7_500,
+            reached_stake_quorum_coverage: true,
+        });
+
+        let end_digest = SumeragiStatusDigest::from_wire(&end);
+        let delta = end_digest.delta_from(SumeragiStatusDigest::from_wire(&start));
+
+        assert_eq!(delta.view_change_install_total, 7);
+        assert_eq!(delta.view_change_cause_total, 52);
+        assert_eq!(delta.view_change_quorum_timeout_total, 2);
+        assert_eq!(delta.view_change_missing_qc_total, 9);
+        assert_eq!(delta.view_change_last_cause.as_deref(), Some("missing_qc"));
+        assert_eq!(delta.missing_block_fetch_total, 16);
+        assert_eq!(delta.missing_block_fetch_last_targets, 5);
+        assert_eq!(delta.missing_block_fetch_last_dwell_ms, 1_200);
+        assert_eq!(delta.tx_queue_depth, 73);
+        assert_eq!(delta.tx_queue_capacity, 128);
+        assert!(delta.tx_queue_saturated);
+        assert_eq!(delta.pacemaker_backpressure_deferrals_total, 20);
+        assert!(delta.commit_inflight_active);
+        assert_eq!(delta.commit_inflight_height, 42);
+        assert_eq!(delta.commit_inflight_view, 3);
+        assert_eq!(delta.commit_inflight_elapsed_ms, 456);
+        assert_eq!(delta.commit_inflight_timeout_total, 30);
+        assert_eq!(delta.worker_loop_stage, "proposal_wait");
+        assert_eq!(delta.worker_loop_last_iteration_ms, 987);
+        assert_eq!(delta.worker_loop_queue_depth_total, 28);
+        assert_eq!(delta.qc_deferred_missing_payload_total, 10);
+        assert_eq!(delta.qc_deferred_resolved_total, 20);
+        assert_eq!(delta.qc_deferred_expired_total, 30);
+        assert_eq!(delta.consensus_missing_qc_reacquire_attempt_total, 40);
+        assert_eq!(delta.consensus_missing_qc_reacquire_success_total, 50);
+        assert_eq!(delta.consensus_missing_qc_reacquire_exhausted_total, 60);
+        assert_eq!(delta.consensus_forced_proposal_attempt_total, 70);
+        assert_eq!(delta.consensus_forced_proposal_success_total, 80);
+        assert_eq!(delta.blocksync_range_pull_escalation_total, 90);
+        assert_eq!(delta.blocksync_range_pull_success_total, 100);
+        assert_eq!(delta.blocksync_range_pull_failure_total, 110);
+        assert_eq!(delta.blocksync_range_pull_candidate_exhausted_total, 120);
+        assert_eq!(delta.npos_repair_selected_stake_coverage_bps, 7_500);
+        assert!(delta.npos_repair_reached_stake_quorum_coverage);
+    }
+
+    #[test]
+    fn diagnostic_copy_preserves_logs_configs_and_genesis_payloads() -> Result<()> {
+        let unique = format!(
+            "izanami-diagnostic-copy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        );
+        let source = env::temp_dir().join(&unique).join("source");
+        let destination = env::temp_dir().join(&unique).join("destination");
+        let peer_dir = source.join("peer-0");
+        let storage_dir = peer_dir.join("storage");
+        fs::create_dir_all(&storage_dir)?;
+        fs::write(peer_dir.join("run-1-stdout.log"), b"stdout")?;
+        fs::write(peer_dir.join("run-1-stderr.log"), b"stderr")?;
+        fs::write(peer_dir.join("run-1-config.toml"), b"extends = []")?;
+        fs::write(peer_dir.join("run-1-genesis.nrt"), b"genesis")?;
+        fs::write(storage_dir.join("large-store.log"), b"skip")?;
+
+        copy_selected_diagnostic_files(&source, &source, &destination)?;
+
+        assert!(destination.join("peer-0/run-1-stdout.log").exists());
+        assert!(destination.join("peer-0/run-1-stderr.log").exists());
+        assert!(destination.join("peer-0/run-1-config.toml").exists());
+        assert!(destination.join("peer-0/run-1-genesis.nrt").exists());
+        assert!(!destination.join("peer-0/storage/large-store.log").exists());
+        fs::remove_dir_all(env::temp_dir().join(unique))?;
+        Ok(())
     }
 
     #[test]
@@ -11296,6 +12409,8 @@ mod tests {
             tps: 15.0,
             max_inflight: 64,
             submitters: 4,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
@@ -11303,6 +12418,7 @@ mod tests {
             log_filter: "info".to_string(),
             faults,
             nexus: nexus.then(|| NexusProfile::sora_defaults().expect("nexus profile")),
+            diagnostic_dir: None,
         }
     }
 
@@ -11680,6 +12796,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -11687,6 +12805,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -12123,6 +13242,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -12130,6 +13251,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -12204,6 +13326,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -12211,6 +13335,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -12317,6 +13442,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -12324,6 +13451,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(profile),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
@@ -12379,6 +13507,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -12386,6 +13516,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
@@ -12436,6 +13567,8 @@ mod tests {
             tps: 5.0,
             max_inflight: 8,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
@@ -12443,6 +13576,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
             nexus: None,
+            diagnostic_dir: None,
         };
         apply_shared_host_stable_soak_profile(&mut config);
 
@@ -12520,6 +13654,8 @@ mod tests {
             tps: 0.5,
             max_inflight: 2,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -12527,6 +13663,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: None,
+            diagnostic_dir: None,
         };
 
         let runner = match IzanamiRunner::new(config).await {
@@ -12570,6 +13707,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -12577,6 +13716,7 @@ mod tests {
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
             nexus: Some(nexus.clone()),
+            diagnostic_dir: None,
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);

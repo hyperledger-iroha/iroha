@@ -68307,6 +68307,81 @@ async fn idle_missing_qc_reacquire_suppresses_far_ahead_highest_qc_force_when_fr
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn repeated_same_height_missing_qc_reacquire_broadens_range_pull_after_retry_window() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let local_height = actor.committed_height_snapshot();
+    let height = local_height.saturating_add(1);
+    let now = Instant::now();
+    let stale_deadline = now + Duration::from_secs(86_400);
+    let expected_peers: BTreeSet<_> = actor
+        .range_pull_targets_for_height_tier(height, RangePullCandidateTier::TrustedPeers)
+        .into_iter()
+        .collect();
+    assert!(
+        expected_peers.len() >= 3,
+        "test requires a multi-peer trusted fanout set"
+    );
+    for peer in &expected_peers {
+        actor.range_pull_escalation_cooldowns.insert(
+            (
+                peer.clone(),
+                local_height,
+                height,
+                "idle_missing_qc_reacquire",
+            ),
+            stale_deadline,
+        );
+    }
+    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, 0));
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.reacquire_missing_qc_dependencies(height, 1, now, true),
+        "repeated same-height missing-QC reacquire should bypass stale narrow-tier cooldowns"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        selected_reanchor_peers_for_height(actor, height),
+        expected_peers,
+        "retry-window promotion should send the recovery range pull to trusted peers"
+    );
+    assert!(
+        actor
+            .range_pull_escalation_cooldowns
+            .iter()
+            .filter(|((_, _, canonical_height, reason), _)| {
+                *canonical_height == height && *reason == "idle_missing_qc_reacquire"
+            })
+            .all(|(_, deadline)| *deadline < stale_deadline),
+        "promotion should clear stale same-height cooldowns before re-emitting range pulls"
+    );
+    assert_eq!(
+        actor.subsystems.propose.last_missing_qc_reacquire_attempt,
+        Some((height, 1)),
+        "successful promotion should still record the exact attempted view"
+    );
+    assert_eq!(
+        after.consensus_missing_qc_reacquire_attempt_total,
+        before
+            .consensus_missing_qc_reacquire_attempt_total
+            .saturating_add(1)
+    );
+    assert_eq!(
+        after.consensus_missing_qc_reacquire_success_total,
+        before
+            .consensus_missing_qc_reacquire_success_total
+            .saturating_add(1)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_qc_reacquire_without_dependency_signals_is_height_window_throttled() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

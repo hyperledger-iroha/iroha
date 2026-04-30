@@ -32099,6 +32099,13 @@ impl Actor {
         now: Instant,
         dependency_signals: bool,
     ) -> bool {
+        let prior_same_height_reacquire = self
+            .subsystems
+            .propose
+            .last_missing_qc_reacquire_attempt
+            .is_some_and(|(attempt_height, attempt_view)| {
+                attempt_height == height && attempt_view != current_view
+            });
         self.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
         if !dependency_signals {
             self.subsystems
@@ -32137,11 +32144,35 @@ impl Actor {
             .lock_lag_catchup_frontier_height()
             .filter(|catchup_height| *catchup_height < height)
             .unwrap_or(height);
-        requested |= self.request_range_pull_from_anchor(
+        let broad_range_pull_tier = (self.config.resilience.enabled && prior_same_height_reacquire)
+            .then_some(RangePullCandidateTier::TrustedPeers);
+        let cooldowns_cleared = if broad_range_pull_tier.is_some() {
+            let cleared = self.clear_range_pull_escalation_cooldowns_for_height(range_pull_height);
+            if range_pull_height == height {
+                cleared
+            } else {
+                cleared
+                    .saturating_add(self.clear_range_pull_escalation_cooldowns_for_height(height))
+            }
+        } else {
+            0
+        };
+        requested |= self.request_range_pull_from_anchor_with_tier(
             range_pull_height,
             "idle_missing_qc_reacquire",
             now,
+            broad_range_pull_tier,
         );
+        if broad_range_pull_tier.is_some() {
+            debug!(
+                height,
+                current_view,
+                range_pull_height,
+                cooldowns_cleared,
+                tier = RangePullCandidateTier::TrustedPeers.label(),
+                "promoted repeated same-height missing-QC reacquire to broad block-sync range pull"
+            );
+        }
         if requested || triggered {
             super::status::inc_consensus_missing_qc_reacquire_success();
         }

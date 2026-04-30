@@ -1141,6 +1141,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after stake-quorum timeouts (`NPoS` only).
     #[norito(default)]
     pub stake_quorum_timeout_total: u64,
+    /// Total view changes triggered after roster-unavailability recovery.
+    #[norito(default)]
+    pub roster_unavailable_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     #[norito(default)]
     pub da_gate_total: u64,
@@ -1172,6 +1175,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
     #[norito(default)]
     pub last_stake_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a roster-unavailable cause was last recorded.
+    #[norito(default)]
+    pub last_roster_unavailable_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     #[norito(default)]
     pub last_da_gate_timestamp_ms: u64,
@@ -1976,6 +1982,42 @@ pub struct SumeragiStatusWire {
     /// Missing-block fetch counters after QC-first arrivals.
     #[norito(default)]
     pub missing_block_fetch: SumeragiMissingBlockFetchStatus,
+    /// Total QCs deferred because payload was missing locally.
+    #[norito(default)]
+    pub qc_deferred_missing_payload_total: u64,
+    /// Total deferred QCs resolved after payload arrival.
+    #[norito(default)]
+    pub qc_deferred_resolved_total: u64,
+    /// Total deferred QCs expired after bounded retries.
+    #[norito(default)]
+    pub qc_deferred_expired_total: u64,
+    /// Bounded missing-QC reacquire attempts before rotating views.
+    #[norito(default)]
+    pub consensus_missing_qc_reacquire_attempt_total: u64,
+    /// Missing-QC reacquire attempts that triggered recovery before rotation.
+    #[norito(default)]
+    pub consensus_missing_qc_reacquire_success_total: u64,
+    /// Missing-QC reacquire windows exhausted before controlled rotation.
+    #[norito(default)]
+    pub consensus_missing_qc_reacquire_exhausted_total: u64,
+    /// Forced leader self-proposal attempts under missing-QC liveness watchdog.
+    #[norito(default)]
+    pub consensus_forced_proposal_attempt_total: u64,
+    /// Forced leader self-proposal attempts that assembled a proposal.
+    #[norito(default)]
+    pub consensus_forced_proposal_success_total: u64,
+    /// Range-pull escalations requested by dependency recovery.
+    #[norito(default)]
+    pub blocksync_range_pull_escalation_total: u64,
+    /// Range-pull recoveries that succeeded.
+    #[norito(default)]
+    pub blocksync_range_pull_success_total: u64,
+    /// Range-pull recoveries that expired without progress.
+    #[norito(default)]
+    pub blocksync_range_pull_failure_total: u64,
+    /// Range-pull recovery tiers exhausted before broader recovery.
+    #[norito(default)]
+    pub blocksync_range_pull_candidate_exhausted_total: u64,
     /// Committed-edge conflicts reclassified as obsolete/non-actionable dependencies.
     #[norito(default)]
     pub committed_edge_conflict_obsolete_total: u64,

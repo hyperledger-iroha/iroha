@@ -1,6 +1,55 @@
 # Status
 
-Last updated: 2026-04-29
+Last updated: 2026-04-30
+
+## 2026-04-30 Izanami prebuilt transaction buffer
+
+- Added an Izanami-only high-TPS driver path with `--prebuild-tx-buffer` and
+  `--prebuild-tx-workers`. Stable stateless plans can now be signed, hashed,
+  and Norito-encoded into a bounded in-memory queue before submitter ticks use
+  them; stateful or blocking-confirmation plans continue through the existing
+  hot path.
+- Added reusable client support for prepared transaction payloads so repeated
+  submissions can avoid re-encoding `SignedTransaction` bodies. The public Torii
+  endpoint and payload format remain unchanged.
+- Added summary counters for the buffer: capacity, workers, built, used,
+  fallback, skipped, and build failures. Matrix/sweep scripts can pass the new
+  prebuild knobs through their own CLI options.
+- Short local 20k TPS smoke with `4` peers, `60s`, buffer `50,000`, and `20`
+  prebuild workers offered `49,092` attempts and accepted `46,952`. This is
+  still driver/ingress limited on the local debug build, not a real 20k result:
+  the row showed endpoint failover pressure, `tx_queue_saturated=true`,
+  pacemaker backpressure, and local port exhaustion under the requested rate.
+  Local port exhaustion is now classified as retryable driver pressure rather
+  than a payload failure.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha prepared_transaction_payload -- --nocapture`
+  - `cargo test -p izanami prebuild -- --nocapture`
+  - `cargo test -p izanami stored_args_roundtrip -- --nocapture`
+  - `cargo test -p izanami throughput -- --nocapture`
+  - `cargo test -p izanami local_port_exhaustion -- --nocapture`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh scripts/run_izanami_communication_vulnerability_sweep.sh`
+  - `cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
+
+## 2026-04-29 Izanami 20k stress diagnostics and targeted Sumeragi recovery
+
+- Added truthful 20k stress reporting for requested/offered/accepted TPS, submit latency percentiles, shutdown-drain counters, recovery-height/skew evidence, detailed Sumeragi status deltas, and per-scenario diagnostic artifact capture under matrix stress runs.
+- Extended Sumeragi status propagation through the wire model, Torii routing, client JSON, Izanami evidence TSV, root-cause report, and sweep aggregation so view-change causes, missing-block fetch state, tx queue/backpressure, worker-loop, QC defer/reacquire, forced proposal, range-pull, and NPoS repair-coverage telemetry remain individually visible.
+- Applied the observed `missing_qc` liveness fix only: repeated same-height missing-QC reacquire now promotes to the existing trusted-peer block-sync range-pull path and clears same-height range-pull cooldowns, without changing block validity, signatures, validator order, or quorum safety.
+- Reran the real seed-7 NPoS 20-peer/800s/25% packet-loss row at requested `20,000 TPS` with `target/debug` binaries. The driver offered `816,166` attempts (`1020.21 TPS`, `5.10%` of request) and ingress accepted `773,285` (`966.61 TPS`, `4.83%` of request); quorum/strict height stayed `1/1`. The post-fix dominant cause moved from `missing_qc` to `quorum_timeout` with `tx_queue_saturated=true` and pacemaker backpressure, so the row is now classified as driver-saturated, consensus-stalled, and overload-admission evidence rather than an unexplained missing-QC repair failure.
+- Latest 20k artifacts: `dist/izanami-20k-targeted-npos-packet-loss-25pct-seed7-20260430-000420`, including `evidence.tsv`, `root-cause.md`, `paper-style-final-report.md`, and diagnostics copied under `diagnostics/npos-packet-loss-25pct`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib repeated_same_height_missing_qc_reacquire_broadens_range_pull_after_retry_window -- --nocapture`
+  - `cargo test -p iroha_core --lib missing_qc_height_stall_mode_reanchor_uses_deterministic_peer_subset_and_periodic_all_peers -- --nocapture`
+  - `cargo test -p izanami sumeragi_status_digest -- --nocapture`
+  - `cargo test -p izanami throughput -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi_status -- --nocapture`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `bash -n scripts/run_izanami_communication_vulnerability_matrix.sh`
+  - `cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
+  - Real 20k NPoS packet-loss row with diagnostics enabled, then report-only rebuild for the new overload-admission evidence label.
 
 ## 2026-04-29 Izanami seed-7 stress rerun closure
 

@@ -54,6 +54,7 @@ tls-rustls-webpki-roots = [
 ]
 
 [dependencies]
+bytes = { workspace = true }
 norito = {workspace = true}
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
