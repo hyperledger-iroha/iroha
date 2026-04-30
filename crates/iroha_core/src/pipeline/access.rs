@@ -1077,6 +1077,13 @@ where
         return set;
     }
 
+    if any
+        .downcast_ref::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>()
+        .is_some()
+    {
+        return AccessSet::global();
+    }
+
     // Set / Remove key-values
     if let Some(sb) = any.downcast_ref::<SetKeyValueBox>() {
         match sb {

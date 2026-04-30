@@ -291,6 +291,13 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         };
     }
 
+    if any
+        .downcast_ref::<dm_isi::SetAssetDefinitionBalancePolicy>()
+        .is_some()
+    {
+        return BASE_SET_KV + 100;
+    }
+
     // Key-value
     if let Some(kv) = any.downcast_ref::<dm_isi::SetKeyValueBox>() {
         let sz = match kv {

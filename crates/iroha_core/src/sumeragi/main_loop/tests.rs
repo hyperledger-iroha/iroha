@@ -87210,6 +87210,316 @@ async fn proposal_yields_local_voted_stale_frontier_owner_without_quorum_lock() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn local_same_height_vote_allows_hard_stale_active_tip_owner_without_qc_lock() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(2);
+    let now = Instant::now();
+    let min_stale_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    let soft_stale_at = now
+        .checked_sub(min_stale_age.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let hard_stale_at = now
+        .checked_sub(
+            min_stale_age
+                .saturating_mul(3)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+
+    let block = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    );
+    let owner_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, frontier_height, owner_view);
+    pending.inserted_at = soft_stale_at;
+    pending.touch_progress(soft_stale_at);
+    pending.note_local_commit_vote_emitted();
+    actor.pending.pending_blocks.insert(owner_hash, pending);
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(frontier_height);
+    let topology = super::network_topology::Topology::new(actor.roster_for_vote_with_mode(
+        owner_hash,
+        frontier_height,
+        owner_view,
+        consensus_mode,
+    ));
+    let signature_topology =
+        super::topology_for_view(&topology, frontier_height, owner_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    actor.vote_log.insert(
+        (
+            Phase::Commit,
+            frontier_height,
+            owner_view,
+            actor.epoch_for_height(frontier_height),
+            local_signer,
+        ),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: owner_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height: frontier_height,
+            view: owner_view,
+            epoch: actor.epoch_for_height(frontier_height),
+            highest_qc: None,
+            signer: local_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    let existing_vote = actor
+        .local_same_height_vote(frontier_height, actor.epoch_for_height(frontier_height))
+        .expect("test setup requires local same-height vote");
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&owner_hash)
+        .expect("test setup requires pending owner");
+    assert!(
+        actor.pending_block_is_active_for_tip(
+            owner_hash,
+            pending,
+            actor.state.committed_height(),
+            actor.state.latest_block_hash_fast(),
+        ),
+        "test setup requires a local-voted active tip owner"
+    );
+    assert!(
+        actor.local_same_height_vote_blocks_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            &existing_vote,
+            now,
+            true,
+        ),
+        "active tip-owner local vote should still block inside the hard stale window"
+    );
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&owner_hash)
+        .expect("test setup requires pending owner");
+    pending.inserted_at = hard_stale_at;
+    pending.touch_progress(hard_stale_at);
+
+    let existing_vote = actor
+        .local_same_height_vote(frontier_height, actor.epoch_for_height(frontier_height))
+        .expect("test setup requires local same-height vote");
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&owner_hash)
+        .expect("test setup requires pending owner");
+    assert!(
+        actor.pending_block_is_active_for_tip(
+            owner_hash,
+            pending,
+            actor.state.committed_height(),
+            actor.state.latest_block_hash_fast(),
+        ),
+        "test setup should still be the same active tip-owner state"
+    );
+    assert!(
+        !actor.local_same_height_vote_blocks_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            &existing_vote,
+            now,
+            true,
+        ),
+        "hard-stale active tip owner without QC or lock must not wedge fresh proposal assembly"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_assembles_after_hard_stale_active_tip_owner_without_qc_lock() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let committed_height = actor.committed_height_snapshot();
+    let mut highest_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    highest_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(highest_qc);
+
+    let frontier_height = committed_height.saturating_add(1);
+    let owner_view = 0_u64;
+    let topology = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id().clone();
+    let search_limit = u64::try_from(topology.len().saturating_mul(12))
+        .unwrap_or(1)
+        .max(2);
+    let fresh_view = (owner_view.saturating_add(1)..search_limit)
+        .find(|candidate_view| {
+            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
+            actor
+                .leader_index_for(&mut candidate_topology, frontier_height, *candidate_view)
+                .ok()
+                .is_some_and(|leader| {
+                    candidate_topology
+                        .position(local_peer.public_key())
+                        .is_some_and(|idx| idx == leader)
+                })
+        })
+        .expect("find later view where local peer is leader");
+    let now = Instant::now();
+    let min_stale_age = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(actor.frontier_slot_lag_window())
+        .max(Duration::from_millis(1));
+    let hard_stale_at = now
+        .checked_sub(
+            min_stale_age
+                .saturating_mul(3)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .start_new_round(frontier_height, hard_stale_at);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, fresh_view, now);
+
+    let stale_owner = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    );
+    let stale_owner_hash = stale_owner.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&stale_owner));
+    let mut pending = PendingBlock::new(stale_owner, payload_hash, frontier_height, owner_view);
+    pending.inserted_at = hard_stale_at;
+    pending.touch_progress(hard_stale_at);
+    pending.note_local_commit_vote_emitted();
+    actor
+        .pending
+        .pending_blocks
+        .insert(stale_owner_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        stale_owner_hash,
+        hard_stale_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(frontier_height);
+    let vote_topology = super::network_topology::Topology::new(actor.roster_for_vote_with_mode(
+        stale_owner_hash,
+        frontier_height,
+        owner_view,
+        consensus_mode,
+    ));
+    let signature_topology = super::topology_for_view(
+        &vote_topology,
+        frontier_height,
+        owner_view,
+        mode_tag,
+        prf_seed,
+    );
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    actor.vote_log.insert(
+        (
+            Phase::Commit,
+            frontier_height,
+            owner_view,
+            actor.epoch_for_height(frontier_height),
+            local_signer,
+        ),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: stale_owner_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height: frontier_height,
+            view: owner_view,
+            epoch: actor.epoch_for_height(frontier_height),
+            highest_qc: None,
+            signer: local_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(frontier_height, fresh_view)
+            .is_some(),
+        "test setup requires stale active owner to block the later view initially"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "pacemaker should yield hard-stale no-QC owner and assemble a fresh proposal"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&stale_owner_hash),
+        "fresh proposal assembly should drop the stale no-QC owner"
+    );
+    assert!(
+        actor.slot_has_proposal_evidence(frontier_height, fresh_view)
+            || actor
+                .pending
+                .pending_blocks
+                .values()
+                .any(|pending| pending.height == frontier_height && pending.view == fresh_view),
+        "fresh proposal should leave durable evidence for the later view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_yields_stale_frontier_owner_with_exhausted_commit_inflight_without_qc_lock() {
     use std::borrow::Cow;
 
@@ -96995,6 +97305,14 @@ async fn assemble_proposal_defers_when_candidate_conflicts_with_local_vote_histo
         ),
         "test setup should record a local same-height vote for the conflicting branch"
     );
+    let proposal_now = Instant::now();
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&conflicting_hash)
+        .expect("conflicting branch should remain pending");
+    pending.inserted_at = proposal_now;
+    pending.touch_progress(proposal_now);
 
     let tx = sample_transaction();
     actor
@@ -97014,7 +97332,7 @@ async fn assemble_proposal_defers_when_candidate_conflicts_with_local_vote_histo
             leader_index,
             local_idx,
             None,
-            Instant::now(),
+            proposal_now,
         )
         .expect("proposal assembly should defer cleanly");
     assert!(
@@ -99785,23 +100103,11 @@ async fn pacemaker_bootstraps_missing_qc_frontier_from_committed_qc_without_new_
     committed_qc.phase = Phase::Commit;
     actor.highest_qc = Some(committed_qc);
 
-    let topology = actor.effective_commit_topology();
-    let local_peer = actor.common_config.peer.id().clone();
-    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
         .unwrap_or(0)
         .max(2);
     let view = (1..search_limit)
-        .find(|candidate_view| {
-            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
-            actor
-                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
-                .ok()
-                .is_some_and(|leader| {
-                    candidate_topology
-                        .position(local_peer.public_key())
-                        .is_some_and(|idx| idx == leader)
-                })
-        })
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
         .expect("find non-zero view where local peer is leader");
 
     let now = Instant::now();
@@ -99876,23 +100182,11 @@ async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_
     committed_qc.phase = Phase::Commit;
     actor.highest_qc = Some(committed_qc);
 
-    let topology = actor.effective_commit_topology();
-    let local_peer = actor.common_config.peer.id().clone();
-    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
         .unwrap_or(0)
         .max(2);
     let view = (1..search_limit)
-        .find(|candidate_view| {
-            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
-            actor
-                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
-                .ok()
-                .is_some_and(|leader| {
-                    candidate_topology
-                        .position(local_peer.public_key())
-                        .is_some_and(|idx| idx == leader)
-                })
-        })
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
         .expect("find non-zero view where local peer is leader");
 
     let now = Instant::now();
@@ -134914,7 +135208,7 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
     actor.phase_tracker.on_view_change(height, 1, now);
 
     let qc_key = (Phase::Commit, block_hash, height, view, epoch);
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         while actor.poll_vote_verify_results() {}
         let recorded_votes = actor

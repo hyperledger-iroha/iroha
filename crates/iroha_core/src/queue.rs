@@ -1437,13 +1437,20 @@ impl Queue {
         tx: &AcceptedTransaction<'static>,
         world: &impl WorldReadOnly,
         nexus: &Nexus,
+        route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<(), Error> {
         let Some(transaction) = tx.external() else {
             return Ok(());
         };
         let observation_time_ms = self.nexus_fee_admission_observation_time_ms(tx);
-        check_external_nexus_fee_admission(world, nexus, transaction, observation_time_ms)
-            .map_err(Self::map_nexus_fee_admission_error)
+        check_external_nexus_fee_admission(
+            world,
+            nexus,
+            transaction,
+            observation_time_ms,
+            route_dataspace_id,
+        )
+        .map_err(Self::map_nexus_fee_admission_error)
     }
 
     fn queue_rejection_reason(
@@ -1788,9 +1795,12 @@ impl Queue {
         let dataspace_id = routing_decision.dataspace_id;
 
         if checked.as_accepted().external().is_some() {
-            if let Err(err) =
-                self.recheck_external_nexus_fee_admission(checked.as_accepted(), world, nexus)
-            {
+            if let Err(err) = self.recheck_external_nexus_fee_admission(
+                checked.as_accepted(),
+                world,
+                nexus,
+                Some(dataspace_id),
+            ) {
                 return Err(Failure {
                     tx: Box::new(checked.as_accepted().clone()),
                     err,
@@ -2627,6 +2637,7 @@ impl Queue {
                 tx_arc.as_accepted(),
                 state_view.world(),
                 &state_view.nexus,
+                routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
             ) {
                 iroha_logger::warn!(
                     tx = %hash,
@@ -2786,9 +2797,17 @@ impl Queue {
                 continue;
             }
 
-            if let Err(e) =
-                self.recheck_external_nexus_fee_admission(tx_arc.as_accepted(), &world, &nexus)
-            {
+            let route_dataspace_id = self
+                .routing_decisions
+                .get(&hash)
+                .map(|decision| decision.dataspace_id)
+                .or_else(|| routing_ledger::get(&hash).map(|decision| decision.dataspace_id));
+            if let Err(e) = self.recheck_external_nexus_fee_admission(
+                tx_arc.as_accepted(),
+                &world,
+                &nexus,
+                route_dataspace_id,
+            ) {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
