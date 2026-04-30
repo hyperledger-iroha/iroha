@@ -172,6 +172,130 @@ final class Halo2PastaTests: XCTestCase {
         }
     }
 
+    func testZeroRoundIPAParametersRoundTripAndCommit() throws {
+        let params = try Halo2IPAParameters.generated(k: 0)
+        XCTAssertEqual(params.k, 0)
+        XCTAssertEqual(params.n, 1)
+        XCTAssertEqual(params.serialized().count, 132)
+        XCTAssertEqual(params.gLagrange, params.g)
+        XCTAssertEqual(try Halo2IPAParameters.read(from: params.serialized()), params)
+
+        let coefficient = PastaFp(21)
+        let evaluation = PastaFp(23)
+        let blind = PastaFp(29)
+        XCTAssertEqual(
+            try params.commit(coefficients: [coefficient], blind: blind).toAffine(),
+            VestaProjective.multiscalarMultiply(
+                scalars: [coefficient, blind],
+                bases: [params.g[0], params.w]
+            ).toAffine()
+        )
+        XCTAssertEqual(
+            try params.commitLagrange(evaluations: [evaluation], blind: blind).toAffine(),
+            VestaProjective.multiscalarMultiply(
+                scalars: [evaluation, blind],
+                bases: [params.gLagrange[0], params.w]
+            ).toAffine()
+        )
+        XCTAssertThrowsError(try params.commit(coefficients: [], blind: blind)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+        XCTAssertThrowsError(try params.commit(coefficients: [coefficient, PastaFp(31)], blind: blind)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 2))
+        }
+        XCTAssertThrowsError(try params.commitLagrange(evaluations: [], blind: blind)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+        XCTAssertThrowsError(try params.commitLagrange(evaluations: [evaluation, PastaFp(37)], blind: blind)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 2))
+        }
+    }
+
+    func testZeroRoundIPAParametersRejectMalformedSerializedPayloads() throws {
+        let params = try Halo2IPAParameters.generated(k: 0)
+
+        var truncated = params.serialized()
+        truncated.removeLast()
+        XCTAssertThrowsError(try Halo2IPAParameters.read(from: truncated)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .truncatedParameters)
+        }
+
+        var trailingByte = params.serialized()
+        trailingByte.append(0)
+        XCTAssertThrowsError(try Halo2IPAParameters.read(from: trailingByte)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
+        }
+
+        var identityGenerator = params.serialized()
+        identityGenerator.replaceSubrange(4..<36, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityGenerator)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
+        }
+
+        var identityLagrangeGenerator = params.serialized()
+        identityLagrangeGenerator.replaceSubrange(36..<68, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityLagrangeGenerator)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
+        }
+
+        var identityW = params.serialized()
+        identityW.replaceSubrange(68..<100, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityW)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
+        }
+
+        var identityU = params.serialized()
+        identityU.replaceSubrange(100..<132, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try Halo2IPAParameters.read(from: identityU)) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointEncoding)
+        }
+    }
+
+    func testZeroRoundIPAParametersRejectConstructorLengthMismatches() throws {
+        let generator = VestaAffine.generator
+        let point = generator.multiplied(by: PastaFp(3))
+
+        XCTAssertThrowsError(try Halo2IPAParameters(
+            k: 0,
+            g: [],
+            gLagrange: [point],
+            w: point,
+            u: point
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 0))
+        }
+
+        XCTAssertThrowsError(try Halo2IPAParameters(
+            k: 0,
+            g: [point],
+            gLagrange: [],
+            w: point,
+            u: point
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 0))
+        }
+
+        XCTAssertThrowsError(try Halo2IPAParameters(
+            k: 0,
+            g: [point, generator.multiplied(by: PastaFp(5))],
+            gLagrange: [point],
+            w: point,
+            u: point
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 2))
+        }
+
+        XCTAssertThrowsError(try Halo2IPAParameters(
+            k: 0,
+            g: [point],
+            gLagrange: [point, generator.multiplied(by: PastaFp(7))],
+            w: point,
+            u: point
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPointCount(expected: 1, actual: 2))
+        }
+    }
+
     func testGeneratedIPAParametersMatchRustHalo2() throws {
         let expected = try Self.hex("""
         0300000045065ed079bf389758f591131095ef419310e8c708a805852b9b77bed8c7ecbde0c0802686d3ed571f7f3399526b24460b16ace461ebda9dcfe6e5b7b298c18cd27962962ce9ed2b87ae4c95462914917a9da0295f593956c1a76adca2ebc394a74f2af0a526eb437ebb22c416a78fda0a275a2f2756115e51248f7c5a7acdaca3c70c4c2497a714ebe96b6192bf940a13a277a6a7c4152a3524988d86be181bc887e3240ff4de618fb8531a447b4f469f50a8ac35fe905da8b8e8732e527eb8b7e796477bd8c4fe4b9ef9806c39cb32ed5558ef9d8c582909779eec700e259a6787540156e67c55fba03e961d98971ccd6bf71c4edd0d80d4d7aec06f9cdb0a1d499756f70cf0deb7b52b1b0def41337e091269c9bcd46334f97a05842a0f0105c58c4a440e77a80e25f3dd162f2b74d6866003b664d1c3ddd6a185c3309314dd77de397f82818f5b36495c402dbb92096a5fc5f8b73210ac79f9b8af3e7ab9cd97784c9657aeefb68194c1546984ae653ba1e4abfc06e887990db451c7cd3227cdb3ef3e31a17568c8953cffba5a911f7c2020cdde94c8b96d35d5eeb7f6021ad59e266061b96ab8968ac8e547138a9f47b9186eddf13ad329d0921707de14fe16f4009d2fa0c76524113ba0796a5f512d5bf2acdd92721d841139fd5b242d3904ea829062811fcf825218a681c7881caa753008c9a8aecd1f8cc600b410907520d96f3e5cd41760367151608b54821883c10c4b9a4ff2beae227bef94bcab379dc4dcfdbf61ccc7d5a0bb9759acf611694f24d0c040f249bad30a83b1a897
@@ -269,6 +393,747 @@ final class Halo2PastaTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? Halo2IPAError, .nonInvertibleChallenge)
         }
+    }
+
+    func testIPAOpeningProofHandlesZeroRoundParameters() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        var rng = SeededGenerator(state: 0x4444_5555_6666_7777)
+        let proof = try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(13)],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &rng
+        )
+        XCTAssertEqual(proof.proof.count, 96)
+
+        XCTAssertTrue(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: proof.proof
+        ))
+        XCTAssertFalse(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value + PastaFp.one,
+            proof: proof.proof
+        ))
+
+        var transcript = Halo2Blake2bReadTranscript(proof: proof.proof)
+        try transcript.commonPoint(proof.commitment)
+        transcript.commonScalar(proof.value)
+        transcript.commonScalar(proof.point)
+        XCTAssertTrue(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &transcript
+        ))
+        XCTAssertEqual(transcript.remainingBytes, 0)
+
+        var wrongTranscript = Halo2Blake2bReadTranscript(proof: proof.proof)
+        try wrongTranscript.commonPoint(proof.commitment)
+        wrongTranscript.commonScalar(proof.value + PastaFp.one)
+        wrongTranscript.commonScalar(proof.point)
+        XCTAssertFalse(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value + PastaFp.one,
+            transcript: &wrongTranscript
+        ))
+
+        var proofWithTrailingByte = proof.proof
+        proofWithTrailingByte.append(0)
+        XCTAssertFalse(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: proofWithTrailingByte
+        ))
+
+        var truncatedProof = proof.proof
+        truncatedProof.removeLast()
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: truncatedProof
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .truncatedProof)
+        }
+
+        var invalidSCommitment = proof.proof
+        invalidSCommitment.replaceSubrange(0..<32, with: Data(repeating: 0, count: 32))
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: invalidSCommitment
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .invalidPointEncoding)
+        }
+
+        var nonCanonicalC = proof.proof
+        nonCanonicalC.replaceSubrange(32..<64, with: Self.bytes(fromLimbs: PastaFpParameters.modulus))
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: nonCanonicalC
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .invalidScalarEncoding)
+        }
+
+        var nonCanonicalF = proof.proof
+        nonCanonicalF.replaceSubrange(64..<96, with: Self.bytes(fromLimbs: PastaFpParameters.modulus))
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: nonCanonicalF
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .invalidScalarEncoding)
+        }
+    }
+
+    func testZeroRoundGeneratedIPAOpeningProofUsesPublicCreateOverload() throws {
+        let params = try Halo2IPAParameters.generated(k: 0)
+        let proof = try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(41)],
+            blind: PastaFp(43),
+            point: PastaFp(47)
+        )
+
+        XCTAssertEqual(proof.proof.count, 96)
+        XCTAssertEqual(proof.value, PastaFp(41))
+        XCTAssertTrue(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: proof.proof
+        ))
+    }
+
+    func testZeroRoundIPAOpeningProofRejectsIdentityCommitmentTranscript() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        XCTAssertEqual(
+            try params.commit(coefficients: [.zero], blind: .zero).toAffine(),
+            .identity
+        )
+
+        var identityCreateRNG = SeededGenerator(state: 0x4242_6464_8686_a8a8)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [.zero],
+            blind: .zero,
+            point: PastaFp(19),
+            rng: &identityCreateRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .pointAtInfinity)
+        }
+
+        var proofRNG = SeededGenerator(state: 0x5353_7575_9797_b9b9)
+        let proof = try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(13)],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &proofRNG
+        )
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: .identity,
+            point: proof.point,
+            value: proof.value,
+            proof: proof.proof
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .pointAtInfinity)
+        }
+    }
+
+    func testZeroRoundIPAOpeningProofRejectsCanonicalFinalScalarTampering() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        var rng = SeededGenerator(state: 0x1212_3434_5656_7878)
+        let proof = try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(13)],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &rng
+        )
+
+        let c = try XCTUnwrap(PastaFp.fromCanonicalBytes(Data(proof.proof[32..<64])))
+        var tamperedC = proof.proof
+        tamperedC.replaceSubrange(32..<64, with: (c + PastaFp.one).canonicalBytes())
+        XCTAssertFalse(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: tamperedC
+        ))
+
+        let f = try XCTUnwrap(PastaFp.fromCanonicalBytes(Data(proof.proof[64..<96])))
+        var tamperedF = proof.proof
+        tamperedF.replaceSubrange(64..<96, with: (f + PastaFp.one).canonicalBytes())
+        XCTAssertFalse(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: proof.point,
+            value: proof.value,
+            proof: tamperedF
+        ))
+    }
+
+    func testZeroRoundIPAOpeningProofRejectsWrongCommitmentAndPoint() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        var rng = SeededGenerator(state: 0x1313_3535_5757_7979)
+        let proof = try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(13)],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &rng
+        )
+        let wrongCommitment = try params.commit(coefficients: [PastaFp(23)], blind: PastaFp(29)).toAffine()
+        let wrongPoint = proof.point + PastaFp.one
+
+        XCTAssertFalse(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: wrongCommitment,
+            point: proof.point,
+            value: proof.value,
+            proof: proof.proof
+        ))
+        XCTAssertFalse(try Halo2IPAOpeningProof.verify(
+            params: params,
+            commitment: proof.commitment,
+            point: wrongPoint,
+            value: proof.value,
+            proof: proof.proof
+        ))
+
+        var wrongCommitmentTranscript = Halo2Blake2bReadTranscript(proof: proof.proof)
+        try wrongCommitmentTranscript.commonPoint(wrongCommitment)
+        wrongCommitmentTranscript.commonScalar(proof.value)
+        wrongCommitmentTranscript.commonScalar(proof.point)
+        XCTAssertFalse(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: wrongCommitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &wrongCommitmentTranscript
+        ))
+
+        var wrongPointTranscript = Halo2Blake2bReadTranscript(proof: proof.proof)
+        try wrongPointTranscript.commonPoint(proof.commitment)
+        wrongPointTranscript.commonScalar(proof.value)
+        wrongPointTranscript.commonScalar(wrongPoint)
+        XCTAssertFalse(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: wrongPoint,
+            value: proof.value,
+            transcript: &wrongPointTranscript
+        ))
+    }
+
+    func testZeroRoundIPAVerifyInTranscriptHandlesMalformedProofReads() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        var rng = SeededGenerator(state: 0x2323_4545_6767_8989)
+        let proof = try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(13)],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &rng
+        )
+
+        var invalidSCommitmentProof = proof.proof
+        invalidSCommitmentProof.replaceSubrange(0..<32, with: Data(repeating: 0, count: 32))
+        var invalidSCommitmentTranscript = Halo2Blake2bReadTranscript(proof: invalidSCommitmentProof)
+        try invalidSCommitmentTranscript.commonPoint(proof.commitment)
+        invalidSCommitmentTranscript.commonScalar(proof.value)
+        invalidSCommitmentTranscript.commonScalar(proof.point)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &invalidSCommitmentTranscript
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .invalidPointEncoding)
+        }
+
+        var truncatedProof = proof.proof
+        truncatedProof.removeLast()
+        var truncatedTranscript = Halo2Blake2bReadTranscript(proof: truncatedProof)
+        try truncatedTranscript.commonPoint(proof.commitment)
+        truncatedTranscript.commonScalar(proof.value)
+        truncatedTranscript.commonScalar(proof.point)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &truncatedTranscript
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .truncatedProof)
+        }
+
+        var nonCanonicalCProof = proof.proof
+        nonCanonicalCProof.replaceSubrange(32..<64, with: Self.bytes(fromLimbs: PastaFpParameters.modulus))
+        var nonCanonicalCTranscript = Halo2Blake2bReadTranscript(proof: nonCanonicalCProof)
+        try nonCanonicalCTranscript.commonPoint(proof.commitment)
+        nonCanonicalCTranscript.commonScalar(proof.value)
+        nonCanonicalCTranscript.commonScalar(proof.point)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &nonCanonicalCTranscript
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .invalidScalarEncoding)
+        }
+
+        var nonCanonicalFProof = proof.proof
+        nonCanonicalFProof.replaceSubrange(64..<96, with: Self.bytes(fromLimbs: PastaFpParameters.modulus))
+        var nonCanonicalFTranscript = Halo2Blake2bReadTranscript(proof: nonCanonicalFProof)
+        try nonCanonicalFTranscript.commonPoint(proof.commitment)
+        nonCanonicalFTranscript.commonScalar(proof.value)
+        nonCanonicalFTranscript.commonScalar(proof.point)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &nonCanonicalFTranscript
+        )) { error in
+            XCTAssertEqual(error as? Halo2TranscriptError, .invalidScalarEncoding)
+        }
+
+        var proofWithTrailingByte = proof.proof
+        proofWithTrailingByte.append(0)
+        var trailingTranscript = Halo2Blake2bReadTranscript(proof: proofWithTrailingByte)
+        try trailingTranscript.commonPoint(proof.commitment)
+        trailingTranscript.commonScalar(proof.value)
+        trailingTranscript.commonScalar(proof.point)
+        XCTAssertTrue(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: proof.commitment.projective,
+            point: proof.point,
+            value: proof.value,
+            transcript: &trailingTranscript
+        ))
+        XCTAssertEqual(trailingTranscript.remainingBytes, 1)
+    }
+
+    func testZeroRoundIPAAppendProofCanVerifyStandaloneTranscript() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        let polynomial = [PastaFp(13)]
+        let blind = PastaFp(17)
+        let point = PastaFp(19)
+        let commitment = try params.commit(coefficients: polynomial, blind: blind).toAffine()
+        let value = Self.evaluate(polynomial, at: point)
+
+        var writer = Halo2Blake2bWriteTranscript()
+        try writer.commonPoint(commitment)
+        writer.commonScalar(value)
+        writer.commonScalar(point)
+        var rng = SeededGenerator(state: 0x5555_aaaa_7777_cccc)
+        try Halo2IPAOpeningProof.appendProof(
+            params: params,
+            transcript: &writer,
+            polynomial: polynomial,
+            blind: blind,
+            point: point,
+            rng: &rng
+        )
+        XCTAssertEqual(writer.proofBytes.count, 96)
+
+        var reader = Halo2Blake2bReadTranscript(proof: writer.proofBytes)
+        try reader.commonPoint(commitment)
+        reader.commonScalar(value)
+        reader.commonScalar(point)
+        XCTAssertTrue(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: commitment.projective,
+            point: point,
+            value: value,
+            transcript: &reader
+        ))
+        XCTAssertEqual(reader.remainingBytes, 0)
+    }
+
+    func testZeroRoundIPAAppendProofRejectsInvalidPolynomialLengths() throws {
+        let params = try Self.zeroRoundIPAParameters()
+
+        var shortCreateRNG = SeededGenerator(state: 0xaaaa_bbbb_cccc_dddd)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &shortCreateRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+
+        var longCreateRNG = SeededGenerator(state: 0xbbbb_cccc_dddd_eeee)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.create(
+            params: params,
+            polynomial: [PastaFp(13), PastaFp(17)],
+            blind: PastaFp(19),
+            point: PastaFp(23),
+            rng: &longCreateRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 2))
+        }
+
+        var shortAppendTranscript = Halo2Blake2bWriteTranscript()
+        var shortAppendRNG = SeededGenerator(state: 0xcccc_dddd_eeee_ffff)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendProof(
+            params: params,
+            transcript: &shortAppendTranscript,
+            polynomial: [],
+            blind: PastaFp(17),
+            point: PastaFp(19),
+            rng: &shortAppendRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+        XCTAssertEqual(shortAppendTranscript.proofBytes.count, 0)
+
+        var longAppendTranscript = Halo2Blake2bWriteTranscript()
+        var longAppendRNG = SeededGenerator(state: 0xdddd_eeee_ffff_aaaa)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendProof(
+            params: params,
+            transcript: &longAppendTranscript,
+            polynomial: [PastaFp(13), PastaFp(17)],
+            blind: PastaFp(19),
+            point: PastaFp(23),
+            rng: &longAppendRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 2))
+        }
+        XCTAssertEqual(longAppendTranscript.proofBytes.count, 0)
+    }
+
+    func testZeroRoundSamePointMultiOpeningProofVerifies() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        let polynomial = [PastaFp(13)]
+        let blind = PastaFp(17)
+        let point = PastaFp(19)
+        let commitment = try params.commit(coefficients: polynomial, blind: blind)
+        let value = Self.evaluate(polynomial, at: point)
+
+        var writer = Halo2Blake2bWriteTranscript()
+        var rng = SeededGenerator(state: 0x5555_6666_7777_8888)
+        try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &writer,
+            queries: [
+                Halo2IPAProverQuery(point: point, polynomial: polynomial, blind: blind),
+            ],
+            rng: &rng
+        )
+
+        XCTAssertEqual(writer.proofBytes.count, 160)
+        var reader = Halo2Blake2bReadTranscript(proof: writer.proofBytes)
+        _ = reader.squeezeChallenge()
+        _ = reader.squeezeChallenge()
+        let qPrimeCommitment = try reader.readPoint()
+        let x3 = reader.squeezeChallenge().scalar
+        let qAtX3 = try reader.readScalar()
+        let x4 = reader.squeezeChallenge().scalar
+        let denominatorInv = try XCTUnwrap((x3 - point).inverted())
+        let quotientEval = (qAtX3 - value) * denominatorInv
+        let pCommitment = qPrimeCommitment.projective.multiplied(by: x4) + commitment
+        let pValue = quotientEval * x4 + qAtX3
+
+        XCTAssertTrue(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: pCommitment,
+            point: x3,
+            value: pValue,
+            transcript: &reader
+        ))
+        XCTAssertEqual(reader.remainingBytes, 0)
+    }
+
+    func testZeroRoundSamePointMultiOpeningProofTranscriptShape() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        let point = PastaFp(19)
+        let queries = [
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(13)], blind: PastaFp(17)),
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(23)], blind: PastaFp(29)),
+        ]
+
+        var writer = Halo2Blake2bWriteTranscript()
+        var rng = SeededGenerator(state: 0x2424_4646_6868_8a8a)
+        try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &writer,
+            queries: queries,
+            rng: &rng
+        )
+        XCTAssertEqual(writer.proofBytes.count, 160)
+
+        var reader = Halo2Blake2bReadTranscript(proof: writer.proofBytes)
+        _ = reader.squeezeChallenge()
+        _ = reader.squeezeChallenge()
+        XCTAssertEqual(reader.remainingBytes, 160)
+        _ = try reader.readPoint()
+        XCTAssertEqual(reader.remainingBytes, 128)
+        _ = reader.squeezeChallenge()
+        _ = try reader.readScalar()
+        XCTAssertEqual(reader.remainingBytes, 96)
+        _ = reader.squeezeChallenge()
+        _ = try reader.readPoint()
+        XCTAssertEqual(reader.remainingBytes, 64)
+        _ = reader.squeezeChallenge()
+        _ = reader.squeezeChallenge()
+        _ = try reader.readScalar()
+        _ = try reader.readScalar()
+        XCTAssertEqual(reader.remainingBytes, 0)
+    }
+
+    func testZeroRoundSamePointMultiOpeningProofAggregatesMultipleQueries() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        let point = PastaFp(19)
+        let queries = [
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(13)], blind: PastaFp(17)),
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(23)], blind: PastaFp(29)),
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(31)], blind: PastaFp(37)),
+        ]
+        let commitments = try queries.map { query in
+            try params.commit(coefficients: query.polynomial, blind: query.blind)
+        }
+
+        var writer = Halo2Blake2bWriteTranscript()
+        var rng = SeededGenerator(state: 0x6666_7777_8888_9999)
+        try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &writer,
+            queries: queries,
+            rng: &rng
+        )
+
+        var reader = Halo2Blake2bReadTranscript(proof: writer.proofBytes)
+        let x1 = reader.squeezeChallenge().scalar
+        _ = reader.squeezeChallenge()
+
+        var qCommitment = VestaProjective.identity
+        var qEval = PastaFp.zero
+        var power = PastaFp.one
+        for idx in queries.indices.reversed() {
+            qCommitment = qCommitment + commitments[idx].multiplied(by: power)
+            qEval += Self.evaluate(queries[idx].polynomial, at: point) * power
+            power *= x1
+        }
+
+        let qPrimeCommitment = try reader.readPoint()
+        let x3 = reader.squeezeChallenge().scalar
+        let qAtX3 = try reader.readScalar()
+        let x4 = reader.squeezeChallenge().scalar
+        let denominatorInv = try XCTUnwrap((x3 - point).inverted())
+        let quotientEval = (qAtX3 - qEval) * denominatorInv
+        let pCommitment = qPrimeCommitment.projective.multiplied(by: x4) + qCommitment
+        let pValue = quotientEval * x4 + qAtX3
+
+        XCTAssertTrue(try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: pCommitment,
+            point: x3,
+            value: pValue,
+            transcript: &reader
+        ))
+        XCTAssertEqual(reader.remainingBytes, 0)
+    }
+
+    func testZeroRoundSamePointMultiOpeningProofRejectsTamperedProof() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        let point = PastaFp(19)
+        let queries = [
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(13)], blind: PastaFp(17)),
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(23)], blind: PastaFp(29)),
+        ]
+        let commitments = try queries.map { query in
+            try params.commit(coefficients: query.polynomial, blind: query.blind)
+        }
+
+        var writer = Halo2Blake2bWriteTranscript()
+        var rng = SeededGenerator(state: 0x1111_7777_2222_8888)
+        try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &writer,
+            queries: queries,
+            rng: &rng
+        )
+
+        let verified = try Self.verifyZeroRoundSamePointMultiOpeningProof(
+            params: params,
+            queries: queries,
+            commitments: commitments,
+            proof: writer.proofBytes
+        )
+        XCTAssertTrue(verified.ok)
+        XCTAssertEqual(verified.remainingBytes, 0)
+
+        var tamperedQAtX3 = writer.proofBytes
+        tamperedQAtX3[32] ^= 0x01
+        let tampered = try Self.verifyZeroRoundSamePointMultiOpeningProof(
+            params: params,
+            queries: queries,
+            commitments: commitments,
+            proof: tamperedQAtX3
+        )
+        XCTAssertFalse(tampered.ok)
+
+        var proofWithTrailingByte = writer.proofBytes
+        proofWithTrailingByte.append(0)
+        let trailing = try Self.verifyZeroRoundSamePointMultiOpeningProof(
+            params: params,
+            queries: queries,
+            commitments: commitments,
+            proof: proofWithTrailingByte
+        )
+        XCTAssertTrue(trailing.ok)
+        XCTAssertEqual(trailing.remainingBytes, 1)
+    }
+
+    func testZeroRoundSamePointMultiOpeningProofRejectsWrongCommitmentSet() throws {
+        let params = try Self.zeroRoundIPAParameters()
+        let point = PastaFp(19)
+        let queries = [
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(13)], blind: PastaFp(17)),
+            Halo2IPAProverQuery(point: point, polynomial: [PastaFp(23)], blind: PastaFp(29)),
+        ]
+        let commitments = try queries.map { query in
+            try params.commit(coefficients: query.polynomial, blind: query.blind)
+        }
+
+        var writer = Halo2Blake2bWriteTranscript()
+        var rng = SeededGenerator(state: 0x1414_3636_5858_7a7a)
+        try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &writer,
+            queries: queries,
+            rng: &rng
+        )
+
+        var wrongCommitments = commitments
+        wrongCommitments[1] = try params.commit(coefficients: [PastaFp(31)], blind: PastaFp(37))
+        let wrongCommitmentSet = try Self.verifyZeroRoundSamePointMultiOpeningProof(
+            params: params,
+            queries: queries,
+            commitments: wrongCommitments,
+            proof: writer.proofBytes
+        )
+        XCTAssertFalse(wrongCommitmentSet.ok)
+        XCTAssertEqual(wrongCommitmentSet.remainingBytes, 0)
+    }
+
+    func testZeroRoundSamePointMultiOpeningProofRejectsInvalidQueries() throws {
+        let params = try Self.zeroRoundIPAParameters()
+
+        var emptyTranscript = Halo2Blake2bWriteTranscript()
+        var emptyRNG = SeededGenerator(state: 0x7777_8888_9999_aaaa)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &emptyTranscript,
+            queries: [],
+            rng: &emptyRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+        XCTAssertEqual(emptyTranscript.proofBytes.count, 0)
+
+        var invalidFirstTranscript = Halo2Blake2bWriteTranscript()
+        var invalidFirstRNG = SeededGenerator(state: 0x8888_9999_aaaa_bbbb)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &invalidFirstTranscript,
+            queries: [
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [], blind: PastaFp(17)),
+            ],
+            rng: &invalidFirstRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+        XCTAssertEqual(invalidFirstTranscript.proofBytes.count, 0)
+
+        var tooLongFirstTranscript = Halo2Blake2bWriteTranscript()
+        var tooLongFirstRNG = SeededGenerator(state: 0xbbbb_cccc_dddd_eeee)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &tooLongFirstTranscript,
+            queries: [
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [PastaFp(13), PastaFp(17)], blind: PastaFp(19)),
+            ],
+            rng: &tooLongFirstRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 2))
+        }
+        XCTAssertEqual(tooLongFirstTranscript.proofBytes.count, 0)
+
+        var invalidLaterTranscript = Halo2Blake2bWriteTranscript()
+        var invalidLaterRNG = SeededGenerator(state: 0x9999_aaaa_bbbb_cccc)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &invalidLaterTranscript,
+            queries: [
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [PastaFp(13)], blind: PastaFp(17)),
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [], blind: PastaFp(29)),
+            ],
+            rng: &invalidLaterRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 0))
+        }
+        XCTAssertEqual(invalidLaterTranscript.proofBytes.count, 0)
+
+        var tooLongLaterTranscript = Halo2Blake2bWriteTranscript()
+        var tooLongLaterRNG = SeededGenerator(state: 0xcccc_dddd_eeee_ffff)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &tooLongLaterTranscript,
+            queries: [
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [PastaFp(13)], blind: PastaFp(17)),
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [PastaFp(23), PastaFp(29)], blind: PastaFp(31)),
+            ],
+            rng: &tooLongLaterRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .invalidPolynomialLength(expected: 1, actual: 2))
+        }
+        XCTAssertEqual(tooLongLaterTranscript.proofBytes.count, 0)
+
+        var mismatchedPointTranscript = Halo2Blake2bWriteTranscript()
+        var mismatchedPointRNG = SeededGenerator(state: 0xaaaa_bbbb_cccc_dddd)
+        XCTAssertThrowsError(try Halo2IPAOpeningProof.appendSamePointMultiOpeningProof(
+            params: params,
+            transcript: &mismatchedPointTranscript,
+            queries: [
+                Halo2IPAProverQuery(point: PastaFp(19), polynomial: [PastaFp(13)], blind: PastaFp(17)),
+                Halo2IPAProverQuery(point: PastaFp(23), polynomial: [PastaFp(29)], blind: PastaFp(31)),
+            ],
+            rng: &mismatchedPointRNG
+        )) { error in
+            XCTAssertEqual(error as? Halo2IPAError, .nonInvertibleChallenge)
+        }
+        XCTAssertEqual(mismatchedPointTranscript.proofBytes.count, 0)
     }
 
     func testIPAOpeningProofVerifiesRustHalo2Vector() throws {
@@ -758,6 +1623,58 @@ final class Halo2PastaTests: XCTestCase {
         coefficients.reversed().reduce(PastaFp.zero) { accumulator, coefficient in
             accumulator * point + coefficient
         }
+    }
+
+    private static func zeroRoundIPAParameters() throws -> Halo2IPAParameters {
+        let generator = VestaAffine.generator
+        return try Halo2IPAParameters(
+            k: 0,
+            g: [generator.multiplied(by: PastaFp(3))],
+            gLagrange: [generator.multiplied(by: PastaFp(5))],
+            w: generator.multiplied(by: PastaFp(7)),
+            u: generator.multiplied(by: PastaFp(11))
+        )
+    }
+
+    private static func verifyZeroRoundSamePointMultiOpeningProof(
+        params: Halo2IPAParameters,
+        queries: [Halo2IPAProverQuery],
+        commitments: [VestaProjective],
+        proof: Data
+    ) throws -> (ok: Bool, remainingBytes: Int) {
+        precondition(params.k == 0)
+        precondition(queries.count == commitments.count)
+        precondition(!queries.isEmpty)
+
+        var reader = Halo2Blake2bReadTranscript(proof: proof)
+        let x1 = reader.squeezeChallenge().scalar
+        _ = reader.squeezeChallenge()
+
+        var qCommitment = VestaProjective.identity
+        var qEval = PastaFp.zero
+        var power = PastaFp.one
+        for idx in queries.indices.reversed() {
+            qCommitment = qCommitment + commitments[idx].multiplied(by: power)
+            qEval += Self.evaluate(queries[idx].polynomial, at: queries[idx].point) * power
+            power *= x1
+        }
+
+        let qPrimeCommitment = try reader.readPoint()
+        let x3 = reader.squeezeChallenge().scalar
+        let qAtX3 = try reader.readScalar()
+        let x4 = reader.squeezeChallenge().scalar
+        let denominatorInv = try XCTUnwrap((x3 - queries[0].point).inverted())
+        let quotientEval = (qAtX3 - qEval) * denominatorInv
+        let pCommitment = qPrimeCommitment.projective.multiplied(by: x4) + qCommitment
+        let pValue = quotientEval * x4 + qAtX3
+        let ok = try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: pCommitment,
+            point: x3,
+            value: pValue,
+            transcript: &reader
+        )
+        return (ok, reader.remainingBytes)
     }
 
     private static func zk1Payload(
