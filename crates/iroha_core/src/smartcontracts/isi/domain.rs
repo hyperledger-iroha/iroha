@@ -8196,6 +8196,62 @@ mod tests {
     }
 
     #[test]
+    fn asset_home_more_coverage_balance_policy_migrates_empty_definition_without_assets() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("policy-empty-migration", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let bpng = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register empty global definition");
+
+        SetAssetDefinitionBalancePolicy::new(
+            definition_id.clone(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(bpng),
+        )
+        .execute(&authority, &mut tx)
+        .expect("empty global definition can migrate policy without balances");
+
+        let updated = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition exists");
+        assert_eq!(
+            updated.balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
+        );
+        assert!(
+            tx.world
+                .asset_definition_assets
+                .get(&definition_id)
+                .is_none_or(|assets| assets.is_empty()),
+            "empty migration should not synthesize scoped balance entries"
+        );
+    }
+
+    #[test]
     fn asset_home_coverage_balance_policy_rejects_unknown_migration_dataspace() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
