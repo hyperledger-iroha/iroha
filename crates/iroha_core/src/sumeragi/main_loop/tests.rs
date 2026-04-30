@@ -80775,7 +80775,7 @@ async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_with_remote_
         "remote NEW_VIEW votes must not reserve a dependency-driven frontier recovery cause"
     );
     assert!(
-        !actor.frontier_vote_backed_recovery_active(height, now),
+        !actor.frontier_vote_backed_recovery_active(height, current_view, now),
         "remote NEW_VIEW votes must not activate vote-backed frontier recovery"
     );
     let committed_height_after_votes = actor

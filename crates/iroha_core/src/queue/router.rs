@@ -11,7 +11,7 @@ use std::sync::Arc;
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
-    asset::{AssetBalancePolicy, AssetDefinitionAlias, AssetDefinitionId},
+    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
     domain::DomainId,
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
@@ -41,6 +41,7 @@ use iroha_executor_data_model::permission::{
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
     nexus::CanPublishSpaceDirectoryManifest,
 };
+use mv::storage::StorageReadOnly;
 
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
@@ -1617,7 +1618,7 @@ fn asset_definition_dataspace_target(
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     let resolved = state_view
-        .and_then(|view| view.world.asset_definition(asset_definition_id).ok())
+        .and_then(|view| asset_definition_for_routing(&view.world, asset_definition_id))
         .map(|definition| {
             let balance_scope_policy = definition.balance_scope_policy();
             (definition.id, balance_scope_policy, definition.alias)
@@ -1649,13 +1650,10 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
 ) -> Option<DataSpaceId> {
-    let resolved = world
-        .asset_definition(asset_definition_id)
-        .ok()
-        .map(|definition| {
-            let balance_scope_policy = definition.balance_scope_policy();
-            (definition.id, balance_scope_policy, definition.alias)
-        });
+    let resolved = asset_definition_for_routing(world, asset_definition_id).map(|definition| {
+        let balance_scope_policy = definition.balance_scope_policy();
+        (definition.id, balance_scope_policy, definition.alias)
+    });
     let effective_id = resolved
         .as_ref()
         .map(|(resolved_id, _, _)| resolved_id)
@@ -1674,6 +1672,28 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
         effective_policy,
         dataspace_catalog,
     )
+}
+
+fn asset_definition_for_routing<W: WorldReadOnly>(
+    world: &W,
+    asset_definition_id: &AssetDefinitionId,
+) -> Option<AssetDefinition> {
+    world
+        .asset_definition(asset_definition_id)
+        .ok()
+        .or_else(|| {
+            world
+                .asset_definitions_iter()
+                .find(|definition| definition.id == *asset_definition_id)
+                .cloned()
+                .map(|mut definition| {
+                    definition.alias = world
+                        .asset_definition_alias_bindings()
+                        .get(&definition.id)
+                        .map(|binding| binding.alias.clone());
+                    definition
+                })
+        })
 }
 
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
