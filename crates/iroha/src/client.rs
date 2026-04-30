@@ -1946,6 +1946,43 @@ impl TransactionResponseHandler {
     }
 }
 
+fn async_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("Failed to build async HTTP client")
+    })
+}
+
+async fn async_client_response_to_response(
+    response: reqwest::Response,
+) -> Result<Response<Vec<u8>>> {
+    let status = response.status();
+    let headers: Vec<_> = response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let body = response
+        .bytes()
+        .await
+        .wrap_err("Failed to get async response as bytes")?;
+
+    let mut builder = Response::builder().status(status);
+    let headers_map = builder
+        .headers_mut()
+        .ok_or_else(|| eyre!("Failed to get headers map reference."))?;
+    for (key, value) in headers {
+        headers_map.insert(key, value);
+    }
+    builder
+        .body(body.to_vec())
+        .wrap_err("Failed to construct response bytes body")
+}
+
 /// Decode a `/status` response body, preferring Norito and falling back to JSON.
 fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
     if resp.status() != StatusCode::OK {
@@ -6884,6 +6921,43 @@ impl Client {
             .build()?
             .send()
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
+        TransactionResponseHandler::handle(&response)?;
+        Ok(hash)
+    }
+
+    /// Submit a prebuilt transaction with the asynchronous HTTP transport.
+    ///
+    /// Returns the submitted transaction's hash once Torii accepts the request.
+    ///
+    /// # Errors
+    /// Fails if sending the transaction to the peer fails, if Torii returns a non-success
+    /// response, or if the submit compatibility advert is missing or incompatible.
+    pub async fn submit_transaction_async(
+        &self,
+        transaction: &SignedTransaction,
+    ) -> Result<HashOf<SignedTransaction>> {
+        self.ensure_transaction_submit_compatibility()?;
+        iroha_logger::trace!(tx=?transaction, "Submitting");
+
+        let transaction_bytes: Vec<u8> = transaction.encode_versioned();
+        let hash = transaction.hash();
+        let mut headers = self.headers.clone();
+        headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+
+        let mut request = async_http_client()
+            .post(join_torii_url(&self.torii_url, torii_uri::TRANSACTION))
+            .timeout(self.torii_request_timeout)
+            .header("Content-Type", APPLICATION_NORITO);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .body(transaction_bytes)
+            .send()
+            .await
+            .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
+        let response = async_client_response_to_response(response).await?;
         TransactionResponseHandler::handle(&response)?;
         Ok(hash)
     }
