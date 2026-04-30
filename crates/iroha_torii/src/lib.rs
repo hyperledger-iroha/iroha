@@ -40762,15 +40762,15 @@ pub(crate) mod tests_runtime_handlers {
         hash
     }
 
-    pub(crate) fn record_latest_committed_header_for_test(
-        app: &SharedAppState,
+    fn make_empty_signed_block(
         height: u64,
+        prev_hash: Option<HashOf<BlockHeader>>,
         creation_time_ms: u64,
-    ) {
+    ) -> SignedBlock {
         let keypair = KeyPair::random();
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("nonzero height"),
-            None,
+            prev_hash,
             None,
             None,
             creation_time_ms,
@@ -40780,10 +40780,43 @@ pub(crate) mod tests_runtime_handlers {
             0,
             SignatureOf::from_hash(keypair.private_key(), header.hash()),
         );
-        let block = SignedBlock::presigned(signature, header, Vec::new());
-        let hash = store_block(app, block);
+        SignedBlock::presigned(signature, header, Vec::new())
+    }
+
+    pub(crate) fn record_latest_committed_header_for_test(
+        app: &SharedAppState,
+        height: u64,
+        creation_time_ms: u64,
+    ) {
+        let durable_blocks_count = app.kura.durable_blocks_count();
+        assert_eq!(
+            app.state.committed_height(),
+            durable_blocks_count,
+            "test block hash journal must match durable Kura height before appending headers"
+        );
+        let durable_height =
+            u64::try_from(durable_blocks_count).expect("durable height fits into u64");
+        assert!(
+            height > durable_height,
+            "latest test header height must advance durable Kura height"
+        );
+
+        let mut prev_hash =
+            NonZeroUsize::new(durable_height.try_into().expect("height fits usize"))
+                .and_then(|height| app.kura.get_block(height))
+                .map(|block| block.hash());
         let mut block_hashes = app.state.block_hashes.block();
-        block_hashes.push_for_tests(hash);
+        for next_height in durable_height.saturating_add(1)..=height {
+            let timestamp = if next_height == height {
+                creation_time_ms
+            } else {
+                0
+            };
+            let block = make_empty_signed_block(next_height, prev_hash, timestamp);
+            let hash = store_block(app, block);
+            block_hashes.push_for_tests(hash);
+            prev_hash = Some(hash);
+        }
         block_hashes.commit_for_tests();
     }
 
