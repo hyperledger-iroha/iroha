@@ -79877,7 +79877,12 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
         actor.latest_committed_qc(),
         committed_height,
     );
-    let current_view = 1_u64;
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let current_view = (1..search_limit)
+        .find(|candidate_view| !actor.local_is_round_leader(height, *candidate_view))
+        .expect("find non-zero post-rotation view where local peer is not leader");
     let now = Instant::now();
     let timeout = super::idle_view_timeout(
         false,
@@ -79913,6 +79918,10 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     assert!(
         !actor.slot_has_proposal_evidence(height, current_view),
         "stale old-view frontier ownership must not count as proposal evidence for the post-rotation round"
+    );
+    assert!(
+        !actor.local_is_round_leader(height, current_view),
+        "test setup must avoid the forced leader self-proposal path"
     );
 
     let before = super::status::snapshot();
