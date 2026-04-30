@@ -34,7 +34,6 @@ use iroha_data_model::nexus::{
     LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
-    Encode,
     account::AccountId,
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
@@ -52,7 +51,7 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
-use norito::core::{self as ncore, NoritoSerialize};
+use norito::core as ncore;
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
@@ -82,7 +81,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     prelude::*,
-    state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
+    state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly, WorldView},
     sumeragi::status,
     telemetry::StateTelemetry,
     tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
@@ -222,6 +221,8 @@ pub struct Queue {
     /// Stored behind `Arc` to avoid deep cloning heavy transactions
     /// (including instruction payloads) during queue operations.
     txs: DashMap<SignedTxHash, Arc<CheckedTransaction<'static>>>,
+    /// Cached count of transactions tracked by `txs`.
+    active_count: AtomicUsize,
     /// Cached routing decision per transaction hash.
     routing_decisions: DashMap<SignedTxHash, RoutingDecision>,
     /// Cached encoded length per queued transaction hash.
@@ -234,6 +235,8 @@ pub struct Queue {
     queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
     queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
+    /// Cached count of hashes still waiting in `tx_hashes`.
+    queued_count: AtomicUsize,
     /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -460,6 +463,8 @@ impl BackpressureHandle {
 pub enum Error {
     /// Queue is full
     Full,
+    /// Queue latency budget is saturated
+    LatencySaturated,
     /// Transaction expired
     Expired,
     /// Transaction is already applied
@@ -593,6 +598,141 @@ impl Drop for TransactionGuard {
     }
 }
 
+trait QueueAdmissionStateAccess {
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        queue: &Queue,
+        tx: &AcceptedTransaction<'static>,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error>;
+
+    fn extract_lane_identity_metadata(
+        &mut self,
+        authority: &AccountId,
+        dataspace_id: DataSpaceId,
+        lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error>;
+
+    fn extract_lane_authority_domains(
+        &mut self,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
+}
+
+struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
+    world: &'view W,
+    nexus: &'view Nexus,
+}
+
+impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
+    const fn new<'view>(
+        world: &'view W,
+        nexus: &'view Nexus,
+    ) -> EagerAdmissionStateAccess<'view, W> {
+        EagerAdmissionStateAccess { world, nexus }
+    }
+}
+
+impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, W> {
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        queue: &Queue,
+        tx: &AcceptedTransaction<'static>,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error> {
+        queue.recheck_external_nexus_fee_admission(tx, self.world, self.nexus, route_dataspace_id)
+    }
+
+    fn extract_lane_identity_metadata(
+        &mut self,
+        authority: &AccountId,
+        dataspace_id: DataSpaceId,
+        lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
+        Queue::extract_lane_identity_metadata(self.world, authority, dataspace_id, lane_alias)
+    }
+
+    fn extract_lane_authority_domains(
+        &mut self,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+        Queue::extract_lane_authority_domains(self.world, authority, lane_alias)
+    }
+}
+
+struct LazyAdmissionStateAccess<'state> {
+    state: &'state State,
+    nexus: Option<Nexus>,
+    world: Option<WorldView<'state>>,
+}
+
+impl<'state> LazyAdmissionStateAccess<'state> {
+    const fn new(state: &'state State) -> Self {
+        Self {
+            state,
+            nexus: None,
+            world: None,
+        }
+    }
+
+    fn ensure_world_and_nexus(&mut self) {
+        if self.nexus.is_none() {
+            self.nexus = Some(self.state.nexus_snapshot());
+        }
+        if self.world.is_none() {
+            let nexus = self.nexus.as_ref().expect("nexus initialized above");
+            self.world = Some(self.state.world_view_with_nexus(nexus));
+        }
+    }
+}
+
+impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
+    fn recheck_external_nexus_fee_admission(
+        &mut self,
+        queue: &Queue,
+        tx: &AcceptedTransaction<'static>,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error> {
+        self.ensure_world_and_nexus();
+        queue.recheck_external_nexus_fee_admission(
+            tx,
+            self.world.as_ref().expect("world initialized above"),
+            self.nexus.as_ref().expect("nexus initialized above"),
+            route_dataspace_id,
+        )
+    }
+
+    fn extract_lane_identity_metadata(
+        &mut self,
+        authority: &AccountId,
+        dataspace_id: DataSpaceId,
+        lane_alias: &str,
+    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
+        self.ensure_world_and_nexus();
+        Queue::extract_lane_identity_metadata(
+            self.world.as_ref().expect("world initialized above"),
+            authority,
+            dataspace_id,
+            lane_alias,
+        )
+    }
+
+    fn extract_lane_authority_domains(
+        &mut self,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+        self.ensure_world_and_nexus();
+        Queue::extract_lane_authority_domains(
+            self.world.as_ref().expect("world initialized above"),
+            authority,
+            lane_alias,
+        )
+    }
+}
+
 impl Queue {
     fn collect_lane_privacy_proofs(tx: &CheckedTransaction<'_>) -> Vec<LanePrivacyProof> {
         tx.external()
@@ -605,19 +745,7 @@ impl Queue {
     }
 
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        match tx.entrypoint() {
-            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => signed
-                .encoded_len_exact()
-                .unwrap_or_else(|| signed.encoded_len()),
-            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(entrypoint) => {
-                entrypoint
-                    .encoded_len_exact()
-                    .unwrap_or_else(|| entrypoint.encoded_len())
-            }
-            iroha_data_model::transaction::TransactionEntrypoint::Time(entrypoint) => entrypoint
-                .encoded_len_exact()
-                .unwrap_or_else(|| entrypoint.encoded_len()),
-        }
+        tx.encoded_len()
     }
 
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
@@ -984,7 +1112,6 @@ impl Queue {
         alias: &str,
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
-        world: &impl WorldReadOnly,
     ) -> Result<bool, Error> {
         if rules.protected_namespaces.is_empty() {
             return Ok(false);
@@ -1096,7 +1223,6 @@ impl Queue {
             register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
         if !contract_instr_seen {
-            let _ = world;
             return Ok(false);
         }
 
@@ -1132,8 +1258,6 @@ impl Queue {
                 "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
             ));
         }
-
-        let _ = world;
 
         Ok(true)
     }
@@ -1318,6 +1442,7 @@ impl Queue {
                 dataspace_catalog: RwLock::new(Arc::clone(dataspace_catalog)),
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
+                active_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
                 txs_per_user: DashMap::new(),
                 routing_decisions: DashMap::new(),
@@ -1326,6 +1451,7 @@ impl Queue {
                 tx_enqueued_at_ms: DashMap::new(),
                 queued_tx_enqueued_at_ms: DashMap::new(),
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
+                queued_count: AtomicUsize::new(0),
                 tx_gossip_payloads: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
@@ -1687,11 +1813,12 @@ impl Queue {
         }
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state_view.telemetry;
+        let mut state_access =
+            EagerAdmissionStateAccess::new(state_view.world(), &state_view.nexus);
         self.push_checked_with_lane_context(
             checked,
             routing_decision,
-            state_view.world(),
-            &state_view.nexus,
+            &mut state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1764,16 +1891,14 @@ impl Queue {
             });
         }
 
-        let world = state.world_view();
-        let nexus = state.nexus_snapshot();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
 
+        let mut state_access = LazyAdmissionStateAccess::new(state);
         self.push_checked_with_lane_context(
             checked,
             routing_decision,
-            &world,
-            &nexus,
+            &mut state_access,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1782,12 +1907,11 @@ impl Queue {
 
     /// Shared admission logic once routing + committed-hash checks have been performed.
     #[allow(clippy::too_many_lines)]
-    fn push_checked_with_lane_context(
+    fn push_checked_with_lane_context<C: QueueAdmissionStateAccess>(
         &self,
         checked: CheckedTransaction<'static>,
         routing_decision: RoutingDecision,
-        world: &impl WorldReadOnly,
-        nexus: &Nexus,
+        state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
@@ -1795,10 +1919,9 @@ impl Queue {
         let dataspace_id = routing_decision.dataspace_id;
 
         if checked.as_accepted().external().is_some() {
-            if let Err(err) = self.recheck_external_nexus_fee_admission(
+            if let Err(err) = state_access.recheck_external_nexus_fee_admission(
+                self,
                 checked.as_accepted(),
-                world,
-                nexus,
                 Some(dataspace_id),
             ) {
                 return Err(Failure {
@@ -1919,7 +2042,7 @@ impl Queue {
                     }
                 }
                 let protected_namespace_result =
-                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world);
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked);
                 let protected_namespace_applied = match protected_namespace_result {
                     Ok(applied) => applied,
                     Err(err) => {
@@ -1998,31 +2121,22 @@ impl Queue {
             Some(lane_privacy_registry_handle)
         };
 
-        let lane_identity = checked
-            .as_ref()
-            .authority_opt()
-            .map(|authority| {
-                Self::extract_lane_identity_metadata(world, authority, dataspace_id, &lane_alias)
-            })
-            .transpose()
-            .map_err(|err| Failure {
-                tx: Box::new(checked.as_accepted().clone()),
-                err,
-            })?
-            .unwrap_or((None, Vec::new()));
-
         let lane_compliance = self.lane_compliance.read().clone();
         if let (Some(engine), Some(authority)) =
             (lane_compliance.as_ref(), checked.as_ref().authority_opt())
         {
-            let (uaid_value, capability_tags) = lane_identity;
-            let authority_domains =
-                Self::extract_lane_authority_domains(world, authority, &lane_alias).map_err(
-                    |err| Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err,
-                    },
-                )?;
+            let (uaid_value, capability_tags) = state_access
+                .extract_lane_identity_metadata(authority, dataspace_id, &lane_alias)
+                .map_err(|err| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                })?;
+            let authority_domains = state_access
+                .extract_lane_authority_domains(authority, &lane_alias)
+                .map_err(|err| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                })?;
             let ctx = LaneComplianceContext {
                 lane_id,
                 dataspace_id,
@@ -2076,7 +2190,7 @@ impl Queue {
         let hash = checked.as_ref().hash();
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
         let _guard = self.push_remove_lock.lock();
-        let txs_len = self.txs.len();
+        let txs_len = self.active_len();
         let entry = match self.txs.entry(hash) {
             Entry::Occupied(_) => {
                 return Err(Failure {
@@ -2113,6 +2227,7 @@ impl Queue {
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
         let tx_arc = Arc::new(checked);
         entry.insert(Arc::clone(&tx_arc));
+        self.track_active_transaction();
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
         self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
@@ -2120,15 +2235,18 @@ impl Queue {
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
+        let mut restore_queued_age_after_compaction = false;
         if !pushed {
             let compacted = self.compact_hash_queue_locked();
             if compacted > 0 {
+                restore_queued_age_after_compaction = true;
                 pushed = self.tx_hashes.push(hash).is_ok();
             }
         }
         if !pushed {
             warn!("Queue is full");
             let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+            self.untrack_active_transaction();
             if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
@@ -2137,7 +2255,7 @@ impl Queue {
             if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
                 self.decrease_per_user_tx_count(authority);
             }
-            self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             return Err(Failure {
                 tx: Box::new(
                     Arc::try_unwrap(err_tx)
@@ -2146,6 +2264,9 @@ impl Queue {
                 ),
                 err: Error::Full,
             });
+        }
+        if restore_queued_age_after_compaction {
+            self.record_queued_age(hash, enqueue_at_ms);
         }
         self.tx_encoded_len.insert(hash, encoded_len);
         if let Some(payload) = gossip_payload {
@@ -2402,7 +2523,7 @@ impl Queue {
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
         let _guard = self.push_remove_lock.lock();
-        let txs_len = self.txs.len();
+        let txs_len = self.active_len();
         let entry = match self.txs.entry(hash) {
             Entry::Occupied(_) => {
                 return Err(Failure {
@@ -2439,6 +2560,7 @@ impl Queue {
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
         let tx_arc = Arc::new(checked);
         entry.insert(Arc::clone(&tx_arc));
+        self.track_active_transaction();
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
         self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
@@ -2446,15 +2568,18 @@ impl Queue {
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
+        let mut restore_queued_age_after_compaction = false;
         if !pushed {
             let compacted = self.compact_hash_queue_locked();
             if compacted > 0 {
+                restore_queued_age_after_compaction = true;
                 pushed = self.tx_hashes.push(hash).is_ok();
             }
         }
         if !pushed {
             warn!("Queue is full");
             let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
+            self.untrack_active_transaction();
             if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
@@ -2463,7 +2588,7 @@ impl Queue {
             if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
                 self.decrease_per_user_tx_count(authority);
             }
-            self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             return Err(Failure {
                 tx: Box::new(
                     Arc::try_unwrap(err_tx)
@@ -2472,6 +2597,9 @@ impl Queue {
                 ),
                 err: Error::Full,
             });
+        }
+        if restore_queued_age_after_compaction {
+            self.record_queued_age(hash, enqueue_at_ms);
         }
         self.tx_encoded_len.insert(hash, encoded_len);
         self.tx_gas_cost.insert(hash, proposal_gas_cost);
@@ -2527,7 +2655,9 @@ impl Queue {
     /// Used when a peer is removed from the topology so it stops advertising stale transactions.
     pub fn clear_all(&self) {
         while let Some(hash) = self.tx_hashes.pop() {
-            self.txs.remove(&hash);
+            if self.txs.remove(&hash).is_some() {
+                self.untrack_active_transaction();
+            }
             self.routing_decisions.remove(&hash);
             self.removed_hashes.remove(&hash);
         }
@@ -2546,7 +2676,7 @@ impl Queue {
             self.lane_teu_pending.clear();
             self.dataspace_teu_pending.clear();
         }
-        self.publish_backpressure_state(0, None);
+        self.publish_backpressure_state(self.active_len(), None);
     }
 
     fn record_inflight_guard(&self) {
@@ -2605,6 +2735,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2633,12 +2764,14 @@ impl Queue {
                 continue;
             }
 
-            if let Err(e) = self.recheck_external_nexus_fee_admission(
-                tx_arc.as_accepted(),
-                state_view.world(),
-                &state_view.nexus,
-                routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
-            ) {
+            if tx_arc.as_accepted().external().is_some()
+                && let Err(e) = self.recheck_external_nexus_fee_admission(
+                    tx_arc.as_accepted(),
+                    state_view.world(),
+                    &state_view.nexus,
+                    routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
+                )
+            {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -2646,6 +2779,7 @@ impl Queue {
                 );
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2731,8 +2865,7 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         let committed_transactions = state.transactions.view();
-        let world = state.world_view();
-        let nexus = state.nexus_snapshot();
+        let mut state_access = LazyAdmissionStateAccess::new(state);
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2769,6 +2902,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2802,12 +2936,13 @@ impl Queue {
                 .get(&hash)
                 .map(|decision| decision.dataspace_id)
                 .or_else(|| routing_ledger::get(&hash).map(|decision| decision.dataspace_id));
-            if let Err(e) = self.recheck_external_nexus_fee_admission(
-                tx_arc.as_accepted(),
-                &world,
-                &nexus,
-                route_dataspace_id,
-            ) {
+            if tx_arc.as_accepted().external().is_some()
+                && let Err(e) = state_access.recheck_external_nexus_fee_admission(
+                    self,
+                    tx_arc.as_accepted(),
+                    route_dataspace_id,
+                )
+            {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -2815,6 +2950,7 @@ impl Queue {
                 );
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_active_transaction();
                     self.untrack_expiry_hash(&hash);
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
@@ -2891,7 +3027,7 @@ impl Queue {
         &self,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> bool {
-        if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
             return false;
         }
         if self.inflight_guards.load(Ordering::Relaxed) > 0 {
@@ -2899,11 +3035,11 @@ impl Queue {
         }
 
         let _guard = self.push_remove_lock.lock();
-        if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
             return false;
         }
 
-        let total = self.txs.len();
+        let total = self.active_len();
         // Sort by hash to keep the recovery order deterministic across peers.
         let mut hashes: Vec<SignedTxHash> = self.txs.iter().map(|entry| *entry.key()).collect();
         hashes.sort();
@@ -2952,13 +3088,77 @@ impl Queue {
 
     /// Return the number of transactions tracked by the queue (queued + in-flight).
     pub fn active_len(&self) -> usize {
-        self.txs.len()
+        self.active_count.load(Ordering::Relaxed)
     }
 
     /// Return the number of transactions still awaiting selection from the queue.
     pub fn queued_len(&self) -> usize {
-        let queued = self.tx_hashes.len();
-        queued.saturating_sub(self.removed_hashes.len())
+        if self.tx_hashes.is_empty() {
+            return 0;
+        }
+        self.queued_count.load(Ordering::Relaxed)
+    }
+
+    fn track_active_transaction(&self) {
+        self.active_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn untrack_active_transaction(&self) {
+        Self::decrement_atomic_count(&self.active_count, "active transaction");
+    }
+
+    fn track_queued_hash(&self) {
+        self.queued_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn untrack_queued_hash(&self) {
+        Self::decrement_atomic_count(&self.queued_count, "queued transaction");
+    }
+
+    #[cfg(test)]
+    fn assert_pressure_counters_consistent_for_tests(&self) {
+        assert_eq!(
+            self.active_len(),
+            self.txs.len(),
+            "active transaction counter must match tracked transactions"
+        );
+        assert_eq!(
+            self.queued_count.load(Ordering::Relaxed),
+            self.queued_tx_enqueued_at_ms.len(),
+            "queued transaction counter must match queued-age index"
+        );
+        if self.tx_hashes.is_empty() {
+            assert_eq!(
+                self.queued_len(),
+                0,
+                "empty hash queue must report zero queued transactions"
+            );
+        } else {
+            assert_eq!(
+                self.queued_len(),
+                self.queued_tx_enqueued_at_ms.len(),
+                "queued length must match queued-age index while the hash queue is non-empty"
+            );
+        }
+    }
+
+    fn decrement_atomic_count(counter: &AtomicUsize, name: &str) {
+        let mut current = counter.load(Ordering::Relaxed);
+        loop {
+            debug_assert!(current > 0, "{name} counter underflow");
+            if current == 0 {
+                return;
+            }
+            match counter.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(next) => current = next,
+            }
+        }
     }
 
     /// Track a queued transaction hash for TTL sweeps.
@@ -3195,19 +3395,28 @@ impl Queue {
     }
 
     fn record_queued_age(&self, hash: SignedTxHash, enqueued_at_ms: u64) {
-        self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        if self
+            .queued_tx_enqueued_at_ms
+            .insert(hash, enqueued_at_ms)
+            .is_none()
+        {
+            self.track_queued_hash();
+        }
         self.queued_age_ring
             .lock()
             .push_back((hash, enqueued_at_ms));
     }
 
     fn remove_queued_age(&self, hash: &SignedTxHash) {
-        self.queued_tx_enqueued_at_ms.remove(hash);
+        if self.queued_tx_enqueued_at_ms.remove(hash).is_some() {
+            self.untrack_queued_hash();
+        }
     }
 
     fn clear_queued_age_index(&self) {
         self.queued_tx_enqueued_at_ms.clear();
         self.queued_age_ring.lock().clear();
+        self.queued_count.store(0, Ordering::Relaxed);
     }
 
     fn oldest_queued_tx_age_ms(&self) -> u64 {
@@ -3233,6 +3442,7 @@ impl Queue {
     fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
         self.clear_queued_age_index();
         let mut age_entries = Vec::new();
+        let mut inserted = 0usize;
         for hash in queued_hashes {
             let Some(enqueued_at_ms) = self
                 .tx_enqueued_at_ms
@@ -3241,11 +3451,18 @@ impl Queue {
             else {
                 continue;
             };
-            self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            if self
+                .queued_tx_enqueued_at_ms
+                .insert(hash, enqueued_at_ms)
+                .is_none()
+            {
+                inserted = inserted.saturating_add(1);
+            }
             age_entries.push((hash, enqueued_at_ms));
         }
         age_entries.sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
         self.queued_age_ring.lock().extend(age_entries);
+        self.queued_count.store(inserted, Ordering::Relaxed);
     }
 
     fn pressure_snapshot_with_tracked_count(
@@ -3306,7 +3523,7 @@ impl Queue {
     fn cull_expired_entries(&self, now: Duration) -> usize {
         const CULL_WARN_MS: u64 = 1_000;
         let scan_start = std::time::Instant::now();
-        let tracked_before = self.txs.len();
+        let tracked_before = self.active_len();
         let mut to_remove = Vec::new();
         let mut expired = 0usize;
         let mut scanned = 0usize;
@@ -3353,6 +3570,7 @@ impl Queue {
         let mut removed = 0usize;
         for hash in to_remove {
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
+                self.untrack_active_transaction();
                 let routing = self
                     .routing_decisions
                     .remove(&hash)
@@ -3403,7 +3621,7 @@ impl Queue {
                 remove_ms,
                 total_ms,
                 tracked_before,
-                tracked_after = self.txs.len(),
+                tracked_after = self.active_len(),
                 scanned,
                 ring_len,
                 expired,
@@ -3418,7 +3636,7 @@ impl Queue {
     ///
     /// Caller must hold `push_remove_lock` to exclude concurrent enqueue operations.
     fn compact_hash_queue_locked(&self) -> usize {
-        let mut retained = Vec::with_capacity(self.txs.len());
+        let mut retained = Vec::with_capacity(self.active_len());
         let mut dropped = 0usize;
         let mut inserted_hashes = Vec::new();
         while let Some(hash) = self.tx_hashes.pop() {
@@ -3433,7 +3651,7 @@ impl Queue {
             if self.tx_hashes.push(hash).is_err() {
                 warn!(
                     queued = self.tx_hashes.len(),
-                    tracked = self.txs.len(),
+                    tracked = self.active_len(),
                     "queue hash compaction reached capacity before re-enqueuing all transactions"
                 );
                 break;
@@ -3462,6 +3680,7 @@ impl Queue {
         let hash = tx.as_ref().hash();
         let _guard = self.push_remove_lock.lock();
         if self.txs.remove(&hash).is_some() {
+            self.untrack_active_transaction();
             self.untrack_expiry_hash(&hash);
             let decision = self
                 .routing_decisions
@@ -3507,6 +3726,7 @@ impl Queue {
             self.remove_queued_age(&hash);
             self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
+                self.untrack_active_transaction();
                 self.removed_hashes.insert(hash, ());
                 if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
                     self.decrease_per_user_tx_count(authority);
@@ -8315,6 +8535,75 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn queue_pressure_counters_track_committed_removal_before_hash_drain() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        queue
+            .push(first, state.view())
+            .expect("first push succeeds");
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("second push succeeds");
+
+        assert_eq!(queue.active_len(), 2);
+        assert_eq!(queue.queued_len(), 2);
+        queue.assert_pressure_counters_consistent_for_tests();
+
+        assert_eq!(queue.remove_committed_hashes([first_hash], None), 1);
+
+        let snapshot = queue.pressure_snapshot();
+        assert_eq!(snapshot.tracked_tx_count, 1);
+        assert_eq!(snapshot.queued_tx_count, 1);
+        assert_eq!(queue.active_len(), queue.txs.len());
+        assert_eq!(queue.queued_len(), queue.queued_tx_enqueued_at_ms.len());
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[tokio::test]
+    async fn queue_pressure_counters_restore_age_after_enqueue_compaction_retry() {
+        let capacity = nonzero!(1_usize);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(
+            Config {
+                capacity,
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        queue
+            .push(first, state.view())
+            .expect("first push succeeds");
+        assert_eq!(queue.remove_committed_hashes([first_hash], None), 1);
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        queue.assert_pressure_counters_consistent_for_tests();
+
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.as_ref().hash();
+        queue
+            .push(second, state.view())
+            .expect("second push compacts stale hash and succeeds");
+
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.queued_tx_enqueued_at_ms.contains_key(&second_hash));
+        assert_eq!(queue.pressure_snapshot().queued_tx_count, 1);
+        queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[tokio::test]
     async fn resync_rebuilds_hash_queue_when_empty() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -8342,6 +8631,7 @@ pub mod tests {
             1,
             "remaining queue size should be tracked"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[tokio::test]
@@ -8372,6 +8662,7 @@ pub mod tests {
             1,
             "remaining queue size should be tracked"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[tokio::test]
@@ -8822,6 +9113,7 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
         assert_eq!(queue.active_len(), 1, "tx tracked before expiration");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         time_handle.advance(Duration::from_secs(2));
         let culled = queue.cull_expired_entries_if_due();
@@ -8831,6 +9123,7 @@ pub mod tests {
             0,
             "expired tx removed from active count"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]
@@ -8854,16 +9147,19 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
         assert_eq!(queue.queued_len(), 2, "hash queue tracks queued txs");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         time_handle.advance(Duration::from_secs(2));
         let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 2, "expired transactions should be culled");
         assert_eq!(queue.queued_len(), 0, "hash queue compacted after cull");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         queue
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push after compaction succeeds");
         assert_eq!(queue.queued_len(), 1, "hash queue accepts new txs");
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]
@@ -8890,11 +9186,13 @@ pub mod tests {
         let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 1, "batch-limited sweep culls one tx");
         assert_eq!(queue.active_len(), 1, "one tx remains after first sweep");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         time_handle.advance(Duration::from_millis(2));
         let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 1, "second sweep culls remaining tx");
         assert_eq!(queue.active_len(), 0, "all expired txs removed");
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]
@@ -8916,6 +9214,7 @@ pub mod tests {
         let removed = queue.remove_committed_hashes([hash], None);
         assert_eq!(removed, 1, "committed hash should be removed");
         assert_eq!(queue.active_len(), 0, "queue no longer tracks tx");
+        queue.assert_pressure_counters_consistent_for_tests();
         assert!(
             !queue.expiry_ring_members.contains_key(&hash),
             "expiry tracking cleared on commit removal"
@@ -8943,6 +9242,7 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
         assert_eq!(queue.queued_len(), 1, "queued count before pop");
+        queue.assert_pressure_counters_consistent_for_tests();
 
         let mut expired = Vec::new();
         let guard = queue
@@ -8952,12 +9252,14 @@ pub mod tests {
         assert_eq!(queue.queued_len(), 0, "hash queue empty after pop");
         assert_eq!(queue.active_len(), 1, "active count includes in-flight");
         assert_eq!(queue.queued_len(), 0, "queued count excludes in-flight");
+        queue.assert_pressure_counters_consistent_for_tests();
         drop(guard);
         assert_eq!(
             queue.active_len(),
             0,
             "active count clears after guard drop"
         );
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]

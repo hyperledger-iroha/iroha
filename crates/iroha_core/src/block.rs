@@ -49,8 +49,6 @@
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
 use core::fmt;
-#[cfg(feature = "bls")]
-use std::sync::LazyLock;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -60,11 +58,9 @@ use std::{
 };
 
 use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
-#[cfg(feature = "bls")]
-use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId,
-    account::{AccountController, AccountId, rekey::AccountAlias},
+    account::{AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -96,22 +92,7 @@ use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(feature = "telemetry")]
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
-#[cfg(feature = "bls")]
-use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
-
-#[cfg(feature = "bls")]
-fn bls_pop_from_metadata(
-    metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
-) -> Option<Vec<u8>> {
-    let json = metadata.get(key)?;
-    let val: JsonValue = norito::json::from_str(json.get()).ok()?;
-    match val {
-        JsonValue::String(s) => hex::decode(s).ok(),
-        _ => None,
-    }
-}
 
 /// Convert overlay build errors into transaction rejection reasons with stable labels.
 fn map_overlay_error(
@@ -213,14 +194,6 @@ mod overlay_error_tests {
     }
 }
 
-#[cfg(feature = "bls")]
-fn bls_small_pop_from_metadata(
-    metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
-) -> Option<Vec<u8>> {
-    bls_pop_from_metadata(metadata, key)
-}
-
 #[cfg(feature = "telemetry")]
 const PIPELINE_LAYER_WIDTH_THRESHOLDS: [u64; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
@@ -228,7 +201,6 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 #[cfg(feature = "telemetry")]
 use settlement_router::haircut::LiquidityProfile;
 use settlement_router::{MicroXor, policy::BufferStatus};
-use sha2::Digest as _;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -518,7 +490,10 @@ use crate::{
         compute_confidential_feature_digest,
     },
     sumeragi::{VotingBlock, network_topology::Topology, status},
-    tx::{AcceptTransactionFail, LaneAssignment, enforce_fraud_policy},
+    tx::{
+        AcceptTransactionFail, LaneAssignment, SignatureRejectionCode, SignatureVerificationFail,
+        enforce_fraud_policy,
+    },
 };
 type QuarantineClassifier = fn(&iroha_data_model::transaction::SignedTransaction) -> bool;
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
@@ -4361,7 +4336,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
-                false,
             )
         }
 
@@ -4381,7 +4355,6 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
-            skip_tx_signature_validation: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -4394,7 +4367,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
-                skip_tx_signature_validation,
             )
         }
 
@@ -4422,7 +4394,6 @@ pub(crate) mod valid {
                 soft_fork,
                 Some(timings),
                 false,
-                false,
             )
         }
 
@@ -4438,7 +4409,6 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
-            skip_tx_signature_validation: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4503,8 +4473,6 @@ pub(crate) mod valid {
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let now_ms = block.header().creation_time().as_millis();
-            let mut cached_ok = vec![false; txs_for_cache.len()];
             let cache_context = if cache_enabled {
                 Some(StatelessValidationContext::new(
                     expected_chain_id.clone(),
@@ -4515,16 +4483,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(context) = cache_context.clone() {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -4536,8 +4494,6 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
-                cache_enabled.then_some(cached_ok.as_slice()),
-                skip_tx_signature_validation,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -4558,10 +4514,7 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cached_ok[idx] {
-                        continue;
-                    }
+                for tx in txs_for_cache {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4714,8 +4667,6 @@ pub(crate) mod valid {
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let now_ms = block.header().creation_time().as_millis();
-            let mut cached_ok = vec![false; txs_for_cache.len()];
             let cache_context = if cache_enabled {
                 Some(StatelessValidationContext::new(
                     expected_chain_id.clone(),
@@ -4726,16 +4677,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(context) = cache_context.clone() {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
@@ -4746,8 +4687,6 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
-                cache_enabled.then_some(cached_ok.as_slice()),
-                false,
                 metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -4761,10 +4700,7 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cached_ok[idx] {
-                        continue;
-                    }
+                for tx in txs_for_cache {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -5103,17 +5039,9 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
-            cached_ok: Option<&[bool]>,
-            skip_tx_signature_validation: bool,
-            metrics: MetricsRef<'_>,
+            _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
-            #[cfg(not(feature = "telemetry"))]
-            let () = metrics;
             let _ = static_data.aggregate_lane;
-            #[cfg(feature = "telemetry")]
-            let metrics = metrics.expect("telemetry enabled");
-            #[cfg(all(feature = "telemetry", not(feature = "bls")))]
-            let _ = metrics;
 
             let max_clock_drift = static_data.max_clock_drift;
             let tx_params = static_data.tx_params;
@@ -5127,772 +5055,6 @@ pub(crate) mod valid {
                 txs.len(),
                 "committed-height snapshot must align with block transaction list",
             );
-            if let Some(cached_ok) = cached_ok {
-                debug_assert_eq!(
-                    cached_ok.len(),
-                    txs.len(),
-                    "stateless-cache snapshot must align with block transaction list",
-                );
-            }
-            let cached = |idx: usize| {
-                cached_ok
-                    .and_then(|snapshot| snapshot.get(idx))
-                    .copied()
-                    .unwrap_or(false)
-            };
-
-            // Deterministic pre-verification of transaction signatures by scheme, using
-            // runtime pipeline configuration caps. Successful pre-verification allows
-            // skipping per-transaction signature checks further below for those schemes.
-
-            // Ed25519 deterministic micro-batching with transcript-derived seed
-            let mut ed_preverified = false;
-            {
-                #[derive(Clone)]
-                struct EdItem {
-                    idx: usize,
-                    pk: [u8; 32],
-                    msg: [u8; 32],
-                    sig: [u8; 64],
-                }
-                let mut items: Vec<EdItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    if algo != iroha_crypto::Algorithm::Ed25519 {
-                        continue;
-                    }
-                    // message is the 32-byte hash of TransactionPayload
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    // signature bytes (64)
-                    let sig_bytes = tx.signature().payload().payload();
-                    if sig_bytes.len() != 64 || pk_bytes.len() != 32 {
-                        return Err(BlockValidationError::TransactionAccept(
-                            AcceptTransactionFail::SignatureVerification(
-                                crate::tx::SignatureVerificationFail::new(
-                                    tx.signature().clone(),
-                                    crate::tx::SignatureRejectionCode::MalformedSignature,
-                                    "bad signature or key length",
-                                ),
-                            ),
-                        ));
-                    }
-                    let mut pk = [0u8; 32];
-                    pk.copy_from_slice(pk_bytes);
-                    let mut sig = [0u8; 64];
-                    sig.copy_from_slice(sig_bytes);
-                    items.push(EdItem {
-                        idx: i,
-                        pk,
-                        msg,
-                        sig,
-                    });
-                }
-                let cap = if pipeline_cfg.signature_batch_max_ed25519 > 0 {
-                    pipeline_cfg.signature_batch_max_ed25519
-                } else {
-                    pipeline_cfg.signature_batch_max
-                };
-                if cap > 0 && !items.is_empty() {
-                    let derive_seed = |slice: &[&EdItem]| -> [u8; 32] {
-                        let mut tuples: Vec<Vec<u8>> = slice
-                            .iter()
-                            .map(|it| {
-                                let mut v = Vec::with_capacity(32 + 32 + 64);
-                                v.extend_from_slice(&it.pk);
-                                v.extend_from_slice(&it.msg);
-                                v.extend_from_slice(&it.sig);
-                                v
-                            })
-                            .collect();
-                        tuples.sort_unstable();
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(b"iroha:ecc_batch:v1:ed25519");
-                        for t in tuples.iter() {
-                            hasher.update(t);
-                        }
-                        let out = hasher.finalize();
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&out);
-                        seed
-                    };
-                    let verify_batch_slice = |slice: &[&EdItem]| -> bool {
-                        let seed = derive_seed(slice);
-                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
-                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
-                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                        iroha_crypto::ed25519_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                            .is_ok()
-                    };
-                    let mut start = 0;
-                    while start < items.len() {
-                        let end = usize::min(start + cap, items.len());
-                        let batch = &items[start..end];
-                        let refs: Vec<&EdItem> = batch.iter().collect();
-                        if !verify_batch_slice(&refs) {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&EdItem>> = VecDeque::new();
-                            q.push_back(refs.clone());
-                            let mut offending: Option<usize> = None;
-                            while let Some(slc) = q.pop_front() {
-                                if verify_batch_slice(&slc) {
-                                    continue;
-                                }
-                                if slc.len() == 1 {
-                                    offending = Some(slc[0].idx);
-                                    break;
-                                }
-                                let mid = slc.len() / 2;
-                                q.push_back(slc[..mid].to_vec());
-                                q.push_back(slc[mid..].to_vec());
-                            }
-                            if let Some(idx) = offending {
-                                if let Some(tx) = txs.get(idx) {
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                tx.signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "ed25519 batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            txs.first().expect("non-empty").signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                        }
-                        start = end;
-                    }
-                    ed_preverified = true;
-                }
-            }
-
-            // secp256k1 deterministic micro-batching (current impl: per-sig verify in batch order)
-            let mut secp_preverified = false;
-            {
-                #[derive(Clone)]
-                struct SecpItem {
-                    idx: usize,
-                    pk: Vec<u8>,
-                    msg: [u8; 32],
-                    sig: [u8; 64],
-                }
-                let mut items: Vec<SecpItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    if algo != iroha_crypto::Algorithm::Secp256k1 {
-                        continue;
-                    }
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    let sig_bytes = tx.signature().payload().payload();
-                    if sig_bytes.len() != 64 {
-                        return Err(BlockValidationError::TransactionAccept(
-                            AcceptTransactionFail::SignatureVerification(
-                                crate::tx::SignatureVerificationFail::new(
-                                    tx.signature().clone(),
-                                    crate::tx::SignatureRejectionCode::MalformedSignature,
-                                    "bad secp256k1 signature length",
-                                ),
-                            ),
-                        ));
-                    }
-                    let mut sig = [0u8; 64];
-                    sig.copy_from_slice(sig_bytes);
-                    items.push(SecpItem {
-                        idx: i,
-                        pk: pk_bytes.to_vec(),
-                        msg,
-                        sig,
-                    });
-                }
-                let cap = pipeline_cfg.signature_batch_max_secp256k1;
-                if cap > 0 && !items.is_empty() {
-                    let derive_seed = |slice: &[&SecpItem]| -> [u8; 32] {
-                        let mut tuples: Vec<Vec<u8>> = slice
-                            .iter()
-                            .map(|it| {
-                                let mut v = Vec::with_capacity(it.pk.len() + 32 + 64);
-                                v.extend_from_slice(&it.pk);
-                                v.extend_from_slice(&it.msg);
-                                v.extend_from_slice(&it.sig);
-                                v
-                            })
-                            .collect();
-                        tuples.sort_unstable();
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(b"iroha:ecc_batch:v1:secp256k1");
-                        for t in tuples.iter() {
-                            hasher.update(t);
-                        }
-                        let out = hasher.finalize();
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&out);
-                        seed
-                    };
-                    let verify_batch_slice = |slice: &[&SecpItem]| -> bool {
-                        let seed = derive_seed(slice);
-                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
-                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
-                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                        iroha_crypto::secp256k1_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                            .is_ok()
-                    };
-                    let mut start = 0;
-                    while start < items.len() {
-                        let end = usize::min(start + cap, items.len());
-                        let batch = &items[start..end];
-                        let refs: Vec<&SecpItem> = batch.iter().collect();
-                        if !verify_batch_slice(&refs) {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&SecpItem>> = VecDeque::new();
-                            q.push_back(refs.clone());
-                            let mut offending: Option<usize> = None;
-                            while let Some(slc) = q.pop_front() {
-                                if verify_batch_slice(&slc) {
-                                    continue;
-                                }
-                                if slc.len() == 1 {
-                                    offending = Some(slc[0].idx);
-                                    break;
-                                }
-                                let mid = slc.len() / 2;
-                                q.push_back(slc[..mid].to_vec());
-                                q.push_back(slc[mid..].to_vec());
-                            }
-                            if let Some(idx) = offending {
-                                if let Some(tx) = txs.get(idx) {
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                tx.signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "secp256k1 batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            txs.first().expect("non-empty").signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                        }
-                        start = end;
-                    }
-                    secp_preverified = true;
-                }
-            }
-
-            // BLS deterministic grouping (feature-gated). Verify per‑signature for now.
-            #[cfg(feature = "bls")]
-            #[allow(unused_assignments)]
-            let mut bls_preverified = false;
-            #[cfg(all(feature = "bls", feature = "telemetry"))]
-            let (mut bls_agg_same_batches, mut bls_agg_multi_batches, bls_deterministic_batches) =
-                (0u64, 0u64, 0u64);
-            #[cfg(feature = "bls")]
-            {
-                #[derive(Clone)]
-                struct BlsItem {
-                    idx: usize,
-                    pk: iroha_crypto::PublicKey,
-                    pk_bytes: Vec<u8>,
-                    pop: Option<Vec<u8>>,
-                    msg: [u8; 32],
-                    sig: Vec<u8>,
-                    small: bool, // true => BlsSmall, false => BlsNormal
-                }
-                static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
-                    LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-                static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
-                    LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
-                let mut all_normal_have_pop = true;
-                let mut all_small_have_pop = true;
-                let mut items_normal: Vec<BlsItem> = Vec::new();
-                let mut items_small: Vec<BlsItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    let small = match algo {
-                        iroha_crypto::Algorithm::BlsNormal => false,
-                        iroha_crypto::Algorithm::BlsSmall => true,
-                        _ => continue,
-                    };
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    let sig_bytes = tx.signature().payload().payload().to_vec();
-                    let mut pop = None;
-                    if small {
-                        // Require PoP metadata for BLS-small keys to enable batching
-                        if let Some(pop_hex) =
-                            bls_small_pop_from_metadata(tx.metadata(), &BLS_POP_SMALL_KEY)
-                        {
-                            if iroha_crypto::bls_small_pop_verify(signatory, &pop_hex).is_err() {
-                                all_small_have_pop = false;
-                            } else {
-                                pop = Some(pop_hex);
-                            }
-                        } else {
-                            all_small_have_pop = false;
-                        }
-                    } else {
-                        // Require a PoP in transaction metadata to harden against rogue-key
-                        // aggregation. Missing/invalid PoP disables batching for normal BLS.
-                        if let Some(pop_hex) = bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY) {
-                            if iroha_crypto::bls_normal_pop_verify(signatory, &pop_hex).is_err() {
-                                all_normal_have_pop = false;
-                            } else {
-                                pop = Some(pop_hex);
-                            }
-                        } else {
-                            all_normal_have_pop = false;
-                        }
-                    }
-                    let item = BlsItem {
-                        idx: i,
-                        pk: signatory.clone(),
-                        pk_bytes: pk_bytes.to_vec(),
-                        pop,
-                        msg,
-                        sig: sig_bytes,
-                        small,
-                    };
-                    if small {
-                        items_small.push(item);
-                    } else {
-                        items_normal.push(item);
-                    }
-                }
-                #[cfg(feature = "telemetry")]
-                let aggregate_lane = static_data.aggregate_lane;
-                let cap = pipeline_cfg.signature_batch_max_bls;
-                #[allow(unused_mut)]
-                let mut verify_set = |set: &Vec<BlsItem>| -> Result<(), BlockValidationError> {
-                    if set.is_empty() {
-                        return Ok(());
-                    }
-                    let mut start = 0usize;
-                    while start < set.len() {
-                        let end = usize::min(start + cap.max(1), set.len());
-                        let batch = &set[start..end];
-                        let refs: Vec<&BlsItem> = batch.iter().collect();
-
-                        // Hybrid grouping: same-message groups (size > 1) use fast-aggregate;
-                        // singletons (pairwise-distinct messages) use multi-message aggregate.
-                        // Deterministic ordering via BTreeMap on message bytes.
-                        let mut groups: std::collections::BTreeMap<[u8; 32], Vec<&BlsItem>> =
-                            std::collections::BTreeMap::new();
-                        for it in &refs {
-                            groups.entry(it.msg).or_default().push(*it);
-                        }
-
-                        // Helper: verify a same-message slice; return true on success
-                        let verify_same = |slc: &[&BlsItem]| -> bool {
-                            debug_assert!(!slc.is_empty());
-                            let msg = slc[0].msg.as_slice();
-                            let sigs: Vec<&[u8]> = slc.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&iroha_crypto::PublicKey> =
-                                slc.iter().map(|it| &it.pk).collect();
-                            let mut pops = Vec::with_capacity(slc.len());
-                            for it in slc {
-                                let Some(pop) = it.pop.as_ref() else {
-                                    return false;
-                                };
-                                pops.push(pop.as_slice());
-                            }
-                            if slc[0].small {
-                                iroha_crypto::bls_small_verify_aggregate_same_message(
-                                    msg, &sigs, &pks, &pops,
-                                )
-                                .is_ok()
-                            } else {
-                                iroha_crypto::bls_normal_verify_aggregate_same_message(
-                                    msg, &sigs, &pks, &pops,
-                                )
-                                .is_ok()
-                            }
-                        };
-
-                        // Helper: bisection for same-message group
-                        let bisect_same = |slc: Vec<&BlsItem>| -> Option<usize> {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&BlsItem>> = VecDeque::new();
-                            q.push_back(slc);
-                            let mut offending: Option<usize> = None;
-                            while let Some(s) = q.pop_front() {
-                                if verify_same(&s) {
-                                    continue;
-                                }
-                                if s.len() == 1 {
-                                    offending = Some(s[0].idx);
-                                    break;
-                                }
-                                let mid = s.len() / 2;
-                                q.push_back(s[..mid].to_vec());
-                                q.push_back(s[mid..].to_vec());
-                            }
-                            offending
-                        };
-
-                        // Collect singletons for multi-message aggregate
-                        let mut singletons: Vec<&BlsItem> = Vec::new();
-                        let mut group_fail: Option<usize> = None;
-                        for (_k, slc) in groups.iter() {
-                            if slc.len() == 1 {
-                                singletons.push(slc[0]);
-                            } else {
-                                let ok = verify_same(slc);
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    bls_agg_same_batches = bls_agg_same_batches.saturating_add(1);
-                                    metrics.inc_pipeline_sig_bls_result(aggregate_lane, true, ok);
-                                }
-                                if !ok {
-                                    // Bisection within the same-message group. If every
-                                    // individual signature passes, the aggregate was not usable
-                                    // for this group (for example, duplicate signer keys); keep
-                                    // checking the remaining independent groups.
-                                    if let Some(idx) = bisect_same(slc.clone()) {
-                                        group_fail = Some(idx);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(idx) = group_fail {
-                            if let Some(tx) = txs.get(idx) {
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    // Record attempted aggregates even on failure
-                                    metrics.set_pipeline_sig_bls_counts(
-                                        aggregate_lane,
-                                        bls_agg_same_batches,
-                                        bls_agg_multi_batches,
-                                        bls_deterministic_batches,
-                                    );
-                                }
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            tx.signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "bls batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                            #[cfg(feature = "telemetry")]
-                            {
-                                // Record attempted aggregates even on failure
-                                metrics.set_pipeline_sig_bls_counts(
-                                    aggregate_lane,
-                                    bls_agg_same_batches,
-                                    bls_agg_multi_batches,
-                                    bls_deterministic_batches,
-                                );
-                            }
-                            return Err(BlockValidationError::TransactionAccept(
-                                AcceptTransactionFail::SignatureVerification(
-                                    crate::tx::SignatureVerificationFail::new(
-                                        txs.first().expect("non-empty").signature().clone(),
-                                        crate::tx::SignatureRejectionCode::InvalidSignature,
-                                        "batch verification failed",
-                                    ),
-                                ),
-                            ));
-                        }
-
-                        // Verify multi-message aggregate across singletons (pairwise distinct by construction)
-                        if !singletons.is_empty() {
-                            let msgs: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.pk_bytes.as_slice()).collect();
-                            let ok = if singletons[0].small {
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    bls_agg_multi_batches = bls_agg_multi_batches.saturating_add(1);
-                                }
-                                iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                    &msgs, &sigs, &pks,
-                                )
-                                .is_ok()
-                            } else {
-                                #[cfg(feature = "telemetry")]
-                                {
-                                    bls_agg_multi_batches = bls_agg_multi_batches.saturating_add(1);
-                                }
-                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                    &msgs, &sigs, &pks,
-                                )
-                                .is_ok()
-                            };
-                            #[cfg(feature = "telemetry")]
-                            metrics.inc_pipeline_sig_bls_result(aggregate_lane, false, ok);
-                            if !ok {
-                                // Bisection over singleton set only
-                                use std::collections::VecDeque;
-                                let mut q: VecDeque<Vec<&BlsItem>> = VecDeque::new();
-                                q.push_back(singletons.clone());
-                                let mut offending: Option<usize> = None;
-                                while let Some(slc) = q.pop_front() {
-                                    let msgs: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.msg.as_slice()).collect();
-                                    let sigs: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.sig.as_slice()).collect();
-                                    let pks: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.pk_bytes.as_slice()).collect();
-                                    let ok = if slc[0].small {
-                                        iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                            &msgs, &sigs, &pks,
-                                        )
-                                        .is_ok()
-                                    } else {
-                                        iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                            &msgs, &sigs, &pks,
-                                        )
-                                        .is_ok()
-                                    };
-                                    if ok {
-                                        continue;
-                                    }
-                                    if slc.len() == 1 {
-                                        offending = Some(slc[0].idx);
-                                        break;
-                                    }
-                                    let mid = slc.len() / 2;
-                                    q.push_back(slc[..mid].to_vec());
-                                    q.push_back(slc[mid..].to_vec());
-                                }
-                                if let Some(idx) = offending {
-                                    if let Some(tx) = txs.get(idx) {
-                                        #[cfg(feature = "telemetry")]
-                                        {
-                                            // Record attempted aggregates even on failure
-                                            metrics.set_pipeline_sig_bls_counts(
-                                                aggregate_lane,
-                                                bls_agg_same_batches,
-                                                bls_agg_multi_batches,
-                                                bls_deterministic_batches,
-                                            );
-                                        }
-                                        return Err(BlockValidationError::TransactionAccept(
-                                            AcceptTransactionFail::SignatureVerification(
-                                                crate::tx::SignatureVerificationFail::new(
-                                                    tx.signature().clone(),
-                                                    crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                    "bls batch verification failed",
-                                                ),
-                                            ),
-                                        ));
-                                    }
-                                } else {
-                                    #[cfg(feature = "telemetry")]
-                                    {
-                                        // Record attempted aggregates even on failure
-                                        metrics.set_pipeline_sig_bls_counts(
-                                            aggregate_lane,
-                                            bls_agg_same_batches,
-                                            bls_agg_multi_batches,
-                                            bls_deterministic_batches,
-                                        );
-                                    }
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                txs.first().expect("non-empty").signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            }
-                        }
-                        start = end;
-                    }
-                    Ok(())
-                };
-                let enable_normal_batch = cap > 0 && all_normal_have_pop;
-                let enable_small_batch = cap > 0 && all_small_have_pop;
-                if enable_normal_batch {
-                    verify_set(&items_normal)?;
-                }
-                if enable_small_batch {
-                    verify_set(&items_small)?;
-                }
-                bls_preverified = (enable_normal_batch && !items_normal.is_empty())
-                    || (enable_small_batch && !items_small.is_empty());
-                #[cfg(feature = "telemetry")]
-                metrics.set_pipeline_sig_bls_counts(
-                    aggregate_lane,
-                    bls_agg_same_batches,
-                    bls_agg_multi_batches,
-                    if bls_preverified {
-                        0
-                    } else {
-                        bls_deterministic_batches
-                    },
-                );
-            }
-
-            // PQC (e.g., ML‑DSA Dilithium) deterministic grouping.
-            let mut pqc_preverified = false;
-            {
-                #[derive(Clone)]
-                struct PqcItem {
-                    idx: usize,
-                    pk: Vec<u8>,
-                    msg: [u8; 32],
-                    sig: Vec<u8>,
-                }
-                let mut items: Vec<PqcItem> = Vec::new();
-                for (i, tx) in txs.iter().enumerate() {
-                    if cached(i) {
-                        continue;
-                    }
-                    let AccountController::Single(signatory) = tx.authority().controller() else {
-                        continue;
-                    };
-                    let (algo, pk_bytes) = signatory.to_bytes();
-                    if algo != iroha_crypto::Algorithm::MlDsa {
-                        continue;
-                    }
-                    // Compute message hash
-                    let h = iroha_crypto::HashOf::new(tx.payload());
-                    let mut msg = [0u8; 32];
-                    msg.copy_from_slice(h.as_ref());
-                    // signature bytes are algorithm-specific length; keep as Vec
-                    let sig_bytes = tx.signature().payload().payload().to_vec();
-                    items.push(PqcItem {
-                        idx: i,
-                        pk: pk_bytes.to_vec(),
-                        msg,
-                        sig: sig_bytes,
-                    });
-                }
-                let cap = pipeline_cfg.signature_batch_max_pqc;
-                if cap > 0 && !items.is_empty() {
-                    let derive_seed = |slice: &[&PqcItem]| -> [u8; 32] {
-                        let mut tuples: Vec<Vec<u8>> = slice
-                            .iter()
-                            .map(|it| {
-                                let mut v = Vec::with_capacity(it.pk.len() + 32 + it.sig.len());
-                                v.extend_from_slice(&it.pk);
-                                v.extend_from_slice(&it.msg);
-                                v.extend_from_slice(&it.sig);
-                                v
-                            })
-                            .collect();
-                        tuples.sort_unstable();
-                        let mut hasher = sha2::Sha256::new();
-                        hasher.update(b"iroha:pqc_batch:v1:dilithium3");
-                        for t in tuples.iter() {
-                            hasher.update(t);
-                        }
-                        let out = hasher.finalize();
-                        let mut seed = [0u8; 32];
-                        seed.copy_from_slice(&out);
-                        seed
-                    };
-                    let verify_batch_slice = |slice: &[&PqcItem]| -> bool {
-                        let seed = derive_seed(slice);
-                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
-                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
-                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                        iroha_crypto::pqc_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                            .is_ok()
-                    };
-                    let mut start = 0;
-                    while start < items.len() {
-                        let end = usize::min(start + cap, items.len());
-                        let batch = &items[start..end];
-                        let refs: Vec<&PqcItem> = batch.iter().collect();
-                        if !verify_batch_slice(&refs) {
-                            use std::collections::VecDeque;
-                            let mut q: VecDeque<Vec<&PqcItem>> = VecDeque::new();
-                            q.push_back(refs.clone());
-                            let mut offending: Option<usize> = None;
-                            while let Some(slc) = q.pop_front() {
-                                if verify_batch_slice(&slc) {
-                                    continue;
-                                }
-                                if slc.len() == 1 {
-                                    offending = Some(slc[0].idx);
-                                    break;
-                                }
-                                let mid = slc.len() / 2;
-                                q.push_back(slc[..mid].to_vec());
-                                q.push_back(slc[mid..].to_vec());
-                            }
-                            if let Some(idx) = offending {
-                                if let Some(tx) = txs.get(idx) {
-                                    return Err(BlockValidationError::TransactionAccept(
-                                        AcceptTransactionFail::SignatureVerification(
-                                            crate::tx::SignatureVerificationFail::new(
-                                                tx.signature().clone(),
-                                                crate::tx::SignatureRejectionCode::InvalidSignature,
-                                                "pqc batch verification failed",
-                                            ),
-                                        ),
-                                    ));
-                                }
-                            } else {
-                                return Err(BlockValidationError::TransactionAccept(
-                                    AcceptTransactionFail::SignatureVerification(
-                                        crate::tx::SignatureVerificationFail::new(
-                                            txs.first().expect("non-empty").signature().clone(),
-                                            crate::tx::SignatureRejectionCode::InvalidSignature,
-                                            "batch verification failed",
-                                        ),
-                                    ),
-                                ));
-                            }
-                        }
-                        start = end;
-                    }
-                    pqc_preverified = true;
-                }
-            }
-
             let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
                 std::collections::BTreeSet::new();
             let mut entrypoints: Vec<HashOf<TransactionEntrypoint>> = Vec::with_capacity(txs.len());
@@ -5926,11 +5088,88 @@ pub(crate) mod valid {
             use rayon::prelude::*;
 
             let is_genesis_block = block.header().is_genesis();
+            let mut ed25519_prechecked = vec![false; txs.len()];
+            let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
+            if !is_genesis_block && ed25519_batch_cap > 0 {
+                struct Ed25519BatchItem<'a> {
+                    idx: usize,
+                    message: HashOf<iroha_data_model::transaction::signed::TransactionPayload>,
+                    signature: &'a [u8],
+                    public_key: &'a [u8],
+                }
+
+                let mut items = Vec::new();
+                for (idx, tx) in txs.iter().enumerate() {
+                    let iroha_data_model::account::AccountController::Single(signatory) =
+                        tx.authority().controller()
+                    else {
+                        continue;
+                    };
+                    if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+                        continue;
+                    }
+                    let signature = tx.signature().payload().payload();
+                    if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
+                        continue;
+                    }
+                    let (_algorithm, public_key) = signatory.to_bytes();
+                    items.push(Ed25519BatchItem {
+                        idx,
+                        message: HashOf::new(tx.payload()),
+                        signature,
+                        public_key,
+                    });
+                }
+
+                let signature_error = |tx: &SignedTransaction, detail: String| {
+                    BlockValidationError::TransactionAccept(
+                        AcceptTransactionFail::SignatureVerification(
+                            SignatureVerificationFail::new(
+                                tx.signature().clone(),
+                                SignatureRejectionCode::InvalidSignature,
+                                detail,
+                            ),
+                        ),
+                    )
+                };
+
+                for chunk in items.chunks(ed25519_batch_cap) {
+                    let messages: Vec<&[u8]> = chunk
+                        .iter()
+                        .map(|item| item.message.as_ref().as_slice())
+                        .collect();
+                    let signatures: Vec<&[u8]> = chunk.iter().map(|item| item.signature).collect();
+                    let public_keys: Vec<&[u8]> =
+                        chunk.iter().map(|item| item.public_key).collect();
+                    if iroha_crypto::ed25519_verify_batch_deterministic(
+                        &messages,
+                        &signatures,
+                        &public_keys,
+                        [0; 32],
+                    )
+                    .is_err()
+                    {
+                        for item in chunk {
+                            let message: [&[u8]; 1] = [item.message.as_ref().as_slice()];
+                            let signature = [item.signature];
+                            let public_key = [item.public_key];
+                            if let Err(err) = iroha_crypto::ed25519_verify_batch_deterministic(
+                                &message,
+                                &signature,
+                                &public_key,
+                                [0; 32],
+                            ) {
+                                return Err(signature_error(txs[item.idx], err.to_string()));
+                            }
+                        }
+                    }
+                    for item in chunk {
+                        ed25519_prechecked[item.idx] = true;
+                    }
+                }
+            }
             let validate_tx =
                 |(idx, tx): (usize, &&SignedTransaction)| -> Option<BlockValidationError> {
-                    if cached(idx) {
-                        return None;
-                    }
                     if is_genesis_block {
                         return AcceptedTransaction::validate_genesis_with_now(
                             tx,
@@ -5944,68 +5183,43 @@ pub(crate) mod valid {
                         .map(BlockValidationError::TransactionAccept);
                     }
 
-                    let signature_override = if skip_tx_signature_validation {
-                        Some(Ok(()))
-                    } else {
-                        match tx.authority().controller() {
-                            AccountController::Single(signatory) => {
-                                let algo = signatory.algorithm();
-                                let skip = (algo == iroha_crypto::Algorithm::Ed25519
-                                    && ed_preverified)
-                                    || (algo == iroha_crypto::Algorithm::Secp256k1
-                                        && secp_preverified)
-                                    || ({
-                                        #[cfg(feature = "bls")]
-                                        {
-                                            matches!(
-                                                algo,
-                                                iroha_crypto::Algorithm::BlsNormal
-                                                    | iroha_crypto::Algorithm::BlsSmall
-                                            ) && bls_preverified
-                                        }
-                                        #[cfg(not(feature = "bls"))]
-                                        {
-                                            false
-                                        }
-                                    })
-                                    || (algo == iroha_crypto::Algorithm::MlDsa && pqc_preverified);
-                                skip.then_some(Ok(()))
-                            }
-                            AccountController::Multisig(_) => None,
-                        }
-                    };
-
                     let stateless = if crate::tx::is_heartbeat_transaction(tx) {
-                        match signature_override {
-                        Some(override_result) => {
-                            AcceptedTransaction::validate_heartbeat_with_now_with_signature_result(
+                        if ed25519_prechecked[idx] {
+                            AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck(
                                 tx,
                                 chain_id,
                                 max_clock_drift,
                                 tx_params,
                                 crypto_cfg.as_ref(),
                                 block_creation_time,
-                                Some(override_result),
+                            )
+                        } else {
+                            AcceptedTransaction::validate_heartbeat_with_now(
+                                tx,
+                                chain_id,
+                                max_clock_drift,
+                                tx_params,
+                                crypto_cfg.as_ref(),
+                                block_creation_time,
                             )
                         }
-                        None => AcceptedTransaction::validate_heartbeat_with_now(
+                    } else if ed25519_prechecked[idx] {
+                        AcceptedTransaction::validate_with_now_after_single_ed25519_precheck(
                             tx,
                             chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                        ),
-                    }
+                        )
                     } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result(
+                        AcceptedTransaction::validate_with_now(
                             tx,
                             chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            signature_override,
                         )
                     };
                     stateless.err().map(BlockValidationError::TransactionAccept)
@@ -6070,8 +5284,6 @@ pub(crate) mod valid {
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
-            let now_ms = block.header().creation_time().as_millis();
-            let mut cached_ok = vec![false; txs_for_cache.len()];
             let cache_context = if cache_enabled {
                 Some(StatelessValidationContext::new(
                     chain_id.clone(),
@@ -6082,16 +5294,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(context) = cache_context.clone() {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             #[cfg(feature = "telemetry")]
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
@@ -6102,18 +5304,13 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
-                cache_enabled.then_some(cached_ok.as_slice()),
-                false,
                 metrics,
             )?;
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for (idx, tx) in txs_for_cache.iter().enumerate() {
-                    if cached_ok[idx] {
-                        continue;
-                    }
+                for tx in txs_for_cache {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -6265,9 +5462,7 @@ pub(crate) mod valid {
             let fraud_cfg = &state_block.fraud_monitoring;
             let cache_cap = state_block.pipeline.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !is_genesis_block;
-            let now_ms = block_creation_time.as_millis();
             let max_clock_drift_ms = max_clock_drift.as_millis();
-            let mut cached_ok = vec![false; txs.len()];
             let cache_context = if cache_enabled {
                 Some(crate::state::StatelessValidationContext::new(
                     chain_id.clone(),
@@ -6278,16 +5473,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            if let Some(cache_context) = cache_context.as_ref() {
-                let mut cache = state_block.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(cache_context.clone());
-                for (idx, tx) in txs.iter().enumerate() {
-                    if cache.get_ok(&tx.hash(), now_ms) {
-                        cached_ok[idx] = true;
-                    }
-                }
-            }
             let routing_results: Vec<_> = if workers > 1 {
                 if let Some(pool) = pool.as_ref() {
                     pool.install(|| {
@@ -6350,490 +5535,8 @@ pub(crate) mod valid {
                     }
                 }
             }
-            let mut signature_overrides: Vec<
-                Option<Result<(), crate::tx::SignatureVerificationFail>>,
-            > = vec![None; txs.len()];
-            let signature_result_for_tx = |tx: &SignedTransaction| {
-                crate::tx::AcceptedTransaction::signature_verification_result(tx)
-            };
-            let malformed_signature = |tx: &SignedTransaction, detail: &str| {
-                Err(crate::tx::SignatureVerificationFail::new(
-                    tx.signature().clone(),
-                    crate::tx::SignatureRejectionCode::MalformedSignature,
-                    detail.to_string(),
-                ))
-            };
-
-            let sig_batch_start = if skip_stateless_checks {
-                None
-            } else {
-                timings.as_ref().map(|_| Instant::now())
-            };
-            if !skip_stateless_checks {
-                // Ed25519 deterministic micro-batching for stateless pre-pass.
-                {
-                    #[derive(Clone)]
-                    struct EdItem {
-                        idx: usize,
-                        pk: [u8; 32],
-                        msg: [u8; 32],
-                        sig: [u8; 64],
-                    }
-                    let mut items: Vec<EdItem> = Vec::new();
-                    for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
-                        let AccountController::Single(signatory) = tx.authority().controller()
-                        else {
-                            continue;
-                        };
-                        if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519 {
-                            continue;
-                        }
-                        let (_algo, pk_bytes) = signatory.to_bytes();
-                        if pk_bytes.len() != 32 {
-                            signature_overrides[idx] =
-                                Some(malformed_signature(tx, "bad signature or key length"));
-                            continue;
-                        }
-                        let sig_bytes = tx.signature().payload().payload();
-                        if sig_bytes.len() != 64 {
-                            signature_overrides[idx] =
-                                Some(malformed_signature(tx, "bad signature or key length"));
-                            continue;
-                        }
-                        let h = iroha_crypto::HashOf::new(tx.payload());
-                        let mut msg = [0u8; 32];
-                        msg.copy_from_slice(h.as_ref());
-                        let mut pk = [0u8; 32];
-                        pk.copy_from_slice(pk_bytes);
-                        let mut sig = [0u8; 64];
-                        sig.copy_from_slice(sig_bytes);
-                        items.push(EdItem { idx, pk, msg, sig });
-                    }
-                    let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
-                        state_block.pipeline.signature_batch_max_ed25519
-                    } else {
-                        state_block.pipeline.signature_batch_max
-                    };
-                    if cap > 0 && !items.is_empty() {
-                        let derive_seed = |slice: &[&EdItem]| -> [u8; 32] {
-                            let mut tuples: Vec<Vec<u8>> = slice
-                                .iter()
-                                .map(|it| {
-                                    let mut v = Vec::with_capacity(32 + 32 + 64);
-                                    v.extend_from_slice(&it.pk);
-                                    v.extend_from_slice(&it.msg);
-                                    v.extend_from_slice(&it.sig);
-                                    v
-                                })
-                                .collect();
-                            tuples.sort_unstable();
-                            let mut hasher = sha2::Sha256::new();
-                            hasher.update(b"iroha:ecc_batch:v1:ed25519");
-                            for t in tuples.iter() {
-                                hasher.update(t);
-                            }
-                            let out = hasher.finalize();
-                            let mut seed = [0u8; 32];
-                            seed.copy_from_slice(&out);
-                            seed
-                        };
-                        let verify_batch_slice = |slice: &[&EdItem]| -> bool {
-                            let seed = derive_seed(slice);
-                            let msgs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                            iroha_crypto::ed25519_verify_batch_deterministic(
-                                &msgs, &sigs, &pks, seed,
-                            )
-                            .is_ok()
-                        };
-                        let mut start = 0;
-                        while start < items.len() {
-                            let end = usize::min(start + cap, items.len());
-                            let batch = &items[start..end];
-                            let refs: Vec<&EdItem> = batch.iter().collect();
-                            if verify_batch_slice(&refs) {
-                                for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
-                                }
-                            } else {
-                                for it in batch {
-                                    signature_overrides[it.idx] =
-                                        Some(signature_result_for_tx(txs[it.idx]));
-                                }
-                            }
-                            start = end;
-                        }
-                    }
-                }
-
-                // Secp256k1 deterministic micro-batching for stateless pre-pass.
-                {
-                    #[derive(Clone)]
-                    struct SecpItem {
-                        idx: usize,
-                        pk: Vec<u8>,
-                        msg: [u8; 32],
-                        sig: [u8; 64],
-                    }
-                    let mut items: Vec<SecpItem> = Vec::new();
-                    for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
-                        let AccountController::Single(signatory) = tx.authority().controller()
-                        else {
-                            continue;
-                        };
-                        if signatory.algorithm() != iroha_crypto::Algorithm::Secp256k1 {
-                            continue;
-                        }
-                        let (_algo, pk_bytes) = signatory.to_bytes();
-                        let sig_bytes = tx.signature().payload().payload();
-                        if sig_bytes.len() != 64 {
-                            signature_overrides[idx] =
-                                Some(malformed_signature(tx, "bad secp256k1 signature length"));
-                            continue;
-                        }
-                        let h = iroha_crypto::HashOf::new(tx.payload());
-                        let mut msg = [0u8; 32];
-                        msg.copy_from_slice(h.as_ref());
-                        let mut sig = [0u8; 64];
-                        sig.copy_from_slice(sig_bytes);
-                        items.push(SecpItem {
-                            idx,
-                            pk: pk_bytes.to_vec(),
-                            msg,
-                            sig,
-                        });
-                    }
-                    let cap = state_block.pipeline.signature_batch_max_secp256k1;
-                    if cap > 0 && !items.is_empty() {
-                        let derive_seed = |slice: &[&SecpItem]| -> [u8; 32] {
-                            let mut tuples: Vec<Vec<u8>> = slice
-                                .iter()
-                                .map(|it| {
-                                    let mut v = Vec::with_capacity(it.pk.len() + 32 + 64);
-                                    v.extend_from_slice(&it.pk);
-                                    v.extend_from_slice(&it.msg);
-                                    v.extend_from_slice(&it.sig);
-                                    v
-                                })
-                                .collect();
-                            tuples.sort_unstable();
-                            let mut hasher = sha2::Sha256::new();
-                            hasher.update(b"iroha:ecc_batch:v1:secp256k1");
-                            for t in tuples.iter() {
-                                hasher.update(t);
-                            }
-                            let out = hasher.finalize();
-                            let mut seed = [0u8; 32];
-                            seed.copy_from_slice(&out);
-                            seed
-                        };
-                        let verify_batch_slice = |slice: &[&SecpItem]| -> bool {
-                            let seed = derive_seed(slice);
-                            let msgs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                            iroha_crypto::secp256k1_verify_batch_deterministic(
-                                &msgs, &sigs, &pks, seed,
-                            )
-                            .is_ok()
-                        };
-                        let mut start = 0;
-                        while start < items.len() {
-                            let end = usize::min(start + cap, items.len());
-                            let batch = &items[start..end];
-                            let refs: Vec<&SecpItem> = batch.iter().collect();
-                            if verify_batch_slice(&refs) {
-                                for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
-                                }
-                            } else {
-                                for it in batch {
-                                    signature_overrides[it.idx] =
-                                        Some(signature_result_for_tx(txs[it.idx]));
-                                }
-                            }
-                            start = end;
-                        }
-                    }
-                }
-
-                // PQC deterministic micro-batching for stateless pre-pass.
-                {
-                    #[derive(Clone)]
-                    struct PqcItem {
-                        idx: usize,
-                        pk: Vec<u8>,
-                        msg: [u8; 32],
-                        sig: Vec<u8>,
-                    }
-                    let mut items: Vec<PqcItem> = Vec::new();
-                    for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
-                        let AccountController::Single(signatory) = tx.authority().controller()
-                        else {
-                            continue;
-                        };
-                        if signatory.algorithm() != iroha_crypto::Algorithm::MlDsa {
-                            continue;
-                        }
-                        let (_algo, pk_bytes) = signatory.to_bytes();
-                        let h = iroha_crypto::HashOf::new(tx.payload());
-                        let mut msg = [0u8; 32];
-                        msg.copy_from_slice(h.as_ref());
-                        let sig_bytes = tx.signature().payload().payload().to_vec();
-                        items.push(PqcItem {
-                            idx,
-                            pk: pk_bytes.to_vec(),
-                            msg,
-                            sig: sig_bytes,
-                        });
-                    }
-                    let cap = state_block.pipeline.signature_batch_max_pqc;
-                    if cap > 0 && !items.is_empty() {
-                        let derive_seed = |slice: &[&PqcItem]| -> [u8; 32] {
-                            let mut tuples: Vec<Vec<u8>> = slice
-                                .iter()
-                                .map(|it| {
-                                    let mut v = Vec::with_capacity(it.pk.len() + 32 + it.sig.len());
-                                    v.extend_from_slice(&it.pk);
-                                    v.extend_from_slice(&it.msg);
-                                    v.extend_from_slice(&it.sig);
-                                    v
-                                })
-                                .collect();
-                            tuples.sort_unstable();
-                            let mut hasher = sha2::Sha256::new();
-                            hasher.update(b"iroha:pqc_batch:v1:dilithium3");
-                            for t in tuples.iter() {
-                                hasher.update(t);
-                            }
-                            let out = hasher.finalize();
-                            let mut seed = [0u8; 32];
-                            seed.copy_from_slice(&out);
-                            seed
-                        };
-                        let verify_batch_slice = |slice: &[&PqcItem]| -> bool {
-                            let seed = derive_seed(slice);
-                            let msgs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                slice.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
-                            iroha_crypto::pqc_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
-                                .is_ok()
-                        };
-                        let mut start = 0;
-                        while start < items.len() {
-                            let end = usize::min(start + cap, items.len());
-                            let batch = &items[start..end];
-                            let refs: Vec<&PqcItem> = batch.iter().collect();
-                            if verify_batch_slice(&refs) {
-                                for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
-                                }
-                            } else {
-                                for it in batch {
-                                    signature_overrides[it.idx] =
-                                        Some(signature_result_for_tx(txs[it.idx]));
-                                }
-                            }
-                            start = end;
-                        }
-                    }
-                }
-
-                // BLS deterministic batching for stateless pre-pass.
-                #[cfg(feature = "bls")]
-                {
-                    #[derive(Clone)]
-                    struct BlsItem {
-                        idx: usize,
-                        pk: iroha_crypto::PublicKey,
-                        pk_bytes: Vec<u8>,
-                        pop: Option<Vec<u8>>,
-                        msg: [u8; 32],
-                        sig: Vec<u8>,
-                    }
-                    static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
-                        LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-                    static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
-                        LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
-                    let mut all_normal_have_pop = true;
-                    let mut all_small_have_pop = true;
-                    let mut items_normal: Vec<BlsItem> = Vec::new();
-                    let mut items_small: Vec<BlsItem> = Vec::new();
-                    for (idx, tx) in txs.iter().enumerate() {
-                        if cached_ok[idx] {
-                            continue;
-                        }
-                        let AccountController::Single(signatory) = tx.authority().controller()
-                        else {
-                            continue;
-                        };
-                        let algo = signatory.algorithm();
-                        let small = match algo {
-                            iroha_crypto::Algorithm::BlsNormal => false,
-                            iroha_crypto::Algorithm::BlsSmall => true,
-                            _ => continue,
-                        };
-                        let h = iroha_crypto::HashOf::new(tx.payload());
-                        let mut msg = [0u8; 32];
-                        msg.copy_from_slice(h.as_ref());
-                        let sig_bytes = tx.signature().payload().payload().to_vec();
-                        let mut pop = None;
-                        if small {
-                            if let Some(pop_hex) =
-                                bls_small_pop_from_metadata(tx.metadata(), &BLS_POP_SMALL_KEY)
-                            {
-                                if iroha_crypto::bls_small_pop_verify(signatory, &pop_hex).is_err()
-                                {
-                                    all_small_have_pop = false;
-                                } else {
-                                    pop = Some(pop_hex);
-                                }
-                            } else {
-                                all_small_have_pop = false;
-                            }
-                        } else if let Some(pop_hex) =
-                            bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY)
-                        {
-                            if iroha_crypto::bls_normal_pop_verify(signatory, &pop_hex).is_err() {
-                                all_normal_have_pop = false;
-                            } else {
-                                pop = Some(pop_hex);
-                            }
-                        } else {
-                            all_normal_have_pop = false;
-                        }
-                        let item = BlsItem {
-                            idx,
-                            pk: signatory.clone(),
-                            pk_bytes: signatory.to_bytes().1.to_vec(),
-                            pop,
-                            msg,
-                            sig: sig_bytes,
-                        };
-                        if small {
-                            items_small.push(item);
-                        } else {
-                            items_normal.push(item);
-                        }
-                    }
-                    let cap = state_block.pipeline.signature_batch_max_bls;
-                    let mut verify_set = |items: &[BlsItem], small: bool| {
-                        if items.is_empty() {
-                            return;
-                        }
-                        let mut groups: std::collections::BTreeMap<[u8; 32], Vec<&BlsItem>> =
-                            std::collections::BTreeMap::new();
-                        for item in items {
-                            groups.entry(item.msg).or_default().push(item);
-                        }
-                        let mut singletons: Vec<&BlsItem> = Vec::new();
-                        for group in groups.values() {
-                            if group.len() == 1 {
-                                singletons.push(group[0]);
-                                continue;
-                            }
-                            let ok = {
-                                let msg = group[0].msg.as_slice();
-                                let sigs: Vec<&[u8]> =
-                                    group.iter().map(|it| it.sig.as_slice()).collect();
-                                let pks: Vec<&iroha_crypto::PublicKey> =
-                                    group.iter().map(|it| &it.pk).collect();
-                                let mut pops = Vec::with_capacity(group.len());
-                                for it in group {
-                                    let Some(pop) = it.pop.as_ref() else {
-                                        return;
-                                    };
-                                    pops.push(pop.as_slice());
-                                }
-                                if small {
-                                    iroha_crypto::bls_small_verify_aggregate_same_message(
-                                        msg, &sigs, &pks, &pops,
-                                    )
-                                    .is_ok()
-                                } else {
-                                    iroha_crypto::bls_normal_verify_aggregate_same_message(
-                                        msg, &sigs, &pks, &pops,
-                                    )
-                                    .is_ok()
-                                }
-                            };
-                            if ok {
-                                for it in group {
-                                    signature_overrides[it.idx] = Some(Ok(()));
-                                }
-                            } else {
-                                for it in group {
-                                    signature_overrides[it.idx] =
-                                        Some(signature_result_for_tx(txs[it.idx]));
-                                }
-                            }
-                        }
-                        if !singletons.is_empty() {
-                            let msgs: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.msg.as_slice()).collect();
-                            let sigs: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.pk_bytes.as_slice()).collect();
-                            let ok = if small {
-                                iroha_crypto::bls_small_verify_aggregate_multi_message(
-                                    &msgs, &sigs, &pks,
-                                )
-                                .is_ok()
-                            } else {
-                                iroha_crypto::bls_normal_verify_aggregate_multi_message(
-                                    &msgs, &sigs, &pks,
-                                )
-                                .is_ok()
-                            };
-                            if ok {
-                                for it in singletons {
-                                    signature_overrides[it.idx] = Some(Ok(()));
-                                }
-                            } else {
-                                for it in singletons {
-                                    signature_overrides[it.idx] =
-                                        Some(signature_result_for_tx(txs[it.idx]));
-                                }
-                            }
-                        }
-                    };
-                    if cap > 0 {
-                        if all_normal_have_pop {
-                            for chunk in items_normal.chunks(cap) {
-                                verify_set(chunk, false);
-                            }
-                        }
-                        if all_small_have_pop {
-                            for chunk in items_small.chunks(cap) {
-                                verify_set(chunk, true);
-                            }
-                        }
-                    }
-                }
-            }
             if let Some(timings) = timings.as_deref_mut() {
-                if let Some(start) = sig_batch_start {
-                    timings.execution_tx_signature_batch_ms = to_ms(start.elapsed());
-                } else if skip_stateless_checks {
-                    timings.execution_tx_signature_batch_ms = 0;
-                }
+                timings.execution_tx_signature_batch_ms = 0;
             }
 
             let stateless_start = timings.as_ref().map(|_| Instant::now());
@@ -6877,46 +5580,26 @@ pub(crate) mod valid {
                             return Some(reason);
                         }
                     }
-                    if cached_ok[idx] {
-                        return None;
-                    }
                     if skip_stateless_checks {
                         return None;
                     }
-                    let signature_override = signature_overrides
-                        .get(idx)
-                        .and_then(|override_result| override_result.as_ref().cloned());
                     let stateless = if is_heartbeat {
-                        match signature_override {
-                            Some(override_result) => {
-                                AcceptedTransaction::validate_heartbeat_with_now_with_signature_result(
-                                    tx,
-                                    &chain_id,
-                                    max_clock_drift,
-                                    tx_params,
-                                    crypto_cfg.as_ref(),
-                                    block_creation_time,
-                                    Some(override_result),
-                                )
-                            }
-                            None => AcceptedTransaction::validate_heartbeat_with_now(
-                                tx,
-                                &chain_id,
-                                max_clock_drift,
-                                tx_params,
-                                crypto_cfg.as_ref(),
-                                block_creation_time,
-                            ),
-                        }
-                    } else {
-                        AcceptedTransaction::validate_with_now_with_signature_result(
+                        AcceptedTransaction::validate_heartbeat_with_now(
                             tx,
                             &chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            signature_override,
+                        )
+                    } else {
+                        AcceptedTransaction::validate_with_now(
+                            tx,
+                            &chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
                         )
                     };
                     match stateless {
@@ -6948,7 +5631,7 @@ pub(crate) mod valid {
                 cache.set_cap(cache_cap);
                 cache.ensure_context(cache_context);
                 for (idx, tx) in txs.iter().enumerate() {
-                    if cached_ok[idx] || stateless_rejections[idx].is_some() {
+                    if stateless_rejections[idx].is_some() {
                         continue;
                     }
                     let expires_at_ms = tx
@@ -9945,6 +8628,7 @@ pub(crate) mod valid {
                 types::{BlobDigest, StorageTicketId},
             },
             isi::{Log, error::Mismatch},
+            metadata::Metadata,
             nexus::LaneId,
             parameter::Parameters,
             prelude::{Account, Domain, PeerId},
@@ -11204,8 +9888,6 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
-                None,
-                false,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -11282,8 +9964,6 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
-                None,
-                false,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
@@ -12431,7 +11111,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = ValidBlock::validate_keep_voting_block(
@@ -12450,10 +11129,146 @@ pub(crate) mod valid {
                 "validation should succeed and warm stateless cache"
             );
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation should populate stateless cache",
+            );
+        }
+
+        #[test]
+        fn block_validation_rejects_invalid_signature_despite_warmed_stateless_cache() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new(World::new(), Arc::clone(&kura), query);
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.stateless_cache_cap = 64;
+            state.set_pipeline(pipeline);
+
+            let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let _ = commit_block_at_height(&state, &kura, &topology, &leader_private, 1, None, 0);
+
+            let (_tx_handle, tx_time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let (authority, signer) = gen_account_in("cache-signature-test");
+            let (other_authority, _) = gen_account_in("cache-signature-test");
+            let valid_tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &tx_time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "cacheable".to_owned())])
+            .sign(signer.private_key());
+
+            let valid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(valid_tx.clone()));
+            let (_valid_block_handle, valid_block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(10));
+            let valid_block =
+                BlockBuilder::new_with_time_source(vec![valid_accepted], valid_block_time_source)
+                    .chain(0, state.view().latest_block().as_deref())
+                    .sign(&leader_private)
+                    .unpack(|_| {});
+            let valid_signed_block: SignedBlock = valid_block.into();
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            ValidBlock::validate_keep_voting_block(
+                valid_signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {})
+            .expect("valid block should warm stateless cache");
+
+            let invalid_tx = valid_tx.with_authority(other_authority);
+            let invalid_hash = invalid_tx.hash();
+            let invalid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx));
+            let (_invalid_block_handle, invalid_block_time_source) =
+                TimeSource::new_mock(Duration::from_millis(20));
+            let invalid_block = BlockBuilder::new_with_time_source(
+                vec![invalid_accepted],
+                invalid_block_time_source,
+            )
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(&leader_private)
+            .unpack(|_| {});
+            let invalid_signed_block: SignedBlock = invalid_block.into();
+
+            {
+                let mut cache = state.stateless_validation_cache().lock();
+                cache.insert_ok(invalid_hash.clone(), None, 0);
+                assert!(
+                    cache.contains_key(&invalid_hash),
+                    "test setup should present the invalid transaction as cache-warmed",
+                );
+            }
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let result = ValidBlock::validate_keep_voting_block(
+                invalid_signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+            let Err(err) = result else {
+                panic!("invalid transaction signature must reject the block");
+            };
+
+            assert!(matches!(
+                *err.1,
+                BlockValidationError::TransactionAccept(
+                    AcceptTransactionFail::SignatureVerification(_)
+                )
+            ));
+        }
+
+        #[test]
+        fn transaction_signature_validation_has_no_bypass_terms() {
+            let needles = [
+                ["signature", "_", "override"].concat(),
+                ["signature", "_", "overrides"].concat(),
+                ["skip", "_tx", "_signature", "_validation"].concat(),
+            ];
+            let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+            let mut pending = vec![src.clone()];
+            let mut hits = Vec::new();
+
+            while let Some(path) = pending.pop() {
+                let metadata = std::fs::metadata(&path).expect("source path metadata");
+                if metadata.is_dir() {
+                    for entry in std::fs::read_dir(&path).expect("source directory readable") {
+                        pending.push(entry.expect("source directory entry").path());
+                    }
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                    continue;
+                }
+
+                let source = std::fs::read_to_string(&path).expect("Rust source readable");
+                for needle in &needles {
+                    if source.contains(needle) {
+                        let relative = path.strip_prefix(&src).unwrap_or(&path);
+                        hits.push(format!("{} contains {needle}", relative.display()));
+                    }
+                }
+            }
+
+            assert!(
+                hits.is_empty(),
+                "forbidden source terms:\n{}",
+                hits.join("\n")
             );
         }
 
@@ -12493,7 +11308,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
@@ -12515,9 +11329,9 @@ pub(crate) mod valid {
             );
             assert!(events.is_empty(), "no rejection events expected");
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation with events should populate stateless cache",
             );
         }
@@ -12558,7 +11372,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut state_block = state.block(signed_block.header());
             let result = ValidBlock::validate(
@@ -12573,9 +11386,9 @@ pub(crate) mod valid {
             assert!(result.is_ok(), "validation should warm stateless cache");
             drop(state_block);
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation should populate stateless cache",
             );
         }
@@ -12616,7 +11429,6 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let block_creation_ms = signed_block.header().creation_time().as_millis();
 
             let mut state_block = state.block(signed_block.header());
             let events = std::cell::RefCell::new(Vec::new());
@@ -12637,9 +11449,9 @@ pub(crate) mod valid {
             assert!(events.borrow().is_empty(), "no rejection events expected");
             drop(state_block);
 
-            let mut cache = state.stateless_validation_cache().lock();
+            let cache = state.stateless_validation_cache().lock();
             assert!(
-                cache.get_ok(&tx_hash, block_creation_ms),
+                cache.contains_key(&tx_hash),
                 "successful static validation with events should populate stateless cache",
             );
         }
@@ -15388,25 +14200,6 @@ mod tests {
         kura.store_block(committed.clone())
             .expect("store committed block");
         committed.as_ref().hash()
-    }
-
-    #[test]
-    #[cfg(feature = "bls")]
-    fn bls_pop_metadata_extracts_hex_string() {
-        let mut metadata = Metadata::default();
-        let key: iroha_data_model::name::Name = "bls_pop".parse().expect("valid name");
-        metadata.insert(key.clone(), Json::new("A1B2"));
-        let out = bls_pop_from_metadata(&metadata, &key).expect("pop should parse");
-        assert_eq!(out, hex::decode("A1B2").unwrap());
-    }
-
-    #[test]
-    #[cfg(feature = "bls")]
-    fn bls_pop_metadata_rejects_non_string() {
-        let mut metadata = Metadata::default();
-        let key: iroha_data_model::name::Name = "bls_pop".parse().expect("valid name");
-        metadata.insert(key.clone(), Json::new(123u64));
-        assert!(bls_pop_from_metadata(&metadata, &key).is_none());
     }
 
     #[test]

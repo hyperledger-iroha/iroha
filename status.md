@@ -2,6 +2,213 @@
 
 Last updated: 2026-04-30
 
+## 2026-04-30 20k bottleneck fix implementation
+
+- Implemented the first tranche of measured hot-path fixes: debug-build Norito
+  trace checks are cached outside tests, Torii batch admission caches local
+  routing decisions per batch, Torii queue-pressure reads avoid full state
+  views, and queue ingress now rejects fresh submissions with the existing
+  429 envelope when the latency budget is saturated.
+- Added a committed latest-block-header cache to `State` and changed
+  `latest_block_header_fast()` to read the cache instead of loading the full
+  latest block from Kura on hot paths.
+- `AcceptedTransaction` now carries cached entrypoint hashes, signed
+  transaction hashes, and exact encoded lengths so queue/admission paths can
+  avoid repeated full Norito encoding and hash work.
+- Block static validation now uses the deterministic Ed25519 batch verification
+  API for naturally batched single-key Ed25519 transactions, then falls back to
+  individual deterministic verification on batch failure to identify the bad
+  transaction. The normal transaction limit, TTL, signing-policy, and
+  consensus-visible validation checks still run.
+- FASTPQ background prover submission now observes queue backpressure and
+  defers non-critical prover jobs while the queue is saturated. Consensus and
+  required block validation checks are unchanged.
+- Validation so far: `cargo fmt --all`, `git diff --check`,
+  `cargo check -p norito -p iroha_crypto -p iroha_core -p iroha_torii -p irohad`,
+  `cargo test -p norito debug_trace_follows_env_flag -- --nocapture`,
+  `cargo test -p iroha_crypto ed25519_batch_deterministic -- --nocapture`,
+  `cargo test -p iroha_core --lib accepted_transaction_caches_hashes_and_encoded_length -- --nocapture`,
+  `cargo test -p iroha_core --lib queue_pressure_ -- --nocapture`,
+  `cargo test -p iroha_core latest_block_header_fast_reads_latest_committed_header -- --nocapture`,
+  `cargo test -p iroha_torii --lib transaction_ingress_rejects_latency_saturated_queue_before_capacity -- --nocapture`,
+  `cargo test -p iroha_core --test admission_batching ed25519_batch_bisection_finds_bad_sig -- --nocapture`,
+  and `cargo test -p iroha_core --test signature_batch_determinism ed25519_batch_permutation_finds_same_bad_sig -- --nocapture`.
+  Post-fix clean 20k TPS benchmark artifacts are still pending.
+
+## 2026-04-30 Izanami 20k TPS stress rerun
+
+- Rebuilt the current dirty-tree dev binaries with
+  `cargo build -p izanami --bin izanami -p irohad --bin iroha3d`, then reran
+  the local `4`-peer, no-fault prebuilt `20,000 TPS` path for a `120s` timed
+  window with `2,400,000` transactions prebuilt before the window, `4096`
+  submitters, `300,000` max inflight, and `300ms` pipeline time.
+- The run offered all `2,400,000` planned submissions (`20,000.00 TPS`).
+  Ingress accepted `87,144` (`726.20 TPS`, `3.63%` of offered). Submit
+  latency p50/p95/p99/max was `625/30011/45016/46130 ms`; shutdown aborted
+  `1,827` outstanding submit tasks after the measured window.
+- Final committed/finality evidence is still blocked: quorum/strict height
+  ended at `2/2`, quorum/strict approved transactions stayed at `10/10`, and
+  peer height / approved-transaction skew stayed `0`. The row remains
+  overload and consensus-throughput evidence rather than a successful
+  committed-20k result.
+- Dominant status deltas: tx queue saturated at `66,580/2,400,000`,
+  pacemaker backpressure deferrals `31`, view-change installs `4`, missing-QC
+  causes `3`, quorum-timeout causes `1`, range-pull escalations `5` with no
+  successes, and no RBC pressure, pending-RBC drops, validation rejects, DA
+  gate, missing-payload, or stake-quorum timeout evidence.
+- Artifact:
+  `dist/izanami-prebuilt-20k-rerun-120s-20260430-200921`, including
+  `run.log`, `command.txt`, and copied diagnostics. The shell wrapper failed
+  after Izanami emitted its final summary because zsh reserves the variable
+  name `status`, so this artifact has no numeric `exit.status`; the run
+  itself reached `izanami::summary`.
+
+## 2026-04-30 Izanami 20k bottleneck classification
+
+- Captured a current-tree dev macOS `sample` profile during a fresh `4`-peer,
+  no-fault, prebuilt `20,000 TPS` Izanami run for `30s`. Artifact:
+  `dist/izanami-profile-20k-current-30s-20260430-202549`, including the
+  runner command, peer samples, run log, and copied diagnostics.
+- Profile-run caveats: the profiling wrapper reached Izanami's final
+  `izanami::summary` but then exited `127` because the wrapper waited for the
+  runner PID after a broader `wait`; the captured samples are still present.
+  A concurrent `cargo test -p iroha_torii torii_hot_path_load_profile -- --ignored --nocapture`
+  process was also active, so this profile is directional rather than a clean
+  isolated benchmark.
+- Current-tree dev run outcome: `600,000` submissions were offered, but only
+  `1,466` reached ingress, with submit latency p50/p95/p99/max
+  `3706/11223/41150/44167 ms`, `7,428` endpoint failovers, `14` endpoint
+  unhealthy marks, and `3,387` submit tasks aborted on shutdown. Final
+  quorum/strict height was `1/1`, approved transactions stayed at `9/9`, peer
+  skew stayed `0`, the tx queue saturated at `17,453/600,000`, pacemaker
+  backpressure deferred `9` times, and there was no RBC pressure,
+  missing-payload, DA-gate, validation-reject, or view-change storm evidence.
+- Primary bottleneck class: overload admission and Torii ingress saturation.
+  The system is spending the window failing over and timing out request
+  submission while the node-side transaction queue stays saturated, so the
+  committed-throughput ceiling is being hit before finality can make progress.
+- CPU bottleneck class in peer samples: per-transaction validation plus codec
+  work. Active peer stacks are dominated by Norito encode/decode paths,
+  Ed25519/`curve25519-dalek` signature verification and public-key parsing,
+  transaction hash re-encoding, and Torii batch admission paths
+  (`handler_post_transactions_batch` -> `accept_transaction_for_ingress` ->
+  `AcceptedTransaction::accept_entrypoint`/`validate_with_now`).
+- Hot-path tax surfaced by the dev profile: `norito::debug_trace_enabled()`
+  probes `std::env::var_os("NORITO_TRACE")` on encode/decode in debug builds,
+  which shows up as repeated `getenv`/environment-lock contention in peer
+  samples. This is not consensus logic, but it inflates the current dev
+  profile and should be cached or removed from hot codec paths before using dev
+  samples as throughput evidence.
+- Secondary bottleneck class: routing/state metadata lookups during ingress.
+  Some peer stacks repeatedly enter
+  `State::authoritative_lane_peer_ids` -> `latest_block_header_fast` ->
+  `block_by_height` -> `Kura::get_block`, so authoritative-lane checks are
+  pulling state/block metadata on the Torii admission path.
+- Consensus/RBC classification: not the dominant bottleneck in this rerun.
+  The run shows stalled finality, but no RBC pressure, DA-gate,
+  missing-payload, validation-reject, stake-quorum timeout, or missing-QC
+  storm. Consensus is mostly starved behind saturated ingress/validation and
+  expensive admission hot paths rather than failing through an RBC-specific
+  mechanism.
+
+## 2026-04-30 Secondary hot-path cost reduction
+
+- `iroha_core` queue admission now lazily snapshots `WorldView`/`Nexus` for
+  state-backed queue paths, so ordinary internal transactions no longer pay
+  full world/nexus clone/drop costs unless external fee admission or lane
+  compliance actually needs world data.
+- Queue pressure bookkeeping now uses maintained atomic active/queued counts
+  instead of repeatedly asking `DashMap`/removed-marker state for hot
+  backpressure snapshots.
+- Torii pipeline status pruning now uses observed-time order indexes and a
+  single-pruner guard, avoiding full-cache scans and sorts during normal
+  transaction/block status writes while preserving TTL and capacity eviction.
+- Torii ingress now uses narrow `State` accessors for transaction admission
+  limits, account existence checks, and effective block time, removing the
+  remaining full `WorldView` clones from transaction acceptance and enqueue
+  pressure refresh paths.
+- Queue pressure counter tests now assert internal counter consistency against
+  the active transaction map, queued hash deque, and queued-age ring after
+  committed-removal, retry, hash-queue rebuild, and expiry-compaction paths.
+- Added measurement hooks for the secondary costs:
+  `torii_transaction_handle_enqueue_direct_metrics` in
+  `crates/iroha_torii/benches/torii_hot_paths.rs` exercises the full Torii
+  transaction handler/enqueue path with fresh queue setup outside the measured
+  routine, and the ignored
+  `pipeline_status_cache_prune_load_profile` test emits a structured prune
+  pressure profile line.
+- Cleanup found by all-target validation is folded in: current signature wrapper
+  calls in the Ed25519 batch precheck path use the inner signature bytes, the
+  Kura bench config includes `eviction_required_replicas`, and `iroha` client
+  clippy warnings are resolved without relaxing lint policy.
+- Focused validation:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core --lib`
+  - `cargo test -p iroha_core queue_pressure_counters -- --nocapture`
+  - `cargo test -p iroha_core expired_cull -- --nocapture`
+  - `cargo test -p iroha_core latest_block_header_fast_reads_latest_committed_header -- --nocapture`
+  - `cargo test -p iroha_core --test signature_batch_determinism -- --nocapture`
+  - `cargo test -p iroha_torii multisig_guard_tests -- --nocapture`
+  - `cargo test -p iroha_torii pipeline_status_cache -- --nocapture`
+  - `cargo test -p iroha_torii pipeline_status_cache_prune_load_profile -- --ignored --nocapture`
+    emitted
+    `torii_profile suite=hot_path kind=pipeline_status_cache_prune_pressure samples=32 warmup_samples=4 concurrency=1 wall_ms=357.389 throughput_per_sec=89.538 avg_us=7113.948 p50_us=7120.416 p95_us=7184.209 p99_us=7192.167 p999_us=NA max_us=7192.167`
+  - `cargo bench -p iroha_torii --bench torii_hot_paths -- --sample-size 10`
+    completed with `torii_transaction_admission_direct_metrics` at
+    `[46.692 µs 46.755 µs 46.907 µs]` and
+    `torii_transaction_handle_enqueue_direct_metrics` at
+    `[14.707 ms 14.890 ms 15.230 ms]`
+  - `cargo clippy -p iroha_core -p iroha_torii --all-targets -- -D warnings`
+
+## 2026-04-30 Transaction signature bypass removal
+
+- Removed the `iroha_core` transaction-validation signature override entrypoints
+  and block-validation plumbing that could feed preaccepted signature results
+  into per-transaction validation.
+- Block transaction validation no longer uses stateless validation cache hits or
+  deterministic batch-preverification overrides to skip the normal
+  `SignedTransaction::verify_signature` path. The cache configuration remains
+  present, but block validation treats warmed entries as insufficient for
+  accepting a transaction signature.
+- Added regression coverage for warmed-cache invalid signatures, heartbeat
+  signature rejection, and a source-level guard against reintroducing the
+  removed bypass identifiers.
+
+## 2026-04-30 Izanami 20k CPU profile
+
+- Captured a release-build macOS `sample` profile during a `4`-peer,
+  no-fault, prebuilt `20,000 TPS` Izanami run for `30s`. The run offered and
+  ingress-accepted all `600,000` prebuilt transfers, with submit latency
+  p50/p95/p99/max `24/121/387/1353 ms`, so the driver was not the limiting
+  stage for this profile.
+- Final consensus evidence remained poor despite full ingress delivery:
+  quorum/strict height reached only `2/2`, quorum/strict approved
+  transactions were `156/156`, max approved-transaction skew was `4096`, the
+  queue stayed saturated at `219,843/600,000`, and the worker-loop last
+  iteration stretched to `2395 ms`.
+- Driver samples were mostly idle or in lightweight send/hash/account-address
+  work. The dominant active peer CPU samples were transaction signature
+  verification (`curve25519-dalek`/Ed25519), allocation and string work,
+  FASTPQ Poseidon/prover work, `WorldView` clone/drop costs, Norito
+  serialization, Torii queue/status bookkeeping, and hash/CRC work.
+- The peer call stacks show the largest consensus-path CPU cost inside
+  `ValidBlock::validate_static_with_snapshot`, especially transaction
+  signature verification and Norito re-encoding of signed transactions during
+  validation. FASTPQ prover jobs were asynchronous but still consumed several
+  seconds of host CPU per peer after block commit.
+- Current optimization order after the signature-bypass removal:
+  1. Reintroduce transaction signature throughput work only as real signature
+     verification, never as a validation override or cache-hit acceptance path.
+  2. Bound or defer FASTPQ prover CPU while consensus has an active backlog,
+     without changing block validity or deterministic consensus state.
+  3. Remove per-transaction full state-view clone/drop work from Torii
+     ingress and lane routing by caching cheap parameter/routing snapshots for
+     the current block or epoch.
+  4. Batch or amortize `PipelineStatusCache` pruning and remaining queue
+     pressure refresh work under heavy ingress.
+- Profile artifact:
+  `dist/izanami-profile-20k-30s-20260430-185822`.
+
 ## 2026-04-30 Izanami 20k ingress restored; committed TPS still blocked
 
 - Replaced the queue pressure age scan with an amortized FIFO age ring, so

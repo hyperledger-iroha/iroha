@@ -43,6 +43,8 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default()).unwrap();

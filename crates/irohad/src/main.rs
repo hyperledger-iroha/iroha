@@ -4978,6 +4978,7 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let queue_backpressure = queue.backpressure_handle();
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -5036,7 +5037,10 @@ impl Iroha {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
         // Start FASTPQ prover lane (background STARK generation) if the backend initialises.
-        if let Some((_h, child)) = iroha_core::fastpq::lane::start(&zk_cfg.fastpq) {
+        if let Some((_h, child)) = iroha_core::fastpq::lane::start_with_backpressure(
+            &zk_cfg.fastpq,
+            Some(queue_backpressure),
+        ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
         // Start Network Time Service sampler with config parameters

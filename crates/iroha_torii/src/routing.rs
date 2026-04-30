@@ -10078,11 +10078,13 @@ mod evidence_submit_tests {
 }
 
 fn reject_direct_multisig_signing(
-    world: &impl WorldReadOnly,
+    state: &CoreState,
     tx: &SignedTransaction,
 ) -> Option<AcceptTransactionFail> {
-    let _account = world.accounts().get(tx.authority())?;
     if tx.authority().controller().multisig_policy().is_none() {
+        return None;
+    }
+    if !state.has_account(tx.authority()) {
         return None;
     }
 
@@ -10148,8 +10150,7 @@ mod multisig_guard_tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .sign(signer_keypair.private_key());
 
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        let rejection = reject_direct_multisig_signing(&state, &tx);
         match rejection {
             Some(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::UnsupportedAuthority);
@@ -10181,8 +10182,7 @@ mod multisig_guard_tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .sign(signer.private_key());
 
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        let rejection = reject_direct_multisig_signing(&state, &tx);
         assert!(
             rejection.is_none(),
             "single-signature signatories with multisig role must pass admission guard"
@@ -10214,8 +10214,7 @@ mod multisig_guard_tests {
             .with_executable(Executable::Instructions(vec![custom].into()))
             .sign(signer_keypair.private_key());
 
-        let view = state.view();
-        let rejection = reject_direct_multisig_signing(view.world(), &tx);
+        let rejection = reject_direct_multisig_signing(&state, &tx);
         assert!(
             rejection.is_none(),
             "multisig custom instruction envelopes must pass admission guard"
@@ -10247,17 +10246,9 @@ pub fn accept_transaction_for_ingress(
     #[cfg(feature = "telemetry")]
     let verify_started = std::time::Instant::now();
 
-    let (max_clock_drift, tx_limits, state_view) = {
-        let state_view = state.world.view();
-        let params = state_view.parameters();
-        (
-            params.sumeragi().max_clock_drift(),
-            params.transaction(),
-            state_view,
-        )
-    };
+    let (max_clock_drift, tx_limits) = state.transaction_admission_limits();
     if let TransactionEntrypoint::External(signed) = &tx
-        && let Some(rejection) = reject_direct_multisig_signing(&state_view, signed)
+        && let Some(rejection) = reject_direct_multisig_signing(state.as_ref(), signed)
     {
         iroha_logger::warn!(
             authority = %signed.authority(),
@@ -10284,7 +10275,6 @@ pub fn accept_transaction_for_ingress(
         );
         return Err(Error::AcceptTransaction(rejection));
     }
-    drop(state_view);
     #[cfg(feature = "telemetry")]
     let (signature_count, signature_limit, authority_label) = match &tx {
         TransactionEntrypoint::External(signed) => {
@@ -10367,23 +10357,22 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
     routing_decision: Option<RoutingDecision>,
 ) -> Result<RoutingDecision> {
     let pressure = {
-        let state_view = state.view();
-        let block_time = state_view
-            .world()
-            .parameters()
-            .sumeragi()
-            .effective_block_time();
+        let block_time = state.sumeragi_effective_block_time();
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
-        iroha_logger::debug!(
+        iroha_logger::warn!(
             tx_hash = %accepted_tx.hash(),
             queued = pressure.queued_tx_count,
             tracked = pressure.tracked_tx_count,
             capacity = pressure.capacity.get(),
             oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "accepting transaction ingress while local queue is latency-saturated"
+            "rejecting transaction ingress while local queue is latency-saturated"
         );
+        return Err(Error::PushIntoQueue {
+            source: Box::new(queue::Error::LatencySaturated),
+            backpressure: pressure.into_backpressure(),
+        });
     }
 
     let result = match routing_decision {
@@ -49029,7 +49018,7 @@ mod transaction_ingress_overload_tests {
     }
 
     #[tokio::test]
-    async fn transaction_ingress_accepts_latency_saturated_queue_before_capacity() {
+    async fn transaction_ingress_rejects_latency_saturated_queue_before_capacity() {
         let state = Arc::new(State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -49059,21 +49048,29 @@ mod transaction_ingress_overload_tests {
         queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
 
         let second = signed_log_transaction(&chain_id, &KeyPair::random(), "second");
-        handle_transaction(
+        let err = handle_transaction(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
             Arc::clone(&state),
             second,
         )
         .await
-        .expect("latency-saturated queue should still accept until capacity");
+        .expect_err("latency-saturated queue should reject fresh ingress");
+        assert!(matches!(
+            err,
+            Error::PushIntoQueue {
+                source,
+                backpressure,
+            } if matches!(source.as_ref(), queue::Error::LatencySaturated)
+                && backpressure.is_saturated()
+        ));
 
         let backpressure = queue.current_backpressure();
         assert!(
             backpressure.is_saturated(),
             "latency saturation must remain visible as backpressure telemetry"
         );
-        assert_eq!(backpressure.queued(), 2);
+        assert_eq!(backpressure.queued(), 1);
         assert_eq!(backpressure.capacity().get(), 32);
     }
 }

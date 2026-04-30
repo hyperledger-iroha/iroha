@@ -5455,13 +5455,6 @@ impl StatelessValidationContext {
     }
 }
 
-#[derive(Debug, Clone)]
-struct StatelessValidationCacheEntry {
-    expires_at_ms: Option<u128>,
-    not_before_ms: u128,
-    order: u64,
-}
-
 #[derive(Debug)]
 pub(crate) struct StatelessValidationCache {
     cap: usize,
@@ -5469,7 +5462,7 @@ pub(crate) struct StatelessValidationCache {
     context: Option<StatelessValidationContext>,
     entries: std::collections::BTreeMap<
         iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        StatelessValidationCacheEntry,
+        u64,
     >,
     lru: std::collections::BTreeSet<(
         u64,
@@ -5508,48 +5501,29 @@ impl StatelessValidationCache {
         }
     }
 
-    pub(crate) fn get_ok(
-        &mut self,
+    #[cfg(test)]
+    pub(crate) fn contains_key(
+        &self,
         key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        now_ms: u128,
     ) -> bool {
-        let Some(mut entry) = self.entries.remove(key) else {
-            return false;
-        };
-        if now_ms < entry.not_before_ms
-            || entry
-                .expires_at_ms
-                .is_some_and(|expires_at| now_ms > expires_at)
-        {
-            self.lru.remove(&(entry.order, key.clone()));
-            return false;
-        }
-        self.lru.remove(&(entry.order, key.clone()));
-        entry.order = self.next_order();
-        self.lru.insert((entry.order, key.clone()));
-        self.entries.insert(key.clone(), entry);
-        true
+        self.entries.contains_key(key)
     }
 
     pub(crate) fn insert_ok(
         &mut self,
         key: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
-        expires_at_ms: Option<u128>,
-        not_before_ms: u128,
+        _expires_at_ms: Option<u128>,
+        _not_before_ms: u128,
     ) {
         if self.cap == 0 {
             return;
         }
+        if let Some(order) = self.entries.remove(&key) {
+            self.lru.remove(&(order, key.clone()));
+        }
         self.evict_capacity();
         let order = self.next_order();
-        self.entries.insert(
-            key.clone(),
-            StatelessValidationCacheEntry {
-                expires_at_ms,
-                not_before_ms,
-                order,
-            },
-        );
+        self.entries.insert(key.clone(), order);
         self.lru.insert((order, key));
     }
 
@@ -5587,16 +5561,17 @@ mod stateless_validation_cache_tests {
     }
 
     #[test]
-    fn cache_respects_not_before_and_expiry() {
-        let mut cache = StatelessValidationCache::new(4);
+    fn cache_tracks_inserted_hashes_and_capacity() {
+        let mut cache = StatelessValidationCache::new(1);
         let key = dummy_hash(7);
+        let other_key = dummy_hash(8);
 
         cache.insert_ok(key, Some(200), 50);
-        assert!(!cache.get_ok(&key, 40));
+        assert!(cache.contains_key(&key));
 
-        cache.insert_ok(key, Some(200), 50);
-        assert!(cache.get_ok(&key, 199));
-        assert!(!cache.get_ok(&key, 201));
+        cache.insert_ok(other_key, None, 0);
+        assert!(!cache.contains_key(&key));
+        assert!(cache.contains_key(&other_key));
     }
 }
 
@@ -5882,6 +5857,8 @@ pub struct State {
     pub world: World,
     /// Blockchain.
     pub block_hashes: BlockHashes,
+    /// Latest committed block header cached for hot paths that do not need full block bodies.
+    latest_block_header: parking_lot::RwLock<Option<BlockHeader>>,
     /// Merge-ledger cache retaining recent entries for queries/telemetry.
     pub merge_ledger: MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -17167,6 +17144,9 @@ impl State {
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
         let pipeline_cache_size = pipeline.cache_size;
+        let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
+            .and_then(|height| kura.get_block(height))
+            .map(|block| block.header());
         let tiered_backend = Arc::new(parking_lot::Mutex::new(TieredStateBackend::default()));
         let tiered_snapshot_worker = TieredSnapshotWorker::new(
             Arc::clone(&tiered_backend),
@@ -17176,6 +17156,7 @@ impl State {
         let mut s = Self {
             world,
             block_hashes: BlockHashes::default(),
+            latest_block_header: parking_lot::RwLock::new(latest_block_header),
             transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
             prev_commit_topology: Cell::new(Vec::new()),
@@ -18293,8 +18274,21 @@ impl State {
     /// consensus paths that only need access to parameters/consensus keys.
     #[track_caller]
     pub fn world_view(&self) -> WorldView<'_> {
+        let nexus = self.nexus_snapshot();
+        self.world_view_with_nexus(&nexus)
+    }
+
+    /// Create a point-in-time world view using an already-snapshotted Nexus configuration.
+    ///
+    /// This is intended for hot paths that need both Nexus and world data and should avoid
+    /// cloning Nexus twice just to populate the dataspace alias catalog.
+    #[track_caller]
+    pub(crate) fn world_view_with_nexus(
+        &self,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> WorldView<'_> {
         let mut world = self.world.view();
-        world.dataspace_catalog = self.nexus_snapshot().dataspace_catalog;
+        world.dataspace_catalog = nexus.dataspace_catalog.clone();
         world
     }
 
@@ -18454,15 +18448,22 @@ impl State {
             .and_then(|height| self.block_by_height(height))
     }
 
-    /// Latest committed block header loaded from Kura.
+    /// Latest committed block header from the state cache.
     ///
     /// This avoids acquiring a full [`StateView`] when callers only need the
     /// latest committed header for contextual validation.
     #[track_caller]
     pub fn latest_block_header_fast(&self) -> Option<BlockHeader> {
-        NonZeroUsize::new(self.committed_height())
-            .and_then(|height| self.block_by_height(height))
-            .map(|block| block.header())
+        self.latest_block_header.read().clone()
+    }
+
+    fn update_latest_block_header_cache(&self, header: BlockHeader) {
+        *self.latest_block_header.write() = Some(header);
+    }
+
+    #[cfg(test)]
+    fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
+        self.update_latest_block_header_cache(header);
     }
 
     /// Produce Merkle proofs for an entrypoint hash at the given block height.
@@ -18485,9 +18486,9 @@ impl State {
     #[track_caller]
     pub fn time_triggers_due_for_block_fast(&self, block_header: &BlockHeader) -> bool {
         let to = block_header.creation_time();
-        let since = NonZeroUsize::new(self.committed_height())
-            .and_then(|height| self.block_by_height(height))
-            .map_or(to, |latest_block| latest_block.header().creation_time());
+        let since = self
+            .latest_block_header_fast()
+            .map_or(to, |latest_header| latest_header.creation_time());
         let (since, length) = to.checked_sub(since).map_or_else(
             || {
                 warn!(
@@ -18550,6 +18551,46 @@ impl State {
     #[track_caller]
     pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
         self.transactions.view().get(&hash).is_some()
+    }
+
+    /// Return the transaction admission limits used by ingress validation.
+    ///
+    /// This avoids acquiring a full [`WorldView`] when transaction admission only
+    /// needs current Sumeragi clock drift and transaction limit parameters.
+    #[track_caller]
+    #[must_use]
+    pub fn transaction_admission_limits(
+        &self,
+    ) -> (
+        Duration,
+        iroha_data_model::parameter::system::TransactionParameters,
+    ) {
+        let params = self.world.parameters.view();
+        (params.sumeragi().max_clock_drift(), params.transaction())
+    }
+
+    /// Effective block time from current Sumeragi parameters.
+    ///
+    /// This avoids acquiring a full [`StateView`] when queue pressure bookkeeping
+    /// only needs the current age budget input.
+    #[track_caller]
+    #[must_use]
+    pub fn sumeragi_effective_block_time(&self) -> Duration {
+        self.world
+            .parameters
+            .view()
+            .sumeragi()
+            .effective_block_time()
+    }
+
+    /// Return whether the canonical account exists in current world state.
+    ///
+    /// This avoids constructing a full [`WorldView`] for Torii admission checks
+    /// that only need account membership.
+    #[track_caller]
+    #[must_use]
+    pub fn has_account(&self, account_id: &AccountId) -> bool {
+        self.world.accounts.view().get(account_id).is_some()
     }
 
     /// Committed block height for a transaction hash, if present in the index.
@@ -22005,6 +22046,7 @@ impl<'state> StateBlock<'state> {
             confidential_registry_dirty,
             view_lock,
             tiered_backend,
+            _curr_block,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
             ..
@@ -22100,6 +22142,7 @@ impl<'state> StateBlock<'state> {
                 return Err(err);
             }
         }
+        state_ref.update_latest_block_header_cache(_curr_block);
         if confidential_registry_dirty {
             state_ref.confidential_digest_cache.bump();
         }
@@ -24242,7 +24285,6 @@ pub fn replay_blocks_from_kura_range(
                     state,
                     &mut voting_block,
                     false,
-                    replay_skip_block_signatures,
                     replay_skip_block_signatures,
                 )
                 .unpack(|_| {})
@@ -28624,9 +28666,13 @@ pub(crate) mod deserialize {
             #[cfg(feature = "telemetry")]
             Some(telemetry_seed.clone()),
         );
+        let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
+            .and_then(|height| kura.get_block(height))
+            .map(|block| block.header());
         let state = State {
             world,
             block_hashes,
+            latest_block_header: parking_lot::RwLock::new(latest_block_header),
             merge_ledger: MergeLedgerStore::with_default_capacity(),
             transactions,
             commit_topology,
@@ -30576,6 +30622,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
         let block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, keypair.private_key());
+        let header = block.header();
         let block_hash = block.hash();
         kura.store_block(Arc::new(block))
             .expect("store block in kura");
@@ -30584,6 +30631,7 @@ mod tests {
             block_hashes.push_for_tests(block_hash);
             block_hashes.commit_for_tests();
         }
+        state.update_latest_block_header_cache_for_tests(header);
 
         let latest = state
             .latest_block_header_fast()

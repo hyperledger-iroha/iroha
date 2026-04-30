@@ -25,12 +25,27 @@ use crate::fastpq::{
 
 /// Handle used to submit FASTPQ prover jobs.
 #[derive(Clone)]
-pub struct FastpqLaneHandle(mpsc::Sender<FastpqWitnessJob>);
+pub struct FastpqLaneHandle {
+    tx: mpsc::Sender<FastpqWitnessJob>,
+    backpressure: Option<crate::queue::BackpressureHandle>,
+}
 
 impl FastpqLaneHandle {
     /// Submit a prover job to the lane.
     pub fn submit(&self, job: FastpqWitnessJob) -> bool {
-        self.0.try_send(job).is_ok()
+        if self
+            .backpressure
+            .as_ref()
+            .is_some_and(|handle| handle.snapshot().is_saturated())
+        {
+            debug!(
+                height = job.height,
+                view = job.view,
+                "fastpq lane: deferring background prover job while queue is saturated"
+            );
+            return false;
+        }
+        self.tx.try_send(job).is_ok()
     }
 }
 
@@ -73,6 +88,14 @@ static TEST_ENGINE: OnceLock<Arc<dyn FastpqProofEngine>> = OnceLock::new();
 
 /// Start the FASTPQ prover lane. Returns the handle and the spawned task when successful.
 pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
+    start_with_backpressure(cfg, None)
+}
+
+/// Start the FASTPQ prover lane with an optional queue backpressure observer.
+pub fn start_with_backpressure(
+    cfg: &Fastpq,
+    backpressure: Option<crate::queue::BackpressureHandle>,
+) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
     if let Some(existing) = GLOBAL_SENDER.get() {
         return Some((existing.clone(), tokio::spawn(async {})));
     }
@@ -83,7 +106,10 @@ pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<
         return None;
     };
     let (tx, mut rx) = mpsc::channel::<FastpqWitnessJob>(32);
-    let handle = FastpqLaneHandle(tx.clone());
+    let handle = FastpqLaneHandle {
+        tx: tx.clone(),
+        backpressure,
+    };
     if GLOBAL_SENDER.set(handle.clone()).is_err() {
         return Some((GLOBAL_SENDER.get().unwrap().clone(), tokio::spawn(async {})));
     }

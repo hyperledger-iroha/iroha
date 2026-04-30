@@ -169,7 +169,7 @@ mod proof_filters;
 use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     convert::{Infallible, TryInto},
     fmt::Debug,
     fs,
@@ -177,7 +177,10 @@ use std::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -201,7 +204,7 @@ use base64::engine::general_purpose::{
     STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD,
 };
 use blake3::hash as blake3_hash;
-use dashmap::DashMap;
+use dashmap::{DashMap, mapref::entry::Entry as DashEntry};
 use error_stack::{Report, ResultExt};
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -1559,6 +1562,8 @@ enum PipelineStatusKind {
 const PIPELINE_STATUS_CACHE_CAP: usize = 1_500_000;
 const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
+const PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP: usize = 1_024;
+const PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER: usize = 4;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_COMPLETED_TTL: Duration = Duration::from_secs(30);
 
@@ -1655,10 +1660,15 @@ struct PendingBlockStatus {
 struct PipelineStatusCache {
     entries: DashMap<HashOf<SignedTransaction>, PipelineStatusEntry>,
     pending_blocks: DashMap<NonZeroU64, PendingBlockStatus>,
+    entry_order: parking_lot::Mutex<VecDeque<(Instant, HashOf<SignedTransaction>)>>,
+    pending_order: parking_lot::Mutex<VecDeque<(Instant, NonZeroU64)>>,
     capacity: usize,
     ttl: Duration,
     start: Instant,
     last_prune_secs: std::sync::atomic::AtomicU64,
+    entry_order_unsorted: AtomicBool,
+    pending_order_unsorted: AtomicBool,
+    prune_lock: parking_lot::Mutex<()>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1678,10 +1688,15 @@ impl PipelineStatusCache {
         Self {
             entries: DashMap::new(),
             pending_blocks: DashMap::new(),
+            entry_order: parking_lot::Mutex::new(VecDeque::new()),
+            pending_order: parking_lot::Mutex::new(VecDeque::new()),
             capacity: cap,
             ttl,
             start: Instant::now(),
             last_prune_secs: std::sync::atomic::AtomicU64::new(0),
+            entry_order_unsorted: AtomicBool::new(false),
+            pending_order_unsorted: AtomicBool::new(false),
+            prune_lock: parking_lot::Mutex::new(()),
         }
     }
 
@@ -1698,10 +1713,7 @@ impl PipelineStatusCache {
             }
         };
         let incoming = PipelineStatusEntry::fresh(kind, event.block_height(), rejection);
-        self.entries
-            .entry(*event.hash())
-            .and_modify(|entry| entry.merge_from_event(incoming.clone()))
-            .or_insert(incoming);
+        self.record_entry_inner(*event.hash(), incoming);
         self.prune_if_needed(Instant::now());
     }
 
@@ -1724,7 +1736,7 @@ impl PipelineStatusCache {
                 self.prune_if_needed(now);
             }
             BlockRecordOutcome::MissingBlock => {
-                self.pending_blocks.insert(
+                self.record_pending_block(
                     height,
                     PendingBlockStatus {
                         kind,
@@ -1743,11 +1755,53 @@ impl PipelineStatusCache {
     }
 
     fn record_entry(&self, hash: HashOf<SignedTransaction>, entry: PipelineStatusEntry) {
-        self.entries
-            .entry(hash)
-            .and_modify(|current| current.merge_from_event(entry.clone()))
-            .or_insert(entry);
+        self.record_entry_inner(hash, entry);
         self.prune_if_needed(Instant::now());
+    }
+
+    fn record_entry_inner(&self, hash: HashOf<SignedTransaction>, incoming: PipelineStatusEntry) {
+        let observed_at = match self.entries.entry(hash) {
+            DashEntry::Occupied(mut entry) => {
+                entry.get_mut().merge_from_event(incoming);
+                entry.get().observed_at
+            }
+            DashEntry::Vacant(entry) => {
+                let observed_at = incoming.observed_at;
+                entry.insert(incoming);
+                observed_at
+            }
+        };
+        self.push_entry_order(hash, observed_at);
+    }
+
+    fn record_pending_block(&self, height: NonZeroU64, pending: PendingBlockStatus) {
+        let observed_at = pending.observed_at;
+        self.pending_blocks.insert(height, pending);
+        self.push_pending_order(height, observed_at);
+    }
+
+    fn push_entry_order(&self, hash: HashOf<SignedTransaction>, observed_at: Instant) {
+        let mut order = self.entry_order.lock();
+        if order
+            .back()
+            .is_some_and(|(last_observed_at, _)| observed_at < *last_observed_at)
+        {
+            self.entry_order_unsorted
+                .store(true, AtomicOrdering::Relaxed);
+        }
+        order.push_back((observed_at, hash));
+    }
+
+    fn push_pending_order(&self, height: NonZeroU64, observed_at: Instant) {
+        let mut order = self.pending_order.lock();
+        if order
+            .back()
+            .is_some_and(|(last_observed_at, _)| observed_at < *last_observed_at)
+        {
+            self.pending_order_unsorted
+                .store(true, AtomicOrdering::Relaxed);
+        }
+        order.push_back((observed_at, height));
     }
 
     fn refresh_pending_blocks(&self, kura: &Kura) {
@@ -1784,72 +1838,185 @@ impl PipelineStatusCache {
         if !over_cap && !prune_due {
             return;
         }
+
+        let Some(_guard) = self.prune_lock.try_lock() else {
+            return;
+        };
+
+        let entries_len = self.entries.len();
+        let pending_len = self.pending_blocks.len();
+        let last_prune = self
+            .last_prune_secs
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let prune_due =
+            elapsed_secs.saturating_sub(last_prune) >= PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS;
+        let over_cap = entries_len > self.capacity || pending_len > self.capacity;
+        if !over_cap && !prune_due {
+            return;
+        }
         self.last_prune_secs
             .store(elapsed_secs, std::sync::atomic::Ordering::Relaxed);
         self.prune(now);
     }
 
     fn prune(&self, now: Instant) {
+        self.rebuild_order_indexes_if_needed();
         if !self.ttl.is_zero() {
-            let ttl = self.ttl;
-            let stale_keys: Vec<_> = self
-                .entries
-                .iter()
-                .filter_map(|entry| {
-                    let age = now.saturating_duration_since(entry.observed_at);
-                    (age > ttl).then_some(*entry.key())
-                })
-                .collect();
-            for key in stale_keys {
-                self.entries.remove(&key);
-            }
-
-            let stale_pending: Vec<_> = self
-                .pending_blocks
-                .iter()
-                .filter_map(|entry| {
-                    let age = now.saturating_duration_since(entry.observed_at);
-                    (age > ttl).then_some(*entry.key())
-                })
-                .collect();
-            for key in stale_pending {
-                self.pending_blocks.remove(&key);
-            }
+            self.prune_stale_entries(now);
+            self.prune_stale_pending_blocks(now);
         }
 
         self.evict_over_capacity();
+        self.compact_order_indexes_if_needed();
     }
 
     fn evict_over_capacity(&self) {
-        let len = self.entries.len();
-        if len <= self.capacity {
-            return;
+        self.evict_entries_over_capacity();
+        self.evict_pending_over_capacity();
+    }
+
+    fn prune_stale_entries(&self, now: Instant) {
+        let ttl = self.ttl;
+        let mut order = self.entry_order.lock();
+        while let Some((observed_at, hash)) = order.front().copied() {
+            if now.saturating_duration_since(observed_at) <= ttl {
+                break;
+            }
+            order.pop_front();
+            let should_remove = self.entries.get(&hash).is_some_and(|entry| {
+                entry.observed_at == observed_at
+                    && now.saturating_duration_since(entry.observed_at) > ttl
+            });
+            if should_remove {
+                self.entries.remove(&hash);
+            }
         }
+    }
+
+    fn prune_stale_pending_blocks(&self, now: Instant) {
+        let ttl = self.ttl;
+        let mut order = self.pending_order.lock();
+        while let Some((observed_at, height)) = order.front().copied() {
+            if now.saturating_duration_since(observed_at) <= ttl {
+                break;
+            }
+            order.pop_front();
+            let should_remove = self.pending_blocks.get(&height).is_some_and(|entry| {
+                entry.observed_at == observed_at
+                    && now.saturating_duration_since(entry.observed_at) > ttl
+            });
+            if should_remove {
+                self.pending_blocks.remove(&height);
+            }
+        }
+    }
+
+    fn evict_entries_over_capacity(&self) {
+        while self.entries.len() > self.capacity {
+            if self.remove_oldest_entry() {
+                continue;
+            }
+            self.rebuild_entry_order_index();
+            if self.entry_order.lock().is_empty() {
+                break;
+            }
+        }
+    }
+
+    fn evict_pending_over_capacity(&self) {
+        while self.pending_blocks.len() > self.capacity {
+            if self.remove_oldest_pending_block() {
+                continue;
+            }
+            self.rebuild_pending_order_index();
+            if self.pending_order.lock().is_empty() {
+                break;
+            }
+        }
+    }
+
+    fn remove_oldest_entry(&self) -> bool {
+        let mut order = self.entry_order.lock();
+        while let Some((observed_at, hash)) = order.pop_front() {
+            let should_remove = self
+                .entries
+                .get(&hash)
+                .is_some_and(|entry| entry.observed_at == observed_at);
+            if should_remove {
+                self.entries.remove(&hash);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn remove_oldest_pending_block(&self) -> bool {
+        let mut order = self.pending_order.lock();
+        while let Some((observed_at, height)) = order.pop_front() {
+            let should_remove = self
+                .pending_blocks
+                .get(&height)
+                .is_some_and(|entry| entry.observed_at == observed_at);
+            if should_remove {
+                self.pending_blocks.remove(&height);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn rebuild_order_indexes_if_needed(&self) {
+        if self
+            .entry_order_unsorted
+            .swap(false, AtomicOrdering::Relaxed)
+        {
+            self.rebuild_entry_order_index();
+        }
+        if self
+            .pending_order_unsorted
+            .swap(false, AtomicOrdering::Relaxed)
+        {
+            self.rebuild_pending_order_index();
+        }
+    }
+
+    fn compact_order_indexes_if_needed(&self) {
+        if Self::order_index_needs_rebuild(self.entry_order.lock().len(), self.entries.len()) {
+            self.rebuild_entry_order_index();
+        }
+        if Self::order_index_needs_rebuild(
+            self.pending_order.lock().len(),
+            self.pending_blocks.len(),
+        ) {
+            self.rebuild_pending_order_index();
+        }
+    }
+
+    fn order_index_needs_rebuild(index_len: usize, live_len: usize) -> bool {
+        let live_bound = live_len
+            .saturating_mul(PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER)
+            .saturating_add(PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP);
+        index_len > live_bound
+    }
+
+    fn rebuild_entry_order_index(&self) {
         let mut ordered: Vec<_> = self
             .entries
             .iter()
-            .map(|entry| (*entry.key(), entry.observed_at))
+            .map(|entry| (entry.observed_at, *entry.key()))
             .collect();
-        ordered.sort_by_key(|(_, observed_at)| *observed_at);
-        let excess = len - self.capacity;
-        for (hash, _) in ordered.into_iter().take(excess) {
-            self.entries.remove(&hash);
-        }
+        ordered.sort_by_key(|(observed_at, _)| *observed_at);
+        *self.entry_order.lock() = ordered.into_iter().collect();
+    }
 
-        let pending_len = self.pending_blocks.len();
-        if pending_len <= self.capacity {
-            return;
-        }
-        let mut pending_ordered: Vec<_> = self
+    fn rebuild_pending_order_index(&self) {
+        let mut ordered: Vec<_> = self
             .pending_blocks
             .iter()
-            .map(|entry| (*entry.key(), entry.observed_at))
+            .map(|entry| (entry.observed_at, *entry.key()))
             .collect();
-        pending_ordered.sort_by_key(|(_, observed_at)| *observed_at);
-        let excess = pending_len - self.capacity;
-        for (height, _) in pending_ordered.into_iter().take(excess) {
-            self.pending_blocks.remove(&height);
-        }
+        ordered.sort_by_key(|(observed_at, _)| *observed_at);
+        *self.pending_order.lock() = ordered.into_iter().collect();
     }
 
     fn record_block_results(
@@ -1898,10 +2065,7 @@ impl PipelineStatusCache {
                 Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
             };
             let incoming = PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
-            self.entries
-                .entry(tx.hash())
-                .and_modify(|entry| entry.merge_from_event(incoming.clone()))
-                .or_insert(incoming);
+            self.record_entry_inner(tx.hash(), incoming);
         }
         BlockRecordOutcome::Recorded
     }
@@ -11632,28 +11796,53 @@ fn torii_proxy_candidate_peer_ids(
 }
 
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
-fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
+fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerId]) -> bool {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return true;
     };
-    app.state
-        .authoritative_lane_peer_ids(routing_decision.lane_id)
+    authoritative_peers
         .iter()
         .any(|peer_id| peer_id == local_peer_id)
 }
 
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
+    let authoritative_peers = app
+        .state
+        .authoritative_lane_peer_ids(routing_decision.lane_id);
+    is_local_authoritative_for_peers(app, &authoritative_peers)
+}
+
+#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
-    if is_local_authoritative_for_route(app, routing_decision) {
+    let authoritative_peers = app
+        .state
+        .authoritative_lane_peer_ids(routing_decision.lane_id);
+    if is_local_authoritative_for_peers(app, &authoritative_peers) {
         return true;
     }
 
     routing_decision.lane_id == LaneId::SINGLE
         && routing_decision.dataspace_id == DataSpaceId::UNIVERSAL
-        && app
-            .state
-            .authoritative_lane_peer_ids(routing_decision.lane_id)
-            .is_empty()
+        && authoritative_peers.is_empty()
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn should_execute_route_locally_cached(
+    app: &AppState,
+    routing_decision: RoutingDecision,
+    cache: &mut Vec<(RoutingDecision, bool)>,
+) -> bool {
+    if let Some((_, result)) = cache
+        .iter()
+        .find(|(cached_route, _)| *cached_route == routing_decision)
+    {
+        return *result;
+    }
+
+    let result = should_execute_route_locally(app, routing_decision);
+    cache.push((routing_decision, result));
+    result
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -12048,12 +12237,7 @@ fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> Respo
 }
 
 fn current_torii_queue_pressure(app: &AppState) -> queue::QueuePressureSnapshot {
-    let state_view = app.state.view();
-    let block_time = state_view
-        .world()
-        .parameters()
-        .sumeragi()
-        .effective_block_time();
+    let block_time = app.state.sumeragi_effective_block_time();
     app.queue
         .refresh_pressure_budget_from_block_time(block_time)
 }
@@ -28028,6 +28212,8 @@ async fn handler_post_transactions_batch(
         let app = app.clone();
         tokio::task::spawn_blocking(move || {
             let mut accepted = Vec::with_capacity(transactions.len());
+            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            let mut local_route_cache = Vec::new();
             for transaction in transactions {
                 let entrypoint = TransactionEntrypoint::External(transaction);
                 let accepted_tx = routing::accept_transaction_for_ingress(
@@ -28041,7 +28227,11 @@ async fn handler_post_transactions_batch(
                     .route_with_state(&accepted_tx, app.state.as_ref())
                     .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
                 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-                if !should_execute_route_locally(app.as_ref(), routing_decision) {
+                if !should_execute_route_locally_cached(
+                    app.as_ref(),
+                    routing_decision,
+                    &mut local_route_cache,
+                ) {
                     return Err(Error::AppServiceUnavailable {
                         code: "transaction_batch_route_not_local",
                         message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
@@ -36216,7 +36406,9 @@ impl IntoResponse for Error {
 
                 if matches!(
                     source.as_ref(),
-                    queue::Error::Full | queue::Error::MaximumTransactionsPerUser
+                    queue::Error::Full
+                        | queue::Error::LatencySaturated
+                        | queue::Error::MaximumTransactionsPerUser
                 ) {
                     headers.insert("Retry-After", HeaderValue::from_static("1"));
                 }
@@ -41476,6 +41668,137 @@ pub(crate) mod tests_runtime_handlers {
         cache.prune(now);
         assert!(cache.lookup(&hash_a).is_none());
         assert!(cache.lookup(&hash_b).is_some());
+    }
+
+    #[test]
+    fn pipeline_status_cache_keeps_refreshed_entry_when_stale_marker_prunes() {
+        let cache = PipelineStatusCache::with_limits(10, Duration::from_secs(1));
+        let (block, _) = make_signed_block(1, None);
+        let tx_hash = block.external_transactions().next().expect("tx").hash();
+        let now = Instant::now();
+        let stale = now
+            .checked_sub(Duration::from_secs(5))
+            .expect("time subtraction");
+        cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, stale),
+        );
+        cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, now),
+        );
+
+        cache.prune(now);
+
+        assert!(cache.lookup(&tx_hash).is_some());
+    }
+
+    #[test]
+    fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
+        let cache = PipelineStatusCache::with_limits(1, Duration::from_secs(1));
+        let (block_a, _) = make_signed_block(1, None);
+        let (block_b, _) = make_signed_block(2, None);
+        let height_a = NonZeroU64::new(1).expect("height");
+        let height_b = NonZeroU64::new(2).expect("height");
+        let now = Instant::now();
+        let stale = now
+            .checked_sub(Duration::from_secs(5))
+            .expect("time subtraction");
+        cache.record_pending_block(
+            height_a,
+            PendingBlockStatus {
+                kind: PipelineStatusKind::Committed,
+                block_hash: block_a.header().hash(),
+                observed_at: stale,
+            },
+        );
+        cache.record_pending_block(
+            height_b,
+            PendingBlockStatus {
+                kind: PipelineStatusKind::Applied,
+                block_hash: block_b.header().hash(),
+                observed_at: now,
+            },
+        );
+
+        cache.prune(now);
+
+        assert!(cache.pending_blocks.get(&height_a).is_none());
+        assert!(cache.pending_blocks.get(&height_b).is_some());
+    }
+
+    #[test]
+    #[ignore = "load profile; run explicitly with --ignored --nocapture"]
+    fn pipeline_status_cache_prune_load_profile() {
+        const WARMUP_SAMPLES: usize = 4;
+        const SAMPLES: usize = 32;
+        const CACHE_ITEMS: u64 = 2_048;
+
+        let fixtures = (1..=CACHE_ITEMS)
+            .map(|height| {
+                let (block, _) = make_signed_block(height, None);
+                let header = block.header();
+                let tx_hash = block.external_transactions().next().expect("tx").hash();
+                (header.height(), header.hash(), tx_hash)
+            })
+            .collect::<Vec<_>>();
+
+        let run_iteration = |sample_index: usize| {
+            let cache = PipelineStatusCache::with_limits(512, Duration::from_secs(1));
+            let now = Instant::now();
+            let stale = now
+                .checked_sub(Duration::from_secs(5))
+                .expect("time subtraction");
+            for (index, (height, block_hash, tx_hash)) in fixtures.iter().enumerate() {
+                let observed_at = if index % 2 == 0 {
+                    stale
+                } else {
+                    now + Duration::from_nanos((index + sample_index) as u64)
+                };
+                cache.record_entry_inner(
+                    *tx_hash,
+                    PipelineStatusEntry::at_time(
+                        PipelineStatusKind::Queued,
+                        Some(*height),
+                        None,
+                        observed_at,
+                    ),
+                );
+                cache.record_pending_block(
+                    *height,
+                    PendingBlockStatus {
+                        kind: PipelineStatusKind::Committed,
+                        block_hash: *block_hash,
+                        observed_at,
+                    },
+                );
+            }
+
+            let start = Instant::now();
+            cache.prune(now);
+            let elapsed = start.elapsed();
+            std::hint::black_box((cache.entries.len(), cache.pending_blocks.len()));
+            elapsed
+        };
+
+        for sample_index in 0..WARMUP_SAMPLES {
+            std::hint::black_box(run_iteration(sample_index));
+        }
+
+        let mut samples = Vec::with_capacity(SAMPLES);
+        let wall_start = Instant::now();
+        for sample_index in 0..SAMPLES {
+            samples.push(run_iteration(sample_index + WARMUP_SAMPLES));
+        }
+
+        crate::profile_stats::print_profile(
+            "hot_path",
+            "pipeline_status_cache_prune_pressure",
+            samples,
+            WARMUP_SAMPLES,
+            1,
+            wall_start.elapsed(),
+        );
     }
 
     #[test]
@@ -52016,9 +52339,9 @@ impl Error {
 impl Error {
     fn status_code_for_queue_error(err: &queue::Error) -> StatusCode {
         match err {
-            queue::Error::Full | queue::Error::MaximumTransactionsPerUser => {
-                StatusCode::TOO_MANY_REQUESTS
-            }
+            queue::Error::Full
+            | queue::Error::LatencySaturated
+            | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
@@ -52037,6 +52360,10 @@ impl Error {
     fn queue_error_summary(err: &queue::Error) -> (&'static str, &'static str) {
         match err {
             queue::Error::Full => ("queue_full", "transaction queue is at capacity"),
+            queue::Error::LatencySaturated => (
+                "queue_latency_saturated",
+                "transaction queue latency budget is saturated",
+            ),
             queue::Error::MaximumTransactionsPerUser => (
                 "per_user_queue_limit",
                 "authority reached its per-user queue capacity",
@@ -52091,7 +52418,9 @@ impl Error {
         let (code, message) = Self::queue_error_summary(err);
         let saturated = backpressure.is_saturated();
         let retry_after_seconds = match err {
-            queue::Error::Full | queue::Error::MaximumTransactionsPerUser => Some(1),
+            queue::Error::Full
+            | queue::Error::LatencySaturated
+            | queue::Error::MaximumTransactionsPerUser => Some(1),
             _ => None,
         };
         QueueErrorEnvelope {
@@ -52147,6 +52476,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::Full => (
             "PRTRY:QUEUE_FULL",
             "transaction queue is at capacity".to_owned(),
+        ),
+        queue::Error::LatencySaturated => (
+            "PRTRY:QUEUE_LATENCY",
+            "transaction queue latency budget is saturated".to_owned(),
         ),
         queue::Error::MaximumTransactionsPerUser => (
             "PRTRY:QUEUE_RATE",

@@ -127,9 +127,14 @@ impl Drop for ArchiveSlice {
 pub fn debug_trace_enabled() -> bool {
     // Environment-based trace toggles are limited to debug/test builds; release
     // builds ignore the flag to keep runtime behaviour config-driven.
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(test)]
     {
         std::env::var_os("NORITO_TRACE").is_some()
+    }
+    #[cfg(all(debug_assertions, not(test)))]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("NORITO_TRACE").is_some())
     }
     #[cfg(not(any(test, debug_assertions)))]
     {

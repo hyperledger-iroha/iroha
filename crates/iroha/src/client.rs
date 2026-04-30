@@ -6362,7 +6362,7 @@ pub struct PreparedTransactionPayload {
 impl PreparedTransactionPayload {
     /// Return the signed transaction hash associated with this payload.
     pub fn hash(&self) -> HashOf<SignedTransaction> {
-        self.hash.clone()
+        self.hash
     }
 
     /// Return the canonical versioned `SignedTransaction` bytes.
@@ -6810,6 +6810,7 @@ impl Client {
         &self,
         transaction: &SignedTransaction,
     ) -> PreparedTransactionPayload {
+        debug_assert_eq!(transaction.chain(), &self.chain);
         PreparedTransactionPayload {
             bytes: Bytes::from(transaction.encode_versioned()),
             hash: transaction.hash(),
@@ -9339,31 +9340,18 @@ impl Client {
         Ok((proof, paths))
     }
 
-    fn build_sorafs_pin_register_payload(
-        authority: &iroha_data_model::account::AccountId,
-        private_key: &iroha_crypto::PrivateKey,
-        manifest: &sorafs_manifest::ManifestV1,
-        chunk_digest_sha3_256: [u8; 32],
-        submitted_epoch: u64,
-        alias: Option<SorafsPinAlias<'_>>,
-        successor_of: Option<[u8; 32]>,
-    ) -> Result<norito::json::Value> {
-        let manifest_digest = manifest
-            .digest()
-            .wrap_err("failed to compute manifest digest for pin registration")?;
-        let chunker = &manifest.chunking;
-        let policy = &manifest.pin_policy;
+    fn sorafs_pin_policy_value(policy: &sorafs_manifest::PinPolicy) -> norito::json::Value {
         let storage_class_label = match policy.storage_class {
             sorafs_manifest::StorageClass::Hot => "Hot",
             sorafs_manifest::StorageClass::Warm => "Warm",
             sorafs_manifest::StorageClass::Cold => "Cold",
         };
-
         let mut storage_class_map = norito::json::Map::new();
         storage_class_map.insert(
             "type".into(),
             norito::json::Value::from(storage_class_label),
         );
+
         let mut pin_policy_map = norito::json::Map::new();
         pin_policy_map.insert(
             "min_replicas".into(),
@@ -9377,7 +9365,38 @@ impl Client {
             "retention_epoch".into(),
             norito::json::Value::from(policy.retention_epoch),
         );
+        norito::json::Value::from(pin_policy_map)
+    }
 
+    fn sorafs_pin_alias_value(alias: SorafsPinAlias<'_>) -> norito::json::Value {
+        let mut alias_map = norito::json::Map::new();
+        alias_map.insert(
+            "namespace".into(),
+            norito::json::Value::from(alias.namespace),
+        );
+        alias_map.insert("name".into(), norito::json::Value::from(alias.name));
+        alias_map.insert(
+            "proof_base64".into(),
+            norito::json::Value::from(
+                base64::engine::general_purpose::STANDARD.encode(alias.proof),
+            ),
+        );
+        norito::json::Value::from(alias_map)
+    }
+
+    fn build_sorafs_pin_register_payload(
+        authority: &iroha_data_model::account::AccountId,
+        private_key: &iroha_crypto::PrivateKey,
+        manifest: &sorafs_manifest::ManifestV1,
+        chunk_digest_sha3_256: [u8; 32],
+        submitted_epoch: u64,
+        alias: Option<SorafsPinAlias<'_>>,
+        successor_of: Option<[u8; 32]>,
+    ) -> Result<norito::json::Value> {
+        let manifest_digest = manifest
+            .digest()
+            .wrap_err("failed to compute manifest digest for pin registration")?;
+        let chunker = &manifest.chunking;
         let mut map = norito::json::Map::new();
         map.insert(
             "authority".into(),
@@ -9411,7 +9430,7 @@ impl Client {
         );
         map.insert(
             "pin_policy".into(),
-            norito::json::Value::from(pin_policy_map),
+            Self::sorafs_pin_policy_value(&manifest.pin_policy),
         );
         map.insert(
             "manifest_digest_hex".into(),
@@ -9433,19 +9452,7 @@ impl Client {
         }
 
         if let Some(alias) = alias {
-            let mut alias_map = norito::json::Map::new();
-            alias_map.insert(
-                "namespace".into(),
-                norito::json::Value::from(alias.namespace),
-            );
-            alias_map.insert("name".into(), norito::json::Value::from(alias.name));
-            alias_map.insert(
-                "proof_base64".into(),
-                norito::json::Value::from(
-                    base64::engine::general_purpose::STANDARD.encode(alias.proof),
-                ),
-            );
-            map.insert("alias".into(), norito::json::Value::from(alias_map));
+            map.insert("alias".into(), Self::sorafs_pin_alias_value(alias));
         }
         if let Some(successor) = successor_of {
             map.insert(

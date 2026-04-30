@@ -14,6 +14,7 @@ use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    queue::Queue,
     state::{State, World},
     telemetry::{StateTelemetry, Telemetry},
 };
@@ -28,7 +29,8 @@ use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
     BenchRateLimiter, MaybeTelemetry, NoritoQuery, QueryOptions, ResponseFormat,
     accept_transaction_for_ingress_for_bench, handle_queries_with_opts,
-    profile_stats::print_profile, verify_signed_query_request_for_bench,
+    handle_transaction_with_metrics_for_bench, profile_stats::print_profile,
+    verify_signed_query_request_for_bench,
 };
 
 fn direct_metrics_telemetry() -> MaybeTelemetry {
@@ -131,6 +133,61 @@ fn bench_transaction_admission(c: &mut Criterion) {
     });
 }
 
+fn bench_transaction_handle_enqueue(c: &mut Criterion) {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let chain_id: Arc<ChainId> = Arc::new(
+        "torii_hot_path_enqueue_bench_chain"
+            .parse()
+            .expect("valid chain id"),
+    );
+    let tx_state = Arc::new(State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    let tx_key_pair = KeyPair::random();
+    let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
+    let telemetry = direct_metrics_telemetry();
+    let counter = AtomicUsize::new(0);
+    let queue_capacity = NonZeroUsize::new(1_000_000).expect("non-zero queue capacity");
+    let queue_cfg = iroha_config::parameters::actual::Queue {
+        capacity: queue_capacity,
+        capacity_per_user: queue_capacity,
+        transaction_time_to_live: Duration::from_secs(60),
+        ..Default::default()
+    };
+
+    c.bench_function("torii_transaction_handle_enqueue_direct_metrics", |b| {
+        b.iter_batched(
+            || {
+                let index = counter.fetch_add(1, Ordering::Relaxed);
+                let instruction =
+                    Log::new(Level::INFO, format!("torii-hot-path-enqueue-bench-{index}"));
+                let tx = TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
+                    .with_instructions([InstructionBox::from(instruction)])
+                    .sign(tx_key_pair.private_key());
+                let (events, _) = tokio::sync::broadcast::channel(queue_capacity.get());
+                let queue = Arc::new(Queue::from_config(queue_cfg, events));
+                (queue, tx)
+            },
+            |(queue, tx)| {
+                let decision = runtime
+                    .block_on(handle_transaction_with_metrics_for_bench(
+                        Arc::clone(&chain_id),
+                        queue,
+                        Arc::clone(&tx_state),
+                        tx,
+                        telemetry.clone(),
+                        iroha_torii_shared::uri::TRANSACTION,
+                    ))
+                    .expect("transaction handle succeeds");
+                std::hint::black_box(decision);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn bench_rate_limiter(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let distinct_limiter = BenchRateLimiter::new(Some(1_000_000), Some(1_000_000));
@@ -180,6 +237,7 @@ fn main() {
     bench_signed_query_verify(&mut c);
     bench_query_find_parameters(&mut c);
     bench_transaction_admission(&mut c);
+    bench_transaction_handle_enqueue(&mut c);
     bench_rate_limiter(&mut c);
     c.final_summary();
 }

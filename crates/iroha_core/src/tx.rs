@@ -15,7 +15,7 @@ use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
     collections::BTreeSet,
-    sync::LazyLock,
+    sync::{LazyLock, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
 
@@ -128,18 +128,55 @@ static HEARTBEAT_TX_SEQUENCE_NAME: LazyLock<iroha_data_model::name::Name> = Lazy
     iroha_data_model::name::Name::from_str("tx_sequence")
         .expect("static heartbeat tx_sequence metadata key")
 });
-const ED25519_SIGNATURE_LENGTH: usize = 64;
+pub(crate) const ED25519_SIGNATURE_LENGTH: usize = 64;
 const MULTISIG_DIRECT_SIGN_REJECTION: &str =
     "multisig accounts must use the multisig propose/approve flow; direct signatures are rejected";
 /// Prefix used in transaction-limit rejection reasons when the signature cap is exceeded.
 pub const SIGNATURE_LIMIT_REASON_PREFIX: &str = "Too many signatures in payload";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SignatureCheck {
+    Verify,
+    PrecheckedSingleEd25519,
+}
 #[cfg(feature = "telemetry")]
 #[allow(clippy::module_name_repetitions)]
 use iroha_data_model::{metadata::Metadata as TelemetryMetadata, name::Name as TelemetryName};
 /// `AcceptedTransaction` — a transaction accepted by Iroha peer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct AcceptedTransaction<'tx>(Cow<'tx, TransactionEntrypoint>);
+#[derive(Debug)]
+pub struct AcceptedTransaction<'tx> {
+    entrypoint: Cow<'tx, TransactionEntrypoint>,
+    entrypoint_hash: OnceLock<HashOf<TransactionEntrypoint>>,
+    signed_hash: OnceLock<HashOf<SignedTransaction>>,
+    encoded_len: OnceLock<usize>,
+}
+
+impl Clone for AcceptedTransaction<'_> {
+    fn clone(&self) -> Self {
+        Self {
+            entrypoint: Cow::Owned(self.entrypoint().clone()),
+            entrypoint_hash: clone_once_lock(&self.entrypoint_hash),
+            signed_hash: clone_once_lock(&self.signed_hash),
+            encoded_len: clone_once_lock(&self.encoded_len),
+        }
+    }
+}
+
+impl PartialEq for AcceptedTransaction<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entrypoint() == other.entrypoint()
+    }
+}
+
+impl Eq for AcceptedTransaction<'_> {}
+
+fn clone_once_lock<T: Clone>(source: &OnceLock<T>) -> OnceLock<T> {
+    let cloned = OnceLock::new();
+    if let Some(value) = source.get() {
+        let _ = cloned.set(value.clone());
+    }
+    cloned
+}
 
 /// Accepted transaction that has been verified to be absent from the blockchain.
 ///
@@ -721,10 +758,64 @@ pub(crate) fn build_heartbeat_transaction_with_time_source(
 }
 
 impl<'tx> AcceptedTransaction<'tx> {
+    fn from_entrypoint(entrypoint: Cow<'tx, TransactionEntrypoint>) -> Self {
+        Self {
+            entrypoint,
+            entrypoint_hash: OnceLock::new(),
+            signed_hash: OnceLock::new(),
+            encoded_len: OnceLock::new(),
+        }
+    }
+
     fn compat_signed_hash(
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
+    }
+
+    fn framed_padding_for<T>() -> usize {
+        let align = core::mem::align_of::<norito::core::Archived<T>>();
+        if align <= 1 {
+            return 0;
+        }
+        let remainder = norito::core::Header::SIZE % align;
+        if remainder == 0 { 0 } else { align - remainder }
+    }
+
+    fn framed_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
+        value
+            .encoded_len_exact()
+            .map(|payload_len| {
+                norito::core::Header::SIZE
+                    .saturating_add(Self::framed_padding_for::<T>())
+                    .saturating_add(payload_len)
+            })
+            .unwrap_or_else(|| {
+                norito::to_bytes(value).map_or_else(
+                    |_| {
+                        norito::core::Header::SIZE
+                            .saturating_add(Self::framed_padding_for::<T>())
+                            .saturating_add(value.encoded_len())
+                    },
+                    |bytes| bytes.len(),
+                )
+            })
+    }
+
+    fn signed_encoded_len(tx: &SignedTransaction) -> usize {
+        Self::framed_encoded_len(tx)
+    }
+
+    fn entrypoint_encoded_len(tx: &TransactionEntrypoint) -> usize {
+        match tx {
+            TransactionEntrypoint::External(signed) => Self::signed_encoded_len(signed),
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Self::framed_encoded_len(entrypoint),
+            TransactionEntrypoint::Time(entrypoint) => Self::framed_encoded_len(entrypoint),
+        }
+    }
+
+    fn signed_encoded_len_for_limit(tx: &SignedTransaction) -> u64 {
+        u64::try_from(Self::signed_encoded_len(tx)).unwrap_or(u64::MAX)
     }
 
     fn validate_common(
@@ -747,6 +838,30 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         Ok(())
+    }
+
+    fn has_single_ed25519_signature(tx: &SignedTransaction) -> bool {
+        matches!(
+            tx.authority().controller(),
+            iroha_data_model::account::AccountController::Single(signatory)
+                if signatory.algorithm() == iroha_crypto::Algorithm::Ed25519
+                    && tx.signature().payload().payload().len() == ED25519_SIGNATURE_LENGTH
+        )
+    }
+
+    fn verify_signature_for_check(
+        tx: &SignedTransaction,
+        signature_check: SignatureCheck,
+    ) -> Result<(), AcceptTransactionFail> {
+        if signature_check == SignatureCheck::PrecheckedSingleEd25519
+            && Self::has_single_ed25519_signature(tx)
+        {
+            return Ok(());
+        }
+
+        tx.verify_signature().map_err(|err| {
+            AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(tx, err))
+        })
     }
 
     fn ensure_signing_allowed(
@@ -838,6 +953,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn signature_verification_result(
         tx: &SignedTransaction,
     ) -> Result<(), SignatureVerificationFail> {
@@ -904,14 +1020,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
-        let tx_encoded_len = norito::to_bytes(&entrypoint)
-            .map(|bytes| bytes.len())
-            .map_err(|err| {
-                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                    reason: format!("Failed to encode private Kaigi transaction: {err}"),
-                })
-            })?;
-        let tx_encoded_len = u64::try_from(tx_encoded_len).unwrap_or(u64::MAX);
+        let tx_encoded_len =
+            u64::try_from(Self::entrypoint_encoded_len(&entrypoint)).unwrap_or(u64::MAX);
         let max_tx_bytes = limits.max_tx_bytes().get();
         if tx_encoded_len > max_tx_bytes {
             return Err(AcceptTransactionFail::TransactionLimit(
@@ -1254,38 +1364,58 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
-        Self::validate_with_now_with_signature_result(
+        Self::validate_with_now_and_signature_check(
             tx,
             expected_chain_id,
             max_clock_drift,
             limits,
             crypto,
             now,
-            None,
+            SignatureCheck::Verify,
         )
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_with_now_with_signature_result(
+    pub(crate) fn validate_with_now_after_single_ed25519_precheck(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
-        signature_override: Option<Result<(), SignatureVerificationFail>>,
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_with_now_and_signature_check(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            SignatureCheck::PrecheckedSingleEd25519,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn validate_with_now_and_signature_check(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        signature_check: SignatureCheck,
     ) -> Result<(), AcceptTransactionFail> {
         let heartbeat_marker =
             heartbeat_marker_value(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
         if heartbeat_marker == Some(true) {
-            return Self::validate_heartbeat_with_now_with_signature_result(
+            return Self::validate_heartbeat_with_now_and_signature_check(
                 tx,
                 expected_chain_id,
                 max_clock_drift,
                 limits,
                 crypto,
                 now,
-                signature_override,
+                signature_check,
             );
         }
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
@@ -1302,31 +1432,12 @@ impl<'tx> AcceptedTransaction<'tx> {
 
         Self::ensure_signing_allowed(tx, crypto)?;
 
-        match signature_override {
-            Some(Ok(())) => {}
-            Some(Err(fail)) => {
-                return Err(AcceptTransactionFail::SignatureVerification(fail));
-            }
-            None => {
-                if let Err(err) = tx.verify_signature() {
-                    return Err(AcceptTransactionFail::SignatureVerification(
-                        Self::signature_fail_from_error(tx, err),
-                    ));
-                }
-            }
-        }
+        Self::verify_signature_for_check(tx, signature_check)?;
 
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
 
-        let tx_encoded_len = norito::to_bytes(tx)
-            .map(|bytes| bytes.len())
-            .map_err(|err| {
-                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                    reason: format!("Failed to encode transaction for size check: {err}"),
-                })
-            })?;
-        let tx_encoded_len = u64::try_from(tx_encoded_len).unwrap_or(u64::MAX);
+        let tx_encoded_len = Self::signed_encoded_len_for_limit(tx);
         let max_tx_bytes = limits.max_tx_bytes().get();
         if tx_encoded_len > max_tx_bytes {
             return Err(AcceptTransactionFail::TransactionLimit(
@@ -1600,26 +1711,46 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
-        Self::validate_heartbeat_with_now_with_signature_result(
+        Self::validate_heartbeat_with_now_and_signature_check(
             tx,
             expected_chain_id,
             max_clock_drift,
             limits,
             crypto,
             now,
-            None,
+            SignatureCheck::Verify,
         )
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_heartbeat_with_now_with_signature_result(
+    pub(crate) fn validate_heartbeat_with_now_after_single_ed25519_precheck(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
-        signature_override: Option<Result<(), SignatureVerificationFail>>,
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_heartbeat_with_now_and_signature_check(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            SignatureCheck::PrecheckedSingleEd25519,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn validate_heartbeat_with_now_and_signature_check(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        signature_check: SignatureCheck,
     ) -> Result<(), AcceptTransactionFail> {
         let _ = crypto;
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
@@ -1650,31 +1781,12 @@ impl<'tx> AcceptedTransaction<'tx> {
             ));
         }
 
-        match signature_override {
-            Some(Ok(())) => {}
-            Some(Err(fail)) => {
-                return Err(AcceptTransactionFail::SignatureVerification(fail));
-            }
-            None => {
-                if let Err(err) = tx.verify_signature() {
-                    return Err(AcceptTransactionFail::SignatureVerification(
-                        Self::signature_fail_from_error(tx, err),
-                    ));
-                }
-            }
-        }
+        Self::verify_signature_for_check(tx, signature_check)?;
 
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
 
-        let tx_encoded_len = norito::to_bytes(tx)
-            .map(|bytes| bytes.len())
-            .map_err(|err| {
-                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                    reason: format!("Failed to encode transaction for size check: {err}"),
-                })
-            })?;
-        let tx_encoded_len = u64::try_from(tx_encoded_len).unwrap_or(u64::MAX);
+        let tx_encoded_len = Self::signed_encoded_len_for_limit(tx);
         let max_tx_bytes = limits.max_tx_bytes().get();
         if tx_encoded_len > max_tx_bytes {
             return Err(AcceptTransactionFail::TransactionLimit(
@@ -1808,18 +1920,18 @@ impl<'tx> AcceptedTransaction<'tx> {
             Cow::Borrowed(signed) => Cow::Owned(TransactionEntrypoint::External(signed.clone())),
             Cow::Owned(signed) => Cow::Owned(TransactionEntrypoint::External(signed)),
         };
-        Self(entrypoint)
+        Self::from_entrypoint(entrypoint)
     }
 
     /// Create [`Self`] assuming the entrypoint is acceptable.
     pub fn new_unchecked_entrypoint(tx: impl Into<Cow<'tx, TransactionEntrypoint>>) -> Self {
-        Self(tx.into())
+        Self::from_entrypoint(tx.into())
     }
 
     /// Borrow the underlying entrypoint.
     #[must_use]
     pub fn entrypoint(&self) -> &TransactionEntrypoint {
-        self.0.as_ref()
+        self.entrypoint.as_ref()
     }
 
     /// Borrow the wrapped signed transaction when present.
@@ -1834,13 +1946,25 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Return the canonical hash of the wrapped transaction.
     #[must_use]
     pub fn hash(&self) -> HashOf<SignedTransaction> {
-        Self::compat_signed_hash(self.hash_as_entrypoint())
+        *self
+            .signed_hash
+            .get_or_init(|| Self::compat_signed_hash(self.hash_as_entrypoint()))
     }
 
     /// Return the canonical entrypoint hash of the wrapped transaction.
     #[must_use]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
-        self.entrypoint().hash()
+        *self
+            .entrypoint_hash
+            .get_or_init(|| self.entrypoint().hash())
+    }
+
+    /// Return the exact encoded size used by queue and transaction-size budgeting.
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        *self
+            .encoded_len
+            .get_or_init(|| Self::entrypoint_encoded_len(self.entrypoint()))
     }
 
     /// Borrow the transaction authority account identifier when present.
@@ -1898,7 +2022,7 @@ impl AcceptedTransaction<'static> {
             genesis_account,
             crypto,
         )
-        .map(|()| Self(Cow::Owned(TransactionEntrypoint::External(tx))))
+        .map(|()| Self::from_entrypoint(Cow::Owned(TransactionEntrypoint::External(tx))))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -1914,7 +2038,7 @@ impl AcceptedTransaction<'static> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
         Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
-            .map(|()| Self(Cow::Owned(TransactionEntrypoint::External(tx))))
+            .map(|()| Self::from_entrypoint(Cow::Owned(TransactionEntrypoint::External(tx))))
     }
 
     /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
@@ -1933,7 +2057,9 @@ impl AcceptedTransaction<'static> {
         let now = time_source.get_unix_time();
         Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
         enforce_nts_health_for_time_sensitive(&tx)?;
-        Ok(Self(Cow::Owned(TransactionEntrypoint::External(tx))))
+        Ok(Self::from_entrypoint(Cow::Owned(
+            TransactionEntrypoint::External(tx),
+        )))
     }
 
     /// Accept any directly submitted transaction entrypoint.
@@ -1978,13 +2104,13 @@ impl AcceptedTransaction<'static> {
                 ));
             }
         }
-        Ok(Self(Cow::Owned(tx)))
+        Ok(Self::from_entrypoint(Cow::Owned(tx)))
     }
 }
 
 impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
-        match source.0.into_owned() {
+        match source.entrypoint.into_owned() {
             TransactionEntrypoint::External(entrypoint) => entrypoint,
             TransactionEntrypoint::PrivateKaigi(_) => {
                 panic!("private Kaigi entrypoints are not signed transactions")
@@ -5332,6 +5458,26 @@ pub mod tests {
     }
 
     #[test]
+    fn accepted_transaction_caches_hashes_and_encoded_length() {
+        let chain: ChainId = "accepted-cache-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let instruction = Log::new(Level::INFO, "cache".into());
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([instruction])
+            .sign(keypair.private_key());
+        let expected_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
+
+        assert_eq!(accepted.hash(), signed.hash());
+        assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
+        assert_eq!(accepted.encoded_len(), expected_len);
+        assert_eq!(accepted.clone().encoded_len(), expected_len);
+    }
+
+    #[test]
     fn fraud_policy_allows_when_disabled() {
         let cfg = iroha_config::parameters::actual::FraudMonitoring::default();
         let metadata = Metadata::default();
@@ -7157,6 +7303,40 @@ pub mod tests {
     }
 
     #[test]
+    fn heartbeat_validation_always_verifies_signature() {
+        use std::time::Duration;
+
+        let chain: ChainId = "heartbeat-invalid-signature".parse().unwrap();
+        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let other_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let other_authority = AccountId::new(other_signer.public_key().clone());
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let tx_params = TransactionParameters::default();
+        let tx = build_heartbeat_transaction_with_time_source(
+            chain.clone(),
+            &signer,
+            &tx_params,
+            1,
+            &time_source,
+        )
+        .with_authority(other_authority);
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let result = AcceptedTransaction::validate_heartbeat_with_now(
+            &tx,
+            &chain,
+            Duration::ZERO,
+            tx_params,
+            &crypto_cfg,
+            time_source.get_unix_time(),
+        );
+        assert!(matches!(
+            result,
+            Err(AcceptTransactionFail::SignatureVerification(_))
+        ));
+    }
+
+    #[test]
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
 
@@ -7176,25 +7356,19 @@ pub mod tests {
         let now = tampered.creation_time();
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let override_err = SignatureVerificationFail::new(
-            tampered.signature().clone(),
-            SignatureRejectionCode::InvalidSignature,
-            "override".to_string(),
-        );
-
         let chain_id = tampered.chain().clone();
-        let result = AcceptedTransaction::validate_with_now_with_signature_result(
+        let result = AcceptedTransaction::validate_with_now(
             &tampered,
             &chain_id,
             Duration::ZERO,
             limits,
             &crypto_cfg,
             now,
-            Some(Err(override_err.clone())),
         );
         assert!(matches!(
             result,
-            Err(AcceptTransactionFail::SignatureVerification(err)) if err == override_err
+            Err(AcceptTransactionFail::SignatureVerification(err))
+                if err.code == SignatureRejectionCode::InvalidSignature
         ));
     }
 
