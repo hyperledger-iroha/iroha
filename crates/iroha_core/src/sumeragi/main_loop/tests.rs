@@ -100230,6 +100230,9 @@ async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_
 async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_rotation() {
     use std::borrow::Cow;
 
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -100346,6 +100349,7 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_ro
         "idle missing-QC handling should assemble the frontier proposal from committed QC"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -100353,6 +100357,9 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_ro
 async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_after_stall_with_dependencies()
  {
     use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -100469,6 +100476,7 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_after_sta
         "stalled missing-QC recovery should populate the current-view proposal cache"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 

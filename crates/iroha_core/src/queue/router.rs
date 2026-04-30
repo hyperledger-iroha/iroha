@@ -2927,6 +2927,34 @@ mod tests {
         .expect("tx should be accepted")
     }
 
+    fn sample_proved_executable(
+        overlay: Vec<InstructionBox>,
+    ) -> iroha_data_model::transaction::Executable {
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version: 1,
+        };
+        let mut bytecode = meta.encode();
+        bytecode.extend_from_slice(b"LTLB");
+        bytecode.extend_from_slice(&0u32.to_le_bytes());
+        bytecode.extend_from_slice(&0u32.to_le_bytes());
+        bytecode.extend_from_slice(&0u32.to_le_bytes());
+        bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(bytecode),
+                overlay: overlay.into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas-policy"),
+            },
+        )
+    }
+
     fn catalog_with_lane_dataspaces(entries: &[(LaneId, DataSpaceId)]) -> LaneCatalog {
         let max_lane = entries
             .iter()
@@ -3775,6 +3803,171 @@ mod tests {
                 .expect("contract call route must resolve"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
+    }
+
+    #[test]
+    fn asset_home_proved_coverage_overlay_domain_routes_to_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let tx = sample_executable_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            sample_proved_executable(vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "paynet").expect("domain id"),
+            )))]),
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("proved overlay domain route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_proved_coverage_overlay_conflicting_domains_are_rejected() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(10);
+        let second_dataspace = DataSpaceId::new(11);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "paynet"), (second_dataspace, "cbuae")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let tx = sample_executable_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            sample_proved_executable(vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("merchant", "paynet").expect("domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("issuer", "cbuae").expect("domain id"),
+                ))),
+            ]),
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(
+                RoutingResolveError::ConflictingTransactionDataspaceTargets {
+                    first_dataspace_id: first_dataspace,
+                    second_dataspace_id: second_dataspace,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn asset_home_proved_coverage_overlay_permission_routes_to_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: dataspace_id,
+        }
+        .into();
+        let tx = sample_executable_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            sample_proved_executable(vec![InstructionBox::from(Grant::account_permission(
+                permission, bob_id,
+            ))]),
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("proved overlay dataspace permission route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_proved_coverage_overlay_conflicting_permissions_are_rejected() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(10);
+        let second_dataspace = DataSpaceId::new(11);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(first_dataspace, "paynet"), (second_dataspace, "cbuae")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), first_dataspace),
+                (LaneId::new(3), second_dataspace),
+            ]),
+        );
+        let first_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: first_dataspace,
+        }
+        .into();
+        let second_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: second_dataspace,
+        }
+        .into();
+        let tx = sample_executable_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            sample_proved_executable(vec![
+                InstructionBox::from(Grant::account_permission(
+                    first_permission,
+                    alice_id.clone(),
+                )),
+                InstructionBox::from(Revoke::account_permission(
+                    second_permission,
+                    alice_id.clone(),
+                )),
+            ]),
+        );
+
+        let err = router
+            .try_route(&tx)
+            .expect_err("mixed proved overlay permissions must be rejected");
+
+        assert!(matches!(
+            err,
+            RoutingResolveError::ConflictingDataspaceScopedPermissions { .. }
+        ));
+        assert_eq!(err.as_label(), "conflicting_dataspace_scoped_permissions");
     }
 
     #[test]
