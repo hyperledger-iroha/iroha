@@ -11,6 +11,8 @@ Dockerfile*
 artifacts/*
 !artifacts/offline_poseidon/
 !artifacts/offline_poseidon/**
+!artifacts/poseidon/
+!artifacts/poseidon/**
 build
 dist
 !dist/

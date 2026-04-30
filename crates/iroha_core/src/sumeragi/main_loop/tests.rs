@@ -129977,6 +129977,106 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_near_quorum_backlog_uses_explicit_sweep_time_for_pending_age() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"near-quorum-explicit-sweep-time");
+    let view_idx = block.header().view_change_index();
+    seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view_idx,
+    );
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let availability_timeout =
+        actor.availability_timeout(quorum_timeout, actor.runtime_da_enabled());
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(quorum_timeout);
+    assert!(
+        near_timeout < quorum_timeout,
+        "test requires reduced near-quorum timeout"
+    );
+    let sweep_now = Instant::now()
+        .checked_sub(Duration::from_secs(30))
+        .expect("test sweep time can be moved into the past");
+    let pending_age = near_timeout + Duration::from_millis(1);
+    assert!(
+        pending_age < availability_timeout,
+        "backlog suppression path should still be inside availability timeout"
+    );
+    let stale_progress_age = quorum_timeout + Duration::from_millis(1);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = sweep_now
+        .checked_sub(pending_age)
+        .expect("pending insertion before sweep");
+    pending.touch_progress(
+        sweep_now
+            .checked_sub(stale_progress_age)
+            .expect("stale progress before sweep"),
+    );
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let rbc_queue_backlog_threshold = usize::try_from(
+        super::Actor::near_quorum_queue_depth_threshold(actor.config.queues.rbc_chunks),
+    )
+    .expect("queue threshold fits usize");
+    for _ in 0..rbc_queue_backlog_threshold {
+        super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    }
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(sweep_now, None),
+        "availability backoff must use the explicit sweep time, not wall-clock pending age"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .and_then(|pending| pending.last_quorum_reschedule)
+            .is_none(),
+        "backlog suppression should not mark the quorum reschedule gate"
+    );
+
+    super::status::record_worker_queue_drain(
+        super::status::WorkerQueueKind::RbcChunks,
+        rbc_queue_backlog_threshold,
+    );
+    assert!(
+        actor.reschedule_stale_pending_blocks_with_now(sweep_now, None),
+        "draining the backlog should let the same explicit sweep time arm the reduced timeout"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .and_then(|pending| pending.last_quorum_reschedule)
+            .is_some(),
+        "near-quorum reschedule should mark the gate after backlog drains"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_near_quorum_vote_backed_defers_while_single_slot_ingress_backlogged() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();

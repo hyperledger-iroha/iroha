@@ -23,6 +23,7 @@ COPY --from=xx / /
 RUN apk add mold git clang clang21-libclang jq
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml .
+COPY artifacts/poseidon artifacts/poseidon
 COPY crates crates
 COPY data_model data_model
 COPY fixtures fixtures
@@ -67,6 +68,7 @@ ENV CC=xx-clang
 RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/cache \
     --mount=type=cache,target=/root/.cargo/registry/index \
+    --mount=type=cache,target=/app/target \
     RUSTFLAGS="${RUSTFLAGS}" mold --run \
     xx-cargo build ${CARGOFLAGS} \
     --target $(xx-cargo --print-target-triple) \
