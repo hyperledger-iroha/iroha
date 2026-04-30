@@ -79781,8 +79781,10 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let _guard = super::status::view_change_cause_test_guard();
+    let _worker_guard = super::status::worker_queue_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let tx = sample_transaction();
     actor
@@ -79863,6 +79865,7 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -128780,7 +128783,9 @@ async fn empty_frontier_missing_qc_reacquires_committed_anchor_before_rotation()
     use std::borrow::Cow;
 
     let _cause_guard = super::status::view_change_cause_test_guard();
+    let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -128861,6 +128866,7 @@ async fn empty_frontier_missing_qc_reacquires_committed_anchor_before_rotation()
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
