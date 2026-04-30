@@ -1456,7 +1456,12 @@ pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
 
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
 /// Request payload accepted by `/v1/contracts/aliases/resolve`.
 pub struct ContractAliasResolveRequestDto {
     /// Contract alias literal in `name::domain.dataspace` or `name::dataspace` form.
@@ -10918,7 +10923,12 @@ pub async fn handle_get_contract_code(
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    Default,
 )]
 pub struct ContractStateQuery {
     /// Optional canonical contract address used to scope logical state paths.

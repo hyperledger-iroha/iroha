@@ -208,6 +208,11 @@ impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::asset_alias::SetAssetDefinitionBalancePolicy> for InstructionBox {
+    fn from(i: crate::isi::asset_alias::SetAssetDefinitionBalancePolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::asset_transfer_control::SetAssetTransferFreeze> for InstructionBox {
     fn from(i: crate::isi::asset_transfer_control::SetAssetTransferFreeze) -> Self {
         InstructionBox(Box::new(i))
