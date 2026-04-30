@@ -174,6 +174,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
     dispatch_instruction::<iroha_data_model::isi::offline::IssueOfflineNoteV2>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNoteV2>,
     dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNoteV2>,

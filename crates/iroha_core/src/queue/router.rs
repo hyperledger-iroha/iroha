@@ -11,16 +11,21 @@ use std::sync::Arc;
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
-    asset::AssetDefinitionId,
+    asset::{AssetBalancePolicy, AssetDefinitionId},
     domain::DomainId,
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
+        contract_alias::SetContractAlias,
         settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
-        smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
+        smart_contract_code::{
+            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
+            RegisterSmartContractCode,
+        },
     },
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
     permission::Permission,
+    smart_contract::ContractAddress,
     transaction::Executable,
 };
 use iroha_executor_data_model::permission::{
@@ -349,7 +354,13 @@ fn dataspace_scoped_permission_routing_decision(
                 }
             }
         }
-        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::ContractCall(call) => {
+            merge_transaction_target_dataspace(
+                &mut target_dataspace,
+                contract_address_dataspace_target(&call.contract_address),
+            )?;
+        }
+        Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 let Some(dataspace_id) = instruction_dataspace_scoped_permission_target(
@@ -418,7 +429,13 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
                 }
             }
         }
-        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::ContractCall(call) => {
+            merge_transaction_target_dataspace(
+                &mut target_dataspace,
+                contract_address_dataspace_target(&call.contract_address),
+            )?;
+        }
+        Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 let Some(dataspace_id) = instruction_dataspace_scoped_permission_target_with_world(
@@ -1064,6 +1081,18 @@ fn instruction_transaction_dataspace_target(
         };
     }
 
+    if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
+        return contract_address_dataspace_target(&activate.contract_address);
+    }
+
+    if let Some(deactivate) = any.downcast_ref::<DeactivateContractInstance>() {
+        return contract_address_dataspace_target(&deactivate.contract_address);
+    }
+
+    if let Some(set_alias) = any.downcast_ref::<SetContractAlias>() {
+        return contract_address_dataspace_target(&set_alias.contract_address);
+    }
+
     None
 }
 
@@ -1186,6 +1215,18 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         };
     }
 
+    if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
+        return contract_address_dataspace_target(&activate.contract_address);
+    }
+
+    if let Some(deactivate) = any.downcast_ref::<DeactivateContractInstance>() {
+        return contract_address_dataspace_target(&deactivate.contract_address);
+    }
+
+    if let Some(set_alias) = any.downcast_ref::<SetContractAlias>() {
+        return contract_address_dataspace_target(&set_alias.contract_address);
+    }
+
     None
 }
 
@@ -1232,6 +1273,10 @@ fn domain_dataspace_target(
     dataspace_catalog?
         .by_alias(domain_id.dataspace().as_ref())
         .map(|entry| entry.id)
+}
+
+fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Option<DataSpaceId> {
+    contract_address.dataspace_id().ok()
 }
 
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
@@ -1384,28 +1429,32 @@ fn asset_definition_dataspace_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
+    let resolved = state_view
+        .and_then(|view| view.world.asset_definition(asset_definition_id).ok())
+        .map(|definition| {
+            (
+                definition.balance_scope_policy(),
+                definition
+                    .alias
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned())
+                    .or_else(|| {
+                        definition
+                            .id
+                            .try_domain()
+                            .map(|domain| domain.dataspace().as_ref().to_owned())
+                    }),
+            )
+        });
     let dataspace_alias = asset_definition_id
         .try_domain()
         .map(|domain| domain.dataspace().as_ref().to_owned())
-        .or_else(|| {
-            state_view.and_then(|view| {
-                view.world
-                    .asset_definition(asset_definition_id)
-                    .ok()
-                    .and_then(|definition| {
-                        definition
-                            .alias
-                            .as_ref()
-                            .map(|alias| alias.dataspace_segment().to_owned())
-                            .or_else(|| {
-                                definition
-                                    .id
-                                    .try_domain()
-                                    .map(|domain| domain.dataspace().as_ref().to_owned())
-                            })
-                    })
-            })
-        })?;
+        .or_else(|| resolved.as_ref().and_then(|(_, alias)| alias.clone()));
+    let Some(dataspace_alias) = dataspace_alias else {
+        return resolved
+            .is_some_and(|(policy, _)| policy == AssetBalancePolicy::Global)
+            .then_some(DataSpaceId::UNIVERSAL);
+    };
     if dataspace_alias.eq_ignore_ascii_case("universal") {
         return Some(DataSpaceId::UNIVERSAL);
     }
@@ -1419,26 +1468,33 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
 ) -> Option<DataSpaceId> {
+    let resolved = world
+        .asset_definition(asset_definition_id)
+        .ok()
+        .map(|definition| {
+            (
+                definition.balance_scope_policy(),
+                definition
+                    .alias
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned())
+                    .or_else(|| {
+                        definition
+                            .id
+                            .try_domain()
+                            .map(|domain| domain.dataspace().as_ref().to_owned())
+                    }),
+            )
+        });
     let dataspace_alias = asset_definition_id
         .try_domain()
         .map(|domain| domain.dataspace().as_ref().to_owned())
-        .or_else(|| {
-            world
-                .asset_definition(asset_definition_id)
-                .ok()
-                .and_then(|definition| {
-                    definition
-                        .alias
-                        .as_ref()
-                        .map(|alias| alias.dataspace_segment().to_owned())
-                        .or_else(|| {
-                            definition
-                                .id
-                                .try_domain()
-                                .map(|domain| domain.dataspace().as_ref().to_owned())
-                        })
-                })
-        })?;
+        .or_else(|| resolved.as_ref().and_then(|(_, alias)| alias.clone()));
+    let Some(dataspace_alias) = dataspace_alias else {
+        return resolved
+            .is_some_and(|(policy, _)| policy == AssetBalancePolicy::Global)
+            .then_some(DataSpaceId::UNIVERSAL);
+    };
     if dataspace_alias.eq_ignore_ascii_case("universal") {
         return Some(DataSpaceId::UNIVERSAL);
     }
@@ -2615,6 +2671,41 @@ mod tests {
         .expect("tx should be accepted")
     }
 
+    fn sample_executable_transaction(
+        authority: &AccountId,
+        signer: &iroha_crypto::PrivateKey,
+        executable: iroha_data_model::transaction::Executable,
+    ) -> AcceptedTransaction<'static> {
+        let chain_id = ChainId::from("chain");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit key"),
+            iroha_primitives::json::Json::new(10_000_u64),
+        );
+        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_executable(executable)
+            .with_metadata(metadata)
+            .sign(signer);
+        let default_limits = TransactionParameters::default();
+        let params = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(4096_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            core::time::Duration::from_secs(30),
+            params,
+            &crypto_cfg,
+        )
+        .expect("tx should be accepted")
+    }
+
     fn catalog_with_lane_dataspaces(entries: &[(LaneId, DataSpaceId)]) -> LaneCatalog {
         let max_lane = entries
             .iter()
@@ -3423,6 +3514,91 @@ mod tests {
     }
 
     #[test]
+    fn contract_call_routes_to_contract_address_dataspace_without_explicit_rule() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &alice_id,
+            0,
+            dataspace_id,
+        )
+        .expect("contract address");
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address,
+            entrypoint: "transfer".to_owned(),
+            payload: None,
+        };
+        let tx = sample_executable_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            iroha_data_model::transaction::Executable::ContractCall(invocation),
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("contract call route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn contract_instance_activation_routes_to_contract_address_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &alice_id,
+            0,
+            dataspace_id,
+        )
+        .expect("contract address");
+        let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+            contract_address,
+            code_hash: Hash::new(b"contract-code"),
+        };
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("contract activation route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
     fn untargeted_authority_transaction_routes_to_single_scope_dataspace_with_state() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -3885,6 +4061,69 @@ mod tests {
                 .try_route_with_view(&tx, &state.view())
                 .expect("opaque asset transfer route must resolve with alias"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn known_opaque_global_asset_without_home_alias_routes_to_universal() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "xor".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(opaque_asset_definition)
+                    .with_name("xor".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .account_scope_directory
+            .insert(sender_id.clone(), scope_entry);
+
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("known global asset route must resolve"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
 

@@ -29,6 +29,7 @@ use iroha_data_model::{
         register::RegisterBox,
     },
     metadata::Metadata,
+    nexus::DataSpaceId,
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
     prelude::{Account, Domain, DomainId, Register, Transfer, Trigger},
@@ -920,6 +921,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     nexus: &iroha_config::parameters::actual::Nexus,
     transaction: &SignedTransaction,
     observation_time_ms: u64,
+    route_dataspace_id: Option<DataSpaceId>,
 ) -> Result<(), NexusFeeAdmissionError> {
     if !nexus.enabled {
         return Ok(());
@@ -987,6 +989,11 @@ pub(crate) fn check_external_nexus_fee_admission(
     let payer_asset = AssetId::new(asset_def, payer.clone());
     if payer == sink_account {
         return Ok(());
+    }
+    if route_dataspace_id.is_some_and(|dataspace_id| dataspace_id != DataSpaceId::UNIVERSAL) {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "non-universal Nexus fee debit must settle through the authoritative global asset route; refusing local global fee lookup".to_owned(),
+        ));
     }
 
     let Some(balance) = world.assets().get(&payer_asset) else {
@@ -1469,6 +1476,31 @@ impl Executor {
                 asset_id: asset_label,
             });
             return Ok(());
+        }
+        if state_transaction
+            .current_dataspace_id
+            .is_some_and(|dataspace_id| dataspace_id != DataSpaceId::UNIVERSAL)
+        {
+            let reason =
+                "non-universal Nexus fee debit must settle through the authoritative global asset route; refusing local global fee debit"
+                    .to_owned();
+            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
+                payer_kind,
+                payer_id: payer_id.clone(),
+                amount: fee.clone(),
+                asset_id: asset_label.clone(),
+                reason: reason.clone(),
+            });
+            warn!(
+                target: "economics",
+                payer = %payer_id,
+                payer_kind = payer_kind_label,
+                fee_amount = %fee,
+                asset = %asset_label,
+                sink = %sink_label,
+                "nexus fee rejected outside authoritative global asset route"
+            );
+            return Err(ValidationFail::NotPermitted(reason));
         }
         let transfer = iroha_data_model::isi::Transfer::<
             Asset,
@@ -6382,6 +6414,64 @@ mod tests {
     }
 
     #[test]
+    fn nexus_fee_admission_rejects_non_universal_local_global_lookup() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let world = World::with_assets([domain], [authority_account, sink_account], [ad], [], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let view = state.view();
+        let err = check_external_nexus_fee_admission(
+            view.world(),
+            view.nexus(),
+            &tx,
+            0,
+            Some(DataSpaceId::new(10)),
+        )
+        .expect_err("private routes must not perform local global fee lookups");
+        assert!(
+            matches!(err, NexusFeeAdmissionError::Rejected(ref reason) if reason.contains("authoritative global asset route")),
+            "unexpected rejection: {err:?}"
+        );
+    }
+
+    #[test]
     fn nexus_successful_claim_mint_bypasses_fee_admission_for_configured_authority() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -6438,7 +6528,7 @@ mod tests {
             .sign(authority_kp.private_key());
 
         let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0)
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, None)
             .expect("configured successful claim mint should bypass fee admission");
     }
 
@@ -6495,7 +6585,7 @@ mod tests {
             .sign(authority_kp.private_key());
 
         let view = state.view();
-        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0)
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, None)
             .expect_err("unconfigured claim authority should still need fee balance");
         assert!(matches!(err, NexusFeeAdmissionError::Rejected(_)));
     }
