@@ -1,6 +1,29 @@
 # Status
 
-Last updated: 2026-04-29
+Last updated: 2026-04-30
+
+## 2026-04-30 Offline V2 native bridge prover FFI
+
+- Rebased PR #5578 onto the current `i23-features` branch and narrowed it to
+  the shared `connect_norito_bridge` C-FFI prover surface. Swift keeps using
+  its native `Halo2OfflineNoteV2Prover` path, while the bridge now exposes
+  Rust-backed redeem/audit proof generation for other native consumers.
+- Added `connect_norito_offline_prove_note_v2_redeem` and
+  `connect_norito_offline_prove_note_v2_audit`, returning Norito-archive
+  `OfflineNoteRecursiveProofV2` payloads with canonical verifier-key id,
+  public-input hash, and Halo2/IPA proof bytes.
+- Added bridge tests that decode the FFI output, check the proof binding, and
+  verify the returned proof against the canonical Offline V2 verifier. Invalid
+  archives now fail through `CONNECT_NORITO_ERR_OFFLINE_NOTE_V2_PROVE`.
+- Fixed three current `iroha_data_model` clippy findings surfaced by the
+  bridge clippy pass: two `NPoS` doc-markdown warnings and one collapsible
+  schema-map branch.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p connect_norito_bridge offline_note_v2_ -- --nocapture`
+  - `cargo test -p connect_norito_bridge`
+  - `cargo clippy -p connect_norito_bridge --all-targets -- -D warnings`
 
 ## 2026-04-29 NPoS PRF seed recovery repair
 
