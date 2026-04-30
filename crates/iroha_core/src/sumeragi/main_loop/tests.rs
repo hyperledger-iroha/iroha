@@ -129942,7 +129942,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
         super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
     }
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
+        !actor.reschedule_stale_pending_blocks_with_now(now, None),
         "queue backlog should suppress reduced near-quorum timeout path"
     );
     let pending_after = actor
@@ -129960,7 +129960,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
         rbc_queue_backlog_threshold,
     );
     assert!(
-        actor.reschedule_stale_pending_blocks(None),
+        actor.reschedule_stale_pending_blocks_with_now(now, None),
         "transient queue depth should not suppress near-quorum reduced timeout reschedule"
     );
     let pending_after = actor
