@@ -3917,6 +3917,9 @@ pub mod query {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
             .build(&ALICE_ID);
             let binding = AssetSubjectBindingV1 {
                 allowed_domains: BTreeSet::new(),
@@ -3936,7 +3939,11 @@ pub mod query {
                 Json::new(issuer_policy),
             );
 
-            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
+            );
             let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
             let world = World::with_assets(
                 [domain],

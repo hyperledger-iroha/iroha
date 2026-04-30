@@ -27,7 +27,11 @@ pub mod isi {
         asset::definition::{
             validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
-        isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
+        asset::{AssetBalancePolicy, AssetBalanceScope},
+        events::data::prelude::AssetChanged,
+        isi::error::{
+            InstructionExecutionError, InvalidParameterError, MathError, RepetitionError,
+        },
         metadata::Metadata,
         name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId, LaneVisibility},
@@ -74,13 +78,12 @@ pub mod isi {
         catalog.by_alias(dataspace_alias).map(|entry| entry.id)
     }
 
-    fn asset_definition_declared_home_dataspace(
+    fn asset_definition_home_dataspace_for_alias(
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
+        alias: Option<&AssetDefinitionAlias>,
     ) -> Option<DataSpaceId> {
-        let dataspace_alias = definition
-            .alias()
-            .as_ref()
+        let dataspace_alias = alias
             .map(|alias| alias.dataspace_segment().to_owned())
             .or_else(|| {
                 definition
@@ -100,6 +103,17 @@ pub mod isi {
         }
     }
 
+    fn asset_definition_declared_home_dataspace(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition: &AssetDefinition,
+    ) -> Option<DataSpaceId> {
+        asset_definition_home_dataspace_for_alias(
+            state_transaction,
+            definition,
+            definition.alias().as_ref(),
+        )
+    }
+
     fn dataspace_is_public_or_universal(
         state_transaction: &StateTransaction<'_, '_>,
         dataspace_id: DataSpaceId,
@@ -112,16 +126,48 @@ pub mod isi {
                 .iter()
                 .any(|lane| {
                     lane.dataspace_id == dataspace_id && lane.visibility == LaneVisibility::Public
-                })
+        })
+    }
+
+    fn ensure_global_asset_definition_home_is_public_or_universal(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition: &AssetDefinition,
+        alias: Option<&AssetDefinitionAlias>,
+    ) -> Result<(), InstructionExecutionError> {
+        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
+            return Ok(());
+        }
+
+        let home_dataspace = asset_definition_home_dataspace_for_alias(
+            state_transaction,
+            definition,
+            alias,
+        )
+        .unwrap_or(DataSpaceId::UNIVERSAL);
+
+        if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "global asset definition {} cannot be registered in restricted dataspace {}; use DataspaceRestricted balance policy",
+                    definition.id(),
+                    home_dataspace.as_u64()
+                )
+                .into(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn ensure_global_asset_definition_registered_on_authoritative_route(
         state_transaction: &StateTransaction<'_, '_>,
         definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
-        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-            return Ok(());
-        }
+        ensure_global_asset_definition_home_is_public_or_universal(
+            state_transaction,
+            definition,
+            definition.alias().as_ref(),
+        )?;
 
         let home_dataspace =
             asset_definition_declared_home_dataspace(state_transaction, definition)
@@ -139,17 +185,6 @@ pub mod isi {
                     definition.id(),
                     home_dataspace.as_u64(),
                     route_dataspace.as_u64()
-                )
-                .into(),
-            ));
-        }
-
-        if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "global asset definition {} cannot be registered in restricted dataspace {}; use DataspaceRestricted balance policy",
-                    definition.id(),
-                    home_dataspace.as_u64()
                 )
                 .into(),
             ));
@@ -2291,6 +2326,11 @@ pub mod isi {
                 .asset_definition(&asset_definition_id)
                 .map_err(Error::from)?;
             validate_alias_for_asset_definition(alias.as_ref(), &definition)?;
+            ensure_global_asset_definition_home_is_public_or_universal(
+                state_transaction,
+                &definition,
+                alias.as_ref(),
+            )?;
 
             if let Some(alias) = alias {
                 let bound_at_ms = state_transaction.block_unix_timestamp_ms();
@@ -2315,6 +2355,212 @@ pub mod isi {
                 state_transaction
                     .world
                     .clear_asset_definition_alias(&asset_definition_id);
+            }
+
+            Ok(())
+        }
+    }
+
+    fn migrate_global_asset_balances_to_dataspace(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        asset_definition_id: &AssetDefinitionId,
+        dataspace_id: DataSpaceId,
+    ) -> Result<(), Error> {
+        let global_asset_ids = state_transaction
+            .world
+            .assets
+            .iter()
+            .filter_map(|(asset_id, _)| {
+                (asset_id.definition() == asset_definition_id
+                    && matches!(asset_id.scope(), AssetBalanceScope::Global))
+                .then_some(asset_id.clone())
+            })
+            .collect::<Vec<_>>();
+
+        for global_asset_id in global_asset_ids {
+            let Some(source_value) = state_transaction
+                .world
+                .assets
+                .get(&global_asset_id)
+                .cloned()
+            else {
+                return Err(FindError::Asset(global_asset_id.into()).into());
+            };
+            let source_amount = source_value.clone().into_inner();
+            let scoped_asset_id = AssetId::with_scope(
+                asset_definition_id.clone(),
+                global_asset_id.account().clone(),
+                AssetBalanceScope::Dataspace(dataspace_id),
+            );
+            let destination_existed = state_transaction
+                .world
+                .assets
+                .get(&scoped_asset_id)
+                .is_some();
+            let merged_amount = state_transaction
+                .world
+                .assets
+                .get(&scoped_asset_id)
+                .map(|destination_value| {
+                    destination_value
+                        .clone()
+                        .into_inner()
+                        .checked_add(source_amount.clone())
+                        .ok_or(MathError::Overflow)
+                })
+                .transpose()?;
+
+            if state_transaction
+                .world
+                .asset_metadata
+                .get(&global_asset_id)
+                .is_some()
+                && state_transaction
+                    .world
+                    .asset_metadata
+                    .get(&scoped_asset_id)
+                    .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot migrate global asset bucket {global_asset_id}: dataspace bucket {scoped_asset_id} already has metadata"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            state_transaction
+                .world
+                .assets
+                .remove(global_asset_id.clone());
+            let source_metadata = state_transaction
+                .world
+                .asset_metadata
+                .remove(global_asset_id.clone());
+            state_transaction
+                .world
+                .untrack_asset_holder_if_empty(&global_asset_id);
+
+            if let Some(merged_amount) = merged_amount {
+                let destination_value = state_transaction
+                    .world
+                    .assets
+                    .get_mut(&scoped_asset_id)
+                    .expect("destination balance exists");
+                **destination_value = merged_amount;
+            } else {
+                state_transaction
+                    .world
+                    .assets
+                    .insert(scoped_asset_id.clone(), source_value);
+            }
+            if !destination_existed {
+                state_transaction.world.track_asset_holder(&scoped_asset_id);
+            }
+            if let Some(source_metadata) = source_metadata {
+                state_transaction
+                    .world
+                    .asset_metadata
+                    .insert(scoped_asset_id.clone(), source_metadata);
+            }
+
+            state_transaction.world.emit_events([
+                AssetEvent::Removed(AssetChanged {
+                    asset: global_asset_id,
+                    amount: source_amount.clone(),
+                }),
+                AssetEvent::Added(AssetChanged {
+                    asset: scoped_asset_id,
+                    amount: source_amount,
+                }),
+            ]);
+        }
+
+        Ok(())
+    }
+
+    impl Execute for SetAssetDefinitionBalancePolicy {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let SetAssetDefinitionBalancePolicy {
+                asset_definition_id,
+                balance_scope_policy,
+                migrate_global_balances_to_dataspace,
+            } = self;
+
+            let current_policy = state_transaction
+                .world
+                .asset_definition(&asset_definition_id)
+                .map_err(Error::from)?
+                .balance_scope_policy();
+
+            if current_policy == balance_scope_policy {
+                if migrate_global_balances_to_dataspace.is_some() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "migration dataspace is only accepted when changing Global to DataspaceRestricted"
+                                .into(),
+                        ),
+                    )
+                    .into());
+                }
+                return Ok(());
+            }
+
+            match (current_policy, balance_scope_policy) {
+                (AssetBalancePolicy::Global, AssetBalancePolicy::DataspaceRestricted) => {
+                    let dataspace_id = migrate_global_balances_to_dataspace.ok_or_else(|| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "Global to DataspaceRestricted migration requires migrate_global_balances_to_dataspace"
+                                    .into(),
+                            ),
+                        )
+                    })?;
+                    if state_transaction
+                        .nexus
+                        .dataspace_catalog
+                        .by_id(dataspace_id)
+                        .is_none()
+                    {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                format!("unknown migration dataspace {}", dataspace_id.as_u64())
+                                    .into(),
+                            ),
+                        )
+                        .into());
+                    }
+
+                    migrate_global_asset_balances_to_dataspace(
+                        state_transaction,
+                        &asset_definition_id,
+                        dataspace_id,
+                    )?;
+                    state_transaction
+                        .world
+                        .asset_definition_mut(&asset_definition_id)
+                        .map_err(Error::from)?
+                        .balance_scope_policy = AssetBalancePolicy::DataspaceRestricted;
+                }
+                (AssetBalancePolicy::DataspaceRestricted, AssetBalancePolicy::Global) => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "asset definition {asset_definition_id} cannot be promoted from DataspaceRestricted to Global"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                (AssetBalancePolicy::Global, AssetBalancePolicy::Global)
+                | (
+                    AssetBalancePolicy::DataspaceRestricted,
+                    AssetBalancePolicy::DataspaceRestricted,
+                ) => {}
             }
 
             Ok(())
@@ -7247,6 +7493,164 @@ mod tests {
         assert!(
             updated.alias().is_none(),
             "definition alias should be cleared"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_balance_policy_migrates_global_balances_to_dataspace() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("policy-migration", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &ALICE_ID, &domain_id);
+        seed_account(&mut state, &BOB_ID, &domain_id);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let bpng = DataSpaceId::new(7);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: bpng,
+                alias: "bpng".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        tx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        tx.world.dataspace_catalog = dataspace_catalog;
+
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+        Mint::asset_numeric(10_u32, AssetId::of(definition_id.clone(), ALICE_ID.clone()))
+            .execute(&authority, &mut tx)
+            .expect("mint alice");
+        Mint::asset_numeric(5_u32, AssetId::of(definition_id.clone(), BOB_ID.clone()))
+            .execute(&authority, &mut tx)
+            .expect("mint bob");
+
+        let original_total = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition exists")
+            .total_quantity()
+            .clone();
+
+        SetAssetDefinitionBalancePolicy::new(
+            definition_id.clone(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(bpng),
+        )
+        .execute(&authority, &mut tx)
+        .expect("migrate balance policy");
+
+        let updated = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition exists");
+        assert_eq!(
+            updated.balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
+        );
+        assert_eq!(updated.total_quantity(), &original_total);
+
+        let alice_global = AssetId::of(definition_id.clone(), ALICE_ID.clone());
+        let bob_global = AssetId::of(definition_id.clone(), BOB_ID.clone());
+        let alice_scoped = AssetId::with_scope(
+            definition_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(bpng),
+        );
+        let bob_scoped = AssetId::with_scope(
+            definition_id.clone(),
+            BOB_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(bpng),
+        );
+
+        assert!(tx.world.assets.get(&alice_global).is_none());
+        assert!(tx.world.assets.get(&bob_global).is_none());
+        assert_eq!(
+            tx.world
+                .assets
+                .get(&alice_scoped)
+                .map(|value| value.clone().into_inner()),
+            Some(Numeric::new(10, 0))
+        );
+        assert_eq!(
+            tx.world
+                .assets
+                .get(&bob_scoped)
+                .map(|value| value.clone().into_inner()),
+            Some(Numeric::new(5, 0))
+        );
+        assert!(
+            tx.world
+                .asset_definition_assets
+                .get(&definition_id)
+                .is_some_and(
+                    |assets| assets.contains(&alice_scoped) && assets.contains(&bob_scoped)
+                )
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_balance_policy_rejects_restricted_to_global() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("policy-restricted", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register restricted definition");
+
+        let err = SetAssetDefinitionBalancePolicy::new(
+            definition_id,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("restricted assets cannot be promoted to global");
+
+        assert!(
+            err.to_string().contains("cannot be promoted"),
+            "unexpected error: {err}"
         );
     }
 

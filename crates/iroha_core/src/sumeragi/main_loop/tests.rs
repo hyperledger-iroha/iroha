@@ -97147,6 +97147,14 @@ async fn assemble_proposal_defers_when_candidate_conflicts_with_local_vote_histo
         ),
         "test setup should record a local same-height vote for the conflicting branch"
     );
+    let proposal_now = Instant::now();
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&conflicting_hash)
+        .expect("conflicting branch should remain pending");
+    pending.inserted_at = proposal_now;
+    pending.touch_progress(proposal_now);
 
     let tx = sample_transaction();
     actor
@@ -97166,7 +97174,7 @@ async fn assemble_proposal_defers_when_candidate_conflicts_with_local_vote_histo
             leader_index,
             local_idx,
             None,
-            Instant::now(),
+            proposal_now,
         )
         .expect("proposal assembly should defer cleanly");
     assert!(
@@ -99937,23 +99945,11 @@ async fn pacemaker_bootstraps_missing_qc_frontier_from_committed_qc_without_new_
     committed_qc.phase = Phase::Commit;
     actor.highest_qc = Some(committed_qc);
 
-    let topology = actor.effective_commit_topology();
-    let local_peer = actor.common_config.peer.id().clone();
-    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
         .unwrap_or(0)
         .max(2);
     let view = (1..search_limit)
-        .find(|candidate_view| {
-            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
-            actor
-                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
-                .ok()
-                .is_some_and(|leader| {
-                    candidate_topology
-                        .position(local_peer.public_key())
-                        .is_some_and(|idx| idx == leader)
-                })
-        })
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
         .expect("find non-zero view where local peer is leader");
 
     let now = Instant::now();
@@ -100028,23 +100024,11 @@ async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_
     committed_qc.phase = Phase::Commit;
     actor.highest_qc = Some(committed_qc);
 
-    let topology = actor.effective_commit_topology();
-    let local_peer = actor.common_config.peer.id().clone();
-    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
         .unwrap_or(0)
         .max(2);
     let view = (1..search_limit)
-        .find(|candidate_view| {
-            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
-            actor
-                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
-                .ok()
-                .is_some_and(|leader| {
-                    candidate_topology
-                        .position(local_peer.public_key())
-                        .is_some_and(|idx| idx == leader)
-                })
-        })
+        .find(|candidate_view| actor.local_is_round_leader(tracked_height, *candidate_view))
         .expect("find non-zero view where local peer is leader");
 
     let now = Instant::now();

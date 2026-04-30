@@ -1043,7 +1043,9 @@ impl Actor {
             }
             return false;
         };
-        let owner_age = owner_pending.progress_age(now).max(owner_pending.age());
+        let owner_age = owner_pending
+            .progress_age(now)
+            .max(now.saturating_duration_since(owner_pending.inserted_at));
         let recovery_exhausted = owner_age >= hard_yield_age;
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
         let local_vote_blocks = local_vote.as_ref().is_some_and(|vote| {
@@ -1232,7 +1234,9 @@ impl Actor {
         {
             let tip_height = self.state.committed_height();
             let tip_hash = self.state.latest_block_hash_fast();
-            let pending_age = pending.progress_age(now).max(pending.age());
+            let pending_age = pending
+                .progress_age(now)
+                .max(now.saturating_duration_since(pending.inserted_at));
             let active_tip_owner = block_active_tip_owner
                 && self.pending_block_is_active_for_tip(
                     existing_vote.block_hash,
@@ -4110,7 +4114,12 @@ impl Actor {
             .filter(|pending| {
                 !pending.aborted && pending.height == height && pending.view == view_idx
             })
-            .map(|pending| (pending.age(), pending.view))
+            .map(|pending| {
+                (
+                    now.saturating_duration_since(pending.inserted_at),
+                    pending.view,
+                )
+            })
             .min_by_key(|(age, _)| *age)
         {
             let quorum_timeout = self.quorum_timeout(da_enabled);

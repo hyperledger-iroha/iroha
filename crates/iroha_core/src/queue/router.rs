@@ -11,18 +11,23 @@ use std::sync::Arc;
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
-    asset::{AssetBalancePolicy, AssetDefinitionId},
+    asset::{AssetBalancePolicy, AssetDefinitionAlias, AssetDefinitionId},
     domain::DomainId,
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
+        asset_alias::SetAssetDefinitionBalancePolicy,
         contract_alias::SetContractAlias,
+        musubi::{
+            AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
+        },
         settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
         },
     },
+    musubi::{MusubiNamespace, MusubiPackageId},
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
     permission::Permission,
     smart_contract::ContractAddress,
@@ -631,11 +636,15 @@ fn instruction_settlement_dataspace_target(
         return settlement_pair_dataspace_target(
             asset_definition_dataspace_target(
                 dvp.delivery_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             ),
             asset_definition_dataspace_target(
                 dvp.payment_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             ),
@@ -646,11 +655,15 @@ fn instruction_settlement_dataspace_target(
         return settlement_pair_dataspace_target(
             asset_definition_dataspace_target(
                 pvp.primary_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             ),
             asset_definition_dataspace_target(
                 pvp.counter_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             ),
@@ -662,11 +675,15 @@ fn instruction_settlement_dataspace_target(
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
                 asset_definition_dataspace_target(
                     dvp.delivery_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     state_view,
                 ),
                 asset_definition_dataspace_target(
                     dvp.payment_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     state_view,
                 ),
@@ -674,11 +691,15 @@ fn instruction_settlement_dataspace_target(
             SettlementInstructionBox::Pvp(pvp) => settlement_pair_dataspace_target(
                 asset_definition_dataspace_target(
                     pvp.primary_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     state_view,
                 ),
                 asset_definition_dataspace_target(
                     pvp.counter_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     state_view,
                 ),
@@ -700,11 +721,15 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
         return settlement_pair_dataspace_target(
             asset_definition_dataspace_target_with_world(
                 dvp.delivery_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
             asset_definition_dataspace_target_with_world(
                 dvp.payment_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
@@ -715,11 +740,15 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
         return settlement_pair_dataspace_target(
             asset_definition_dataspace_target_with_world(
                 pvp.primary_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
             asset_definition_dataspace_target_with_world(
                 pvp.counter_leg().asset_definition_id(),
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
@@ -731,11 +760,15 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
                 asset_definition_dataspace_target_with_world(
                     dvp.delivery_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     world,
                 ),
                 asset_definition_dataspace_target_with_world(
                     dvp.payment_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     world,
                 ),
@@ -743,11 +776,15 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             SettlementInstructionBox::Pvp(pvp) => settlement_pair_dataspace_target(
                 asset_definition_dataspace_target_with_world(
                     pvp.primary_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     world,
                 ),
                 asset_definition_dataspace_target_with_world(
                     pvp.counter_leg().asset_definition_id(),
+                    None,
+                    None,
                     dataspace_catalog,
                     world,
                 ),
@@ -985,6 +1022,8 @@ fn instruction_transaction_dataspace_target(
             }
             RegisterBox::AssetDefinition(register) => asset_definition_dataspace_target(
                 &register.object.id,
+                register.object.alias.as_ref(),
+                Some(register.object.balance_scope_policy),
                 dataspace_catalog,
                 state_view,
             ),
@@ -1001,7 +1040,13 @@ fn instruction_transaction_dataspace_target(
                 domain_dataspace_target(&unregister.object, dataspace_catalog)
             }
             UnregisterBox::AssetDefinition(unregister) => {
-                asset_definition_dataspace_target(&unregister.object, dataspace_catalog, state_view)
+                asset_definition_dataspace_target(
+                    &unregister.object,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                )
             }
             UnregisterBox::Peer(_)
             | UnregisterBox::Account(_)
@@ -1018,7 +1063,13 @@ fn instruction_transaction_dataspace_target(
                 account_dataspace_target(state_view.map(StateView::world), &set.object)
             }
             SetKeyValueBox::AssetDefinition(set) => {
-                asset_definition_dataspace_target(&set.object, dataspace_catalog, state_view)
+                asset_definition_dataspace_target(
+                    &set.object,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                )
             }
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
@@ -1033,7 +1084,13 @@ fn instruction_transaction_dataspace_target(
                 account_dataspace_target(state_view.map(StateView::world), &remove.object)
             }
             RemoveKeyValueBox::AssetDefinition(remove) => {
-                asset_definition_dataspace_target(&remove.object, dataspace_catalog, state_view)
+                asset_definition_dataspace_target(
+                    &remove.object,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                )
             }
             RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
         };
@@ -1045,10 +1102,18 @@ fn instruction_transaction_dataspace_target(
                 domain_dataspace_target(&transfer.object, dataspace_catalog)
             }
             TransferBox::AssetDefinition(transfer) => {
-                asset_definition_dataspace_target(&transfer.object, dataspace_catalog, state_view)
+                asset_definition_dataspace_target(
+                    &transfer.object,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    state_view,
+                )
             }
             TransferBox::Asset(transfer) => asset_definition_dataspace_target(
                 &transfer.source.definition,
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             )
@@ -1063,6 +1128,8 @@ fn instruction_transaction_dataspace_target(
         return match mint {
             MintBox::Asset(mint) => asset_definition_dataspace_target(
                 &mint.destination.definition,
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             ),
@@ -1074,11 +1141,42 @@ fn instruction_transaction_dataspace_target(
         return match burn {
             BurnBox::Asset(burn) => asset_definition_dataspace_target(
                 &burn.destination.definition,
+                None,
+                None,
                 dataspace_catalog,
                 state_view,
             ),
             BurnBox::TriggerRepetitions(_) => None,
         };
+    }
+
+    if let Some(set_policy) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
+        return asset_definition_dataspace_target(
+            &set_policy.asset_definition_id,
+            None,
+            None,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
+        return musubi_package_dataspace_target(
+            &publish.release.package.package,
+            dataspace_catalog,
+        );
+    }
+
+    if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
+        return musubi_package_dataspace_target(&yank.package.package, dataspace_catalog);
+    }
+
+    if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
+        return musubi_package_dataspace_target(&set_alias.alias.target, dataspace_catalog);
+    }
+
+    if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
+        return musubi_package_dataspace_target(&assert_release.package, dataspace_catalog);
     }
 
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
@@ -1113,6 +1211,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             }
             RegisterBox::AssetDefinition(register) => asset_definition_dataspace_target_with_world(
                 &register.object.id,
+                register.object.alias.as_ref(),
+                Some(register.object.balance_scope_policy),
                 dataspace_catalog,
                 world,
             ),
@@ -1131,6 +1231,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             UnregisterBox::AssetDefinition(unregister) => {
                 asset_definition_dataspace_target_with_world(
                     &unregister.object,
+                    None,
+                    None,
                     dataspace_catalog,
                     world,
                 )
@@ -1148,7 +1250,13 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             SetKeyValueBox::Domain(set) => domain_dataspace_target(&set.object, dataspace_catalog),
             SetKeyValueBox::Account(set) => account_dataspace_target(Some(world), &set.object),
             SetKeyValueBox::AssetDefinition(set) => {
-                asset_definition_dataspace_target_with_world(&set.object, dataspace_catalog, world)
+                asset_definition_dataspace_target_with_world(
+                    &set.object,
+                    None,
+                    None,
+                    dataspace_catalog,
+                    world,
+                )
             }
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
@@ -1165,6 +1273,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             RemoveKeyValueBox::AssetDefinition(remove) => {
                 asset_definition_dataspace_target_with_world(
                     &remove.object,
+                    None,
+                    None,
                     dataspace_catalog,
                     world,
                 )
@@ -1180,11 +1290,15 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             }
             TransferBox::AssetDefinition(transfer) => asset_definition_dataspace_target_with_world(
                 &transfer.object,
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
             TransferBox::Asset(transfer) => asset_definition_dataspace_target_with_world(
                 &transfer.source.definition,
+                None,
+                None,
                 dataspace_catalog,
                 world,
             )
@@ -1197,6 +1311,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return match mint {
             MintBox::Asset(mint) => asset_definition_dataspace_target_with_world(
                 &mint.destination.definition,
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
@@ -1208,11 +1324,42 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return match burn {
             BurnBox::Asset(burn) => asset_definition_dataspace_target_with_world(
                 &burn.destination.definition,
+                None,
+                None,
                 dataspace_catalog,
                 world,
             ),
             BurnBox::TriggerRepetitions(_) => None,
         };
+    }
+
+    if let Some(set_policy) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
+        return asset_definition_dataspace_target_with_world(
+            &set_policy.asset_definition_id,
+            None,
+            None,
+            dataspace_catalog,
+            world,
+        );
+    }
+
+    if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
+        return musubi_package_dataspace_target(
+            &publish.release.package.package,
+            dataspace_catalog,
+        );
+    }
+
+    if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
+        return musubi_package_dataspace_target(&yank.package.package, dataspace_catalog);
+    }
+
+    if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
+        return musubi_package_dataspace_target(&set_alias.alias.target, dataspace_catalog);
+    }
+
+    if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
+        return musubi_package_dataspace_target(&assert_release.package, dataspace_catalog);
     }
 
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
@@ -1279,6 +1426,52 @@ fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Opti
     contract_address.dataspace_id().ok()
 }
 
+fn musubi_namespace_dataspace_target(
+    namespace: &MusubiNamespace,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
+    let dataspace_alias = namespace.dataspace_segment();
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    dataspace_catalog?
+        .by_alias(dataspace_alias)
+        .map(|entry| entry.id)
+}
+
+fn musubi_package_dataspace_target(
+    package: &MusubiPackageId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
+    musubi_namespace_dataspace_target(&package.namespace, dataspace_catalog)
+}
+
+fn asset_definition_target_from_parts(
+    asset_definition_id: &AssetDefinitionId,
+    alias: Option<&AssetDefinitionAlias>,
+    balance_scope_policy: Option<AssetBalancePolicy>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Option<DataSpaceId> {
+    let dataspace_alias = alias
+        .map(|alias| alias.dataspace_segment().to_owned())
+        .or_else(|| {
+            asset_definition_id
+                .try_domain()
+                .map(|domain| domain.dataspace().as_ref().to_owned())
+        });
+    let Some(dataspace_alias) = dataspace_alias else {
+        return balance_scope_policy
+            .is_some_and(|policy| policy == AssetBalancePolicy::Global)
+            .then_some(DataSpaceId::UNIVERSAL);
+    };
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    dataspace_catalog?
+        .by_alias(&dataspace_alias)
+        .map(|entry| entry.id)
+}
+
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
 
@@ -1330,8 +1523,7 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return matches!(
             unregister,
-            UnregisterBox::AssetDefinition(unregister)
-                if unregister.object.is_opaque_canonical()
+            UnregisterBox::AssetDefinition(_)
         );
     }
 
@@ -1339,8 +1531,7 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return matches!(set_key_value, SetKeyValueBox::Account(_))
             || matches!(
                 set_key_value,
-                SetKeyValueBox::AssetDefinition(set)
-                    if set.object.is_opaque_canonical()
+                SetKeyValueBox::AssetDefinition(_)
             );
     }
 
@@ -1348,17 +1539,27 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return matches!(remove_key_value, RemoveKeyValueBox::Account(_))
             || matches!(
                 remove_key_value,
-                RemoveKeyValueBox::AssetDefinition(remove)
-                    if remove.object.is_opaque_canonical()
+                RemoveKeyValueBox::AssetDefinition(_)
             );
     }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
-            TransferBox::AssetDefinition(transfer) => transfer.object.is_opaque_canonical(),
-            TransferBox::Asset(transfer) => transfer.source.definition.is_opaque_canonical(),
+            TransferBox::AssetDefinition(_) | TransferBox::Asset(_) => true,
             TransferBox::Domain(_) | TransferBox::Nft(_) => false,
         };
+    }
+
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        return matches!(mint, MintBox::Asset(_));
+    }
+
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        return matches!(burn, BurnBox::Asset(_));
+    }
+
+    if let Some(set_policy) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
+        return true;
     }
 
     false
@@ -1426,6 +1627,8 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
 
 fn asset_definition_dataspace_target(
     asset_definition_id: &AssetDefinitionId,
+    alias: Option<&AssetDefinitionAlias>,
+    balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
@@ -1434,37 +1637,29 @@ fn asset_definition_dataspace_target(
         .map(|definition| {
             (
                 definition.balance_scope_policy(),
-                definition
-                    .alias
-                    .as_ref()
-                    .map(|alias| alias.dataspace_segment().to_owned())
-                    .or_else(|| {
-                        definition
-                            .id
-                            .try_domain()
-                            .map(|domain| domain.dataspace().as_ref().to_owned())
-                    }),
+                definition.alias,
             )
         });
-    let dataspace_alias = asset_definition_id
-        .try_domain()
-        .map(|domain| domain.dataspace().as_ref().to_owned())
-        .or_else(|| resolved.as_ref().and_then(|(_, alias)| alias.clone()));
-    let Some(dataspace_alias) = dataspace_alias else {
-        return resolved
-            .is_some_and(|(policy, _)| policy == AssetBalancePolicy::Global)
-            .then_some(DataSpaceId::UNIVERSAL);
-    };
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    dataspace_catalog?
-        .by_alias(&dataspace_alias)
-        .map(|entry| entry.id)
+    let effective_alias = resolved
+        .as_ref()
+        .and_then(|(_, resolved_alias)| resolved_alias.as_ref())
+        .or(alias);
+    let effective_policy = resolved
+        .as_ref()
+        .map(|(policy, _)| *policy)
+        .or(balance_scope_policy);
+    asset_definition_target_from_parts(
+        asset_definition_id,
+        effective_alias,
+        effective_policy,
+        dataspace_catalog,
+    )
 }
 
 fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
+    alias: Option<&AssetDefinitionAlias>,
+    balance_scope_policy: Option<AssetBalancePolicy>,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
 ) -> Option<DataSpaceId> {
@@ -1474,33 +1669,23 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
         .map(|definition| {
             (
                 definition.balance_scope_policy(),
-                definition
-                    .alias
-                    .as_ref()
-                    .map(|alias| alias.dataspace_segment().to_owned())
-                    .or_else(|| {
-                        definition
-                            .id
-                            .try_domain()
-                            .map(|domain| domain.dataspace().as_ref().to_owned())
-                    }),
+                definition.alias,
             )
         });
-    let dataspace_alias = asset_definition_id
-        .try_domain()
-        .map(|domain| domain.dataspace().as_ref().to_owned())
-        .or_else(|| resolved.as_ref().and_then(|(_, alias)| alias.clone()));
-    let Some(dataspace_alias) = dataspace_alias else {
-        return resolved
-            .is_some_and(|(policy, _)| policy == AssetBalancePolicy::Global)
-            .then_some(DataSpaceId::UNIVERSAL);
-    };
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    dataspace_catalog?
-        .by_alias(&dataspace_alias)
-        .map(|entry| entry.id)
+    let effective_alias = resolved
+        .as_ref()
+        .and_then(|(_, resolved_alias)| resolved_alias.as_ref())
+        .or(alias);
+    let effective_policy = resolved
+        .as_ref()
+        .map(|(policy, _)| *policy)
+        .or(balance_scope_policy);
+    asset_definition_target_from_parts(
+        asset_definition_id,
+        effective_alias,
+        effective_policy,
+        dataspace_catalog,
+    )
 }
 
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
@@ -1509,32 +1694,32 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .payload()
             .try_into_any_norito::<CanMintAssetWithDefinition>()
             .ok()
-            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+            .is_some(),
         "CanBurnAssetWithDefinition" => permission
             .payload()
             .try_into_any_norito::<CanBurnAssetWithDefinition>()
             .ok()
-            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+            .is_some(),
         "CanTransferAssetWithDefinition" => permission
             .payload()
             .try_into_any_norito::<CanTransferAssetWithDefinition>()
             .ok()
-            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+            .is_some(),
         "CanModifyAssetMetadataWithDefinition" => permission
             .payload()
             .try_into_any_norito::<CanModifyAssetMetadataWithDefinition>()
             .ok()
-            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+            .is_some(),
         "CanUnregisterAssetDefinition" => permission
             .payload()
             .try_into_any_norito::<CanUnregisterAssetDefinition>()
             .ok()
-            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+            .is_some(),
         "CanModifyAssetDefinitionMetadata" => permission
             .payload()
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
             .ok()
-            .is_some_and(|token| token.asset_definition.is_opaque_canonical()),
+            .is_some(),
         _ => false,
     }
 }
@@ -1553,6 +1738,8 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     asset_definition_dataspace_target(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         state_view,
                     )
@@ -1564,6 +1751,8 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     asset_definition_dataspace_target(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         state_view,
                     )
@@ -1575,6 +1764,8 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     asset_definition_dataspace_target(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         state_view,
                     )
@@ -1586,6 +1777,8 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     asset_definition_dataspace_target(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         state_view,
                     )
@@ -1597,6 +1790,8 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     asset_definition_dataspace_target(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         state_view,
                     )
@@ -1608,6 +1803,8 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     asset_definition_dataspace_target(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         state_view,
                     )
@@ -1637,6 +1834,8 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         world,
                     )
@@ -1648,6 +1847,8 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         world,
                     )
@@ -1659,6 +1860,8 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         world,
                     )
@@ -1670,6 +1873,8 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         world,
                     )
@@ -1681,6 +1886,8 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         world,
                     )
@@ -1692,6 +1899,8 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .and_then(|token| {
                     asset_definition_dataspace_target_with_world(
                         &token.asset_definition,
+                        None,
+                        None,
                         dataspace_catalog,
                         world,
                     )
@@ -2618,6 +2827,7 @@ mod tests {
     use iroha_data_model::{
         IntoKeyValue,
         account::AccountAliasDomain,
+        asset::{AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy},
         isi::{
             prelude::{Mint, Register, Transfer},
             settlement::{
@@ -2636,6 +2846,7 @@ mod tests {
         account::{AccountAliasPermissionScope, CanManageAccountAlias},
         nexus::CanPublishSpaceDirectoryManifest,
     };
+    use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
@@ -3599,6 +3810,40 @@ mod tests {
     }
 
     #[test]
+    fn musubi_package_alias_routes_to_package_namespace_dataspace_without_explicit_rule() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "bpng")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let target = iroha_data_model::musubi::MusubiPackageId::from_parts("mibank.bpng", "fx")
+            .expect("package id");
+        let alias =
+            iroha_data_model::musubi::MusubiShortAlias::new("fx".parse().expect("alias"), target);
+        let instruction = iroha_data_model::isi::musubi::SetMusubiShortAlias::new(alias);
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(instruction)],
+        );
+
+        assert_eq!(
+            router.try_route(&tx).expect("musubi route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
     fn untargeted_authority_transaction_routes_to_single_scope_dataspace_with_state() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -4061,6 +4306,133 @@ mod tests {
                 .try_route_with_view(&tx, &state.view())
                 .expect("opaque asset transfer route must resolve with alias"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_definition_registration_routes_by_declared_alias_dataspace() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog,
+            lane_catalog,
+        );
+        let transparent_asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let definition = NewAssetDefinition {
+            id: opaque_asset_definition,
+            name: "pkr".to_owned(),
+            description: None,
+            alias: Some(alias),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(Register::asset_definition(definition))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("declared alias route should not need state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
+    fn asset_transfer_uses_stored_alias_before_transparent_id_domain() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let (receiver_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let transfer = Transfer::asset_numeric(
+            AssetId::of(asset_definition.clone(), sender_id.clone()),
+            1_u32,
+            receiver_id,
+        );
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&sender_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("stored alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
         );
     }
 

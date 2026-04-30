@@ -278,6 +278,7 @@ use iroha_data_model::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
     },
+    musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
     nexus::{DataSpaceId, LaneId},
     nft::NftId,
@@ -13953,6 +13954,23 @@ fn torii_contract_target_read_route(
 }
 
 #[cfg(feature = "app_api")]
+fn torii_musubi_namespace_read_route(
+    app: &AppState,
+    namespace: &MusubiNamespace,
+) -> Option<RoutingDecision> {
+    dataspace_id_for_alias_segment(app, namespace.dataspace_segment())
+        .and_then(|dataspace_id| resolve_torii_route_for_dataspace_id(app, dataspace_id).ok())
+}
+
+#[cfg(feature = "app_api")]
+fn torii_musubi_package_read_route(
+    app: &AppState,
+    package: &MusubiPackageId,
+) -> Option<RoutingDecision> {
+    torii_musubi_namespace_read_route(app, &package.namespace)
+}
+
+#[cfg(feature = "app_api")]
 fn parse_asset_definition_item_literal(literal: &str) -> Option<AssetDefinitionId> {
     literal
         .parse::<AssetDefinitionId>()
@@ -18603,6 +18621,69 @@ async fn execute_torii_read_request_locally(
             finish_torii_read_result(
                 routing::handle_post_contract_view_batch(app.state.clone(), NoritoJson(request))
                     .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::MusubiPackagesSearch => {
+            let params = match decode_torii_proxy_query::<musubi::MusubiPackageSearchParams>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                musubi::handler_search_packages(State(app.clone()), crate::NoritoQuery(params))
+                    .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::MusubiReleaseGet => {
+            let params = match decode_torii_proxy_query::<musubi::MusubiReleaseQueryParams>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                musubi::handler_get_release(State(app.clone()), crate::NoritoQuery(params)).await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::MusubiPackageReleases => {
+            let params = match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                musubi::handler_list_releases(State(app.clone()), crate::NoritoQuery(params)).await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::MusubiPackageVersions => {
+            let params = match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                musubi::handler_list_versions(State(app.clone()), crate::NoritoQuery(params)).await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::MusubiAliasResolve => {
+            let Ok(alias) = torii_proxy_path_arg(&request, 0, "alias") else {
+                return torii_proxy_path_arg(&request, 0, "alias").unwrap_err();
+            };
+            finish_torii_read_result(
+                musubi::handler_resolve_alias(State(app.clone()), AxPath(alias)).await,
                 routing_decision,
                 routed_by,
             )
@@ -25018,6 +25099,186 @@ async fn handler_post_contract_view_batch(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_musubi_search_packages_routed(
+    State(app): State<SharedAppState>,
+    request: axum::extract::Request,
+) -> Result<AxResponse, Error> {
+    let query_string = request.uri().query().map(ToOwned::to_owned);
+    let params = match decode_torii_proxy_query::<musubi::MusubiPackageSearchParams>(
+        query_string.as_deref(),
+    ) {
+        Ok(params) => params,
+        Err(response) => return Ok(response.into_response()),
+    };
+
+    if let Some(namespace) = params
+        .namespace
+        .as_deref()
+        .and_then(|namespace| namespace.parse::<MusubiNamespace>().ok())
+        && let Some(route) = torii_musubi_namespace_read_route(app.as_ref(), &namespace)
+    {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::MusubiPackagesSearch,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await
+        .into_response());
+    }
+
+    if params.namespace.is_none() {
+        return Ok(execute_torii_read_fanout_via_nexus(
+            &app,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            ToriiReadFanoutMergeV1::List,
+            ToriiReadEndpointV1::MusubiPackagesSearch,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+            ToriiProxyResponseFormatV1::Json,
+        )
+        .await
+        .into_response());
+    }
+
+    Ok(
+        musubi::handler_search_packages(State(app), crate::NoritoQuery(params))
+            .await?
+            .into_response(),
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_musubi_get_release_routed(
+    State(app): State<SharedAppState>,
+    request: axum::extract::Request,
+) -> Result<AxResponse, Error> {
+    let query_string = request.uri().query().map(ToOwned::to_owned);
+    let params =
+        match decode_torii_proxy_query::<musubi::MusubiReleaseQueryParams>(query_string.as_deref())
+        {
+            Ok(params) => params,
+            Err(response) => return Ok(response.into_response()),
+        };
+    if let Some(package_ref) = params
+        .package
+        .as_deref()
+        .and_then(|package| package.parse::<MusubiPackageRef>().ok())
+        && let Some(route) = torii_musubi_package_read_route(app.as_ref(), &package_ref.package)
+    {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::MusubiReleaseGet,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await
+        .into_response());
+    }
+
+    Ok(
+        musubi::handler_get_release(State(app), crate::NoritoQuery(params))
+            .await?
+            .into_response(),
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_musubi_list_releases_routed(
+    State(app): State<SharedAppState>,
+    request: axum::extract::Request,
+) -> Result<AxResponse, Error> {
+    let query_string = request.uri().query().map(ToOwned::to_owned);
+    let params =
+        match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(query_string.as_deref())
+        {
+            Ok(params) => params,
+            Err(response) => return Ok(response.into_response()),
+        };
+    if let Some(package) = params
+        .package
+        .as_deref()
+        .and_then(|package| package.parse::<MusubiPackageId>().ok())
+        && let Some(route) = torii_musubi_package_read_route(app.as_ref(), &package)
+    {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::MusubiPackageReleases,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await
+        .into_response());
+    }
+
+    Ok(
+        musubi::handler_list_releases(State(app), crate::NoritoQuery(params))
+            .await?
+            .into_response(),
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_musubi_list_versions_routed(
+    State(app): State<SharedAppState>,
+    request: axum::extract::Request,
+) -> Result<AxResponse, Error> {
+    let query_string = request.uri().query().map(ToOwned::to_owned);
+    let params =
+        match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(query_string.as_deref())
+        {
+            Ok(params) => params,
+            Err(response) => return Ok(response.into_response()),
+        };
+    if let Some(package) = params
+        .package
+        .as_deref()
+        .and_then(|package| package.parse::<MusubiPackageId>().ok())
+        && let Some(route) = torii_musubi_package_read_route(app.as_ref(), &package)
+    {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::MusubiPackageVersions,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await
+        .into_response());
+    }
+
+    Ok(
+        musubi::handler_list_versions(State(app), crate::NoritoQuery(params))
+            .await?
+            .into_response(),
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_musubi_resolve_alias_routed(
+    State(app): State<SharedAppState>,
+    AxPath(alias): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    Ok(execute_torii_fanout_singleton_read(
+        &app,
+        ToriiReadEndpointV1::MusubiAliasResolve,
+        vec![alias],
+        None,
+        Vec::new(),
+    )
+    .await
+    .into_response())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_call_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -31221,13 +31482,22 @@ impl Torii {
     fn add_musubi_routes(&self, builder: &mut RouterBuilder) {
         builder.apply(|router| {
             router
-                .route("/v1/musubi/packages", get(musubi::handler_search_packages))
-                .route("/v1/musubi/release", get(musubi::handler_get_release))
-                .route("/v1/musubi/releases", get(musubi::handler_list_releases))
-                .route("/v1/musubi/versions", get(musubi::handler_list_versions))
+                .route(
+                    "/v1/musubi/packages",
+                    get(handler_musubi_search_packages_routed),
+                )
+                .route("/v1/musubi/release", get(handler_musubi_get_release_routed))
+                .route(
+                    "/v1/musubi/releases",
+                    get(handler_musubi_list_releases_routed),
+                )
+                .route(
+                    "/v1/musubi/versions",
+                    get(handler_musubi_list_versions_routed),
+                )
                 .route(
                     "/v1/musubi/aliases/{alias}",
-                    get(musubi::handler_resolve_alias),
+                    get(handler_musubi_resolve_alias_routed),
                 )
                 .route(
                     "/v1/musubi/instructions/publish-release",
