@@ -309,6 +309,31 @@ fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<Blo
     block_hash
 }
 
+fn insert_test_vote_with_roster(
+    actor: &mut Actor,
+    vote: crate::sumeragi::consensus::Vote,
+    roster: &[PeerId],
+) {
+    actor.cache_vote_roster(vote.block_hash, vote.height, vote.view, roster.to_vec());
+    if let Some(peer) = actor.vote_signer_peer(&vote) {
+        actor.vote_log_identities.insert(
+            (
+                vote.phase,
+                vote.height,
+                vote.view,
+                vote.epoch,
+                vote.signer,
+                peer.public_key().clone(),
+            ),
+            vote.clone(),
+        );
+    }
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+}
+
 fn seed_commit_votes_for_block(
     actor: &mut Actor,
     keypairs: &[KeyPair],
@@ -1621,13 +1646,13 @@ async fn apply_mode_flip_to_permissioned_restores_epoch_record_but_clears_collec
     assert_eq!(
         manager.seed(),
         expected_seed,
-        "permissioned PRF seed should be schedule-derived, not record-local"
+        "permissioned PRF seed should restore the persisted epoch record"
     );
     let snapshot = manager.snapshot_current_epoch(0, height);
     assert_eq!(snapshot.commits, vec![(0, commitment)]);
     assert_eq!(snapshot.reveals, vec![(0, reveal)]);
     assert_eq!(snapshot.roster_len, 4);
-    assert_ne!(manager.seed(), record_seed);
+    assert_eq!(manager.seed(), record_seed);
 
     harness.shutdown.send();
 }
@@ -20865,16 +20890,7 @@ async fn commit_pipeline_defers_higher_view_precommit_when_lower_view_vote_is_ca
         signer: local_signer,
         bls_sig: Vec::new(),
     };
-    actor.vote_log.insert(
-        (
-            lower_vote.phase,
-            lower_vote.height,
-            lower_vote.view,
-            lower_vote.epoch,
-            lower_vote.signer,
-        ),
-        lower_vote,
-    );
+    insert_test_vote_with_roster(actor, lower_vote, topology.as_ref());
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
@@ -20936,16 +20952,7 @@ async fn event_driven_precommit_defers_higher_view_when_lower_view_vote_is_cache
         signer: local_signer,
         bls_sig: Vec::new(),
     };
-    actor.vote_log.insert(
-        (
-            lower_vote.phase,
-            lower_vote.height,
-            lower_vote.view,
-            lower_vote.epoch,
-            lower_vote.signer,
-        ),
-        lower_vote,
-    );
+    insert_test_vote_with_roster(actor, lower_vote, &topology);
 
     let emitted = actor.maybe_emit_local_commit_vote_for_pending_event(
         higher_hash,
@@ -21024,16 +21031,7 @@ async fn commit_pipeline_allows_higher_view_precommit_when_only_remote_lower_vie
         .expect("test needs a remote lower-view signer");
 
     let lower_vote = make_vote(lower_block.hash(), lower_view, remote_signer);
-    actor.vote_log.insert(
-        (
-            lower_vote.phase,
-            lower_vote.height,
-            lower_vote.view,
-            lower_vote.epoch,
-            lower_vote.signer,
-        ),
-        lower_vote,
-    );
+    insert_test_vote_with_roster(actor, lower_vote, topology.as_ref());
 
     assert!(
         actor
@@ -21119,16 +21117,7 @@ async fn event_driven_precommit_allows_higher_view_when_only_remote_lower_view_v
         .expect("test needs a remote lower-view signer");
 
     let lower_vote = make_vote(lower_block.hash(), lower_view, remote_signer);
-    actor.vote_log.insert(
-        (
-            lower_vote.phase,
-            lower_vote.height,
-            lower_vote.view,
-            lower_vote.epoch,
-            lower_vote.signer,
-        ),
-        lower_vote,
-    );
+    insert_test_vote_with_roster(actor, lower_vote, &topology);
 
     assert!(
         actor
@@ -21236,28 +21225,10 @@ async fn event_driven_precommit_joins_higher_view_when_candidate_votes_outweigh_
         .expect("test needs a remote lower-view signer");
 
     let lower_vote = make_vote(lower_block.hash(), lower_view, lower_signer);
-    actor.vote_log.insert(
-        (
-            lower_vote.phase,
-            lower_vote.height,
-            lower_vote.view,
-            lower_vote.epoch,
-            lower_vote.signer,
-        ),
-        lower_vote,
-    );
+    insert_test_vote_with_roster(actor, lower_vote, &topology);
     for signer in &remote_signers {
         let higher_vote = make_vote(higher_hash, higher_view, *signer);
-        actor.vote_log.insert(
-            (
-                higher_vote.phase,
-                higher_vote.height,
-                higher_vote.view,
-                higher_vote.epoch,
-                higher_vote.signer,
-            ),
-            higher_vote,
-        );
+        insert_test_vote_with_roster(actor, higher_vote, &topology);
     }
     assert!(
         !actor.should_defer_tip_precommit_for_same_height_conflict(
@@ -23705,6 +23676,7 @@ async fn finalize_pending_block_commits_retired_same_height_with_conflicting_loc
     let actor = &mut harness.actor;
 
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    actor.process_committed_blocks_before_consensus("finalize_retired_same_height_conflict_test");
     let height = u64::try_from(actor.state.view().height())
         .unwrap_or(u64::MAX)
         .saturating_add(1);
@@ -23713,7 +23685,33 @@ async fn finalize_pending_block_commits_retired_same_height_with_conflicting_loc
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
 
-    let canonical_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, parent);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let canonical_roster =
+        super::roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let canonical_signature_topology =
+        super::topology_for_view(&canonical_topology, height, 0, mode_tag, prf_seed);
+    let canonical_signer = canonical_signature_topology
+        .as_ref()
+        .first()
+        .expect("canonical signature topology not empty");
+    let canonical_keypair = harness
+        .key_pairs
+        .iter()
+        .find(|keypair| keypair.public_key() == canonical_signer.public_key())
+        .expect("canonical signer keypair exists");
+    let canonical_signer_idx = canonical_signature_topology
+        .position(canonical_keypair.public_key())
+        .expect("canonical signer index in topology");
+    let canonical_block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        0,
+        parent,
+        canonical_keypair,
+        u64::try_from(canonical_signer_idx).expect("canonical signer index fits u64"),
+    );
     let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 1, parent);
     insert_validated_pending(actor, conflicting_block.clone());
     assert!(actor.emit_precommit_vote(
@@ -79858,8 +79856,10 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let _guard = super::status::view_change_cause_test_guard();
+    let _worker_guard = super::status::worker_queue_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let tx = sample_transaction();
     actor
@@ -79940,6 +79940,7 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -128906,7 +128907,9 @@ async fn empty_frontier_missing_qc_reacquires_committed_anchor_before_rotation()
     use std::borrow::Cow;
 
     let _cause_guard = super::status::view_change_cause_test_guard();
+    let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -128987,6 +128990,7 @@ async fn empty_frontier_missing_qc_reacquires_committed_anchor_before_rotation()
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -134810,6 +134814,7 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
     let worker_joins = actor.attach_vote_verify_worker();
 
     let parent_hash = seed_genesis_block_for_state(&actor.state);
+    actor.process_committed_blocks_before_consensus("stale_view_async_commit_votes_test");
     let committed_height = actor.committed_height_snapshot();
     let height = committed_height.saturating_add(1);
     let view = 0_u64;

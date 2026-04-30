@@ -20,6 +20,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_ASSET -301
 #define CONNECT_NORITO_ERR_OFFLINE_NONCE -303
 #define CONNECT_NORITO_ERR_OFFLINE_SERIALIZE -304
+#define CONNECT_NORITO_ERR_OFFLINE_NOTE_V2_PROVE -310
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -61,6 +62,25 @@ int32_t connect_norito_decode_ciphertext_frame(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
+
+// ---------------- Offline Note V2 prover helpers ----------------
+// Generate a recursive Halo2/IPA proof for an Offline V2 redemption.
+// Input: Norito-archive bytes of `OfflineNoteRedeemV2` (recursive_proof field is ignored).
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProofV2` (slot back into the redemption).
+int32_t connect_norito_offline_prove_note_v2_redeem(
+    const uint8_t* redeem_norito_ptr,
+    unsigned long redeem_norito_len,
+    uint8_t** out_recursive_proof_ptr,
+    unsigned long* out_recursive_proof_len);
+
+// Generate a recursive Halo2/IPA proof for an Offline V2 audit bundle.
+// Input: Norito-archive bytes of `OfflineNoteAuditBundleV2` (recursive_proof field is ignored).
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProofV2` (slot back into the audit bundle).
+int32_t connect_norito_offline_prove_note_v2_audit(
+    const uint8_t* audit_norito_ptr,
+    unsigned long audit_norito_len,
+    uint8_t** out_recursive_proof_ptr,
+    unsigned long* out_recursive_proof_len);
 
 void connect_norito_free(uint8_t* ptr);
 
