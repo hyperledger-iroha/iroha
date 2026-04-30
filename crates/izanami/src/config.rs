@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 //! Runtime configuration and CLI parsing for the Izanami chaos tool.
 
-use std::{ops::RangeInclusive, sync::OnceLock, time::Duration};
+use std::{ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration};
 
 use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
@@ -81,6 +81,12 @@ pub struct IzanamiArgs {
     /// Number of independent transaction submitter loops sharing the global inflight budget.
     #[arg(long, default_value_t = 1)]
     pub submitters: usize,
+    /// Bounded in-memory queue of pre-signed, pre-encoded transactions for high-TPS stable runs.
+    #[arg(long, default_value_t = 0)]
+    pub prebuild_tx_buffer: usize,
+    /// Number of workers used to fill the prebuilt transaction buffer; 0 chooses a host-aware default.
+    #[arg(long, default_value_t = 0)]
+    pub prebuild_tx_workers: usize,
     /// Workload profile controlling which recipes are scheduled.
     #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
     pub workload_profile: WorkloadProfile,
@@ -109,6 +115,9 @@ pub struct IzanamiArgs {
     /// Enable Nexus/Sora multi-lane defaults from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
+    /// Optional directory where Izanami copies test-network diagnostics before cleanup.
+    #[arg(long)]
+    pub diagnostic_dir: Option<PathBuf>,
 }
 
 /// Workload profiles for recipe selection.
@@ -391,6 +400,8 @@ pub struct ChaosConfig {
     pub tps: f64,
     pub max_inflight: usize,
     pub submitters: usize,
+    pub prebuild_tx_buffer: usize,
+    pub prebuild_tx_workers: usize,
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
@@ -398,6 +409,7 @@ pub struct ChaosConfig {
     pub log_filter: String,
     pub faults: FaultToggles,
     pub nexus: Option<NexusProfile>,
+    pub diagnostic_dir: Option<PathBuf>,
 }
 
 impl TryFrom<IzanamiArgs> for ChaosConfig {
@@ -543,6 +555,8 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             tps,
             max_inflight,
             submitters,
+            prebuild_tx_buffer,
+            prebuild_tx_workers,
             workload_profile,
             allow_contract_deploy_in_stable,
             log_filter,
@@ -551,6 +565,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             faults: _faults,
             packet_loss_percent,
             nexus,
+            diagnostic_dir,
             allow_net,
         } = args;
         let nexus = if nexus {
@@ -576,6 +591,8 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             tps,
             max_inflight,
             submitters,
+            prebuild_tx_buffer,
+            prebuild_tx_workers,
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
@@ -583,6 +600,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             log_filter,
             faults: toggles,
             nexus,
+            diagnostic_dir,
         })
     }
 }
@@ -619,6 +637,8 @@ impl IzanamiArgs {
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
             submitters: cfg.submitters,
+            prebuild_tx_buffer: cfg.prebuild_tx_buffer,
+            prebuild_tx_workers: cfg.prebuild_tx_workers,
             workload_profile: cfg.workload_profile,
             allow_contract_deploy_in_stable: cfg.allow_contract_deploy_in_stable,
             log_filter: cfg.log_filter.clone(),
@@ -628,6 +648,7 @@ impl IzanamiArgs {
             packet_loss_percent: cfg.packet_loss_percent,
             nexus: cfg.nexus.is_some(),
             allow_net: cfg.allow_net,
+            diagnostic_dir: cfg.diagnostic_dir.clone(),
         }
     }
 
@@ -1085,6 +1106,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1102,6 +1125,7 @@ mod tests {
             },
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         assert!(ChaosConfig::try_from(args).is_err());
     }
@@ -1126,6 +1150,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "warn".to_string(),
@@ -1134,6 +1160,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         init_tracing_with_filter(&args.log_filter);
         init_tracing_with_filter(&args.log_filter);
@@ -1159,6 +1186,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1167,6 +1196,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("allow_net=false should prevent ChaosConfig construction");
@@ -1197,6 +1227,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1205,6 +1237,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         assert!(ChaosConfig::try_from(args).is_err());
     }
@@ -1233,6 +1266,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1241,6 +1276,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("pipeline_time below minimum should fail");
@@ -1322,6 +1358,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1330,6 +1368,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("progress_interval > progress_timeout should fail");
@@ -1360,6 +1399,8 @@ mod tests {
             tps: f64::NAN,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1368,6 +1409,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("non-finite tps should fail");
@@ -1398,6 +1440,8 @@ mod tests {
             tps: f64::MAX,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1406,6 +1450,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("tps too high for timer resolution should fail");
@@ -1436,6 +1481,8 @@ mod tests {
             tps: f64::MIN_POSITIVE,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1444,6 +1491,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("tps too low for timer range should fail");
@@ -1474,6 +1522,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1482,6 +1532,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("latency threshold without target_blocks should fail");
@@ -1512,6 +1563,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1520,6 +1573,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("zero latency threshold should fail");
@@ -1595,6 +1649,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 0,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1603,6 +1659,7 @@ mod tests {
             faults: FaultArgs::default(),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("zero submitters should fail");
@@ -1633,6 +1690,8 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1650,6 +1709,7 @@ mod tests {
             },
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("faulty peers without enabled faults should fail");

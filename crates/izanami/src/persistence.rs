@@ -54,6 +54,10 @@ struct StoredArgs {
     fault_window_end_ms: Option<u64>,
     #[norito(default = "default_packet_loss_percent")]
     packet_loss_percent: u8,
+    #[norito(default)]
+    prebuild_tx_buffer: u32,
+    #[norito(default)]
+    prebuild_tx_workers: u32,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -129,6 +133,18 @@ impl StoredArgs {
         })?;
         let submitters = u32::try_from(args.submitters)
             .map_err(|_| eyre!("submitters {} exceeds persistence limits", args.submitters))?;
+        let prebuild_tx_buffer = u32::try_from(args.prebuild_tx_buffer).map_err(|_| {
+            eyre!(
+                "prebuild_tx_buffer {} exceeds persistence limits",
+                args.prebuild_tx_buffer
+            )
+        })?;
+        let prebuild_tx_workers = u32::try_from(args.prebuild_tx_workers).map_err(|_| {
+            eyre!(
+                "prebuild_tx_workers {} exceeds persistence limits",
+                args.prebuild_tx_workers
+            )
+        })?;
         let fault_min_ms = duration_to_ms(args.fault_interval_min, "fault interval min")?;
         let fault_max_ms = duration_to_ms(args.fault_interval_max, "fault interval max")?;
         Ok(Self {
@@ -139,6 +155,8 @@ impl StoredArgs {
             tps: args.tps,
             max_inflight,
             submitters,
+            prebuild_tx_buffer,
+            prebuild_tx_workers,
             workload_profile: workload_profile_to_u8(args.workload_profile),
             allow_contract_deploy_in_stable: args.allow_contract_deploy_in_stable,
             log_filter: args.log_filter.clone(),
@@ -180,6 +198,8 @@ impl StoredArgs {
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
             submitters: self.submitters as usize,
+            prebuild_tx_buffer: self.prebuild_tx_buffer as usize,
+            prebuild_tx_workers: self.prebuild_tx_workers as usize,
             workload_profile: workload_profile_from_u8(self.workload_profile),
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
@@ -188,6 +208,7 @@ impl StoredArgs {
             faults: FaultArgs::from(fault_toggles),
             packet_loss_percent: self.packet_loss_percent.min(100),
             nexus: self.nexus,
+            diagnostic_dir: None,
         })
     }
 }
@@ -269,12 +290,16 @@ mod portable_tests {
         args.fault_window_start = Some(Duration::from_secs(133));
         args.fault_window_end = Some(Duration::from_secs(266));
         args.shutdown_drain_timeout = Duration::from_secs(60);
+        args.prebuild_tx_buffer = 1024;
+        args.prebuild_tx_workers = 4;
 
         let loaded = StoredArgs::from_args(&args)?.into_args()?;
 
         assert_eq!(loaded.fault_window_start, args.fault_window_start);
         assert_eq!(loaded.fault_window_end, args.fault_window_end);
         assert_eq!(loaded.shutdown_drain_timeout, args.shutdown_drain_timeout);
+        assert_eq!(loaded.prebuild_tx_buffer, args.prebuild_tx_buffer);
+        assert_eq!(loaded.prebuild_tx_workers, args.prebuild_tx_workers);
         Ok(())
     }
 }
@@ -431,6 +456,8 @@ mod tests {
             tps: 12.5,
             max_inflight: 64,
             submitters: 3,
+            prebuild_tx_buffer: 2048,
+            prebuild_tx_workers: 6,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: true,
             log_filter: "debug".to_string(),
@@ -448,6 +475,7 @@ mod tests {
             },
             packet_loss_percent: 50,
             nexus: true,
+            diagnostic_dir: None,
         };
 
         store_args(&args)?;
@@ -469,6 +497,8 @@ mod tests {
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);
         assert_eq!(loaded.submitters, args.submitters);
+        assert_eq!(loaded.prebuild_tx_buffer, args.prebuild_tx_buffer);
+        assert_eq!(loaded.prebuild_tx_workers, args.prebuild_tx_workers);
         assert_eq!(loaded.workload_profile, args.workload_profile);
         assert_eq!(
             loaded.allow_contract_deploy_in_stable,
@@ -527,6 +557,8 @@ mod tests {
         assert_eq!(loaded.tps, legacy.tps);
         assert_eq!(loaded.max_inflight, legacy.max_inflight as usize);
         assert_eq!(loaded.submitters, 1);
+        assert_eq!(loaded.prebuild_tx_buffer, 0);
+        assert_eq!(loaded.prebuild_tx_workers, 0);
         assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
         assert!(!loaded.allow_contract_deploy_in_stable);
         assert_eq!(loaded.log_filter, legacy.log_filter);

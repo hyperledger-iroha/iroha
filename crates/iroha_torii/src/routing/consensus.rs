@@ -1923,6 +1923,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
+            "censorship_evidence_total",
+            snap.view_change_causes.censorship_evidence_total,
+        ),
+        json_entry(
             "missing_payload_total",
             snap.view_change_causes.missing_payload_total,
         ),
@@ -1964,6 +1968,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_da_gate_timestamp_ms",
             snap.view_change_causes.last_da_gate_timestamp_ms,
+        ),
+        json_entry(
+            "last_censorship_evidence_timestamp_ms",
+            snap.view_change_causes
+                .last_censorship_evidence_timestamp_ms,
         ),
         json_entry(
             "last_missing_payload_timestamp_ms",
@@ -2423,7 +2432,15 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "stake_quorum_timeout_total",
             snap.view_change_causes.stake_quorum_timeout_total,
         ),
+        json_entry(
+            "roster_unavailable_total",
+            snap.view_change_causes.roster_unavailable_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
+        json_entry(
+            "censorship_evidence_total",
+            snap.view_change_causes.censorship_evidence_total,
+        ),
         json_entry(
             "missing_payload_total",
             snap.view_change_causes.missing_payload_total,
@@ -2437,6 +2454,45 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_cause_timestamp_ms",
             snap.view_change_causes.last_cause_timestamp_ms,
+        ),
+        json_entry(
+            "last_commit_failure_timestamp_ms",
+            snap.view_change_causes.last_commit_failure_timestamp_ms,
+        ),
+        json_entry(
+            "last_quorum_timeout_timestamp_ms",
+            snap.view_change_causes.last_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_stake_quorum_timeout_timestamp_ms",
+            snap.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_roster_unavailable_timestamp_ms",
+            snap.view_change_causes
+                .last_roster_unavailable_timestamp_ms,
+        ),
+        json_entry(
+            "last_da_gate_timestamp_ms",
+            snap.view_change_causes.last_da_gate_timestamp_ms,
+        ),
+        json_entry(
+            "last_censorship_evidence_timestamp_ms",
+            snap.view_change_causes
+                .last_censorship_evidence_timestamp_ms,
+        ),
+        json_entry(
+            "last_missing_payload_timestamp_ms",
+            snap.view_change_causes.last_missing_payload_timestamp_ms,
+        ),
+        json_entry(
+            "last_missing_qc_timestamp_ms",
+            snap.view_change_causes.last_missing_qc_timestamp_ms,
+        ),
+        json_entry(
+            "last_validation_reject_timestamp_ms",
+            snap.view_change_causes.last_validation_reject_timestamp_ms,
         ),
     ]);
     let block_sync_roster = json_object(vec![
@@ -3154,6 +3210,12 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.consensus_missing_block_height_progress_deferred_total,
         ),
         json_entry(
+            "qc_deferred_missing_payload_total",
+            snap.qc_deferred_missing_payload_total,
+        ),
+        json_entry("qc_deferred_resolved_total", snap.qc_deferred_resolved_total),
+        json_entry("qc_deferred_expired_total", snap.qc_deferred_expired_total),
+        json_entry(
             "consensus_missing_qc_reacquire_attempt_total",
             snap.consensus_missing_qc_reacquire_attempt_total,
         ),
@@ -3207,6 +3269,18 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     .map(|(state, ms)| json_entry(*state, *ms))
                     .collect::<Vec<_>>(),
             ),
+        ),
+        json_entry(
+            "blocksync_range_pull_escalation_total",
+            snap.blocksync_range_pull_escalation_total,
+        ),
+        json_entry(
+            "blocksync_range_pull_success_total",
+            snap.blocksync_range_pull_success_total,
+        ),
+        json_entry(
+            "blocksync_range_pull_failure_total",
+            snap.blocksync_range_pull_failure_total,
         ),
         json_entry(
             "blocksync_range_pull_candidate_exhausted_total",
@@ -4470,7 +4544,9 @@ pub async fn handle_v1_sumeragi_status(
                 commit_failure_total: snap.view_change_causes.commit_failure_total,
                 quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
                 stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
+                roster_unavailable_total: snap.view_change_causes.roster_unavailable_total,
                 da_gate_total: snap.view_change_causes.da_gate_total,
+                censorship_evidence_total: snap.view_change_causes.censorship_evidence_total,
                 missing_payload_total: snap.view_change_causes.missing_payload_total,
                 missing_qc_total: snap.view_change_causes.missing_qc_total,
                 validation_reject_total: snap.view_change_causes.validation_reject_total,
@@ -4485,7 +4561,13 @@ pub async fn handle_v1_sumeragi_status(
                 last_stake_quorum_timeout_timestamp_ms: snap
                     .view_change_causes
                     .last_stake_quorum_timeout_timestamp_ms,
+                last_roster_unavailable_timestamp_ms: snap
+                    .view_change_causes
+                    .last_roster_unavailable_timestamp_ms,
                 last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
+                last_censorship_evidence_timestamp_ms: snap
+                    .view_change_causes
+                    .last_censorship_evidence_timestamp_ms,
                 last_missing_payload_timestamp_ms: snap
                     .view_change_causes
                     .last_missing_payload_timestamp_ms,
@@ -4601,6 +4683,22 @@ pub async fn handle_v1_sumeragi_status(
                 last_targets: snap.missing_block_fetch_last_targets,
                 last_dwell_ms: snap.missing_block_fetch_last_dwell_ms,
             },
+            qc_deferred_missing_payload_total: snap.qc_deferred_missing_payload_total,
+            qc_deferred_resolved_total: snap.qc_deferred_resolved_total,
+            qc_deferred_expired_total: snap.qc_deferred_expired_total,
+            consensus_missing_qc_reacquire_attempt_total: snap
+                .consensus_missing_qc_reacquire_attempt_total,
+            consensus_missing_qc_reacquire_success_total: snap
+                .consensus_missing_qc_reacquire_success_total,
+            consensus_missing_qc_reacquire_exhausted_total: snap
+                .consensus_missing_qc_reacquire_exhausted_total,
+            consensus_forced_proposal_attempt_total: snap.consensus_forced_proposal_attempt_total,
+            consensus_forced_proposal_success_total: snap.consensus_forced_proposal_success_total,
+            blocksync_range_pull_escalation_total: snap.blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total: snap.blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total: snap.blocksync_range_pull_failure_total,
+            blocksync_range_pull_candidate_exhausted_total: snap
+                .blocksync_range_pull_candidate_exhausted_total,
             committed_edge_conflict_obsolete_total: snap.committed_edge_conflict_obsolete_total,
             roster_sidecar_mismatch_obsolete_total: snap.roster_sidecar_mismatch_obsolete_total,
             da_gate: SumeragiDaGateStatus {
