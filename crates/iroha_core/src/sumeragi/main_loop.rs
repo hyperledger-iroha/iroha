@@ -33511,15 +33511,42 @@ impl Actor {
             && !frontier_pending_exists
             && (!proposal_gated_by_missing_dependencies
                 || missing_qc_stall_allows_frontier_reproposal);
+        let initial_empty_frontier_reacquire_allowed = current_view == 0
+            && !pre_reset_passive_frontier_slot_without_external_dependency
+            && !self.frontier_slot_passive_catchup_active_at_height(height);
+        if height == contiguous_frontier_height
+            && !proposal_seen
+            && !frontier_pending_exists
+            && !proposal_gap_backlog_grace_expired
+            && !frontier_slot_vote_backed_evidence
+            && !self.frontier_recovery_exists_at_height(height)
+            && !self.frontier_recovery_already_armed_for_missing_qc(height, current_view)
+            && initial_empty_frontier_reacquire_allowed
+            && !missing_qc_reacquire_dependency_signals
+            && self.should_attempt_missing_qc_reacquire(
+                height,
+                current_view,
+                proposal_seen,
+                false,
+                now,
+            )
+            && self.reacquire_missing_qc_dependencies(height, current_view, now, false)
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                missing_qc_actionable_dependency_signals,
+                "deferred initial empty-frontier missing_qc rotation after committed-anchor reacquire request"
+            );
+            return false;
+        }
         if !proposal_seen
             && contiguous_frontier_missing_proposal_can_self_propose
             && self.maybe_force_missing_qc_leader_proposal(height, current_view, age, now)
         {
             return false;
         }
-        let initial_empty_frontier_reacquire_allowed = current_view == 0
-            && !pre_reset_passive_frontier_slot_without_external_dependency
-            && !self.frontier_slot_passive_catchup_active_at_height(height);
         if height == contiguous_frontier_height
             && !proposal_seen
             && !frontier_pending_exists
