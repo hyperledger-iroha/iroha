@@ -1039,15 +1039,13 @@ fn instruction_transaction_dataspace_target(
             UnregisterBox::Domain(unregister) => {
                 domain_dataspace_target(&unregister.object, dataspace_catalog)
             }
-            UnregisterBox::AssetDefinition(unregister) => {
-                asset_definition_dataspace_target(
-                    &unregister.object,
-                    None,
-                    None,
-                    dataspace_catalog,
-                    state_view,
-                )
-            }
+            UnregisterBox::AssetDefinition(unregister) => asset_definition_dataspace_target(
+                &unregister.object,
+                None,
+                None,
+                dataspace_catalog,
+                state_view,
+            ),
             UnregisterBox::Peer(_)
             | UnregisterBox::Account(_)
             | UnregisterBox::Nft(_)
@@ -1062,15 +1060,13 @@ fn instruction_transaction_dataspace_target(
             SetKeyValueBox::Account(set) => {
                 account_dataspace_target(state_view.map(StateView::world), &set.object)
             }
-            SetKeyValueBox::AssetDefinition(set) => {
-                asset_definition_dataspace_target(
-                    &set.object,
-                    None,
-                    None,
-                    dataspace_catalog,
-                    state_view,
-                )
-            }
+            SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target(
+                &set.object,
+                None,
+                None,
+                dataspace_catalog,
+                state_view,
+            ),
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
     }
@@ -1083,15 +1079,13 @@ fn instruction_transaction_dataspace_target(
             RemoveKeyValueBox::Account(remove) => {
                 account_dataspace_target(state_view.map(StateView::world), &remove.object)
             }
-            RemoveKeyValueBox::AssetDefinition(remove) => {
-                asset_definition_dataspace_target(
-                    &remove.object,
-                    None,
-                    None,
-                    dataspace_catalog,
-                    state_view,
-                )
-            }
+            RemoveKeyValueBox::AssetDefinition(remove) => asset_definition_dataspace_target(
+                &remove.object,
+                None,
+                None,
+                dataspace_catalog,
+                state_view,
+            ),
             RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
         };
     }
@@ -1101,15 +1095,13 @@ fn instruction_transaction_dataspace_target(
             TransferBox::Domain(transfer) => {
                 domain_dataspace_target(&transfer.object, dataspace_catalog)
             }
-            TransferBox::AssetDefinition(transfer) => {
-                asset_definition_dataspace_target(
-                    &transfer.object,
-                    None,
-                    None,
-                    dataspace_catalog,
-                    state_view,
-                )
-            }
+            TransferBox::AssetDefinition(transfer) => asset_definition_dataspace_target(
+                &transfer.object,
+                None,
+                None,
+                dataspace_catalog,
+                state_view,
+            ),
             TransferBox::Asset(transfer) => asset_definition_dataspace_target(
                 &transfer.source.definition,
                 None,
@@ -1249,15 +1241,13 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return match set_key_value {
             SetKeyValueBox::Domain(set) => domain_dataspace_target(&set.object, dataspace_catalog),
             SetKeyValueBox::Account(set) => account_dataspace_target(Some(world), &set.object),
-            SetKeyValueBox::AssetDefinition(set) => {
-                asset_definition_dataspace_target_with_world(
-                    &set.object,
-                    None,
-                    None,
-                    dataspace_catalog,
-                    world,
-                )
-            }
+            SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target_with_world(
+                &set.object,
+                None,
+                None,
+                dataspace_catalog,
+                world,
+            ),
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
     }
@@ -1521,26 +1511,17 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     }
 
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
-        return matches!(
-            unregister,
-            UnregisterBox::AssetDefinition(_)
-        );
+        return matches!(unregister, UnregisterBox::AssetDefinition(_));
     }
 
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return matches!(set_key_value, SetKeyValueBox::Account(_))
-            || matches!(
-                set_key_value,
-                SetKeyValueBox::AssetDefinition(_)
-            );
+            || matches!(set_key_value, SetKeyValueBox::AssetDefinition(_));
     }
 
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return matches!(remove_key_value, RemoveKeyValueBox::Account(_))
-            || matches!(
-                remove_key_value,
-                RemoveKeyValueBox::AssetDefinition(_)
-            );
+            || matches!(remove_key_value, RemoveKeyValueBox::AssetDefinition(_));
     }
 
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
@@ -1558,7 +1539,10 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return matches!(burn, BurnBox::Asset(_));
     }
 
-    if let Some(set_policy) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
+    if any
+        .downcast_ref::<SetAssetDefinitionBalancePolicy>()
+        .is_some()
+    {
         return true;
     }
 
@@ -1634,12 +1618,7 @@ fn asset_definition_dataspace_target(
 ) -> Option<DataSpaceId> {
     let resolved = state_view
         .and_then(|view| view.world.asset_definition(asset_definition_id).ok())
-        .map(|definition| {
-            (
-                definition.balance_scope_policy(),
-                definition.alias,
-            )
-        });
+        .map(|definition| (definition.balance_scope_policy(), definition.alias));
     let effective_alias = resolved
         .as_ref()
         .and_then(|(_, resolved_alias)| resolved_alias.as_ref())
@@ -1666,12 +1645,7 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     let resolved = world
         .asset_definition(asset_definition_id)
         .ok()
-        .map(|definition| {
-            (
-                definition.balance_scope_policy(),
-                definition.alias,
-            )
-        });
+        .map(|definition| (definition.balance_scope_policy(), definition.alias));
     let effective_alias = resolved
         .as_ref()
         .and_then(|(_, resolved_alias)| resolved_alias.as_ref())
@@ -2827,7 +2801,9 @@ mod tests {
     use iroha_data_model::{
         IntoKeyValue,
         account::AccountAliasDomain,
-        asset::{AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy},
+        asset::{
+            AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
+        },
         isi::{
             prelude::{Mint, Register, Transfer},
             settlement::{
