@@ -25,14 +25,13 @@ RUN apk add mold git clang clang21-libclang jq
 COPY Cargo.toml Cargo.lock rust-toolchain.toml .
 COPY crates crates
 COPY data_model data_model
+COPY fixtures fixtures
 COPY integration_tests integration_tests
 COPY mochi mochi
 COPY python python
 COPY tools tools
 COPY vendor vendor
 COPY xtask xtask
-# FIX: needed for `VERGEN_GIT_SHA`; prefer to pass `GIT_SHA` explicitly
-COPY .git .git
 # PERF: Cache mounts as in https://github.com/tonistiigi/xx#rust
 #       Using _before_ `ARG TARGETPLATFORM` to re-use between platform jobs
 #       (not sure it works exactly this way, but it is said to be done this way)
@@ -53,6 +52,7 @@ ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
+ARG BINARIES=""
 
 # HACK: install target platform-specific headers necessary for cross-compilation
 RUN xx-apk add build-base
@@ -68,7 +68,7 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/cache \
     --mount=type=cache,target=/root/.cargo/registry/index \
     RUSTFLAGS="${RUSTFLAGS}" mold --run \
-    xx-cargo ${CARGOFLAGS} build \
+    xx-cargo build ${CARGOFLAGS} \
     --target $(xx-cargo --print-target-triple) \
     --profile "${PROFILE}" \
     --features "${FEATURES}" \
@@ -78,8 +78,11 @@ RUN <<EOF
   set -ex
   mkdir ./bins
   target_triple="$(xx-cargo --print-target-triple)"
-  bins="$(cargo metadata --no-deps --format-version 1 \
-    | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
+  bins="${BINARIES}"
+  if [ -z "${bins}" ]; then
+    bins="$(cargo metadata --no-deps --format-version 1 \
+      | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
+  fi
   if [ -z "${bins}" ]; then
     bins="iroha irohad kagami"
   fi

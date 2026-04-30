@@ -387,7 +387,7 @@ impl Actor {
                 continue;
             }
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
-            let pending_age = pending.age();
+            let pending_age = now.saturating_duration_since(pending.inserted_at);
             let fast_timeout = match consensus_mode {
                 ConsensusMode::Permissioned => fast_timeout_permissioned,
                 ConsensusMode::Npos => fast_timeout_npos,

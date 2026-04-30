@@ -4404,6 +4404,159 @@ mod tests {
     }
 
     #[test]
+    fn asset_home_extra_coverage_registration_universal_alias_routes_to_universal() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (LaneId::new(2), dataspace_id),
+            ]),
+        );
+        let transparent_asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let definition = NewAssetDefinition {
+            id: opaque_asset_definition,
+            name: "pkr".to_owned(),
+            description: None,
+            alias: Some("pkr#universal".parse().expect("asset alias")),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(Register::asset_definition(definition))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("universal alias route should not need state"),
+            Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
+        );
+    }
+
+    #[test]
+    fn asset_home_extra_coverage_opaque_restricted_without_alias_uses_default_route() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(2), dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let transparent_asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
+            &transparent_asset_definition.canonical_address(),
+        )
+        .expect("opaque canonical asset definition id");
+        let definition = NewAssetDefinition {
+            id: opaque_asset_definition,
+            name: "pkr".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(Register::asset_definition(definition))],
+        );
+        let state = state_with_asset_definitions(Vec::new(), dataspace_catalog, lane_catalog);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("opaque restricted definition should defer before fallback"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("opaque restricted definition without home should fall back to default"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn asset_home_more_coverage_alias_home_without_lane_returns_no_lane_error() {
+        let (sender_id, sender_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::new(4),
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "paynet")]),
+            catalog_with_lane_dataspaces(&[(LaneId::new(4), DataSpaceId::UNIVERSAL)]),
+        );
+        let definition = NewAssetDefinition {
+            id: AssetDefinitionId::new(
+                DomainId::try_new("cash", "universal").expect("asset definition domain"),
+                "pkr".parse().expect("asset definition name"),
+            ),
+            name: "pkr".to_owned(),
+            description: None,
+            alias: Some("pkr#paynet".parse().expect("asset alias")),
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+        let tx = sample_transaction(
+            &sender_id,
+            sender_keypair.private_key(),
+            vec![InstructionBox::from(Register::asset_definition(definition))],
+        );
+
+        let err = router
+            .try_route_without_state(&tx)
+            .expect_err("alias home without lane should fail");
+
+        assert_eq!(
+            err,
+            RoutingResolveError::NoLaneForDataspace { dataspace_id }
+        );
+    }
+
+    #[test]
     fn asset_definition_registration_rejects_mixed_declared_alias_dataspaces() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let paynet = DataSpaceId::new(10);
@@ -4769,6 +4922,585 @@ mod tests {
             router
                 .try_route_with_view(&tx, &state.view())
                 .expect("stored alias balance-policy route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_coverage_mint_uses_stored_alias_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Mint::asset_numeric(
+                1_u32,
+                AssetId::of(asset_definition.clone(), alice_id.clone()),
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("mint alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias mint route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_coverage_burn_uses_stored_alias_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Burn::asset_numeric(
+                1_u32,
+                AssetId::of(asset_definition.clone(), alice_id.clone()),
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("burn alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias burn route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_coverage_modify_asset_metadata_permission_uses_stored_alias_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                iroha_executor_data_model::permission::asset::CanModifyAssetMetadataWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("asset metadata permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias metadata permission route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_coverage_unregister_asset_definition_permission_uses_stored_alias_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("unregister permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias unregister permission route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_extra_coverage_mint_permission_uses_stored_alias_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("mint permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias mint permission route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_extra_coverage_burn_permission_uses_stored_alias_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("burn permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias burn permission route must resolve with state"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_more_coverage_modify_definition_metadata_permission_uses_stored_alias_dataspace()
+    {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("definition metadata permission alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias definition metadata permission route must resolve"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn asset_home_more_coverage_revoke_modify_definition_metadata_permission_uses_stored_alias() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "universal").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Revoke::account_permission(
+                iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                    asset_definition: asset_definition.clone(),
+                },
+                bob_id,
+            ))],
+        );
+        let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        state
+            .world
+            .asset_definition_aliases
+            .insert(alias.clone(), asset_definition.clone());
+        state.world.asset_definition_alias_bindings.insert(
+            asset_definition,
+            crate::state::AssetDefinitionAliasBindingRecord {
+                alias,
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("definition metadata revoke alias lookup should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("stored alias definition metadata revoke route must resolve"),
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
