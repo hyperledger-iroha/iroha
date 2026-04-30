@@ -44,7 +44,7 @@ use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
 
-const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 753;
+const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
 const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const MAX_DIRECT_REGISTER_BYTES_TX_BYTES: usize = 40_000;
