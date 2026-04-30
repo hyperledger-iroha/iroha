@@ -3298,7 +3298,7 @@ mod tests {
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
-        isi::error::InstructionExecutionError,
+        isi::error::{InstructionExecutionError, InvalidParameterError},
         metadata::Metadata,
         name::Name,
         nexus::{

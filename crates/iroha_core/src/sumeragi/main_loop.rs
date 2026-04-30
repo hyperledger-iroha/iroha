@@ -5631,7 +5631,11 @@ impl Actor {
     }
 
     fn frontier_recovery_owned_by_quorum_timeout(&self, frontier_height: u64) -> bool {
-        self.frontier_non_missing_qc_recovery_cause(frontier_height) == Some("quorum_timeout")
+        let frontier_view = self
+            .phase_tracker
+            .current_view(frontier_height)
+            .unwrap_or(0);
+        self.frontier_recovery_owned_by_quorum_timeout_for_view(frontier_height, frontier_view)
     }
 
     fn frontier_recovery_already_armed_for_missing_qc(
@@ -6816,7 +6820,7 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> Option<&'static str> {
-        if self.frontier_vote_backed_recovery_active(frontier_height, now)
+        if self.frontier_vote_backed_recovery_active(frontier_height, frontier_view, now)
             || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
         {
             return Some("quorum_timeout");
@@ -6830,10 +6834,16 @@ impl Actor {
         .then_some("missing_payload")
     }
 
-    fn frontier_vote_backed_recovery_active(&self, frontier_height: u64, now: Instant) -> bool {
+    fn frontier_vote_backed_recovery_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
         if self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
+                    && slot.view == frontier_view
                     && !matches!(
                         slot.mode,
                         FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
@@ -6883,7 +6893,34 @@ impl Actor {
                 });
         pending_vote_backed
             || inflight_vote_backed
-            || self.frontier_recovery_owned_by_quorum_timeout(frontier_height)
+            || self
+                .frontier_recovery_owned_by_quorum_timeout_for_view(frontier_height, frontier_view)
+    }
+
+    fn frontier_recovery_owned_by_quorum_timeout_for_view(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+    ) -> bool {
+        if self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && slot.view == frontier_view
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
+                    && slot.repair_state.last_reason == Some("quorum_timeout")
+            })
+        {
+            return true;
+        }
+        self.frontier_recovery.as_ref().is_some_and(|state| {
+            state.frontier_height == frontier_height
+                && state.last_view == frontier_view
+                && state.last_rotation_view != Some(frontier_view)
+                && state.last_cause == "quorum_timeout"
+        })
     }
 
     fn frontier_slot_has_active_owner_state_for_view(&self, height: u64, view: u64) -> bool {
@@ -33780,7 +33817,7 @@ impl Actor {
             .then(|| self.frontier_dependency_recovery_cause(height, current_view, now))
             .flatten();
         let frontier_vote_backed_recovery_active = height == contiguous_frontier_height
-            && self.frontier_vote_backed_recovery_active(height, now);
+            && self.frontier_vote_backed_recovery_active(height, current_view, now);
         if !missing_qc_actionable_dependency_signals {
             if height == contiguous_frontier_height {
                 if exact_frontier_body_repair_active {
