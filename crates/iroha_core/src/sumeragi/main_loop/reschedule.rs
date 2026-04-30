@@ -675,6 +675,7 @@ impl Actor {
             if near_commit_quorum
                 && missing_local_data
                 && !quorum_reached
+                && !near_quorum_queue_backlog
                 && progress_stall_age >= near_quorum_recovery_window
             {
                 near_quorum_recovery_candidates.push((
