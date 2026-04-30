@@ -18,7 +18,6 @@ isi! {
         #[norito(default)]
         pub lease_expiry_ms: Option<u64>,
     }
-
 }
 
 isi! {

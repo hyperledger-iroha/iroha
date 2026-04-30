@@ -126,7 +126,7 @@ pub mod isi {
                 .iter()
                 .any(|lane| {
                     lane.dataspace_id == dataspace_id && lane.visibility == LaneVisibility::Public
-        })
+                })
     }
 
     fn ensure_global_asset_definition_home_is_public_or_universal(
@@ -138,12 +138,9 @@ pub mod isi {
             return Ok(());
         }
 
-        let home_dataspace = asset_definition_home_dataspace_for_alias(
-            state_transaction,
-            definition,
-            alias,
-        )
-        .unwrap_or(DataSpaceId::UNIVERSAL);
+        let home_dataspace =
+            asset_definition_home_dataspace_for_alias(state_transaction, definition, alias)
+                .unwrap_or(DataSpaceId::UNIVERSAL);
 
         if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -3455,6 +3452,40 @@ mod tests {
         tx.nexus.dataspace_catalog = catalog.clone();
         tx.world.dataspace_catalog = catalog;
         (paynet, cbuae)
+    }
+
+    fn install_dataspace_catalog_with_lane(
+        tx: &mut StateTransaction<'_, '_>,
+        dataspace: DataSpaceId,
+        alias: &str,
+        visibility: LaneVisibility,
+    ) {
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace,
+                alias: alias.to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        tx.nexus.dataspace_catalog = catalog.clone();
+        tx.world.dataspace_catalog = catalog;
+        tx.nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: dataspace,
+                    alias: alias.to_owned(),
+                    visibility,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
     }
 
     fn seed_account_alias_manage_permissions(
@@ -7493,6 +7524,128 @@ mod tests {
         assert!(
             updated.alias().is_none(),
             "definition alias should be cleared"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_alias_rejects_global_move_to_restricted_dataspace() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = DomainId::try_new("alias-global", "universal").expect("domain");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "pgk".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let bpng = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+
+        let alias: AssetDefinitionAlias = "pgk#bpng".parse().expect("alias");
+        let err = SetAssetDefinitionAlias::bind(definition_id, alias, None)
+            .execute(&authority, &mut tx)
+            .expect_err("global alias must not move home to restricted dataspace");
+
+        assert!(
+            err.to_string().contains("restricted dataspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_alias_clear_rejects_restricted_domain_fallback_for_global_asset() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let bpng = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("cash", "bpng").expect("domain");
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name("pgk".to_owned())
+            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            .build(&authority);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        tx.world
+            .asset_definitions
+            .insert(definition_id.clone(), definition);
+        tx.world
+            .bind_asset_definition_alias(
+                &definition_id,
+                "pgk#universal".parse().expect("alias"),
+                None,
+                None,
+                10_000,
+            )
+            .expect("seed public alias");
+
+        let err = SetAssetDefinitionAlias::clear(definition_id)
+            .execute(&authority, &mut tx)
+            .expect_err("clearing alias would expose restricted domain fallback");
+
+        assert!(
+            err.to_string().contains("restricted dataspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn set_asset_definition_alias_allows_restricted_policy_in_restricted_dataspace() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("alias-restricted", "universal").expect("domain");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "pgk".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "pgk".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let bpng = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, bpng, "bpng", LaneVisibility::Restricted);
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register restricted definition");
+
+        let alias: AssetDefinitionAlias = "pgk#bpng".parse().expect("alias");
+        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+            .execute(&authority, &mut tx)
+            .expect("restricted asset alias may use restricted dataspace");
+
+        assert_eq!(
+            tx.world.asset_definition_aliases.get(&alias),
+            Some(&definition_id)
         );
     }
 
