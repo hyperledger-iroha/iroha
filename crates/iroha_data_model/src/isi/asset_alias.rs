@@ -18,7 +18,9 @@ isi! {
         #[norito(default)]
         pub lease_expiry_ms: Option<u64>,
     }
+}
 
+isi! {
     /// Change the balance partition policy for an existing asset definition.
     ///
     /// Transitioning from `Global` to `DataspaceRestricted` may migrate existing global balance
