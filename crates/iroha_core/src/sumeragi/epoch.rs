@@ -500,6 +500,11 @@ mod tests {
     use iroha_data_model::consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord};
 
     use super::*;
+
+    fn commitment_for(reveal: [u8; 32]) -> [u8; 32] {
+        iroha_crypto::Hash::new(reveal).into()
+    }
+
     #[test]
     fn commit_and_reveal_window_and_epoch_rollover() {
         let chain = ChainId::from("iroha:test:epoch");
@@ -850,12 +855,291 @@ mod tests {
     }
 
     #[test]
+    fn vrf_notes_reject_epoch_mismatch_without_recording_inputs() {
+        let chain = ChainId::from("iroha:test:epoch_mismatch");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 2, 5);
+
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 1,
+                    commitment: [0x10; 32],
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::RejectedEpochMismatch
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                4,
+                VrfReveal {
+                    epoch: 1,
+                    reveal: [0x11; 32],
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::RejectedEpochMismatch
+        );
+
+        let snapshot = em.snapshot_current_epoch(1, 4);
+        assert!(snapshot.commits.is_empty());
+        assert!(snapshot.reveals.is_empty());
+        assert!(snapshot.late_reveals.is_empty());
+    }
+
+    #[test]
+    fn late_reveal_rejects_without_commit_or_matching_commitment() {
+        let chain = ChainId::from("iroha:test:epoch_late_reject");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 2, 4);
+
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: [0x21; 32],
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::RejectedOutOfWindow
+        );
+
+        let reveal = [0x22; 32];
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal),
+                    signer: 1,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: [0x23; 32],
+                    signer: 1,
+                },
+            ),
+            VrfNoteResult::RejectedInvalidReveal
+        );
+        assert_eq!(em.test_late_reveals_len(), 0);
+
+        em.on_block_commit(8);
+        let (_, committed_no_reveal) = em
+            .take_last_penalties()
+            .expect("epoch boundary should record penalties");
+        assert_eq!(committed_no_reveal, vec![1]);
+    }
+
+    #[test]
+    fn on_block_commit_zero_does_not_finalize_epoch() {
+        let chain = ChainId::from("iroha:test:epoch_commit_zero");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(6, 2, 4);
+        em.set_validator_roster_indices(0..3);
+
+        let seed = em.seed();
+        em.on_block_commit(0);
+
+        assert_eq!(em.epoch(), 0);
+        assert_eq!(em.seed(), seed);
+        assert!(em.take_last_epoch_snapshot().is_none());
+        assert!(em.take_last_penalties().is_none());
+        assert!(em.take_last_penalties_detailed().is_none());
+        assert_eq!(em.test_current_roster_len(), Some(3));
+    }
+
+    #[test]
+    fn zero_epoch_length_parameter_uses_single_block_epochs() {
+        let chain = ChainId::from("iroha:test:epoch_len_zero");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(0, 0, 0);
+
+        assert_eq!(em.epoch_length_blocks(), 1);
+        assert_eq!(em.commit_window_end(), 0);
+        assert_eq!(em.reveal_window_end(), 0);
+        assert_eq!(em.position_in_epoch(1), Some(1));
+        assert_eq!(em.epoch_for_height(1), 0);
+        assert_eq!(em.epoch_for_height(2), 1);
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [0x31; 32],
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::RejectedOutOfWindow
+        );
+
+        let seed = em.seed();
+        em.on_block_commit(1);
+
+        let snapshot = em
+            .take_last_epoch_snapshot()
+            .expect("single-block epoch should finalize at height 1");
+        assert_eq!(snapshot.epoch, 0);
+        assert_eq!(snapshot.updated_at_height, 1);
+        assert!(snapshot.commits.is_empty());
+        assert!(snapshot.reveals.is_empty());
+        assert_eq!(em.epoch(), 1);
+        assert_ne!(em.seed(), seed);
+    }
+
+    #[test]
     fn set_epoch_seed_overrides_initial_seed() {
         let chain = ChainId::from("iroha:test:epoch_seed_override");
         let mut em = EpochManager::new_from_chain(&chain);
         let seed = [0x22; 32];
         em.set_epoch_seed(seed);
         assert_eq!(em.seed(), seed);
+    }
+
+    #[test]
+    fn non_boundary_commit_keeps_epoch_state_pending() {
+        let chain = ChainId::from("iroha:test:epoch_non_boundary");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 2, 5);
+
+        let reveal = [0x41; 32];
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal),
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                4,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+
+        let seed = em.seed();
+        em.on_block_commit(7);
+
+        assert_eq!(em.epoch(), 0);
+        assert_eq!(em.seed(), seed);
+        assert!(em.take_last_epoch_snapshot().is_none());
+        assert!(em.take_last_penalties().is_none());
+        assert!(em.take_last_penalties_detailed().is_none());
+
+        let snapshot = em.snapshot_current_epoch(1, 7);
+        assert_eq!(snapshot.commits, vec![(0, commitment_for(reveal))]);
+        assert_eq!(snapshot.reveals, vec![(0, reveal)]);
+        assert_eq!(snapshot.updated_at_height, 7);
+    }
+
+    #[test]
+    fn next_epoch_evolves_seed_from_regular_reveals_and_clears_state() {
+        let chain = ChainId::from("iroha:test:epoch_next");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        em.set_validator_roster_indices(0..3);
+
+        let reveal_regular = [0x51; 32];
+        let reveal_late = [0x52; 32];
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_regular),
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_regular,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                3,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_late),
+                    signer: 1,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                7,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_late,
+                    signer: 1,
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+
+        let expected_seed = em.current_entropy();
+        assert_ne!(em.seed(), expected_seed);
+        assert_eq!(em.test_late_reveals_len(), 1);
+
+        em.next_epoch();
+
+        assert_eq!(em.epoch(), 1);
+        assert_eq!(em.seed(), expected_seed);
+        assert_eq!(em.test_current_roster_len(), None);
+        assert_eq!(em.test_late_reveals_len(), 0);
+        let snapshot = em.snapshot_current_epoch(0, 10);
+        assert!(snapshot.commits.is_empty());
+        assert!(snapshot.reveals.is_empty());
+        assert!(snapshot.late_reveals.is_empty());
+    }
+
+    #[test]
+    fn epoch_parameters_clamp_windows_and_map_heights() {
+        let chain = ChainId::from("iroha:test:epoch_window_clamp");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(4, 10, 99);
+
+        assert_eq!(em.epoch_length_blocks(), 4);
+        assert_eq!(em.commit_window_end(), 4);
+        assert_eq!(em.reveal_window_end(), 4);
+        assert_eq!(em.position_in_epoch(0), None);
+        assert_eq!(em.position_in_epoch(1), Some(1));
+        assert_eq!(em.position_in_epoch(4), Some(4));
+        assert_eq!(em.position_in_epoch(5), Some(1));
+        assert!(em.is_commit_window_position(4));
+        assert!(!em.is_reveal_window_position(4));
+        assert_eq!(em.epoch_for_height(0), 0);
+        assert_eq!(em.epoch_for_height(1), 0);
+        assert_eq!(em.epoch_for_height(4), 0);
+        assert_eq!(em.epoch_for_height(5), 1);
+        assert_eq!(em.epoch_for_height(8), 1);
+        assert_eq!(em.epoch_for_height(9), 2);
     }
 
     #[test]
@@ -886,6 +1170,76 @@ mod tests {
         assert_eq!(em.epoch_length_blocks(), 12);
         assert_eq!(em.commit_window_end(), 4);
         assert_eq!(em.reveal_window_end(), 9);
+    }
+
+    #[test]
+    fn restore_from_unfinalized_record_recovers_epoch_inputs() {
+        let chain = ChainId::from("iroha:test:epoch_restore_unfinalized");
+        let record = VrfEpochRecord {
+            epoch: 3,
+            seed: [0x31; 32],
+            epoch_length: 16,
+            commit_deadline_offset: 4,
+            reveal_deadline_offset: 10,
+            roster_len: 3,
+            finalized: false,
+            updated_at_height: 33,
+            participants: vec![
+                VrfParticipantRecord {
+                    signer: 0,
+                    commitment: Some([0xA0; 32]),
+                    reveal: Some([0xB0; 32]),
+                    last_updated_height: 29,
+                },
+                VrfParticipantRecord {
+                    signer: 1,
+                    commitment: Some([0xA1; 32]),
+                    reveal: None,
+                    last_updated_height: 30,
+                },
+            ],
+            late_reveals: vec![VrfLateRevealRecord {
+                signer: 2,
+                reveal: [0xC2; 32],
+                noted_at_height: 31,
+            }],
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.restore_from_record(&record);
+
+        assert_eq!(em.epoch(), 3);
+        assert_eq!(em.seed(), [0x31; 32]);
+        assert_eq!(em.epoch_length_blocks(), 16);
+        assert_eq!(em.commit_window_end(), 4);
+        assert_eq!(em.reveal_window_end(), 10);
+        assert_eq!(em.test_current_roster_len(), Some(3));
+        assert_eq!(em.test_late_reveals_len(), 1);
+
+        let snapshot = em.snapshot_current_epoch(0, 33);
+        assert_eq!(snapshot.epoch, 3);
+        assert_eq!(snapshot.seed, [0x31; 32]);
+        assert_eq!(snapshot.commits, vec![(0, [0xA0; 32]), (1, [0xA1; 32])]);
+        assert_eq!(snapshot.reveals, vec![(0, [0xB0; 32])]);
+        assert_eq!(snapshot.late_reveals, vec![(2, [0xC2; 32], 31)]);
+        assert_eq!(snapshot.roster_len, 3);
+        assert_eq!(snapshot.updated_at_height, 33);
+        assert_eq!(
+            em.try_note_commit_at_height(
+                34,
+                VrfCommit {
+                    epoch: 3,
+                    commitment: [0xFF; 32],
+                    signer: 3,
+                },
+            ),
+            VrfNoteResult::RejectedUnknownSigner
+        );
     }
 
     #[test]
@@ -1010,6 +1364,105 @@ mod tests {
         assert_eq!(penalties.1, vec![1]); // signer 1 committed but failed to reveal
         assert_eq!(penalties.2, vec![2]); // signer 2 did not participate at all
         assert_eq!(penalties.3, 3); // roster size propagated
+    }
+
+    #[test]
+    fn epoch_boundary_snapshot_preserves_finalized_inputs_before_clearing() {
+        let chain = ChainId::from("iroha:test:epoch_boundary_snapshot");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 2, 5);
+        em.set_validator_roster_indices(0..4);
+
+        let reveal_regular = [0x71; 32];
+        let reveal_late = [0x72; 32];
+        let seed = em.seed();
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_regular),
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                4,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_regular,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [0x73; 32],
+                    signer: 1,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_late),
+                    signer: 2,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                6,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_late,
+                    signer: 2,
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+
+        let expected_next_seed = em.current_entropy();
+        em.on_block_commit(8);
+
+        let snapshot = em
+            .take_last_epoch_snapshot()
+            .expect("epoch boundary should produce snapshot");
+        assert_eq!(snapshot.epoch, 0);
+        assert_eq!(snapshot.seed, seed);
+        assert_eq!(
+            snapshot.commits,
+            vec![
+                (0, commitment_for(reveal_regular)),
+                (1, [0x73; 32]),
+                (2, commitment_for(reveal_late)),
+            ]
+        );
+        assert_eq!(snapshot.reveals, vec![(0, reveal_regular)]);
+        assert_eq!(snapshot.late_reveals, vec![(2, reveal_late, 6)]);
+        assert_eq!(snapshot.committed_no_reveal, vec![1]);
+        assert_eq!(snapshot.no_participation, vec![3]);
+        assert_eq!(snapshot.roster_len, 4);
+        assert_eq!(snapshot.updated_at_height, 8);
+        assert_eq!(em.epoch(), 1);
+        assert_eq!(em.seed(), expected_next_seed);
+        assert_eq!(em.test_current_roster_len(), None);
+
+        let current = em.snapshot_current_epoch(4, 8);
+        assert!(current.commits.is_empty());
+        assert!(current.reveals.is_empty());
+        assert!(current.late_reveals.is_empty());
+        assert!(em.take_last_epoch_snapshot().is_none());
     }
 
     #[test]

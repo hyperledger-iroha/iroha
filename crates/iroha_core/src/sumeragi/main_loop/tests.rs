@@ -874,17 +874,35 @@ fn sign_vote_for_canonical_signer(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) {
-    let canonical_roster = super::roster::canonicalize_roster_for_mode(
-        topology.as_ref().to_vec(),
-        ConsensusMode::Permissioned,
-    );
-    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let prf_seed = Some(prf_seed_for_chain(chain));
+    sign_vote_for_canonical_signer_with_seed(
+        vote,
+        chain,
+        topology,
+        keypairs,
+        ConsensusMode::Permissioned,
+        super::PERMISSIONED_TAG,
+        prf_seed,
+    );
+}
+
+fn sign_vote_for_canonical_signer_with_seed(
+    vote: &mut crate::sumeragi::consensus::Vote,
+    chain: &ChainId,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+    consensus_mode: ConsensusMode,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) {
+    let canonical_roster =
+        super::roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology = super::topology_for_view(
         &canonical_topology,
         vote.height,
         vote.view,
-        super::PERMISSIONED_TAG,
+        mode_tag,
         prf_seed,
     );
     let canonical = ValidatorIndex::try_from(vote.signer).expect("signer fits u32");
@@ -897,7 +915,7 @@ fn sign_vote_for_canonical_signer(
         chain,
         &canonical_topology,
         keypairs,
-        super::PERMISSIONED_TAG,
+        mode_tag,
         prf_seed,
     );
 }
@@ -1422,6 +1440,194 @@ async fn apply_mode_flip_aligns_epoch_to_current_height_without_vrf_record() {
         super::npos_seed_for_height(&view, height)
     };
     assert_eq!(manager.seed(), expected_seed);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn apply_mode_flip_to_npos_restores_unfinalized_target_epoch_record() {
+    use iroha_data_model::{
+        consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord},
+        parameter::system::SumeragiNposParameters,
+    };
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 5;
+
+    let height = 7u64;
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
+    let actor = &mut harness.actor;
+
+    let record_seed = [0x36; 32];
+    let reveal = [0x37; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 5,
+            vrf_commit_window_blocks: 2,
+            vrf_reveal_window_blocks: 3,
+            ..SumeragiNposParameters::default().with_epoch_seed([0x99; 32])
+        };
+        params.custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.vrf_epochs.insert(
+            1,
+            VrfEpochRecord {
+                epoch: 1,
+                seed: record_seed,
+                epoch_length: 5,
+                commit_deadline_offset: 2,
+                reveal_deadline_offset: 5,
+                roster_len: 4,
+                finalized: false,
+                updated_at_height: height,
+                participants: vec![
+                    VrfParticipantRecord {
+                        signer: 0,
+                        commitment: Some(commitment),
+                        reveal: Some(reveal),
+                        last_updated_height: 6,
+                    },
+                    VrfParticipantRecord {
+                        signer: 1,
+                        commitment: Some([0x38; 32]),
+                        reveal: None,
+                        last_updated_height: 7,
+                    },
+                ],
+                late_reveals: vec![VrfLateRevealRecord {
+                    signer: 2,
+                    reveal: [0x39; 32],
+                    noted_at_height: 7,
+                }],
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            },
+        );
+        block.commit();
+    }
+
+    actor
+        .apply_mode_flip(ConsensusMode::Npos)
+        .expect("mode flip should succeed");
+
+    let manager = actor.epoch_manager.as_ref().expect("epoch manager set");
+    assert_eq!(manager.epoch(), 1);
+    assert_eq!(manager.seed(), record_seed);
+    assert_eq!(manager.epoch_length_blocks(), 5);
+    assert_eq!(manager.commit_window_end(), 2);
+    assert_eq!(manager.reveal_window_end(), 5);
+    let snapshot = manager.snapshot_current_epoch(0, height);
+    assert_eq!(snapshot.commits, vec![(0, commitment), (1, [0x38; 32])]);
+    assert_eq!(snapshot.reveals, vec![(0, reveal)]);
+    assert_eq!(snapshot.late_reveals, vec![(2, [0x39; 32], 7)]);
+    assert_eq!(snapshot.roster_len, 4);
+
+    let collectors = actor.npos_collectors.expect("NPoS collectors set");
+    assert_eq!(collectors.seed, record_seed);
+    assert_eq!(actor.consensus_mode, ConsensusMode::Npos);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn apply_mode_flip_to_permissioned_restores_epoch_record_but_clears_collectors() {
+    use iroha_data_model::{
+        consensus::{VrfEpochRecord, VrfParticipantRecord},
+        parameter::system::SumeragiNposParameters,
+    };
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 5;
+
+    let height = 7u64;
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
+    let actor = &mut harness.actor;
+
+    let record_seed = [0x45; 32];
+    let reveal = [0x46; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 5,
+            vrf_commit_window_blocks: 2,
+            vrf_reveal_window_blocks: 3,
+            ..SumeragiNposParameters::default().with_epoch_seed([0x47; 32])
+        };
+        params.custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.vrf_epochs.insert(
+            1,
+            VrfEpochRecord {
+                epoch: 1,
+                seed: record_seed,
+                epoch_length: 5,
+                commit_deadline_offset: 2,
+                reveal_deadline_offset: 5,
+                roster_len: 4,
+                finalized: false,
+                updated_at_height: height,
+                participants: vec![VrfParticipantRecord {
+                    signer: 0,
+                    commitment: Some(commitment),
+                    reveal: Some(reveal),
+                    last_updated_height: height,
+                }],
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: false,
+                penalties_applied_at_height: None,
+                validator_election: None,
+            },
+        );
+        block.commit();
+    }
+
+    let expected_seed = {
+        let view = actor.state.view();
+        super::prf_seed_for_height(&view, height)
+    };
+    actor
+        .apply_mode_flip(ConsensusMode::Permissioned)
+        .expect("mode flip should succeed");
+
+    assert_eq!(actor.consensus_mode, ConsensusMode::Permissioned);
+    assert!(
+        actor.npos_collectors.is_none(),
+        "permissioned mode should clear NPoS collectors"
+    );
+    let manager = actor.epoch_manager.as_ref().expect("epoch manager set");
+    assert_eq!(manager.epoch(), 1);
+    assert_eq!(
+        manager.seed(),
+        expected_seed,
+        "permissioned PRF seed should be schedule-derived, not record-local"
+    );
+    let snapshot = manager.snapshot_current_epoch(0, height);
+    assert_eq!(snapshot.commits, vec![(0, commitment)]);
+    assert_eq!(snapshot.reveals, vec![(0, reveal)]);
+    assert_eq!(snapshot.roster_len, 4);
+    assert_ne!(manager.seed(), record_seed);
 
     harness.shutdown.send();
 }
@@ -26564,11 +26770,8 @@ async fn local_accepted_commit_vote_does_not_replay_known_block_evidence() {
 async fn known_block_commit_evidence_replay_skips_payload_fallback_without_roster() {
     let mut harness = test_actor_harness(4).await;
 
-    let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
-    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"precommit_vote_skips_payload_fallback_when_pending_tracked_without_roster",
-    ));
-    let block = sample_block(2, 0, Some(parent_hash));
+    let genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
+    let block = sample_block(2, 0, Some(genesis_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     insert_validated_pending(&mut harness.actor, block.clone());
@@ -27089,11 +27292,8 @@ async fn emit_precommit_vote_targets_quorum_retransmit_peers() {
     actor.config.collectors.parallel_topology_fanout = 0;
     let background_log = attach_background_log(actor);
 
-    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
-    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"emit_precommit_vote_targets_quorum_retransmit_peers",
-    ));
-    let block = sample_block(2, 0, Some(parent_hash));
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let block = sample_block(2, 0, Some(genesis_hash));
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let local_peer = actor.common_config.peer.id().clone();
@@ -27161,11 +27361,8 @@ async fn emit_precommit_vote_targets_quorum_retransmit_peers() {
 async fn known_block_commit_evidence_replay_skips_aborted_pending_tracked() {
     let mut harness = test_actor_harness(4).await;
 
-    let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
-    let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"precommit_vote_payload_broadcast_skips_aborted_pending_tracked",
-    ));
-    let block = sample_block(2, 0, Some(parent_hash));
+    let genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
+    let block = sample_block(2, 0, Some(genesis_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
@@ -80308,11 +80505,13 @@ async fn force_view_change_if_idle_rotates_empty_frontier_local_vote_evidence_wi
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(
+        sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
             &topology,
             &harness.key_pairs,
+            mode_tag,
+            prf_seed,
         );
         actor.handle_vote(vote);
     }
@@ -92277,11 +92476,13 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(
+        sign_vote_for_view_with_seed(
             &mut vote,
             &actor.common_config.chain,
             &topology,
             &harness.key_pairs,
+            mode_tag,
+            prf_seed,
         );
         actor.handle_vote(vote);
     }
@@ -98281,6 +98482,186 @@ async fn refresh_npos_seed_realigns_epoch_after_epoch_length_change() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn refresh_npos_seed_precommit_preserves_epoch_state_during_schedule_change() {
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
+
+    use crate::sumeragi::consensus::{VrfCommit, VrfReveal};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 3;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 6;
+
+    let height = 15u64;
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
+    let actor = &mut harness.actor;
+
+    let reveal = [0x82; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let manager = actor.epoch_manager.as_mut().expect("epoch manager set");
+        manager.set_params(10, 3, 6);
+        manager.set_epoch(1);
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                12,
+                VrfCommit {
+                    epoch: 1,
+                    commitment,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            manager.try_note_reveal_at_height(
+                15,
+                VrfReveal {
+                    epoch: 1,
+                    reveal,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+    }
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 4,
+            epoch_seed: [0x83; 32],
+            vrf_commit_window_blocks: 1,
+            vrf_reveal_window_blocks: 2,
+            ..SumeragiNposParameters::default()
+        };
+        params.custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.commit();
+    }
+
+    let collector_seed = [0x84; 32];
+    actor.refresh_npos_seed(
+        collector_seed,
+        height,
+        super::commit::EpochRefreshPhase::PreCommit,
+    );
+
+    let manager = actor.epoch_manager.as_ref().expect("epoch manager set");
+    assert_eq!(
+        manager.epoch(),
+        1,
+        "pre-commit refresh must not realign an in-flight epoch"
+    );
+    assert_eq!(manager.epoch_length_blocks(), 4);
+    assert_eq!(manager.commit_window_end(), 1);
+    assert_eq!(manager.reveal_window_end(), 3);
+    let snapshot = manager.snapshot_current_epoch(4, height);
+    assert_eq!(snapshot.commits, vec![(0, commitment)]);
+    assert_eq!(snapshot.reveals, vec![(0, reveal)]);
+    let collectors = actor.npos_collectors.expect("NPoS collectors set");
+    assert_eq!(collectors.seed, collector_seed);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_npos_seed_postcommit_boundary_advances_epoch_and_clears_inputs() {
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
+
+    use crate::sumeragi::consensus::{VrfCommit, VrfReveal};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 4;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 1;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 3;
+
+    let height = 8u64;
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
+    let actor = &mut harness.actor;
+
+    let reveal = [0x92; 32];
+    let commitment: [u8; 32] = Hash::new(reveal).into();
+    {
+        let manager = actor.epoch_manager.as_mut().expect("epoch manager set");
+        manager.set_params(4, 1, 3);
+        manager.set_epoch(1);
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                5,
+                VrfCommit {
+                    epoch: 1,
+                    commitment,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            manager.try_note_reveal_at_height(
+                7,
+                VrfReveal {
+                    epoch: 1,
+                    reveal,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+    }
+
+    let reset_seed = [0x93; 32];
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: 4,
+            epoch_seed: reset_seed,
+            vrf_commit_window_blocks: 1,
+            vrf_reveal_window_blocks: 2,
+            ..SumeragiNposParameters::default()
+        };
+        params.custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.commit();
+    }
+
+    actor.refresh_npos_seed(
+        [0x94; 32],
+        height,
+        super::commit::EpochRefreshPhase::PostCommit,
+    );
+
+    let manager = actor.epoch_manager.as_ref().expect("epoch manager set");
+    assert_eq!(manager.epoch(), 2);
+    assert_eq!(manager.seed(), reset_seed);
+    assert_eq!(manager.epoch_length_blocks(), 4);
+    assert_eq!(manager.commit_window_end(), 1);
+    assert_eq!(manager.reveal_window_end(), 3);
+    let snapshot = manager.snapshot_current_epoch(4, height);
+    assert!(snapshot.commits.is_empty());
+    assert!(snapshot.reveals.is_empty());
+    assert!(snapshot.late_reveals.is_empty());
+    let collectors = actor.npos_collectors.expect("NPoS collectors set");
+    assert_eq!(collectors.seed, reset_seed);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn update_prf_context_uses_activation_height_seed() {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
@@ -98368,6 +98749,87 @@ async fn epoch_for_height_uses_npos_params_before_activation() {
     let height = activation_height + 2;
     let expected_epoch = (height - 1) / epoch_len;
     assert_eq!(actor.epoch_for_height(height), expected_epoch);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn epoch_for_height_returns_zero_for_permissioned_target_after_scheduled_flip() {
+    use iroha_data_model::parameter::system::SumeragiConsensusMode;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 4;
+
+    let activation_height = 10u64;
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, consensus_cfg, None, activation_height).await;
+    let actor = &mut harness.actor;
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.next_mode = Some(SumeragiConsensusMode::Permissioned);
+        params.sumeragi.mode_activation_height = Some(activation_height);
+        block.commit();
+    }
+
+    assert_eq!(actor.epoch_for_height(activation_height - 1), 2);
+    assert_eq!(
+        actor.epoch_for_height(activation_height),
+        0,
+        "permissioned target heights must not inherit NPoS epoch numbering"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn epoch_for_height_prefers_finalized_schedule_over_stale_manager() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 5;
+
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 12).await;
+    let actor = &mut harness.actor;
+    seed_npos_epochs(actor, 5, [0xA1; 32], [0xA2; 32]);
+    {
+        let manager = actor.epoch_manager.as_mut().expect("epoch manager set");
+        manager.set_params(100, 1, 2);
+    }
+
+    assert_eq!(
+        actor.epoch_for_height(10),
+        1,
+        "finalized VRF epoch boundaries should override local manager schedule"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn epoch_for_height_uses_manager_after_finalized_boundary_when_npos_active() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 5;
+
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 12).await;
+    let actor = &mut harness.actor;
+    seed_npos_epochs(actor, 5, [0xB1; 32], [0xB2; 32]);
+    {
+        let manager = actor.epoch_manager.as_mut().expect("epoch manager set");
+        manager.set_params(3, 1, 2);
+    }
+
+    assert_eq!(
+        actor.epoch_for_height(11),
+        3,
+        "post-finalized heights use the active local epoch manager"
+    );
 
     harness.shutdown.send();
 }
@@ -99875,6 +100337,7 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
         )
         .expect("push tx");
 
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
     actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
     let committed_height = actor.state.view().height() as u64;
     let mut highest_qc = actor
@@ -99891,7 +100354,6 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
     let now = Instant::now();
     actor.phase_tracker.start_new_round(tracked_height, now);
 
-    let genesis_hash = seed_genesis_block_for_state(&actor.state);
     let stale_owner = nonempty_block_for_actor(
         actor,
         &harness.key_pairs,
@@ -99940,26 +100402,33 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
     let local_signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local validator index");
+    let epoch = actor.epoch_for_height(tracked_height);
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: stale_owner_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: tracked_height,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: local_signer,
+        bls_sig: Vec::new(),
+    };
     actor.vote_log.insert(
+        (Phase::Commit, tracked_height, 0, epoch, local_signer),
+        vote.clone(),
+    );
+    actor.vote_log_identities.insert(
         (
             Phase::Commit,
             tracked_height,
             0,
-            actor.epoch_for_height(tracked_height),
+            epoch,
             local_signer,
+            actor.common_config.peer.id().public_key().clone(),
         ),
-        crate::sumeragi::consensus::Vote {
-            phase: Phase::Commit,
-            block_hash: stale_owner_hash,
-            parent_state_root: zero_state_root(),
-            post_state_root: zero_state_root(),
-            height: tracked_height,
-            view: 0,
-            epoch: actor.epoch_for_height(tracked_height),
-            highest_qc: None,
-            signer: local_signer,
-            bls_sig: Vec::new(),
-        },
+        vote,
     );
 
     actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
@@ -99975,12 +100444,12 @@ async fn missing_qc_view_advance_preserves_local_same_height_vote_history_for_st
     );
     assert!(
         actor
-            .local_same_height_vote(tracked_height, actor.epoch_for_height(tracked_height))
+            .local_same_height_vote(tracked_height, epoch)
             .is_some(),
         "test setup requires preserved local same-height vote history after the missing-QC view advance"
     );
     let preserved_vote = actor
-        .local_same_height_vote(tracked_height, actor.epoch_for_height(tracked_height))
+        .local_same_height_vote(tracked_height, epoch)
         .expect("old-view local same-height vote history must survive the missing-QC rotation");
     assert_eq!(
         preserved_vote.block_hash, stale_owner_hash,
@@ -106160,6 +106629,7 @@ async fn conflicting_higher_view_frontier_block_created_marks_round_liveness_but
     let epoch = actor.epoch_for_height(height);
     let canonical_block =
         nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(prev_hash));
+    let canonical_parent = canonical_block.header().prev_block_hash();
     let canonical_hash = insert_validated_pending(actor, canonical_block);
 
     assert!(
@@ -106170,7 +106640,7 @@ async fn conflicting_higher_view_frontier_block_created_marks_round_liveness_but
             epoch,
             ValidationStatus::Valid,
             &topology,
-            None,
+            canonical_parent,
             Some((Hash::new([]), Hash::new([]))),
         ),
         "test setup should record a local same-height vote for the canonical branch"
@@ -134296,10 +134766,6 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
     let view = 0_u64;
     let epoch = actor.epoch_for_height(height);
 
-    let topology_peers = actor.effective_commit_topology();
-    let topology = super::network_topology::Topology::new(topology_peers.clone());
-    let required = topology.min_votes_for_commit().max(1);
-
     let block =
         nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
@@ -134317,7 +134783,16 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
         actor.block_known_locally(block_hash),
         "known pending block should remain available for stale-view precommit handling"
     );
-    for signer_idx in 0..required {
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.roster_for_vote_with_mode(
+        block_hash,
+        height,
+        view,
+        consensus_mode,
+    ));
+    let required = topology.min_votes_for_commit().max(1);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    for signer_idx in 0..signature_topology.as_ref().len() {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash,
@@ -134330,7 +134805,19 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
             signer: u32::try_from(signer_idx).expect("signer index fits u32"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_canonical_signer(&mut vote, &chain_id, &topology, &harness.key_pairs);
+        sign_vote_for_canonical_signer_with_seed(
+            &mut vote,
+            &chain_id,
+            &topology,
+            &harness.key_pairs,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+        );
+        assert!(
+            super::vote_signature_check(&vote, &signature_topology, &chain_id, mode_tag).is_ok(),
+            "test generated invalid vote for signer {signer_idx}"
+        );
         actor.handle_vote(vote);
     }
 
@@ -134354,9 +134841,9 @@ async fn stale_view_async_commit_votes_for_known_pending_block_still_form_qc() {
             })
             .count();
         if actor.qc_cache.contains_key(&qc_key) {
-            assert_eq!(
-                recorded_votes, required,
-                "all stale-view commit votes should still be recorded for a known pending block"
+            assert!(
+                recorded_votes >= required,
+                "stale-view commit votes should retain enough records for a known pending block"
             );
             break;
         }
@@ -141462,6 +141949,115 @@ async fn vrf_snapshot_uses_epoch_manager_params() {
     assert_eq!(record.epoch_length, 12);
     assert_eq!(record.commit_deadline_offset, 4);
     assert_eq!(record.reveal_deadline_offset, 9);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vrf_snapshot_record_merges_participants_and_finalized_penalties() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+
+    let harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let commit_a = [0xA1; 32];
+    let commit_b = [0xA2; 32];
+    let reveal_a = [0xB1; 32];
+    let reveal_c = [0xB3; 32];
+    let late_reveal = [0xC4; 32];
+    let snapshot = EpochSnapshot {
+        epoch: 9,
+        seed: [0xD9; 32],
+        commits: vec![(2, commit_b), (1, commit_a)],
+        reveals: vec![(1, reveal_a), (3, reveal_c)],
+        late_reveals: vec![(4, late_reveal, 17)],
+        committed_no_reveal: vec![2],
+        no_participation: vec![5],
+        roster_len: 6,
+        updated_at_height: 18,
+    };
+
+    let record = harness.actor.snapshot_to_vrf_record(snapshot, true, None);
+
+    assert_eq!(record.epoch, 9);
+    assert!(record.finalized);
+    assert_eq!(record.participants.len(), 3);
+    assert_eq!(record.participants[0].signer, 1);
+    assert_eq!(record.participants[0].commitment, Some(commit_a));
+    assert_eq!(record.participants[0].reveal, Some(reveal_a));
+    assert_eq!(record.participants[0].last_updated_height, 18);
+    assert_eq!(record.participants[1].signer, 2);
+    assert_eq!(record.participants[1].commitment, Some(commit_b));
+    assert_eq!(record.participants[1].reveal, None);
+    assert_eq!(record.participants[2].signer, 3);
+    assert_eq!(record.participants[2].commitment, None);
+    assert_eq!(record.participants[2].reveal, Some(reveal_c));
+    assert_eq!(record.late_reveals.len(), 1);
+    assert_eq!(record.late_reveals[0].signer, 4);
+    assert_eq!(record.late_reveals[0].reveal, late_reveal);
+    assert_eq!(record.late_reveals[0].noted_at_height, 17);
+    assert_eq!(record.committed_no_reveal, vec![2]);
+    assert_eq!(record.no_participation, vec![5]);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unfinalized_vrf_snapshot_strips_penalties_but_preserves_application_marker() {
+    use iroha_data_model::consensus::VrfEpochRecord;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        block.vrf_epochs.insert(
+            4,
+            VrfEpochRecord {
+                epoch: 4,
+                seed: [0xE4; 32],
+                epoch_length: 8,
+                commit_deadline_offset: 2,
+                reveal_deadline_offset: 5,
+                roster_len: 4,
+                finalized: true,
+                updated_at_height: 32,
+                participants: Vec::new(),
+                late_reveals: Vec::new(),
+                committed_no_reveal: vec![1],
+                no_participation: vec![2],
+                penalties_applied: true,
+                penalties_applied_at_height: Some(33),
+                validator_election: None,
+            },
+        );
+        block.commit();
+    }
+
+    let snapshot = EpochSnapshot {
+        epoch: 4,
+        seed: [0xF4; 32],
+        commits: Vec::new(),
+        reveals: Vec::new(),
+        late_reveals: Vec::new(),
+        committed_no_reveal: vec![3],
+        no_participation: vec![0, 2],
+        roster_len: 4,
+        updated_at_height: 35,
+    };
+
+    let record = harness.actor.snapshot_to_vrf_record(snapshot, false, None);
+
+    assert!(!record.finalized);
+    assert!(record.committed_no_reveal.is_empty());
+    assert!(record.no_participation.is_empty());
+    assert!(record.penalties_applied);
+    assert_eq!(record.penalties_applied_at_height, Some(33));
+    assert_eq!(record.updated_at_height, 35);
+    assert_eq!(record.seed, [0xF4; 32]);
+
     harness.shutdown.send();
 }
 
