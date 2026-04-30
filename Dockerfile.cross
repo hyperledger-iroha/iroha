@@ -53,6 +53,7 @@ ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
+ARG CARGO_BUILD_JOBS=""
 ARG BINARIES=""
 
 # HACK: install target platform-specific headers necessary for cross-compilation
@@ -69,6 +70,7 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/cache \
     --mount=type=cache,target=/root/.cargo/registry/index \
     --mount=type=cache,target=/app/target \
+    if [ -n "${CARGO_BUILD_JOBS}" ]; then export CARGO_BUILD_JOBS; fi; \
     RUSTFLAGS="${RUSTFLAGS}" mold --run \
     xx-cargo build ${CARGOFLAGS} \
     --target $(xx-cargo --print-target-triple) \
@@ -76,9 +78,9 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --features "${FEATURES}" \
     --bins
 
-RUN <<EOF
+RUN --mount=type=cache,target=/app/target <<EOF
   set -ex
-  mkdir ./bins
+  mkdir -p ./bins
   target_triple="$(xx-cargo --print-target-triple)"
   bins="${BINARIES}"
   if [ -z "${bins}" ]; then
