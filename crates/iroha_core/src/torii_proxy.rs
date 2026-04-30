@@ -129,6 +129,16 @@ pub enum ToriiReadEndpointV1 {
     ContractViewPost,
     /// `POST /v1/contracts/view/batch`
     ContractViewBatchPost,
+    /// `GET /v1/musubi/packages`
+    MusubiPackagesSearch,
+    /// `GET /v1/musubi/release`
+    MusubiReleaseGet,
+    /// `GET /v1/musubi/releases`
+    MusubiPackageReleases,
+    /// `GET /v1/musubi/versions`
+    MusubiPackageVersions,
+    /// `GET /v1/musubi/aliases/{alias}`
+    MusubiAliasResolve,
 }
 
 /// Canonical routed read executed on an authoritative Torii peer.
