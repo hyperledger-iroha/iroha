@@ -246,6 +246,10 @@ const BLOCK_SYNC_WARN_BURST_CAP: u32 = 3;
 const BLOCK_SYNC_WARN_BURST_WINDOW: Duration = Duration::from_secs(10);
 /// Periodic interval for emitting aggregated hotspot summary logs.
 const HOTSPOT_LOG_SUMMARY_INTERVAL: Duration = Duration::from_secs(30);
+/// Upper bound for letting consensus ingress drain before a fresh frontier proposal when tx backlog exists.
+const FRONTIER_INGRESS_BACKLOG_DRAIN_GRACE_CEILING: Duration = Duration::from_millis(250);
+/// Minimum drain window used when there is no transaction backlog forcing proposal progress.
+const FRONTIER_INGRESS_IDLE_DRAIN_GRACE_FLOOR: Duration = Duration::from_millis(750);
 /// Align control-plane rebroadcast cadence with block time while enforcing a safe floor.
 ///
 /// Control-plane messages (votes / missing-block pulls / RBC READY/DELIVER coordination) are
@@ -5711,7 +5715,14 @@ impl Actor {
     }
 
     fn frontier_ingress_drain_grace(&self, _da_enabled: bool) -> Duration {
-        saturating_mul_duration(self.rebroadcast_cooldown(), 5).max(Duration::from_millis(750))
+        let idle_grace = saturating_mul_duration(self.rebroadcast_cooldown(), 5)
+            .max(FRONTIER_INGRESS_IDLE_DRAIN_GRACE_FLOOR);
+        if self.queue.active_len() > 0 {
+            return idle_grace
+                .min(FRONTIER_INGRESS_BACKLOG_DRAIN_GRACE_CEILING)
+                .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
+        }
+        idle_grace
     }
 
     fn frontier_proposal_starved_past_ingress_grace(

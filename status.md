@@ -2,6 +2,41 @@
 
 Last updated: 2026-04-30
 
+## 2026-04-30 Izanami 20k ingress restored; committed TPS still blocked
+
+- Replaced the queue pressure age scan with an amortized FIFO age ring, so
+  Torii admission no longer scans the full transaction map under 20k prebuilt
+  ingress. The 30s release run with `600,000` prebuilt transfers now offered
+  and ingress-accepted all `600,000` submissions with zero submit failures;
+  submit latency was p50/p95/p99/max `16/36/73/281 ms`.
+- Added final transaction-approval sampling to Izanami progress and summary
+  output. This separates ingress acceptance from committed/finalized
+  throughput and exposes peer divergence at the deadline.
+- The latest local 20k run did **not** reach 20k committed TPS:
+  quorum/strict finalized transaction counts were only `39/39` at the 30s
+  deadline, with max peer transaction-approved skew `4096`. One peer can get a
+  full 4096-transfer block ahead, but quorum/strict finality does not converge
+  fast enough under the offered load.
+- Dominant evidence in the diagnostics is now block validation and
+  availability/commit convergence under large transfer blocks, not the driver:
+  height-3 validation took about `3.4s`, commit QC aggregation took roughly
+  `20s`, repeated RBC DELIVER rebroadcasts were needed, and the asynchronous
+  FASTPQ prover lane generated many per-entry proofs at roughly `16-20 ms`
+  each after the block commit. View-change causes were zero in the Izanami
+  summary, but the queue remained saturated (`205,691/600,000`) and
+  pacemaker backpressure fired `7` times.
+- Reduced FASTPQ prover log amplification by changing per-proof success logs
+  to debug-level detail and emitting one info-level summary per prover job.
+  This removes a large local logging pressure source for transfer-heavy stress
+  blocks, but proof generation itself remains a real throughput cost.
+- Current conclusion: the harness can now do real 20k ingress on this host,
+  but Sumeragi cannot commit/finalize 20k TPS for the current transfer
+  workload. Getting there requires a real consensus/execution throughput
+  change: batching or throttling optional FASTPQ proof work, reducing per-block
+  validation latency, and improving large-block DA/RBC/commit-vote convergence.
+- Latest artifact:
+  `dist/izanami-prebuilt-20k-4096acct-fastplan-pipeline200-gas2b-teu24m-cap4096-rbc4096-30s-20260430-180302`.
+
 ## 2026-04-30 Sumeragi overload admission and 20k liveness rerun
 
 - Added a local Torii ingress admission guard for latency-saturated queues:

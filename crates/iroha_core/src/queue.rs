@@ -232,6 +232,8 @@ pub struct Queue {
     tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
     queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
+    /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
+    queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
     /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -1323,6 +1325,7 @@ impl Queue {
                 tx_gas_cost: DashMap::new(),
                 tx_enqueued_at_ms: DashMap::new(),
                 queued_tx_enqueued_at_ms: DashMap::new(),
+                queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
                 tx_gossip_payloads: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
@@ -2103,7 +2106,7 @@ impl Queue {
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
         self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-        self.queued_tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+        self.record_queued_age(hash, enqueue_at_ms);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
@@ -2120,7 +2123,7 @@ impl Queue {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
             self.tx_enqueued_at_ms.remove(&hash);
-            self.queued_tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
             if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
                 self.decrease_per_user_tx_count(authority);
             }
@@ -2429,7 +2432,7 @@ impl Queue {
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
         self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-        self.queued_tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+        self.record_queued_age(hash, enqueue_at_ms);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
@@ -2446,7 +2449,7 @@ impl Queue {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
             self.tx_enqueued_at_ms.remove(&hash);
-            self.queued_tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
             if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
                 self.decrease_per_user_tx_count(authority);
             }
@@ -2525,7 +2528,7 @@ impl Queue {
         self.tx_encoded_len.clear();
         self.tx_gas_cost.clear();
         self.tx_enqueued_at_ms.clear();
-        self.queued_tx_enqueued_at_ms.clear();
+        self.clear_queued_age_index();
         self.tx_gossip_payloads.clear();
         #[cfg(feature = "telemetry")]
         {
@@ -2564,7 +2567,7 @@ impl Queue {
                 }
                 return None;
             };
-            self.queued_tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -2605,7 +2608,7 @@ impl Queue {
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
                     self.tx_enqueued_at_ms.remove(&hash);
-                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
@@ -2615,7 +2618,7 @@ impl Queue {
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
-                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2646,7 +2649,7 @@ impl Queue {
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
                     self.tx_enqueued_at_ms.remove(&hash);
-                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
                     if let Some(reason) = Self::queue_rejection_reason(&e) {
                         let _ = self.events_sender.send(
                             TransactionEvent {
@@ -2663,7 +2666,7 @@ impl Queue {
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
-                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2728,7 +2731,7 @@ impl Queue {
                 }
                 return None;
             };
-            self.queued_tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -2768,7 +2771,7 @@ impl Queue {
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
                     self.tx_enqueued_at_ms.remove(&hash);
-                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
@@ -2778,7 +2781,7 @@ impl Queue {
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
-                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2807,7 +2810,7 @@ impl Queue {
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
                     self.tx_enqueued_at_ms.remove(&hash);
-                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
                     if let Some(reason) = Self::queue_rejection_reason(&e) {
                         let _ = self.events_sender.send(
                             TransactionEvent {
@@ -2824,7 +2827,7 @@ impl Queue {
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
-                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -3172,17 +3175,45 @@ impl Queue {
         )
     }
 
+    fn record_queued_age(&self, hash: SignedTxHash, enqueued_at_ms: u64) {
+        self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        self.queued_age_ring
+            .lock()
+            .push_back((hash, enqueued_at_ms));
+    }
+
+    fn remove_queued_age(&self, hash: &SignedTxHash) {
+        self.queued_tx_enqueued_at_ms.remove(hash);
+    }
+
+    fn clear_queued_age_index(&self) {
+        self.queued_tx_enqueued_at_ms.clear();
+        self.queued_age_ring.lock().clear();
+    }
+
     fn oldest_queued_tx_age_ms(&self) -> u64 {
+        if self.tx_hashes.is_empty() {
+            self.queued_age_ring.lock().clear();
+            return 0;
+        }
         let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        self.queued_tx_enqueued_at_ms
-            .iter()
-            .map(|entry| now_ms.saturating_sub(*entry.value()))
-            .max()
-            .unwrap_or(0)
+        let mut ring = self.queued_age_ring.lock();
+        while let Some(&(hash, enqueued_at_ms)) = ring.front() {
+            if self
+                .queued_tx_enqueued_at_ms
+                .get(&hash)
+                .is_some_and(|entry| *entry.value() == enqueued_at_ms)
+            {
+                return now_ms.saturating_sub(enqueued_at_ms);
+            }
+            ring.pop_front();
+        }
+        0
     }
 
     fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
-        self.queued_tx_enqueued_at_ms.clear();
+        self.clear_queued_age_index();
+        let mut age_entries = Vec::new();
         for hash in queued_hashes {
             let Some(enqueued_at_ms) = self
                 .tx_enqueued_at_ms
@@ -3192,7 +3223,10 @@ impl Queue {
                 continue;
             };
             self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            age_entries.push((hash, enqueued_at_ms));
         }
+        age_entries.sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
+        self.queued_age_ring.lock().extend(age_entries);
     }
 
     fn pressure_snapshot_with_tracked_count(
@@ -3314,7 +3348,7 @@ impl Queue {
                 #[cfg(feature = "telemetry")]
                 self.record_teu_dequeue(&hash, None);
                 self.tx_enqueued_at_ms.remove(&hash);
-                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 if let Ok(tx) = Arc::try_unwrap(tx_arc) {
                     let accepted = tx.into_accepted();
                     if self.is_expired_at(&accepted, now) {
@@ -3424,7 +3458,7 @@ impl Queue {
         self.tx_encoded_len.remove(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
-        self.queued_tx_enqueued_at_ms.remove(&hash);
+        self.remove_queued_age(&hash);
         self.tx_gossip_payloads.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
@@ -3451,7 +3485,7 @@ impl Queue {
             self.tx_encoded_len.remove(&hash);
             self.tx_gas_cost.remove(&hash);
             self.tx_enqueued_at_ms.remove(&hash);
-            self.queued_tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
             self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
                 self.removed_hashes.insert(hash, ());
@@ -3950,10 +3984,11 @@ impl Queue {
             .map(|entry| *entry.key())
             .collect();
 
-        for hash in queued_hashes {
+        for hash in queued_hashes.iter().copied() {
             self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
             self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
         }
+        self.rebuild_queued_age_index(queued_hashes);
 
         self.refresh_backpressure_state(self.active_len(), None);
         self.pressure_snapshot()
