@@ -30,7 +30,7 @@ pub mod isi {
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
-        nexus::DataSpaceCatalog,
+        nexus::{DataSpaceCatalog, DataSpaceId, LaneVisibility},
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
     };
     use iroha_logger::prelude::*;
@@ -62,6 +62,100 @@ pub mod isi {
                 format!("invalid asset definition alias: {err}").into(),
             )
         })
+    }
+
+    fn dataspace_id_for_alias_segment(
+        catalog: &DataSpaceCatalog,
+        dataspace_alias: &str,
+    ) -> Option<DataSpaceId> {
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            return Some(DataSpaceId::UNIVERSAL);
+        }
+        catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+    }
+
+    fn asset_definition_declared_home_dataspace(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition: &AssetDefinition,
+    ) -> Option<DataSpaceId> {
+        let dataspace_alias = definition
+            .alias()
+            .as_ref()
+            .map(|alias| alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                definition
+                    .id()
+                    .try_domain()
+                    .map(|domain| domain.dataspace().as_ref().to_owned())
+            });
+
+        match dataspace_alias {
+            Some(alias) => {
+                dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
+            }
+            None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
+                Some(DataSpaceId::UNIVERSAL)
+            }
+            None => None,
+        }
+    }
+
+    fn dataspace_is_public_or_universal(
+        state_transaction: &StateTransaction<'_, '_>,
+        dataspace_id: DataSpaceId,
+    ) -> bool {
+        dataspace_id == DataSpaceId::UNIVERSAL
+            || state_transaction
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| {
+                    lane.dataspace_id == dataspace_id && lane.visibility == LaneVisibility::Public
+                })
+    }
+
+    fn ensure_global_asset_definition_registered_on_authoritative_route(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition: &AssetDefinition,
+    ) -> Result<(), InstructionExecutionError> {
+        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
+            return Ok(());
+        }
+
+        let home_dataspace =
+            asset_definition_declared_home_dataspace(state_transaction, definition)
+                .unwrap_or(DataSpaceId::UNIVERSAL);
+        let route_dataspace = state_transaction
+            .current_dataspace_id
+            .or(state_transaction.world.current_dataspace_id);
+
+        if let Some(route_dataspace) = route_dataspace
+            && route_dataspace != home_dataspace
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "global asset definition {} must be registered on its authoritative dataspace {}; current route is {}",
+                    definition.id(),
+                    home_dataspace.as_u64(),
+                    route_dataspace.as_u64()
+                )
+                .into(),
+            ));
+        }
+
+        if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "global asset definition {} cannot be registered in restricted dataspace {}; use DataspaceRestricted balance policy",
+                    definition.id(),
+                    home_dataspace.as_u64()
+                )
+                .into(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn upsert_account_rekey_record(
@@ -1836,6 +1930,10 @@ pub mod isi {
         ) -> Result<(), Error> {
             let asset_definition = self.object().clone().build(authority);
             ensure_asset_definition_human_fields(&asset_definition)?;
+            ensure_global_asset_definition_registered_on_authoritative_route(
+                state_transaction,
+                &asset_definition,
+            )?;
 
             let asset_definition_id = asset_definition.id().clone();
             if state_transaction
@@ -2957,11 +3055,12 @@ mod tests {
         events::data::space_directory::{
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
+        isi::error::InstructionExecutionError,
         metadata::Metadata,
         name::Name,
         nexus::{
-            AssetPermissionManifest, DataSpaceId, DataSpaceMetadata, ManifestVersion,
-            UniversalAccountId,
+            AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+            LaneConfig, LaneId, LaneVisibility, ManifestVersion, UniversalAccountId,
         },
         nft::{Nft, NftId},
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
@@ -6889,6 +6988,76 @@ mod tests {
                 .is_none(),
             "escrow mapping should not be created"
         );
+    }
+
+    #[test]
+    fn register_global_asset_definition_rejects_restricted_dataspace_home() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let bpng = DataSpaceId::new(7);
+        let domain_id: DomainId = DomainId::try_new("digital-kina", "bpng").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id =
+            AssetDefinitionId::new(domain_id, "kina".parse().expect("asset definition name"));
+        let new_definition = NewAssetDefinition {
+            id: definition_id,
+            name: "Digital Kina".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: bpng,
+                alias: "bpng".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        tx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        tx.world.dataspace_catalog = dataspace_catalog;
+        tx.nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: bpng,
+                    alias: "bpng".to_owned(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        tx.current_dataspace_id = Some(bpng);
+        tx.world.current_dataspace_id = Some(bpng);
+
+        let err = Register::asset_definition(new_definition)
+            .execute(&authority, &mut tx)
+            .expect_err("restricted dataspaces must not register global asset definitions");
+
+        match err {
+            InstructionExecutionError::InvariantViolation(message) => {
+                assert!(
+                    message.contains("restricted dataspace"),
+                    "unexpected invariant message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

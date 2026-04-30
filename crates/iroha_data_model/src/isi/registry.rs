@@ -88,6 +88,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<offline::IssueOfflineNoteV2>,
     InstructionRegistry::register::<offline::RedeemOfflineNoteV2>,
     InstructionRegistry::register::<offline::AuditOfflineNoteV2>,
+    InstructionRegistry::register::<asset_alias::SetAssetDefinitionBalancePolicy>,
     InstructionRegistry::register::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
@@ -570,6 +571,9 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
         registry.register_with_id::<identifier::RevokeIdentifier>("identity::RevokeIdentifier");
     registry = registry.register_with_id::<asset_alias::SetAssetDefinitionAlias>(
         asset_alias::SetAssetDefinitionAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id::<asset_alias::SetAssetDefinitionBalancePolicy>(
+        asset_alias::SetAssetDefinitionBalancePolicy::WIRE_ID,
     );
     registry = registry.register_with_id::<asset_transfer_control::SetAssetTransferFreeze>(
         asset_transfer_control::SetAssetTransferFreeze::WIRE_ID,

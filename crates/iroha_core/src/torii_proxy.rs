@@ -115,6 +115,20 @@ pub enum ToriiReadEndpointV1 {
     AliasResolveIndex,
     /// `POST /v1/aliases/by_account`
     AliasLookupByAccount,
+    /// `GET /v1/explorer/asset-definitions/{id}`
+    ExplorerAssetDefinitionDetail,
+    /// `GET /v1/explorer/asset-definitions/{id}/econometrics`
+    ExplorerAssetDefinitionEconometrics,
+    /// `GET /v1/explorer/asset-definitions/{id}/snapshot`
+    ExplorerAssetDefinitionSnapshot,
+    /// `POST /v1/contracts/aliases/resolve`
+    ContractAliasResolve,
+    /// `GET /v1/contracts/state`
+    ContractStateGet,
+    /// `POST /v1/contracts/view`
+    ContractViewPost,
+    /// `POST /v1/contracts/view/batch`
+    ContractViewBatchPost,
 }
 
 /// Canonical routed read executed on an authoritative Torii peer.

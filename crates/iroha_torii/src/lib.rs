@@ -269,7 +269,9 @@ use iroha_data_model::{
     ChainId,
     account::{AccountAddress, AccountId},
     alias::AliasIndex,
-    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
+    asset::{
+        AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId, AssetId,
+    },
     block::{BlockHeader, proofs::BlockProofs},
     domain::DomainId,
     events::{
@@ -283,6 +285,7 @@ use iroha_data_model::{
     permission::Permission,
     query::SignedQuery,
     rwa::RwaId,
+    smart_contract::{ContractAddress, ContractAlias},
     transaction::{
         SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         signed::TransactionEntrypoint,
@@ -6563,7 +6566,13 @@ async fn handler_explorer_asset_definition_detail(
         .await?;
     }
     let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
-    routing::handle_v1_explorer_asset_definition_detail(app.state.clone(), definition_id).await
+    Ok(execute_torii_asset_definition_singleton_read(
+        &app,
+        ToriiReadEndpointV1::ExplorerAssetDefinitionDetail,
+        &definition_id,
+    )
+    .await
+    .into_response())
 }
 
 #[cfg(feature = "app_api")]
@@ -6586,8 +6595,13 @@ async fn handler_explorer_asset_definition_econometrics(
         .await?;
     }
     let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
-    routing::handle_v1_explorer_asset_definition_econometrics(app.state.clone(), definition_id)
-        .await
+    Ok(execute_torii_asset_definition_singleton_read(
+        &app,
+        ToriiReadEndpointV1::ExplorerAssetDefinitionEconometrics,
+        &definition_id,
+    )
+    .await
+    .into_response())
 }
 
 #[cfg(feature = "app_api")]
@@ -6610,7 +6624,13 @@ async fn handler_explorer_asset_definition_snapshot(
         .await?;
     }
     let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
-    routing::handle_v1_explorer_asset_definition_snapshot(app.state.clone(), definition_id).await
+    Ok(execute_torii_asset_definition_singleton_read(
+        &app,
+        ToriiReadEndpointV1::ExplorerAssetDefinitionSnapshot,
+        &definition_id,
+    )
+    .await
+    .into_response())
 }
 
 #[cfg(feature = "app_api")]
@@ -11110,7 +11130,7 @@ fn resolve_torii_target_account_routes(
         }
     })?;
 
-    let dataspaces: BTreeSet<_> = account_scope.map_or_else(
+    let mut dataspaces: BTreeSet<_> = account_scope.map_or_else(
         || {
             // Fresh private-dataspace accounts can be queryable on another authoritative peer
             // before the local world view can derive their account scope. Do not collapse those
@@ -11127,6 +11147,7 @@ fn resolve_torii_target_account_routes(
                 .collect()
         },
     );
+    dataspaces.extend(torii_public_dataspace_ids(app));
 
     torii_routes_for_dataspaces(app, dataspaces)
 }
@@ -11800,14 +11821,7 @@ fn torii_visible_account_read_routes(
 ) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let nexus = state_view.nexus();
-    let mut visible_dataspaces = BTreeSet::new();
-
-    for lane in nexus.lane_catalog.lanes() {
-        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public {
-            visible_dataspaces.insert(lane.dataspace_id);
-        }
-    }
+    let mut visible_dataspaces = torii_public_dataspace_ids(app);
 
     if let Some(caller) = caller
         && let Ok(account) = world.account(caller)
@@ -11821,6 +11835,21 @@ fn torii_visible_account_read_routes(
         .into_iter()
         .filter(|route| visible_dataspaces.contains(&route.dataspace_id))
         .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    let mut dataspaces = BTreeSet::from([DataSpaceId::UNIVERSAL]);
+
+    for lane in nexus.lane_catalog.lanes() {
+        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public {
+            dataspaces.insert(lane.dataspace_id);
+        }
+    }
+
+    dataspaces
 }
 
 #[cfg(feature = "app_api")]
@@ -12589,6 +12618,13 @@ struct ToriiFanoutJsonPayloads {
     diagnostics: ToriiFanoutDiagnostics,
 }
 
+#[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct ToriiFanoutRoutedJsonPayloads {
+    payloads: Vec<(RoutingDecision, Value)>,
+    diagnostics: ToriiFanoutDiagnostics,
+}
+
 fn torii_alias_routes_denied_warning_header() -> HeaderValue {
     HeaderValue::from_static(r#"199 - "one or more alias routes were denied""#)
 }
@@ -12804,6 +12840,67 @@ where
     }
 
     Ok(ToriiFanoutJsonPayloads {
+        payloads,
+        diagnostics,
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn collect_torii_routed_list_json_payloads<F, Fut>(
+    routes: &[RoutingDecision],
+    mut fetch: F,
+) -> Result<ToriiFanoutRoutedJsonPayloads, Response>
+where
+    F: FnMut(RoutingDecision) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let mut payloads = Vec::with_capacity(routes.len());
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for _ in routes {
+        diagnostics.record_attempt();
+    }
+    let responses = futures_util::future::join_all(routes.iter().map(|route| fetch(*route))).await;
+
+    for (route, response) in routes.iter().copied().zip(responses) {
+        if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        match torii_json_body_value(response).await {
+            Ok(payload) => {
+                diagnostics.record_success();
+                payloads.push((route, payload));
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return Err(with_torii_fanout_headers(response, diagnostics));
+            }
+        }
+    }
+
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
+    }
+
+    Ok(ToriiFanoutRoutedJsonPayloads {
         payloads,
         diagnostics,
     })
@@ -13793,6 +13890,325 @@ where
     norito::to_bytes(value).map_err(|error| {
         torii_internal_json_error(format!("failed to encode merged typed payload: {error}"))
     })
+}
+
+#[cfg(feature = "app_api")]
+fn dataspace_id_for_alias_segment(app: &AppState, dataspace_alias: &str) -> Option<DataSpaceId> {
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    app.state
+        .view()
+        .nexus()
+        .dataspace_catalog
+        .by_alias(dataspace_alias)
+        .map(|entry| entry.id)
+}
+
+#[cfg(feature = "app_api")]
+fn asset_definition_home_dataspace_id(
+    app: &AppState,
+    definition_id: &AssetDefinitionId,
+) -> Option<DataSpaceId> {
+    if let Some(domain) = definition_id.try_domain() {
+        return dataspace_id_for_alias_segment(app, domain.dataspace().as_ref());
+    }
+
+    let state_view = app.state.view();
+    let definition = state_view.world().asset_definition(definition_id).ok()?;
+    if let Some(alias) = definition.alias().as_ref() {
+        return dataspace_id_for_alias_segment(app, alias.dataspace_segment());
+    }
+    if let Some(domain) = definition.id.try_domain() {
+        return dataspace_id_for_alias_segment(app, domain.dataspace().as_ref());
+    }
+    (definition.balance_scope_policy() == AssetBalancePolicy::Global)
+        .then_some(DataSpaceId::UNIVERSAL)
+}
+
+#[cfg(feature = "app_api")]
+fn torii_asset_definition_read_route(
+    app: &AppState,
+    definition_id: &AssetDefinitionId,
+) -> Option<RoutingDecision> {
+    asset_definition_home_dataspace_id(app, definition_id)
+        .and_then(|dataspace_id| resolve_torii_route_for_dataspace_id(app, dataspace_id).ok())
+}
+
+#[cfg(feature = "app_api")]
+fn contract_alias_dataspace_id(app: &AppState, alias: &ContractAlias) -> Option<DataSpaceId> {
+    dataspace_id_for_alias_segment(app, alias.dataspace_segment())
+}
+
+#[cfg(feature = "app_api")]
+fn torii_contract_target_read_route(
+    app: &AppState,
+    address: Option<&ContractAddress>,
+    alias: Option<&ContractAlias>,
+) -> Option<RoutingDecision> {
+    let dataspace_id = address
+        .and_then(|address| address.dataspace_id().ok())
+        .or_else(|| alias.and_then(|alias| contract_alias_dataspace_id(app, alias)))?;
+    resolve_torii_route_for_dataspace_id(app, dataspace_id).ok()
+}
+
+#[cfg(feature = "app_api")]
+fn parse_asset_definition_item_literal(literal: &str) -> Option<AssetDefinitionId> {
+    literal
+        .parse::<AssetDefinitionId>()
+        .ok()
+        .or_else(|| AssetDefinitionId::parse_address_literal(literal).ok())
+}
+
+#[cfg(feature = "app_api")]
+fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpaceId> {
+    let object = item.as_object()?;
+    if let Some(alias_literal) = object
+        .get("asset_alias")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|literal| !literal.is_empty())
+        && let Ok(alias) = alias_literal.parse::<AssetDefinitionAlias>()
+    {
+        return dataspace_id_for_alias_segment(app, alias.dataspace_segment());
+    }
+
+    for key in ["asset_definition_id", "asset"] {
+        if let Some(definition_id) = object
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(parse_asset_definition_item_literal)
+        {
+            return asset_definition_home_dataspace_id(app, &definition_id);
+        }
+    }
+
+    for key in ["asset_id", "asset"] {
+        if let Some(asset_id) = object
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|literal| AssetId::parse_literal(literal).ok())
+        {
+            return asset_definition_home_dataspace_id(app, asset_id.definition());
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "app_api")]
+fn asset_item_has_global_scope(item: &Value) -> bool {
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+
+    if let Some(scope) = object.get("scope").and_then(Value::as_str) {
+        return scope == "global";
+    }
+
+    for key in ["asset_id", "asset"] {
+        if let Some(asset_id) = object
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|literal| AssetId::parse_literal(literal).ok())
+        {
+            return matches!(asset_id.scope(), AssetBalanceScope::Global);
+        }
+    }
+
+    false
+}
+
+#[cfg(feature = "app_api")]
+fn route_is_public_or_universal(app: &AppState, route: RoutingDecision) -> bool {
+    if route.dataspace_id == DataSpaceId::UNIVERSAL {
+        return true;
+    }
+    app.state
+        .view()
+        .nexus()
+        .lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| {
+            lane.dataspace_id == route.dataspace_id
+                && lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn should_keep_authoritative_global_item(
+    app: &AppState,
+    route: RoutingDecision,
+    item: &Value,
+) -> bool {
+    if !asset_item_has_global_scope(item) {
+        return true;
+    }
+
+    if let Some(home_dataspace_id) = asset_item_home_dataspace_id(app, item) {
+        return home_dataspace_id == route.dataspace_id;
+    }
+
+    route_is_public_or_universal(app, route)
+}
+
+#[cfg(feature = "app_api")]
+fn filter_non_authoritative_global_list_rows(
+    app: &AppState,
+    endpoint: ToriiReadEndpointV1,
+    payloads: Vec<(RoutingDecision, Value)>,
+) -> Result<Vec<(RoutingDecision, Value)>, Response> {
+    if !matches!(
+        endpoint,
+        ToriiReadEndpointV1::AccountAssetsGet
+            | ToriiReadEndpointV1::AccountAssetsQuery
+            | ToriiReadEndpointV1::AssetHoldersGet
+            | ToriiReadEndpointV1::AssetHoldersQuery
+    ) {
+        return Ok(payloads);
+    }
+
+    let mut filtered_payloads = Vec::with_capacity(payloads.len());
+    for (route, payload) in payloads {
+        let Some(object) = payload.as_object() else {
+            return Err(torii_internal_json_error(
+                "expected JSON object payload while filtering routed list response",
+            ));
+        };
+        let Some(items) = object.get("items").and_then(Value::as_array) else {
+            return Err(torii_internal_json_error(
+                "expected `items` array while filtering routed list response",
+            ));
+        };
+
+        let mut filtered_items = Vec::with_capacity(items.len());
+        for item in items {
+            if should_keep_authoritative_global_item(app, route, item) {
+                filtered_items.push(item.clone());
+            } else {
+                let asset = item
+                    .as_object()
+                    .and_then(|object| object.get("asset"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unknown>");
+                iroha_logger::warn!(
+                    dataspace_id = %route.dataspace_id,
+                    asset,
+                    "suppressing non-authoritative global asset row from routed Torii merge"
+                );
+            }
+        }
+
+        let mut filtered = object.clone();
+        filtered.insert(
+            "total".into(),
+            Value::from(u64::try_from(filtered_items.len()).unwrap_or(u64::MAX)),
+        );
+        filtered.insert("items".into(), Value::Array(filtered_items));
+        filtered_payloads.push((route, Value::Object(filtered)));
+    }
+
+    Ok(filtered_payloads)
+}
+
+#[cfg(feature = "app_api")]
+fn filter_non_authoritative_global_portfolio_rows(
+    app: &AppState,
+    endpoint: ToriiReadEndpointV1,
+    payloads: Vec<(RoutingDecision, Value)>,
+) -> Result<Vec<(RoutingDecision, Value)>, Response> {
+    if !matches!(endpoint, ToriiReadEndpointV1::AccountsPortfolio) {
+        return Ok(payloads);
+    }
+
+    let mut filtered_payloads = Vec::with_capacity(payloads.len());
+    for (route, payload) in payloads {
+        let Some(object) = payload.as_object() else {
+            return Err(torii_internal_json_error(
+                "expected JSON object payload while filtering portfolio response",
+            ));
+        };
+        let Some(dataspaces) = object.get("dataspaces").and_then(Value::as_array) else {
+            return Err(torii_internal_json_error(
+                "expected `dataspaces` array while filtering portfolio response",
+            ));
+        };
+
+        let mut filtered_dataspaces = Vec::with_capacity(dataspaces.len());
+        let mut total_accounts = 0_u64;
+        let mut total_positions = 0_u64;
+        for dataspace in dataspaces {
+            let Some(dataspace_object) = dataspace.as_object() else {
+                return Err(torii_internal_json_error(
+                    "portfolio dataspace rows must be JSON objects",
+                ));
+            };
+            let Some(accounts) = dataspace_object.get("accounts").and_then(Value::as_array) else {
+                return Err(torii_internal_json_error(
+                    "portfolio dataspace rows must include `accounts`",
+                ));
+            };
+
+            let mut filtered_accounts = Vec::with_capacity(accounts.len());
+            for account in accounts {
+                let Some(account_object) = account.as_object() else {
+                    return Err(torii_internal_json_error(
+                        "portfolio account rows must be JSON objects",
+                    ));
+                };
+                let Some(assets) = account_object.get("assets").and_then(Value::as_array) else {
+                    return Err(torii_internal_json_error(
+                        "portfolio account rows must include `assets`",
+                    ));
+                };
+
+                let mut filtered_assets = Vec::with_capacity(assets.len());
+                for asset in assets {
+                    if should_keep_authoritative_global_item(app, route, asset) {
+                        filtered_assets.push(asset.clone());
+                    } else {
+                        let asset_literal = asset
+                            .as_object()
+                            .and_then(|object| {
+                                object
+                                    .get("asset_id")
+                                    .or_else(|| object.get("asset"))
+                                    .or_else(|| object.get("asset_definition_id"))
+                            })
+                            .and_then(Value::as_str)
+                            .unwrap_or("<unknown>");
+                        iroha_logger::warn!(
+                            dataspace_id = %route.dataspace_id,
+                            asset = asset_literal,
+                            "suppressing non-authoritative global asset row from portfolio merge"
+                        );
+                    }
+                }
+
+                let mut filtered_account = account_object.clone();
+                total_accounts = total_accounts.saturating_add(1);
+                total_positions = total_positions.saturating_add(filtered_assets.len() as u64);
+                filtered_account.insert("assets".into(), Value::Array(filtered_assets));
+                filtered_accounts.push(Value::Object(filtered_account));
+            }
+
+            let mut filtered_dataspace = dataspace_object.clone();
+            filtered_dataspace.insert("accounts".into(), Value::Array(filtered_accounts));
+            filtered_dataspaces.push(Value::Object(filtered_dataspace));
+        }
+
+        let mut totals = norito::json::Map::new();
+        totals.insert("accounts".into(), Value::from(total_accounts));
+        totals.insert("positions".into(), Value::from(total_positions));
+
+        let mut filtered = object.clone();
+        filtered.insert("totals".into(), Value::Object(totals));
+        filtered.insert("dataspaces".into(), Value::Array(filtered_dataspaces));
+        filtered_payloads.push((route, Value::Object(filtered)));
+    }
+
+    Ok(filtered_payloads)
 }
 
 #[cfg(feature = "app_api")]
@@ -17800,6 +18216,60 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::ExplorerAssetDefinitionDetail => {
+            let Ok(definition_id) = torii_proxy_path_arg(&request, 0, "definition_id") else {
+                return torii_proxy_path_arg(&request, 0, "definition_id").unwrap_err();
+            };
+            let definition_id = match parse_asset_definition_id(app.as_ref(), &definition_id) {
+                Ok(definition_id) => definition_id,
+                Err(err) => return err.into_response(),
+            };
+            finish_torii_read_result(
+                routing::handle_v1_explorer_asset_definition_detail(
+                    app.state.clone(),
+                    definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::ExplorerAssetDefinitionEconometrics => {
+            let Ok(definition_id) = torii_proxy_path_arg(&request, 0, "definition_id") else {
+                return torii_proxy_path_arg(&request, 0, "definition_id").unwrap_err();
+            };
+            let definition_id = match parse_asset_definition_id(app.as_ref(), &definition_id) {
+                Ok(definition_id) => definition_id,
+                Err(err) => return err.into_response(),
+            };
+            finish_torii_read_result(
+                routing::handle_v1_explorer_asset_definition_econometrics(
+                    app.state.clone(),
+                    definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::ExplorerAssetDefinitionSnapshot => {
+            let Ok(definition_id) = torii_proxy_path_arg(&request, 0, "definition_id") else {
+                return torii_proxy_path_arg(&request, 0, "definition_id").unwrap_err();
+            };
+            let definition_id = match parse_asset_definition_id(app.as_ref(), &definition_id) {
+                Ok(definition_id) => definition_id,
+                Err(err) => return err.into_response(),
+            };
+            finish_torii_read_result(
+                routing::handle_v1_explorer_asset_definition_snapshot(
+                    app.state.clone(),
+                    definition_id,
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::DomainsList => {
             let params = match decode_torii_proxy_query::<crate::filter::Pagination>(
                 request.query_string.as_deref(),
@@ -18080,6 +18550,63 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::ContractAliasResolve => {
+            let request = match decode_torii_proxy_json_body::<
+                routing::ContractAliasResolveRequestDto,
+            >(&request.body, "contract alias resolve body")
+            {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                execute_contract_alias_resolve_local_read(app, &request),
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::ContractStateGet => {
+            let query = match decode_torii_proxy_query::<routing::ContractStateQuery>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(query) => query,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(query))
+                    .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::ContractViewPost => {
+            let request = match decode_torii_proxy_json_body::<routing::ContractViewDto>(
+                &request.body,
+                "contract view body",
+            ) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                routing::handle_post_contract_view(app.state.clone(), NoritoJson(request)).await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::ContractViewBatchPost => {
+            let request = match decode_torii_proxy_json_body::<routing::ContractViewBatchDto>(
+                &request.body,
+                "contract view batch body",
+            ) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                routing::handle_post_contract_view_batch(app.state.clone(), NoritoJson(request))
+                    .await,
+                routing_decision,
+                routed_by,
+            )
+        }
     }
 }
 
@@ -18272,7 +18799,7 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
         ));
     }
 
-    let collected = collect_torii_list_json_payloads(&routes, |route| {
+    let collected = collect_torii_routed_list_json_payloads(&routes, |route| {
         execute_torii_read_for_route(
             app,
             route,
@@ -18287,7 +18814,14 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
     })
     .await?;
 
-    Ok((routes, collected.payloads, collected.diagnostics))
+    let payloads =
+        filter_non_authoritative_global_list_rows(app.as_ref(), endpoint, collected.payloads)?;
+    let payloads =
+        filter_non_authoritative_global_portfolio_rows(app.as_ref(), endpoint, payloads)?;
+    let routes = payloads.iter().map(|(route, _)| *route).collect();
+    let payloads = payloads.into_iter().map(|(_, payload)| payload).collect();
+
+    Ok((routes, payloads, collected.diagnostics))
 }
 
 #[cfg(feature = "app_api")]
@@ -18839,6 +19373,30 @@ async fn execute_torii_fanout_singleton_read(
         ToriiProxyResponseFormatV1::Json,
     )
     .await
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_asset_definition_singleton_read(
+    app: &SharedAppState,
+    endpoint: ToriiReadEndpointV1,
+    definition_id: &AssetDefinitionId,
+) -> Response {
+    let definition_literal = definition_id.to_string();
+    if let Some(route) = torii_asset_definition_read_route(app.as_ref(), definition_id) {
+        return execute_torii_singleton_read_for_routes(
+            app,
+            vec![route],
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            endpoint,
+            vec![definition_literal],
+            None,
+            Vec::new(),
+        )
+        .await;
+    }
+
+    execute_torii_fanout_singleton_read(app, endpoint, vec![definition_literal], None, Vec::new())
+        .await
 }
 
 #[cfg(feature = "app_api")]
@@ -22160,7 +22718,7 @@ async fn handler_get_contract_state(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ContractStateQuery>,
-) -> Result<JsonBody<crate::routing::ContractStateResponse>, Error> {
+) -> Result<AxResponse, Error> {
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -22169,7 +22727,35 @@ async fn handler_get_contract_state(
         "state",
     )
     .await?;
-    crate::routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(q)).await
+    let contract_address = q
+        .contract_address
+        .as_deref()
+        .and_then(|raw| raw.parse::<ContractAddress>().ok());
+    let contract_alias = q
+        .contract_alias
+        .as_deref()
+        .and_then(|raw| raw.parse::<ContractAlias>().ok());
+    if let Some(route) = torii_contract_target_read_route(
+        app.as_ref(),
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+    ) {
+        let query_string = encode_torii_proxy_query(&q)?;
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::ContractStateGet,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await
+        .into_response());
+    }
+
+    crate::routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(q))
+        .await
+        .map(IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -24331,6 +24917,27 @@ async fn handler_post_contract_view(
         "view",
     )
     .await?;
+    if let Some(route) = torii_contract_target_read_route(
+        app.as_ref(),
+        request.0.contract_address.as_ref(),
+        request.0.contract_alias.as_ref(),
+    ) {
+        let body = norito::json::to_vec(&request.0).map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to encode routed contract view request: {error}"
+            )))
+        })?;
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::ContractViewPost,
+            Vec::new(),
+            None,
+            body,
+        )
+        .await
+        .into_response());
+    }
     match crate::routing::handle_post_contract_view(app.state.clone(), request).await {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -24356,6 +24963,50 @@ async fn handler_post_contract_view_batch(
         "view_batch",
     )
     .await?;
+    let mut batch_route = None;
+    let mut batch_route_conflict = false;
+    let mut all_items_routed = !request.0.items.is_empty();
+    for item in &request.0.items {
+        let item_route = torii_contract_target_read_route(
+            app.as_ref(),
+            item.contract_address.as_ref(),
+            item.contract_alias.as_ref(),
+        );
+        match item_route {
+            Some(item_route) => match batch_route {
+                Some(existing) if existing != item_route => {
+                    batch_route_conflict = true;
+                    break;
+                }
+                Some(_) => {}
+                None => batch_route = Some(item_route),
+            },
+            None => {
+                all_items_routed = false;
+                break;
+            }
+        }
+    }
+    if let Some(route) = batch_route
+        && all_items_routed
+        && !batch_route_conflict
+    {
+        let body = norito::json::to_vec(&request.0).map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to encode routed contract view batch request: {error}"
+            )))
+        })?;
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::ContractViewBatchPost,
+            Vec::new(),
+            None,
+            body,
+        )
+        .await
+        .into_response());
+    }
     match crate::routing::handle_post_contract_view_batch(app.state.clone(), request).await {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -28536,12 +29187,12 @@ async fn handler_asset_alias_resolve(
     )
 }
 
-async fn handler_contract_alias_resolve(
-    State(app): State<SharedAppState>,
-    NoritoJson(request): NoritoJson<routing::ContractAliasResolveRequestDto>,
+fn execute_contract_alias_resolve_local_read(
+    app: &SharedAppState,
+    request: &routing::ContractAliasResolveRequestDto,
 ) -> Result<AxResponse, Error> {
     let Some((contract_alias, contract_address, binding, dataspace_alias)) =
-        resolve_contract_alias_on_chain(&app, &request.contract_alias)?
+        resolve_contract_alias_on_chain(app, &request.contract_alias)?
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
@@ -28559,6 +29210,36 @@ async fn handler_contract_alias_resolve(
             .map(|record| routing::contract_alias_binding_dto(record, now_ms)),
         "world_state",
     )
+}
+
+async fn handler_contract_alias_resolve(
+    State(app): State<SharedAppState>,
+    NoritoJson(request): NoritoJson<routing::ContractAliasResolveRequestDto>,
+) -> Result<AxResponse, Error> {
+    let alias = ContractAlias::from_str(request.contract_alias.trim()).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    if let Some(route) = torii_contract_target_read_route(app.as_ref(), None, Some(&alias)) {
+        let body = norito::json::to_vec(&request).map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to encode routed contract alias resolve request: {error}"
+            )))
+        })?;
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::ContractAliasResolve,
+            Vec::new(),
+            None,
+            body,
+        )
+        .await
+        .into_response());
+    }
+
+    execute_contract_alias_resolve_local_read(&app, &request)
 }
 
 #[cfg(feature = "app_api")]
@@ -37909,12 +38590,16 @@ pub(crate) mod tests_runtime_handlers {
 
         assert_eq!(
             dataspaces,
-            std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, restricted_dataspace]),
-            "signed/internal account reads should only fan out across the target account scope",
+            std::collections::BTreeSet::from([
+                DataSpaceId::UNIVERSAL,
+                governance_dataspace,
+                restricted_dataspace,
+            ]),
+            "signed/internal account reads should fan out across the target account scope plus public dataspaces",
         );
         assert!(
-            !dataspaces.contains(&governance_dataspace),
-            "unrelated public dataspaces must be excluded from target-account routing",
+            dataspaces.contains(&governance_dataspace),
+            "public dataspaces must remain visible in target-account routing",
         );
     }
 

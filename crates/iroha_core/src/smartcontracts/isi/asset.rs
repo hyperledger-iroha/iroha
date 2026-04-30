@@ -24,9 +24,9 @@ pub mod isi {
     use iroha_data_model::{
         asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
-            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlRecord,
-            AssetTransferControlStoreV1, AssetTransferControlWindow, AssetTransferLimit,
-            AssetTransferUsageBucket, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
+            AssetBalancePolicy, AssetIssuerUsagePolicyV1, AssetSubjectBindingV1,
+            AssetTransferControlRecord, AssetTransferControlStoreV1, AssetTransferControlWindow,
+            AssetTransferLimit, AssetTransferUsageBucket, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         },
         events::data::prelude::{AccountEvent, AssetEvent, MetadataChanged},
@@ -34,7 +34,7 @@ pub mod isi {
             RemoveAssetKeyValue, SetAssetKeyValue, SetAssetTransferBlacklist,
             SetAssetTransferControl, SetAssetTransferFreeze, error::MintabilityError,
         },
-        nexus::{CapabilityRequest, ManifestVerdict},
+        nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
     };
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{json::Json, numeric::Numeric};
@@ -696,6 +696,77 @@ pub mod isi {
         }
     }
 
+    fn dataspace_id_for_alias_segment(
+        catalog: &DataSpaceCatalog,
+        dataspace_alias: &str,
+    ) -> Option<DataSpaceId> {
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            return Some(DataSpaceId::UNIVERSAL);
+        }
+        catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+    }
+
+    fn asset_definition_home_dataspace_id(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition: &AssetDefinition,
+    ) -> Option<DataSpaceId> {
+        let dataspace_alias = definition
+            .alias()
+            .as_ref()
+            .map(|alias| alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                definition
+                    .id()
+                    .try_domain()
+                    .map(|domain| domain.dataspace().as_ref().to_owned())
+            });
+
+        match dataspace_alias {
+            Some(alias) => {
+                dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
+            }
+            None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
+                Some(DataSpaceId::UNIVERSAL)
+            }
+            None => None,
+        }
+    }
+
+    fn ensure_global_asset_write_on_authoritative_route(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition_id: &AssetDefinitionId,
+        operation: &str,
+    ) -> Result<(), Error> {
+        let definition = state_transaction
+            .world
+            .asset_definition(definition_id)
+            .map_err(Error::from)?;
+        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
+            return Ok(());
+        }
+
+        let home_dataspace = asset_definition_home_dataspace_id(state_transaction, &definition)
+            .unwrap_or(DataSpaceId::UNIVERSAL);
+        let route_dataspace = state_transaction
+            .current_dataspace_id
+            .or(state_transaction.world.current_dataspace_id);
+
+        if let Some(route_dataspace) = route_dataspace
+            && route_dataspace != home_dataspace
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "global asset {definition_id} {operation} must execute on authoritative dataspace {}; current route is {}",
+                    home_dataspace.as_u64(),
+                    route_dataspace.as_u64()
+                )
+                .into(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Source-account guard to apply when validating a transparent numeric transfer.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum NumericAssetTransferSourcePolicy {
@@ -713,6 +784,11 @@ pub mod isi {
         amount: &Numeric,
         source_policy: NumericAssetTransferSourcePolicy,
     ) -> Result<(AssetId, AssetId), Error> {
+        ensure_global_asset_write_on_authoritative_route(
+            state_transaction,
+            source_id.definition(),
+            "transfer",
+        )?;
         let source_id = state_transaction
             .world
             .resolve_asset_id_for_current_scope(source_id)?;
@@ -862,6 +938,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_id = self.destination().clone();
+            ensure_global_asset_write_on_authoritative_route(
+                state_transaction,
+                asset_id.definition(),
+                "mint",
+            )?;
             let resolved_asset_id = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
@@ -939,6 +1020,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_id = self.destination().clone();
+            ensure_global_asset_write_on_authoritative_route(
+                state_transaction,
+                asset_id.definition(),
+                "burn",
+            )?;
             let resolved_asset_id = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
@@ -3249,6 +3335,52 @@ pub mod query {
                     .is_none(),
                 "global bucket must stay empty for restricted assets"
             );
+        }
+
+        #[test]
+        fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            .build(&ALICE_ID);
+
+            let world = World::with([domain], [account], [asset_def]);
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let private_dataspace = DataSpaceId::new(7);
+            stx.current_dataspace_id = Some(private_dataspace);
+            stx.world.current_dataspace_id = Some(private_dataspace);
+
+            let mint_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+            let err = Mint::asset_numeric(5_u32, mint_id)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("global asset writes must use the authoritative route");
+
+            match err {
+                InstructionExecutionError::InvariantViolation(message) => {
+                    assert!(
+                        message.contains("authoritative dataspace"),
+                        "unexpected invariant message: {message}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
         }
 
         #[test]

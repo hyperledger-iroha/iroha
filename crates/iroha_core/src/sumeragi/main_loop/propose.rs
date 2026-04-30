@@ -1194,7 +1194,7 @@ impl Actor {
                 })
     }
 
-    fn local_same_height_vote_blocks_fresh_proposal(
+    pub(super) fn local_same_height_vote_blocks_fresh_proposal(
         &self,
         proposal_height: u64,
         proposal_view: u64,
@@ -1233,17 +1233,21 @@ impl Actor {
             let tip_height = self.state.committed_height();
             let tip_hash = self.state.latest_block_hash_fast();
             let pending_age = pending.progress_age(now).max(pending.age());
-            if block_active_tip_owner
+            let active_tip_owner = block_active_tip_owner
                 && self.pending_block_is_active_for_tip(
                     existing_vote.block_hash,
                     pending,
                     tip_height,
                     tip_hash,
-                )
-            {
-                return true;
-            }
-            if pending_age < min_stale_age {
+                );
+            // Keep old-view active-owner protection through the hard stale window, but do
+            // not let a no-QC branch anchor fresh proposal assembly forever.
+            let stale_age = if active_tip_owner {
+                min_stale_age.saturating_mul(3)
+            } else {
+                min_stale_age
+            };
+            if pending_age < stale_age {
                 return true;
             }
         }
