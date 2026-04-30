@@ -503,7 +503,10 @@ public enum Halo2IPAOpeningProof {
     }
 
     private static func kateDivision(_ polynomial: [PastaFp], by point: PastaFp) -> [PastaFp] {
-        precondition(polynomial.count > 1)
+        precondition(!polynomial.isEmpty)
+        guard polynomial.count > 1 else {
+            return []
+        }
         let negPoint = -point
         var quotient = [PastaFp](repeating: .zero, count: polynomial.count - 1)
         var tmp = PastaFp.zero
@@ -553,7 +556,9 @@ public enum Halo2IPAOpeningProof {
     }
 
     private static func computeS(challenges: [PastaFp], initial: PastaFp) -> [PastaFp] {
-        precondition(!challenges.isEmpty)
+        guard !challenges.isEmpty else {
+            return [initial]
+        }
         var values = [PastaFp](repeating: .zero, count: 1 << challenges.count)
         values[0] = initial
         for (idx, challenge) in challenges.reversed().enumerated() {

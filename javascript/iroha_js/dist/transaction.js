@@ -2661,16 +2661,37 @@ function isTerminalStatus(status) {
   if (!status || typeof status !== "object") {
     return false;
   }
-  const value = status.status;
-  if (typeof value !== "string") {
+  const labels = [];
+  const collect = (value) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    if (typeof value.status === "string") {
+      labels.push(value.status);
+    } else if (value.status && typeof value.status === "object") {
+      collect(value.status);
+    }
+    if (typeof value.kind === "string") {
+      labels.push(value.kind);
+    }
+    if (typeof value.type === "string") {
+      labels.push(value.type);
+    }
+  };
+  collect(status);
+  if (labels.length === 0) {
     return false;
   }
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes("committed") ||
-    normalized.includes("rejected") ||
-    normalized.includes("failed")
-  );
+  return labels.some((label) => {
+    const normalized = label.toLowerCase();
+    return (
+      normalized.includes("committed") ||
+      normalized.includes("applied") ||
+      normalized.includes("rejected") ||
+      normalized.includes("failed") ||
+      normalized.includes("expired")
+    );
+  });
 }
 
 function toBuffer(value) {
