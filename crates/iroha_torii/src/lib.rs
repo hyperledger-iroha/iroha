@@ -10957,26 +10957,53 @@ fn insert_route_transport_header(response: &mut Response, transport: &'static st
     );
 }
 
+const PREFER_RETURN_MINIMAL: &str = "return=minimal";
+
+fn header_contains_preference(value: &HeaderValue, preference: &str) -> bool {
+    value.to_str().is_ok_and(|raw| {
+        raw.split(',')
+            .any(|part| part.trim().eq_ignore_ascii_case(preference))
+    })
+}
+
+fn transaction_submission_prefers_minimal_response(headers: &HeaderMap) -> bool {
+    headers
+        .get_all("prefer")
+        .iter()
+        .any(|value| header_contains_preference(value, PREFER_RETURN_MINIMAL))
+}
+
 fn transaction_submission_response(
     app: &AppState,
     tx_hash: HashOf<SignedTransaction>,
     routing_decision: RoutingDecision,
     routed_by: &'static str,
+    minimal_response: bool,
 ) -> Response {
-    let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
-    let submitted_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0);
     let tx_hash_header = tx_hash.to_string();
-    let payload = TransactionSubmissionReceiptPayload {
-        tx_hash,
-        submitted_at_ms,
-        submitted_at_height,
-        signer: app.da_receipt_signer.public_key().clone(),
+    let mut response = if minimal_response {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::ACCEPTED;
+        response.headers_mut().insert(
+            HeaderName::from_static("preference-applied"),
+            HeaderValue::from_static(PREFER_RETURN_MINIMAL),
+        );
+        response
+    } else {
+        let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
+        let submitted_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0);
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash,
+            submitted_at_ms,
+            submitted_at_height,
+            signer: app.da_receipt_signer.public_key().clone(),
+        };
+        let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
+        (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response()
     };
-    let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
-    let mut response = (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response();
     if let Ok(header) = HeaderValue::from_str(&tx_hash_header) {
         response
             .headers_mut()
@@ -19102,6 +19129,7 @@ async fn execute_incoming_torii_proxy_request(
                                     tx_hash,
                                     routing_decision,
                                     "proxy",
+                                    false,
                                 ),
                                 Err(error) => error.into_response(),
                             }
@@ -26961,12 +26989,25 @@ async fn handler_post_transaction(
     }
     let tx_hash = transaction.hash();
     let transaction = TransactionEntrypoint::External(transaction);
-    let accepted_tx = routing::accept_transaction_for_ingress(
-        app.chain_id.clone(),
-        app.state.clone(),
-        transaction.clone(),
-        &app.telemetry,
-    )?;
+    let accepted_tx = {
+        let chain_id = app.chain_id.clone();
+        let state = app.state.clone();
+        let transaction_for_admission = transaction.clone();
+        let telemetry = app.telemetry.clone();
+        tokio::task::spawn_blocking(move || {
+            routing::accept_transaction_for_ingress(
+                chain_id,
+                state,
+                transaction_for_admission,
+                &telemetry,
+            )
+        })
+        .await
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: "transaction_admission_worker_failed",
+            message: error.to_string(),
+        })??
+    };
     #[allow(unused_variables)]
     let routing_decision = app
         .queue
@@ -26981,9 +27022,140 @@ async fn handler_post_transaction(
         app.state.clone(),
         accepted_tx,
     )?;
-    let response =
-        transaction_submission_response(app.as_ref(), tx_hash, routing_decision, "local");
+    let response = transaction_submission_response(
+        app.as_ref(),
+        tx_hash,
+        routing_decision,
+        "local",
+        transaction_submission_prefers_minimal_response(&headers),
+    );
     Ok(response)
+}
+
+fn decode_transaction_batch_payloads(
+    payloads: Vec<Vec<u8>>,
+) -> Result<Vec<SignedTransaction>, Error> {
+    payloads
+        .into_iter()
+        .enumerate()
+        .map(|(idx, payload)| {
+            <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+                payload.as_slice(),
+            )
+            .map_err(|error| Error::AppQueryValidation {
+                code: "invalid_transaction_batch_payload",
+                message: format!("transaction batch item {idx} could not be decoded: {error}"),
+            })
+        })
+        .collect()
+}
+
+fn transaction_batch_submission_response(accepted_count: usize) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::ACCEPTED;
+    response.headers_mut().insert(
+        HeaderName::from_static("preference-applied"),
+        HeaderValue::from_static(PREFER_RETURN_MINIMAL),
+    );
+    if let Ok(header) = HeaderValue::from_str(&accepted_count.to_string()) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-transactions-accepted"),
+            header,
+        );
+    }
+    response
+}
+
+async fn handler_post_transactions_batch(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Norito(payloads): Norito<Vec<Vec<u8>>>,
+) -> Result<Response, Error> {
+    if payloads.is_empty() {
+        return Err(Error::AppQueryValidation {
+            code: "empty_transaction_batch",
+            message: "transaction batch must contain at least one signed transaction".to_owned(),
+        });
+    }
+
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+
+    let transactions =
+        tokio::task::spawn_blocking(move || decode_transaction_batch_payloads(payloads))
+            .await
+            .map_err(|error| Error::AppServiceUnavailable {
+                code: "transaction_batch_decode_worker_failed",
+                message: error.to_string(),
+            })??;
+
+    for transaction in &transactions {
+        let key = token_hdr
+            .clone()
+            .unwrap_or_else(|| transaction.authority().to_string());
+        if !app.tx_rate_limiter.allow(&key).await {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+
+    let accepted_count = {
+        let app = app.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut accepted = Vec::with_capacity(transactions.len());
+            for transaction in transactions {
+                let entrypoint = TransactionEntrypoint::External(transaction);
+                let accepted_tx = routing::accept_transaction_for_ingress(
+                    app.chain_id.clone(),
+                    app.state.clone(),
+                    entrypoint,
+                    &app.telemetry,
+                )?;
+                let routing_decision = app
+                    .queue
+                    .route_with_state(&accepted_tx, app.state.as_ref())
+                    .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+                #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                if !should_execute_route_locally(app.as_ref(), routing_decision) {
+                    return Err(Error::AppServiceUnavailable {
+                        code: "transaction_batch_route_not_local",
+                        message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
+                    });
+                }
+                accepted.push((accepted_tx, routing_decision));
+            }
+            let accepted_count = accepted.len();
+            for (accepted_tx, routing_decision) in accepted {
+                routing::push_accepted_transaction_for_ingress_with_routing(
+                    app.queue.clone(),
+                    app.state.clone(),
+                    accepted_tx,
+                    Some(routing_decision),
+                )?;
+            }
+            Ok::<usize, Error>(accepted_count)
+        })
+        .await
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: "transaction_batch_admission_worker_failed",
+            message: error.to_string(),
+        })??
+    };
+
+    Ok(transaction_batch_submission_response(accepted_count))
 }
 
 async fn handler_proof_record_get(
@@ -30476,6 +30648,10 @@ impl Torii {
         builder.apply(|router| {
             let router = router
                 .route(uri::TRANSACTION, post(handler_post_transaction))
+                .route(
+                    uri::TRANSACTIONS_BATCH,
+                    post(handler_post_transactions_batch),
+                )
                 .layer(DefaultBodyLimit::max(
                     self.transaction_max_content_len
                         .get()
@@ -37067,6 +37243,93 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_honors_prefer_return_minimal() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "minimal-submit-response".to_string())])
+            .sign(keypair.private_key());
+        let submitted_hash = transaction.hash().to_string();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("prefer"),
+            HeaderValue::from_static("respond-async, return=minimal"),
+        );
+
+        let response =
+            super::handler_post_transaction(State(app), headers, NoritoVersioned(transaction))
+                .await
+                .expect("accepted")
+                .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response
+                .headers()
+                .get("preference-applied")
+                .and_then(|value| value.to_str().ok()),
+            Some(PREFER_RETURN_MINIMAL)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-transaction-hash")
+                .and_then(|value| value.to_str().ok()),
+            Some(submitted_hash.as_str())
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert!(
+            body.is_empty(),
+            "minimal response should not sign a receipt body"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_post_transactions_batch_accepts_multiple_payloads() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "batch-submit-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "batch-submit-2".to_string())])
+            .sign(keypair.private_key());
+        let payloads = vec![
+            iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
+            iroha_version::codec::EncodeVersioned::encode_versioned(&tx2),
+        ];
+
+        let response = super::handler_post_transactions_batch(
+            State(app.clone()),
+            HeaderMap::new(),
+            Norito(payloads),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-transactions-accepted")
+                .and_then(|value| value.to_str().ok()),
+            Some("2")
+        );
+        assert_eq!(app.queue.active_len(), 2);
     }
 
     #[cfg(feature = "app_api")]

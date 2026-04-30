@@ -2,26 +2,100 @@
 
 Last updated: 2026-04-30
 
+## 2026-04-30 Sumeragi overload admission and 20k liveness rerun
+
+- Added a local Torii ingress admission guard for latency-saturated queues:
+  before enqueueing a fresh transaction, Torii refreshes the queue pressure
+  budget from the effective block time and returns saturated queue
+  backpressure once queued transaction age exceeds the budget. This keeps
+  20k stress rows honest as overload admission evidence rather than accepting
+  an unbounded local backlog.
+- Relaxed the Sumeragi pacemaker backpressure classification for payload-only
+  pending frontier work after the ingress starvation window. Saturated ingress
+  no longer turns a live but unvoted pending frontier into a permanent hard
+  proposal veto; once recovery is due, queue saturation becomes pacing so the
+  deterministic recovery/proposal path can run without changing quorum safety.
+- Reran the local no-fault offered-20k path for a `120s` timed window with all
+  `2,400,000` transactions prebuilt ahead of time. Izanami launched all
+  `2,400,000` attempts (`20,000.00 TPS`) and ingress accepted `7,090`
+  (`59.08 TPS`, `0.30%` of offered). The row is now classified as
+  `not-driver-saturated`, `ingress-under-delivered`, `overload-admission`,
+  and `liveness-degraded-not-stalled`: quorum/strict height advanced to `4/4`
+  with zero peer skew instead of remaining at height `1/1`.
+- The dominant Sumeragi evidence moved from a missing-QC storm to bounded
+  overload: view-change installs `12`, quorum timeouts `6`, missing QC `4`,
+  last cause `quorum_timeout`, tx queue saturated at `6,475/65,536`,
+  pacemaker backpressure deferrals `105`, missing-QC reacquire `5/5`, and
+  range-pull escalations/successes/failures `19/4/4`. RBC pressure,
+  validation rejects, missing payload, DA gate, and stake-quorum timeout were
+  all zero.
+- Latest local 20k artifacts:
+  `dist/izanami-prebuilt-20k-120s-20260430-111435`, including
+  `run.log`, `failure-classification.md`, and copied diagnostics under
+  `diagnostics/`.
+- Extended the same prebuilt/no-fault local path into a `120s` TPS ladder at
+  requested `50,100,250,500,1000,2000,5000,10000`. The `50` and `100` rows are
+  explicitly driver-capped by Izanami stable-ingress pacing (`64` max inflight
+  for requested TPS <= `200`), while `250` TPS and above offered essentially the
+  full requested load from memory. Best accepted throughput in this ladder was
+  `8,376` accepted at requested `5,000 TPS` (`69.80 TPS`, `1.40%` of offered);
+  requested `10,000 TPS` offered `1,199,035` attempts and accepted `7,264`
+  (`60.53 TPS`, `0.61%` of offered).
+- Ladder classification: every uncapped row is `ingress-under-delivered` and
+  `tx_queue_saturated`; `2,000 TPS` and `10,000 TPS` show the clearest
+  liveness churn, with strict height only `3`, missing-QC view-change totals
+  `35` and `20`, and quorum-timeout totals `13` and `8`. The `5,000 TPS` row
+  stayed livelier (`9` strict height, one quorum-timeout cause), so the observed
+  break point is not monotonic; scheduler/leader timing still matters. Across
+  the ladder, RBC pressure, missing payload, validation rejects, DA gate, and
+  peer height divergence remained zero or non-dominant.
+- Ladder artifacts:
+  `dist/izanami-prebuilt-ladder-120s-20260430-122804/ladder-summary.tsv` and
+  `dist/izanami-prebuilt-ladder-120s-20260430-122804/ladder-report.md`.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib proposal_backpressure_allows_starved_payload_only_pending_under_saturation -- --nocapture`
+  - `cargo test -p iroha_torii transaction_ingress_rejects_latency_saturated_queue_before_capacity -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi_resilience -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi_status -- --nocapture`
+  - `cargo test -p izanami sumeragi_status_digest -- --nocapture`
+  - `cargo test -p izanami throughput -- --nocapture`
+  - `cargo test -p izanami prebuild -- --nocapture`
+  - `python3 -m pytest scripts/tests/izanami_matrix_classifier_test.py`
+  - `cargo build -p izanami --bin izanami -p irohad --bin iroha3d`
+
 ## 2026-04-30 Izanami prebuilt transaction buffer
 
 - Added an Izanami-only high-TPS driver path with `--prebuild-tx-buffer` and
-  `--prebuild-tx-workers`. Stable stateless plans can now be signed, hashed,
-  and Norito-encoded into a bounded in-memory queue before submitter ticks use
-  them; stateful or blocking-confirmation plans continue through the existing
-  hot path.
+  `--prebuild-tx-workers`. Stable stateless plans are now signed, hashed, and
+  Norito-encoded before the timed load window starts; prebuilt stress feeds use
+  only cached payloads and do not fall back to live transaction construction.
 - Added reusable client support for prepared transaction payloads so repeated
   submissions can avoid re-encoding `SignedTransaction` bodies. The public Torii
   endpoint and payload format remain unchanged.
 - Added summary counters for the buffer: capacity, workers, built, used,
   fallback, skipped, and build failures. Matrix/sweep scripts can pass the new
   prebuild knobs through their own CLI options.
-- Short local 20k TPS smoke with `4` peers, `60s`, buffer `50,000`, and `20`
-  prebuild workers offered `49,092` attempts and accepted `46,952`. This is
-  still driver/ingress limited on the local debug build, not a real 20k result:
-  the row showed endpoint failover pressure, `tx_queue_saturated=true`,
-  pacemaker backpressure, and local port exhaustion under the requested rate.
-  Local port exhaustion is now classified as retryable driver pressure rather
-  than a payload failure.
+- Replaced the per-submit prebuilt ticker with a batch feed scheduler that
+  catches up to elapsed-time TPS targets from the in-memory deque. The timed
+  window no longer includes prebuild warmup, and the prebuilt path bypasses
+  loop-level ingress backpressure so under-delivery is reported as
+  ingress/consensus evidence instead of silent driver throttling.
+- Local `4`-peer smoke at requested `20,000 TPS` for `10s` prebuilt all
+  `200,000` transactions ahead of time and launched all `200,000` during the
+  timed window. Ingress accepted `27,046`; the row exposed endpoint failover,
+  endpoint unhealthy marking, `tx_queue_saturated=true`, pacemaker
+  backpressure, `quorum_timeout`, and missing-block/range-pull pressure. This
+  is now a real offered-20k stress row on the driver side, with acceptance
+  limited by ingress/consensus pressure.
+- Extended the same local offered-20k path to a `120s` timed window with
+  `2,400,000` prebuilt transactions. Izanami launched `2,394,340` attempts
+  (`19,952.83 TPS`, `99.76%` of requested) and ingress accepted `55,488`
+  (`462.40 TPS`, `2.32%` of offered). Classification:
+  `ingress-under-delivered`, `consensus-stalled`, `overload-admission`, and
+  `missing-qc-view-change-storm`; not driver-saturated. The run preserved raw
+  logs and a compact classification report under
+  `dist/izanami-prebuilt-20k-120s-20260430-103233`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo test -p iroha prepared_transaction_payload -- --nocapture`
