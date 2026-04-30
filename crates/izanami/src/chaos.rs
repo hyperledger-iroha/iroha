@@ -2,10 +2,11 @@
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     future::Future,
     io::Write,
+    num::NonZeroU64,
     path::Path,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
@@ -29,8 +30,8 @@ use iroha_data_model::{
         register::RegisterPeerWithPop,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    parameter::SumeragiParameter,
     parameter::system::SumeragiNposParameters,
+    parameter::{BlockParameter, SumeragiParameter},
     prelude::*,
     query::trigger::prelude::FindTriggers,
     trigger::action::Repeats,
@@ -42,11 +43,11 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
-    sync::{Mutex as TokioMutex, Notify, OwnedSemaphorePermit, Semaphore, mpsc},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time,
 };
-use toml::Table;
+use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -72,11 +73,16 @@ const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
 const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
 const IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP: i64 = 16_384;
+const IZANAMI_QUEUE_CAPACITY: i64 = 65_536;
+const IZANAMI_TORII_PREAUTH_RATE_PER_IP_PER_SEC: i64 = 1_000_000;
+const IZANAMI_TORII_PREAUTH_BURST_PER_IP: i64 = 2_000_000;
+const IZANAMI_TORII_DISABLED_RATE_LIMIT: i64 = 0;
+const IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE: usize = 32;
 const IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS: i64 = 250;
 const IZANAMI_TRANSACTION_GOSSIP_SIZE: i64 = 1024;
 const IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS: i64 = 1;
 const IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP: i64 = 64;
-const IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS: i64 = 128;
+const IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS: i64 = 8_192;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
 const IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS: i64 = 300;
@@ -168,6 +174,9 @@ const IZANAMI_THROUGHPUT_CONFIRMATION_WINDOW_SECS: u64 = 60;
 const IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP: usize = 4_096;
 const IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS: u64 = 100;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
+const IZANAMI_PREBUILD_ATTEMPT_MULTIPLIER: usize = 16;
+const IZANAMI_PREBUILD_PROGRESS_LOG_STEP: usize = 50_000;
+const IZANAMI_PREBUILD_FEED_TICK_MS: u64 = 5;
 const IZANAMI_STATUS_SAMPLE_MAX_PEERS: usize = 3;
 const IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS: u64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
@@ -1281,6 +1290,7 @@ struct IngressEndpointPool {
     endpoints: Arc<Vec<IngressEndpoint>>,
     endpoint_index_by_peer: Arc<BTreeMap<PeerId, usize>>,
     submit_client_cache: Arc<StdMutex<BTreeMap<(usize, String), Client>>>,
+    submit_request_timeout: Duration,
     health: EndpointHealthPool,
 }
 
@@ -1289,6 +1299,7 @@ impl IngressEndpointPool {
         peers: &[NetworkPeer],
         config: IngressEndpointPoolConfig,
         ingress_stats: Arc<IngressStats>,
+        submit_request_timeout: Duration,
     ) -> Self {
         let mut endpoints: Vec<_> = peers
             .iter()
@@ -1318,6 +1329,7 @@ impl IngressEndpointPool {
             endpoints: Arc::new(endpoints),
             endpoint_index_by_peer: Arc::new(endpoint_index_by_peer),
             submit_client_cache: Arc::new(StdMutex::new(BTreeMap::new())),
+            submit_request_timeout,
             health,
         }
     }
@@ -1583,6 +1595,7 @@ impl IngressEndpointPool {
                 .peer
                 .client_for(&signer.id, signer.key_pair.private_key().clone()),
             mode,
+            self.submit_request_timeout,
         );
         if let Ok(mut guard) = self.submit_client_cache.lock() {
             guard.insert(cache_key, client.clone());
@@ -2460,6 +2473,27 @@ fn effective_submission_tps(config: &ChaosConfig) -> f64 {
     }
 }
 
+fn effective_network_queue_capacity(config: &ChaosConfig) -> i64 {
+    let stress_capacity = if config.prebuild_tx_buffer > 0
+        && config.tps > IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS
+    {
+        config.prebuild_tx_buffer
+    } else {
+        0
+    };
+    let capacity = stress_capacity.max(usize::try_from(IZANAMI_QUEUE_CAPACITY).expect("positive"));
+    i64::try_from(capacity).unwrap_or(i64::MAX)
+}
+
+fn effective_ingress_request_timeout(config: &ChaosConfig) -> Duration {
+    let baseline = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
+    if config.prebuild_tx_buffer > 0 && config.tps > IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS {
+        config.shutdown_drain_timeout.max(baseline)
+    } else {
+        baseline
+    }
+}
+
 fn recovery_profile_for(config: &ChaosConfig) -> RecoveryProfile {
     if is_shared_host_stable_recovery_run(config) {
         shared_host_recovery_profile()
@@ -2695,6 +2729,19 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     // Inject Izanami timing into on-chain Sumeragi parameters.
     let npos_timing = derive_npos_timing(config);
     let (collectors_k, redundant_send_r) = npos_collectors_and_redundancy(config);
+    let block_max_transactions = u64::try_from(IZANAMI_SUMERAGI_BLOCK_MAX_TRANSACTIONS)
+        .expect("Izanami block transaction cap fits u64");
+    let block_max_transactions =
+        NonZeroU64::new(block_max_transactions).expect("Izanami block transaction cap non-zero");
+    if let Some(last_tx) = genesis.last_mut() {
+        last_tx.push(InstructionBox::from(SetParameter::new(Parameter::Block(
+            BlockParameter::MaxTransactions(block_max_transactions),
+        ))));
+    } else {
+        genesis.push(vec![InstructionBox::from(SetParameter::new(
+            Parameter::Block(BlockParameter::MaxTransactions(block_max_transactions)),
+        ))]);
+    }
     if config.nexus.is_some() {
         let mut injected = Vec::new();
         injected.push(InstructionBox::from(SetParameter::new(
@@ -2726,6 +2773,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         }
     }
     // Tune pipeline/validation throughput and raise payload/RBC budgets to keep long Izanami runs stable.
+    let queue_capacity = effective_network_queue_capacity(config);
     builder = builder.with_config_layer(move |layer| {
         let as_i64 = |value: u64| -> i64 {
             i64::try_from(value).expect("NPoS timing fits into i64 milliseconds")
@@ -2791,6 +2839,47 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 ["network", "p2p_subscriber_queue_cap"],
                 IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP,
             )
+            .write(["queue", "capacity"], queue_capacity)
+            .write(["queue", "capacity_per_user"], queue_capacity)
+            .write(
+                ["torii", "preauth_allow_cidrs"],
+                TomlValue::Array(vec![
+                    TomlValue::String("127.0.0.0/8".into()),
+                    TomlValue::String("::1/128".into()),
+                ]),
+            )
+            .write(
+                ["torii", "api_allow_cidrs"],
+                TomlValue::Array(vec![
+                    TomlValue::String("127.0.0.0/8".into()),
+                    TomlValue::String("::1/128".into()),
+                ]),
+            )
+            .write(
+                ["torii", "preauth_rate_per_ip_per_sec"],
+                IZANAMI_TORII_PREAUTH_RATE_PER_IP_PER_SEC,
+            )
+            .write(
+                ["torii", "preauth_burst_per_ip"],
+                IZANAMI_TORII_PREAUTH_BURST_PER_IP,
+            )
+            .write(
+                ["torii", "query_rate_per_authority_per_sec"],
+                IZANAMI_TORII_DISABLED_RATE_LIMIT,
+            )
+            .write(
+                ["torii", "query_burst_per_authority"],
+                IZANAMI_TORII_DISABLED_RATE_LIMIT,
+            )
+            .write(
+                ["torii", "tx_rate_per_authority_per_sec"],
+                IZANAMI_TORII_DISABLED_RATE_LIMIT,
+            )
+            .write(
+                ["torii", "tx_burst_per_authority"],
+                IZANAMI_TORII_DISABLED_RATE_LIMIT,
+            )
+            .write(["torii", "api_high_load_tx_threshold"], queue_capacity)
             .write(
                 ["network", "transaction_gossip_period_ms"],
                 IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS,
@@ -3528,9 +3617,6 @@ impl IzanamiRunner {
     }
 
     pub async fn run(self) -> Result<()> {
-        let run_started_at = Instant::now();
-        let deadline = run_started_at + self.config.duration;
-        let run_control = Arc::new(RunControl::new(deadline));
         let mut rng = self.seeded_rng();
         let config_layers = Arc::new(
             self.network
@@ -3549,8 +3635,24 @@ impl IzanamiRunner {
             &self.peers,
             IngressEndpointPoolConfig::default(),
             Arc::clone(&ingress_stats),
+            effective_ingress_request_timeout(&self.config),
         ));
+        let submission_counter = Arc::new(AtomicU64::new(0));
+        let submission_confirmation = submission_confirmation_mode(&self.config);
+        let prebuilt_pool = self
+            .prebuild_transaction_pool(
+                &metrics,
+                &ingress_pool,
+                &mut rng,
+                &submission_counter,
+                submission_confirmation,
+            )
+            .await;
+
         let sumeragi_status_start = sample_sumeragi_status_digest(&self.peers).await.ok();
+        let run_started_at = Instant::now();
+        let deadline = run_started_at + self.config.duration;
+        let run_control = Arc::new(RunControl::new(deadline));
         if uses_sumeragi_leader_fault_targeting(&self.config) {
             info!(
                 target: "izanami::faults",
@@ -3560,8 +3662,6 @@ impl IzanamiRunner {
         } else {
             ingress_pool.reserve_fault_target_ingress_until(&self.peers, &fault_targets, deadline);
         }
-        let submission_counter = Arc::new(AtomicU64::new(0));
-        let submission_confirmation = submission_confirmation_mode(&self.config);
         let confirmation_audit_wait_options =
             throughput_confirmation_wait_options_for(&self.config);
         let (confirmation_audit_tx, confirmation_audit_handle) = if matches!(
@@ -3598,6 +3698,7 @@ impl IzanamiRunner {
             &run_control,
             &mut rng,
             &submission_counter,
+            prebuilt_pool,
             confirmation_audit_tx.clone(),
             confirmation_audit_seed,
             confirmation_audit_wait_options.clone(),
@@ -4057,18 +4158,17 @@ impl IzanamiRunner {
         })]
     }
 
-    fn spawn_prebuilt_transaction_workers(
+    async fn prebuild_transaction_pool(
         &self,
         metrics: &Arc<Metrics>,
         ingress_pool: &Arc<IngressEndpointPool>,
-        run_control: &Arc<RunControl>,
         rng: &mut StdRng,
         submission_counter: &Arc<AtomicU64>,
         submission_confirmation: SubmissionConfirmationMode,
-    ) -> (Option<PrebuiltTransactionPool>, Vec<JoinHandle<()>>) {
+    ) -> Option<PrebuiltTransactionPool> {
         let buffer_capacity = self.config.prebuild_tx_buffer;
         if buffer_capacity == 0 {
-            return (None, Vec::new());
+            return None;
         }
         if !matches!(
             submission_confirmation,
@@ -4079,7 +4179,7 @@ impl IzanamiRunner {
                 buffer_capacity,
                 "prebuilt transaction buffer is enabled but the workload requires blocking confirmation; disabling prebuild"
             );
-            return (None, Vec::new());
+            return None;
         }
 
         let worker_count = effective_prebuild_tx_workers(&self.config);
@@ -4090,36 +4190,46 @@ impl IzanamiRunner {
                 endpoints = ingress_pool.endpoint_count(),
                 "prebuilt transaction buffer could not start"
             );
-            return (None, Vec::new());
+            return None;
         }
 
         metrics.configure_prebuilt_tx_buffer(buffer_capacity, worker_count);
-        let (tx, rx) = mpsc::channel(buffer_capacity);
-        let pool = PrebuiltTransactionPool {
-            receiver: Arc::new(TokioMutex::new(rx)),
-        };
         info!(
             target: "izanami::prebuild",
             buffer_capacity,
             worker_count,
-            "prebuilt transaction buffer enabled"
+            "warming prebuilt transaction buffer before load window"
         );
 
+        let (tx, mut rx) = mpsc::channel(worker_count.saturating_mul(4).max(1));
+        let built_count = Arc::new(AtomicU64::new(0));
+        let attempt_count = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let max_attempts = prebuild_attempt_limit(buffer_capacity, worker_count);
         let mut handles = Vec::with_capacity(worker_count);
         for worker_idx in 0..worker_count {
             let mut prebuild_rng = StdRng::seed_from_u64(rng.next_u64());
             let tx = tx.clone();
             let workload = Arc::clone(&self.workload);
             let ingress_pool = Arc::clone(ingress_pool);
-            let run_control = Arc::clone(run_control);
-            let stop_notify = run_control.stop_notifier();
-            let deadline = run_control.deadline();
             let metrics = Arc::clone(metrics);
             let submission_counter = Arc::clone(submission_counter);
+            let built_count = Arc::clone(&built_count);
+            let attempt_count = Arc::clone(&attempt_count);
+            let stop = Arc::clone(&stop);
             let endpoint_idx = worker_idx % ingress_pool.endpoint_count();
             handles.push(tokio::spawn(async move {
                 loop {
-                    if run_control.should_stop() || Instant::now() >= deadline {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if built_count.load(Ordering::Relaxed) >= buffer_capacity as u64 {
+                        break;
+                    }
+                    if attempt_count.fetch_add(1, Ordering::Relaxed) >= max_attempts {
+                        break;
+                    }
+                    if stop.load(Ordering::Relaxed) {
                         break;
                     }
                     let plan = match workload.next_plan(&mut prebuild_rng).await {
@@ -4138,6 +4248,9 @@ impl IzanamiRunner {
                     if !plan_is_prebuild_safe(&plan, submission_confirmation) {
                         metrics.record_prebuilt_tx_skipped();
                         continue;
+                    }
+                    if stop.load(Ordering::Relaxed) {
+                        break;
                     }
                     let client = match ingress_pool.cached_submit_client_for(
                         endpoint_idx,
@@ -4161,18 +4274,16 @@ impl IzanamiRunner {
                     let transaction =
                         client.build_transaction_from_items(plan.instructions.clone(), metadata);
                     let payload = client.prepare_transaction_payload(&transaction);
-                    let prepared = PreparedTransactionSubmission { plan, payload };
-                    tokio::select! {
-                        send_result = tx.send(prepared) => {
-                            if send_result.is_err() {
-                                break;
-                            }
-                            metrics.record_prebuilt_tx_built();
-                            tokio::task::yield_now().await;
-                        },
-                        () = stop_notify.notified() => break,
-                        () = time::sleep_until(deadline.into()) => break,
+                    let next_index = built_count.fetch_add(1, Ordering::Relaxed);
+                    if next_index >= buffer_capacity as u64 {
+                        break;
                     }
+                    let prepared = PreparedTransactionSubmission { plan, payload };
+                    if tx.send(prepared).await.is_err() {
+                        break;
+                    }
+                    metrics.record_prebuilt_tx_built();
+                    tokio::task::yield_now().await;
                 }
                 debug!(
                     target: "izanami::prebuild",
@@ -4182,7 +4293,45 @@ impl IzanamiRunner {
             }));
         }
         drop(tx);
-        (Some(pool), handles)
+
+        let mut prepared = Vec::with_capacity(buffer_capacity);
+        while prepared.len() < buffer_capacity {
+            let Some(submission) = rx.recv().await else {
+                break;
+            };
+            prepared.push(submission);
+            if prepared.len() % IZANAMI_PREBUILD_PROGRESS_LOG_STEP == 0 {
+                info!(
+                    target: "izanami::prebuild",
+                    prepared = prepared.len(),
+                    target = buffer_capacity,
+                    "prebuilt transaction warmup progress"
+                );
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        drop(rx);
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        if prepared.len() < buffer_capacity {
+            warn!(
+                target: "izanami::prebuild",
+                prepared = prepared.len(),
+                target = buffer_capacity,
+                attempts = attempt_count.load(Ordering::Relaxed),
+                "prebuilt transaction warmup ended before the requested target was full"
+            );
+        } else {
+            info!(
+                target: "izanami::prebuild",
+                prepared = prepared.len(),
+                "prebuilt transaction warmup complete"
+            );
+        }
+
+        Some(PrebuiltTransactionPool::new(prepared))
     }
 
     fn spawn_load_supervisors(
@@ -4192,20 +4341,14 @@ impl IzanamiRunner {
         run_control: &Arc<RunControl>,
         rng: &mut StdRng,
         submission_counter: &Arc<AtomicU64>,
+        prebuilt_pool: Option<PrebuiltTransactionPool>,
         confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
         confirmation_audit_seed: u64,
         confirmation_audit_wait_options: TransactionWaitOptions,
     ) -> Vec<JoinHandle<()>> {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
-        let (prebuilt_pool, mut handles) = self.spawn_prebuilt_transaction_workers(
-            metrics,
-            ingress_pool,
-            run_control,
-            rng,
-            submission_counter,
-            submission_confirmation,
-        );
+        let mut handles = Vec::new();
         let submission_max_inflight = effective_submission_max_inflight(&self.config);
         let submission_tps = effective_submission_tps(&self.config);
         if submission_max_inflight != self.config.max_inflight
@@ -4224,6 +4367,24 @@ impl IzanamiRunner {
         }
         let semaphore = Arc::new(Semaphore::new(submission_max_inflight));
         let backlog_limit = submission_backlog_limit(submission_max_inflight);
+        if let Some(prebuilt_pool) = prebuilt_pool {
+            return vec![spawn_prebuilt_load_supervisor(PrebuiltLoadSupervisor {
+                metrics: Arc::clone(metrics),
+                ingress_pool: Arc::clone(ingress_pool),
+                run_control: Arc::clone(run_control),
+                workload,
+                prebuilt_pool,
+                semaphore,
+                backlog_limit,
+                submission_tps,
+                submitters: self.config.submitters,
+                submission_confirmation,
+                confirmation_audit_tx,
+                confirmation_audit_seed,
+                confirmation_audit_wait_options,
+                shutdown_drain_timeout: self.config.shutdown_drain_timeout,
+            })];
+        }
         let per_submitter_interval =
             Duration::from_secs_f64(self.config.submitters as f64 / submission_tps);
         let shutdown_drain_timeout = self.config.shutdown_drain_timeout;
@@ -4238,7 +4399,6 @@ impl IzanamiRunner {
                 let deadline = run_control.deadline();
                 let submission_counter = Arc::clone(submission_counter);
                 let workload = Arc::clone(&workload);
-                let prebuilt_pool = prebuilt_pool.clone();
                 let semaphore = Arc::clone(&semaphore);
                 let confirmation_audit_tx = confirmation_audit_tx.clone();
                 let confirmation_audit_wait_options = confirmation_audit_wait_options.clone();
@@ -4343,64 +4503,6 @@ impl IzanamiRunner {
                                 },
                             }
                             continue;
-                        }
-                        if let Some(prebuilt) =
-                            prebuilt_pool.as_ref().and_then(PrebuiltTransactionPool::try_pop)
-                        {
-                            metrics.record_prebuilt_tx_used();
-                            let effective_submission_confirmation = effective_submission_confirmation(
-                                submission_confirmation,
-                                &prebuilt.plan.state_updates,
-                            );
-                            if !submission_has_deadline_budget(
-                                Instant::now(),
-                                deadline,
-                                effective_submission_confirmation,
-                            ) {
-                                record_submit_plan_shutdown_skip_once(
-                                    &metrics,
-                                    &mut shutdown_skip_recorded,
-                                );
-                                debug!(
-                                    target: "izanami::workload",
-                                    submitter_idx,
-                                    plan = prebuilt.plan.label,
-                                    "dropping late prebuilt workload plan because it requires more confirmation budget than remains"
-                                );
-                                wait_until_deadline_or_stop(stop_notify.as_ref(), deadline).await;
-                                break;
-                            }
-                            metrics.record_submit_plan_started();
-                            metrics.record_backlog_spawn();
-                            let metrics = Arc::clone(&metrics);
-                            let ingress_pool = Arc::clone(&ingress_pool);
-                            let workload = Arc::clone(&workload);
-                            let semaphore = Arc::clone(&semaphore);
-                            let confirmation_audit_tx = confirmation_audit_tx.clone();
-                            let run_control = Arc::clone(&run_control);
-                            let confirmation_audit_wait_options =
-                                confirmation_audit_wait_options.clone();
-                            submissions.spawn(async move {
-                                let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics));
-                                submit_prebuilt_plan(
-                                    &ingress_pool,
-                                    prebuilt,
-                                    submission_confirmation,
-                                    semaphore,
-                                    &metrics,
-                                    &workload,
-                                    submitter_idx,
-                                    confirmation_audit_tx,
-                                    confirmation_audit_seed,
-                                    &run_control,
-                                    &confirmation_audit_wait_options,
-                                )
-                                .await;
-                            });
-                            continue;
-                        }
-                        if prebuilt_pool.is_some() {
-                            metrics.record_prebuilt_tx_fallback();
                         }
 
                         let plan = match workload.next_plan(&mut load_rng).await {
@@ -4629,6 +4731,22 @@ fn effective_prebuild_tx_workers(config: &ChaosConfig) -> usize {
     host_parallelism.min(config.submitters.max(1)).max(1)
 }
 
+fn effective_prebuilt_submit_batch_size(submission_tps: f64) -> usize {
+    if submission_tps >= IZANAMI_STRESS_STABLE_INGRESS_CAP_BYPASS_TPS as f64 {
+        IZANAMI_PREBUILT_SUBMIT_BATCH_SIZE
+    } else {
+        1
+    }
+}
+
+fn prebuild_attempt_limit(buffer_capacity: usize, worker_count: usize) -> u64 {
+    buffer_capacity
+        .saturating_mul(IZANAMI_PREBUILD_ATTEMPT_MULTIPLIER)
+        .max(buffer_capacity)
+        .max(worker_count)
+        .min(u64::MAX as usize) as u64
+}
+
 fn plan_is_prebuild_safe(
     plan: &TransactionPlan,
     submission_confirmation: SubmissionConfirmationMode,
@@ -4716,9 +4834,18 @@ async fn wait_for_submission_capacity(
     true
 }
 
-fn tune_ingress_client(mut client: Client, mode: SubmissionConfirmationMode) -> Client {
-    client.torii_request_timeout = Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS);
+fn tune_ingress_client(
+    mut client: Client,
+    mode: SubmissionConfirmationMode,
+    request_timeout: Duration,
+) -> Client {
+    client.torii_request_timeout = request_timeout;
     mark_data_model_submit_compatible(&client.data_model_compatibility);
+    if matches!(mode, SubmissionConfirmationMode::AcceptedByIngress) {
+        client
+            .headers
+            .insert("Prefer".to_owned(), "return=minimal".to_owned());
+    }
     if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
         client.transaction_status_timeout =
             Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
@@ -6070,15 +6197,25 @@ struct PreparedTransactionSubmission {
 
 #[derive(Clone)]
 struct PrebuiltTransactionPool {
-    receiver: Arc<TokioMutex<mpsc::Receiver<PreparedTransactionSubmission>>>,
+    queue: Arc<StdMutex<VecDeque<PreparedTransactionSubmission>>>,
+    target_len: u64,
 }
 
 impl PrebuiltTransactionPool {
+    fn new(submissions: Vec<PreparedTransactionSubmission>) -> Self {
+        let target_len = u64::try_from(submissions.len()).unwrap_or(u64::MAX);
+        Self {
+            queue: Arc::new(StdMutex::new(VecDeque::from(submissions))),
+            target_len,
+        }
+    }
+
     fn try_pop(&self) -> Option<PreparedTransactionSubmission> {
-        let Ok(mut receiver) = self.receiver.try_lock() else {
-            return None;
-        };
-        receiver.try_recv().ok()
+        self.queue.lock().ok()?.pop_front()
+    }
+
+    fn target_len(&self) -> u64 {
+        self.target_len
     }
 }
 
@@ -6295,6 +6432,159 @@ fn record_plan_skip(
     }
 }
 
+struct PrebuiltLoadSupervisor {
+    metrics: Arc<Metrics>,
+    ingress_pool: Arc<IngressEndpointPool>,
+    run_control: Arc<RunControl>,
+    workload: Arc<WorkloadEngine>,
+    prebuilt_pool: PrebuiltTransactionPool,
+    semaphore: Arc<Semaphore>,
+    backlog_limit: usize,
+    submission_tps: f64,
+    submitters: usize,
+    submission_confirmation: SubmissionConfirmationMode,
+    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+    confirmation_audit_seed: u64,
+    confirmation_audit_wait_options: TransactionWaitOptions,
+    shutdown_drain_timeout: Duration,
+}
+
+fn spawn_prebuilt_load_supervisor(args: PrebuiltLoadSupervisor) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let PrebuiltLoadSupervisor {
+            metrics,
+            ingress_pool,
+            run_control,
+            workload,
+            prebuilt_pool,
+            semaphore,
+            backlog_limit,
+            submission_tps,
+            submitters,
+            submission_confirmation,
+            confirmation_audit_tx,
+            confirmation_audit_seed,
+            confirmation_audit_wait_options,
+            shutdown_drain_timeout,
+        } = args;
+        let submitters = submitters.max(1);
+        let deadline = run_control.deadline();
+        let stop_notify = run_control.stop_notifier();
+        let started_at = Instant::now();
+        let feed_tick = Duration::from_millis(IZANAMI_PREBUILD_FEED_TICK_MS);
+        let prebuilt_target = prebuilt_pool.target_len();
+        let submit_batch_size = effective_prebuilt_submit_batch_size(submission_tps);
+        let mut submissions = JoinSet::new();
+        let mut launched = 0_u64;
+        let mut shutdown_skip_recorded = false;
+
+        loop {
+            drain_ready_submissions(&mut submissions);
+            let now = Instant::now();
+            let due_by_now = (now.saturating_duration_since(started_at).as_secs_f64()
+                * submission_tps)
+                .floor() as u64;
+            let due_by_now = due_by_now.min(prebuilt_target);
+            while launched < due_by_now {
+                if run_control.stop_requested() {
+                    record_submit_plan_shutdown_skip_once(&metrics, &mut shutdown_skip_recorded);
+                    break;
+                }
+                if !wait_for_submission_capacity(
+                    &mut submissions,
+                    backlog_limit,
+                    stop_notify.as_ref(),
+                    deadline,
+                )
+                .await
+                {
+                    if run_control.stop_requested() || Instant::now() >= deadline {
+                        record_submit_plan_shutdown_skip_once(
+                            &metrics,
+                            &mut shutdown_skip_recorded,
+                        );
+                    }
+                    break;
+                }
+                let batch_start = launched;
+                let mut batch = Vec::with_capacity(submit_batch_size);
+                while launched < due_by_now && batch.len() < submit_batch_size {
+                    let Some(prebuilt) = prebuilt_pool.try_pop() else {
+                        metrics.record_prebuilt_tx_fallback();
+                        break;
+                    };
+                    metrics.record_prebuilt_tx_used();
+                    metrics.record_submit_plan_started();
+                    batch.push(prebuilt);
+                    launched = launched.saturating_add(1);
+                }
+                if batch.is_empty() {
+                    break;
+                }
+                metrics.record_backlog_spawn();
+                let submitter_idx = (batch_start as usize) % submitters;
+                let metrics_for_task = Arc::clone(&metrics);
+                let ingress_pool_for_task = Arc::clone(&ingress_pool);
+                let workload_for_task = Arc::clone(&workload);
+                let semaphore_for_task = Arc::clone(&semaphore);
+                let confirmation_audit_tx_for_task = confirmation_audit_tx.clone();
+                let run_control_for_task = Arc::clone(&run_control);
+                let confirmation_audit_wait_options_for_task =
+                    confirmation_audit_wait_options.clone();
+                submissions.spawn(async move {
+                    let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics_for_task));
+                    submit_prebuilt_batch(
+                        &ingress_pool_for_task,
+                        batch,
+                        submission_confirmation,
+                        semaphore_for_task,
+                        &metrics_for_task,
+                        &workload_for_task,
+                        submitter_idx,
+                        confirmation_audit_tx_for_task,
+                        confirmation_audit_seed,
+                        &run_control_for_task,
+                        &confirmation_audit_wait_options_for_task,
+                    )
+                    .await;
+                });
+            }
+
+            let now = Instant::now();
+            if run_control.stop_requested() || now >= deadline {
+                record_submit_plan_shutdown_skip_once(&metrics, &mut shutdown_skip_recorded);
+                break;
+            }
+            let sleep_for = deadline
+                .checked_duration_since(now)
+                .unwrap_or_default()
+                .min(feed_tick);
+            tokio::select! {
+                () = time::sleep(sleep_for) => {},
+                () = stop_notify.notified() => {
+                    record_submit_plan_shutdown_skip_once(
+                        &metrics,
+                        &mut shutdown_skip_recorded,
+                    );
+                    break;
+                },
+            }
+        }
+
+        let aborted =
+            drain_submissions_for_shutdown(&mut submissions, shutdown_drain_timeout).await;
+        if aborted > 0 {
+            metrics.record_submit_tasks_shutdown_aborted(aborted);
+            warn!(
+                target: "izanami::workload",
+                aborted,
+                ?shutdown_drain_timeout,
+                "prebuilt submission drain timeout expired; aborted leftover tasks"
+            );
+        }
+    })
+}
+
 async fn submit_prebuilt_plan(
     ingress_pool: &Arc<IngressEndpointPool>,
     prepared: PreparedTransactionSubmission,
@@ -6432,6 +6722,171 @@ async fn submit_prebuilt_plan(
         }
         Err(_err) => {
             workload.record_result(&plan, false).await;
+        }
+    }
+}
+
+async fn submit_prebuilt_batch(
+    ingress_pool: &Arc<IngressEndpointPool>,
+    mut batch: Vec<PreparedTransactionSubmission>,
+    submission_confirmation: SubmissionConfirmationMode,
+    semaphore: Arc<Semaphore>,
+    metrics: &Arc<Metrics>,
+    workload: &Arc<WorkloadEngine>,
+    submitter_idx: usize,
+    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+    confirmation_audit_seed: u64,
+    run_control: &RunControl,
+    confirmation_audit_wait_options: &TransactionWaitOptions,
+) {
+    if batch.len() == 1 {
+        if let Some(prepared) = batch.pop() {
+            submit_prebuilt_plan(
+                ingress_pool,
+                prepared,
+                submission_confirmation,
+                semaphore,
+                metrics,
+                workload,
+                submitter_idx,
+                confirmation_audit_tx,
+                confirmation_audit_seed,
+                run_control,
+                confirmation_audit_wait_options,
+            )
+            .await;
+        }
+        return;
+    }
+
+    let batch_len = batch.len();
+    let permit_count = u32::try_from(batch_len).unwrap_or(u32::MAX);
+    let permit = match semaphore.clone().acquire_many_owned(permit_count).await {
+        Ok(permit) => permit,
+        Err(_) => {
+            warn!(
+                target: "izanami::workload",
+                batch_len,
+                submitter_idx,
+                "submission permit channel closed before prebuilt batch submit"
+            );
+            for submission in batch {
+                if submission.plan.expect_success {
+                    metrics.record_failure();
+                } else {
+                    metrics.record_expected_failure();
+                }
+                workload.record_result(&submission.plan, false).await;
+            }
+            return;
+        }
+    };
+    metrics.record_inflight_acquired_many(u64::try_from(batch_len).unwrap_or(u64::MAX));
+    let _inflight_guard = InflightBatchGuard::new(Arc::clone(metrics), permit, batch_len);
+
+    let signer_for_submit = batch[0].plan.signer.clone();
+    let payloads = Arc::new(
+        batch
+            .iter()
+            .map(|submission| submission.payload.clone())
+            .collect::<Vec<_>>(),
+    );
+    let hashes = payloads
+        .iter()
+        .map(PreparedTransactionPayload::hash)
+        .collect::<Vec<_>>();
+
+    let ingress_pool_for_submit = Arc::clone(ingress_pool);
+    let ingress_pool_for_retry_delay = Arc::clone(ingress_pool);
+    let started_at = Instant::now();
+    let submission_result = run_with_queue_timeout_retry_with_policy_and_delay_result_async(
+        "submit_prebuilt_transaction_batch",
+        IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
+        Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
+        move || ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now()),
+        move || {
+            let ingress_pool_for_submit = Arc::clone(&ingress_pool_for_submit);
+            let payloads = Arc::clone(&payloads);
+            let signer_for_submit = signer_for_submit.clone();
+            async move {
+                let ingress_pool_for_operation = Arc::clone(&ingress_pool_for_submit);
+                ingress_pool_for_submit
+                    .run_with_failover_preferred_with_endpoint_async(
+                        "submit_prebuilt_transaction_batch",
+                        submitter_idx,
+                        move |endpoint_idx, _peer| {
+                            let ingress_pool_for_submit = Arc::clone(&ingress_pool_for_operation);
+                            let payloads = Arc::clone(&payloads);
+                            let signer_for_submit = signer_for_submit.clone();
+                            async move {
+                                let client = ingress_pool_for_submit.cached_submit_client_for(
+                                    endpoint_idx,
+                                    &signer_for_submit,
+                                    SubmissionConfirmationMode::AcceptedByIngress,
+                                )?;
+                                client
+                                    .submit_prepared_transaction_payload_batch_async(
+                                        payloads.as_slice(),
+                                    )
+                                    .await
+                            }
+                        },
+                    )
+                    .await
+            }
+        },
+    )
+    .await;
+    let elapsed = started_at.elapsed();
+    let succeeded = submission_result.is_ok();
+    if let Err(err) = &submission_result {
+        warn!(
+            target: "izanami::workload",
+            ?err,
+            batch_len,
+            "prebuilt transaction batch submission failed"
+        );
+    }
+    for submission in &batch {
+        metrics.record_submit_latency(elapsed);
+        match (succeeded, submission.plan.expect_success) {
+            (true, true) => metrics.record_success(),
+            (true, false) => metrics.record_unexpected_success(),
+            (false, true) => metrics.record_failure(),
+            (false, false) => metrics.record_expected_failure(),
+        }
+        if succeeded {
+            metrics.record_ingress_accepted();
+        }
+    }
+
+    let endpoint_idx = submission_result
+        .as_ref()
+        .ok()
+        .map(|(endpoint_idx, _)| *endpoint_idx);
+    for (submission, hash) in batch.into_iter().zip(hashes) {
+        workload.record_result(&submission.plan, succeeded).await;
+        if succeeded
+            && should_audit_throughput_confirmation(
+                SubmissionConfirmationMode::AcceptedByIngress,
+                submission.plan.expect_success,
+            )
+            && should_sample_throughput_confirmation(&hash, confirmation_audit_seed)
+            && let (Some(endpoint_idx), Some(confirmation_audit_tx)) =
+                (endpoint_idx, confirmation_audit_tx.as_ref())
+        {
+            try_schedule_submission_audit(
+                confirmation_audit_tx,
+                metrics.as_ref(),
+                SubmissionAuditCandidate {
+                    endpoint_idx,
+                    signer: submission.plan.signer,
+                    hash,
+                    plan_label: submission.plan.label,
+                },
+                run_control,
+                confirmation_audit_wait_options,
+            );
         }
     }
 }
@@ -6779,6 +7234,7 @@ async fn submit_plan(
                                             signer_for_submit.key_pair.private_key().clone(),
                                         ),
                                         SubmissionConfirmationMode::AcceptedByIngress,
+                                        ingress_pool_for_submit.submit_request_timeout,
                                     );
                                     let metadata =
                                         submission_metadata(submission_counter_for_submit.as_ref());
@@ -6885,6 +7341,7 @@ async fn query_trigger_repetitions_on_endpoint(
             let client = tune_ingress_client(
                 peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                 SubmissionConfirmationMode::AcceptedByIngress,
+                ingress_pool.submit_request_timeout,
             );
             query_trigger_repetitions(&client, &trigger_id)
         }) {
@@ -6904,6 +7361,7 @@ async fn query_trigger_repetitions_on_endpoint(
                         let client = tune_ingress_client(
                             peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                             SubmissionConfirmationMode::AcceptedByIngress,
+                            ingress_pool.submit_request_timeout,
                         );
                         query_trigger_repetitions(&client, &trigger_id)
                     },
@@ -6931,6 +7389,7 @@ fn submit_repeatable_trigger_plan_on_endpoint(
         let client = tune_ingress_client(
             peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
             SubmissionConfirmationMode::AcceptedByIngress,
+            ingress_pool.submit_request_timeout,
         );
         let metadata = submission_metadata(submission_counter);
         client
@@ -7180,6 +7639,7 @@ fn wait_for_transaction_terminal_status_with_failover(
                     let client = tune_ingress_client(
                         peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                         SubmissionConfirmationMode::AcceptedByIngress,
+                        ingress_pool.submit_request_timeout,
                     );
                     let Some(response) =
                         client.get_transaction_status_response_auto(hash.clone())?
@@ -7613,8 +8073,22 @@ impl Metrics {
         update_peak(&self.inflight_peak, current);
     }
 
+    fn record_inflight_acquired_many(&self, count: u64) {
+        if count == 0 {
+            return;
+        }
+        let current = self.inflight_current.fetch_add(count, Ordering::Relaxed) + count;
+        update_peak(&self.inflight_peak, current);
+    }
+
     fn record_inflight_released(&self) {
         self.inflight_current.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn record_inflight_released_many(&self, count: u64) {
+        if count > 0 {
+            self.inflight_current.fetch_sub(count, Ordering::Relaxed);
+        }
     }
 
     fn record_backlog_spawn(&self) {
@@ -7716,6 +8190,29 @@ impl InflightGuard {
 impl Drop for InflightGuard {
     fn drop(&mut self) {
         self.metrics.record_inflight_released();
+    }
+}
+
+struct InflightBatchGuard {
+    metrics: Arc<Metrics>,
+    count: u64,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl InflightBatchGuard {
+    fn new(metrics: Arc<Metrics>, permit: OwnedSemaphorePermit, count: usize) -> Self {
+        let count = u64::try_from(count).unwrap_or(u64::MAX);
+        Self {
+            metrics,
+            count,
+            _permit: permit,
+        }
+    }
+}
+
+impl Drop for InflightBatchGuard {
+    fn drop(&mut self) {
+        self.metrics.record_inflight_released_many(self.count);
     }
 }
 
@@ -9320,6 +9817,66 @@ mod tests {
     }
 
     #[test]
+    fn prebuilt_stress_queue_capacity_scales_to_buffer() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(120),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
+            seed: Some(7),
+            tps: 20_000.0,
+            max_inflight: 2_400_000,
+            submitters: 4096,
+            prebuild_tx_buffer: 2_400_000,
+            prebuild_tx_workers: 20,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::default(),
+            nexus: None,
+            diagnostic_dir: None,
+        };
+
+        assert_eq!(effective_network_queue_capacity(&config), 2_400_000);
+        config.shutdown_drain_timeout = Duration::from_secs(120);
+        assert_eq!(
+            effective_ingress_request_timeout(&config),
+            Duration::from_secs(120)
+        );
+
+        config.tps = 100.0;
+        assert_eq!(
+            effective_network_queue_capacity(&config),
+            IZANAMI_QUEUE_CAPACITY
+        );
+        assert_eq!(
+            effective_ingress_request_timeout(&config),
+            Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
+        );
+
+        config.prebuild_tx_buffer = 0;
+        config.tps = 20_000.0;
+        assert_eq!(
+            effective_network_queue_capacity(&config),
+            IZANAMI_QUEUE_CAPACITY
+        );
+        assert_eq!(
+            effective_ingress_request_timeout(&config),
+            Duration::from_millis(IZANAMI_INGRESS_REQUEST_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
     fn status_sample_request_timeout_is_short_and_bounded() {
         let sample_timeout = Duration::from_millis(IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS);
 
@@ -9529,6 +10086,15 @@ mod tests {
 
         config.prebuild_tx_buffer = 0;
         assert_eq!(effective_prebuild_tx_workers(&config), 0);
+    }
+
+    #[test]
+    fn prebuild_attempt_limit_allows_skips_without_unbounded_warmup() {
+        assert_eq!(
+            prebuild_attempt_limit(10, 4),
+            (10 * IZANAMI_PREBUILD_ATTEMPT_MULTIPLIER) as u64
+        );
+        assert_eq!(prebuild_attempt_limit(0, 8), 8);
     }
 
     #[test]
@@ -12868,6 +13434,23 @@ mod tests {
             }
             None
         };
+        let read_string_array = |layer: &Table, path: &[&str]| -> Option<Vec<String>> {
+            let mut current = layer;
+            for (idx, key) in path.iter().enumerate() {
+                let value = current.get(*key)?;
+                if idx + 1 == path.len() {
+                    return Some(
+                        value
+                            .as_array()?
+                            .iter()
+                            .map(|entry| entry.as_str().map(str::to_string))
+                            .collect::<Option<Vec<_>>>()?,
+                    );
+                }
+                current = value.as_table()?;
+            }
+            None
+        };
         let lookup = |path| layers.iter().rev().find_map(|layer| read_i64(layer, path));
         let lookup_bool = |path| layers.iter().rev().find_map(|layer| read_bool(layer, path));
         let lookup_string = |path| {
@@ -12875,6 +13458,12 @@ mod tests {
                 .iter()
                 .rev()
                 .find_map(|layer| read_string(layer, path))
+        };
+        let lookup_string_array = |path| {
+            layers
+                .iter()
+                .rev()
+                .find_map(|layer| read_string_array(layer, path))
         };
         let npos_timing = derive_npos_timing(&config);
         let npos_propose_ms =
@@ -12948,6 +13537,47 @@ mod tests {
         assert_eq!(
             lookup(&["network", "p2p_subscriber_queue_cap"]),
             Some(IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP)
+        );
+        assert_eq!(lookup(&["queue", "capacity"]), Some(IZANAMI_QUEUE_CAPACITY));
+        assert_eq!(
+            lookup(&["queue", "capacity_per_user"]),
+            Some(IZANAMI_QUEUE_CAPACITY)
+        );
+        assert_eq!(
+            lookup_string_array(&["torii", "preauth_allow_cidrs"]),
+            Some(vec!["127.0.0.0/8".to_string(), "::1/128".to_string()])
+        );
+        assert_eq!(
+            lookup_string_array(&["torii", "api_allow_cidrs"]),
+            Some(vec!["127.0.0.0/8".to_string(), "::1/128".to_string()])
+        );
+        assert_eq!(
+            lookup(&["torii", "preauth_rate_per_ip_per_sec"]),
+            Some(IZANAMI_TORII_PREAUTH_RATE_PER_IP_PER_SEC)
+        );
+        assert_eq!(
+            lookup(&["torii", "preauth_burst_per_ip"]),
+            Some(IZANAMI_TORII_PREAUTH_BURST_PER_IP)
+        );
+        assert_eq!(
+            lookup(&["torii", "query_rate_per_authority_per_sec"]),
+            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["torii", "query_burst_per_authority"]),
+            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["torii", "tx_rate_per_authority_per_sec"]),
+            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["torii", "tx_burst_per_authority"]),
+            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["torii", "api_high_load_tx_threshold"]),
+            Some(IZANAMI_QUEUE_CAPACITY)
         );
         assert_eq!(
             lookup(&["network", "transaction_gossip_period_ms"]),

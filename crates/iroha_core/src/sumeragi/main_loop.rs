@@ -1507,6 +1507,15 @@ fn should_preserve_idle_view_budget_for_proposal(
         && (!backpressure.should_defer() || backpressure.only_pacing_backpressure())
 }
 
+fn should_retry_idle_view_after_proposal(
+    skipped_idle_view_for_proposal: bool,
+    queue_len: usize,
+    pending_blocks: usize,
+    commit_inflight: bool,
+) -> bool {
+    skipped_idle_view_for_proposal && queue_len > 0 && pending_blocks == 0 && !commit_inflight
+}
+
 fn rotate_topology_for_mode(
     topology: &mut super::network_topology::Topology,
     height: u64,
@@ -18839,7 +18848,8 @@ impl Actor {
             pre_idle_proposal_backpressure,
             proposal_deadline_due,
         );
-        let (idle_view_progress, idle_view_cost) = {
+        let skipped_idle_view_for_proposal = preserve_idle_view_budget_for_proposal;
+        let (idle_view_progress, mut idle_view_cost) = {
             let step_start = Instant::now();
             let progress = if preserve_idle_view_budget_for_proposal {
                 trace!(
@@ -18991,6 +19001,27 @@ impl Actor {
                 }
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
+        }
+        if should_retry_idle_view_after_proposal(
+            skipped_idle_view_for_proposal,
+            self.queue.active_len(),
+            self.pending.pending_blocks.len(),
+            self.subsystems.commit.inflight.is_some(),
+        ) {
+            let repair_start = Instant::now();
+            if Self::tick_budget_exhausted(tick_deadline, repair_start) {
+                trace!(
+                    queue_len = self.queue.active_len(),
+                    "deferring post-proposal idle view repair because tick budget is exhausted"
+                );
+            } else {
+                let _view_ctx =
+                    StateViewContextGuard::new("sumeragi.tick.post_proposal_idle_repair");
+                if self.force_view_change_if_idle(now) {
+                    progress = true;
+                }
+            }
+            idle_view_cost = idle_view_cost.saturating_add(repair_start.elapsed());
         }
         if let Some(telemetry) = self.telemetry_handle() {
             telemetry.observe_pacemaker_eval_ms(pacemaker_eval_cost);
@@ -32274,7 +32305,10 @@ impl Actor {
             active.forced_proposal_attempts = active.forced_proposal_attempts.saturating_add(1);
         }
         super::status::inc_consensus_forced_proposal_attempt();
-        let success = self.on_pacemaker_propose_ready(now);
+        let success = self.on_pacemaker_propose_ready_with_dependency_override(
+            now,
+            allow_dependency_gated_reproposal,
+        );
         if success {
             super::status::inc_consensus_forced_proposal_success();
         }

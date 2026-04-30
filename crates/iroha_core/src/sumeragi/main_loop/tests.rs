@@ -86887,6 +86887,55 @@ async fn proposal_backpressure_allows_starved_queue_only_saturation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_backpressure_allows_starved_payload_only_pending_under_saturation() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let capacity = NonZeroUsize::new(1).expect("non-zero");
+    let (_tx, rx) = tokio::sync::watch::channel(BackpressureState::Saturated {
+        queued: capacity.get(),
+        capacity,
+    });
+    actor.subsystems.propose.backpressure_gate = super::BackpressureGate::new(rx);
+    insert_active_pending_block(actor, 0);
+
+    let now = Instant::now();
+    let ingress_grace = actor.frontier_ingress_drain_grace(actor.runtime_da_enabled());
+    actor.subsystems.propose.last_successful_proposal = Some(
+        now.checked_sub(ingress_grace.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(now),
+    );
+
+    let backpressure = actor.proposal_backpressure_at(now);
+    assert!(
+        !backpressure.active_pending,
+        "payload-only pending frontier work must not remain hard backpressure once ingress starvation is due"
+    );
+    assert!(
+        !backpressure.queue_state.is_saturated(),
+        "starvation override should convert queue saturation into proposal pacing"
+    );
+    assert!(
+        !backpressure.should_defer(),
+        "starved payload-only pending work should allow the recovery proposal path to run"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_yields_unvoted_stale_frontier_owner_for_fresh_view() {
     use std::borrow::Cow;
 
@@ -141077,6 +141126,27 @@ fn idle_view_budget_is_preserved_for_due_proposal_under_pacing_backpressure() {
     assert!(
         !should_preserve_idle_view_budget_for_proposal(16, false, false, backpressure, false,),
         "idle-view repair should run while the proposal deadline has not fired"
+    );
+}
+
+#[test]
+fn idle_view_repair_retries_after_skipped_due_proposal_only_when_frontier_empty() {
+    assert!(should_retry_idle_view_after_proposal(true, 16, 0, false));
+    assert!(
+        !should_retry_idle_view_after_proposal(false, 16, 0, false),
+        "no retry is needed when idle repair already ran before proposal evaluation"
+    );
+    assert!(
+        !should_retry_idle_view_after_proposal(true, 0, 0, false),
+        "idle repair must stay quiet without queued work"
+    );
+    assert!(
+        !should_retry_idle_view_after_proposal(true, 16, 1, false),
+        "active pending blocks already own same-height liveness"
+    );
+    assert!(
+        !should_retry_idle_view_after_proposal(true, 16, 0, true),
+        "commit-inflight work must not be interrupted by the post-proposal retry"
     );
 }
 

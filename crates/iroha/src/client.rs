@@ -7133,6 +7133,66 @@ impl Client {
         Ok(hash)
     }
 
+    /// Submit already encoded transaction payloads with the asynchronous batched transport.
+    ///
+    /// Returns the submitted transaction hashes once Torii accepts the whole batch.
+    ///
+    /// # Errors
+    /// Fails if sending the batch to the peer fails, if Torii returns a non-success response, if
+    /// the accepted-count acknowledgement does not match the requested batch size, or if the submit
+    /// compatibility advert is missing or incompatible.
+    pub async fn submit_prepared_transaction_payload_batch_async(
+        &self,
+        payloads: &[PreparedTransactionPayload],
+    ) -> Result<Vec<HashOf<SignedTransaction>>> {
+        self.ensure_transaction_submit_compatibility()?;
+        if payloads.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hashes = payloads
+            .iter()
+            .map(PreparedTransactionPayload::hash)
+            .collect::<Vec<_>>();
+        let body = payloads
+            .iter()
+            .map(|payload| payload.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        let body = to_bytes(&body).wrap_err("failed to encode transaction batch as Norito")?;
+
+        let mut request = async_http_client()
+            .post(join_torii_url(
+                &self.torii_url,
+                torii_uri::TRANSACTIONS_BATCH,
+            ))
+            .timeout(self.torii_request_timeout)
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Prefer", "return=minimal");
+        for (name, value) in self.transaction_headers_without_content_type() {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .body(body)
+            .send()
+            .await
+            .wrap_err("Failed to send transaction batch")?;
+        let response = async_client_response_to_response(response).await?;
+        TransactionResponseHandler::handle(&response)?;
+        let accepted_count = response
+            .headers()
+            .get("x-iroha-transactions-accepted")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        if accepted_count != payloads.len() {
+            return Err(eyre!(
+                "transaction batch accepted {accepted_count} item(s), expected {}",
+                payloads.len()
+            ));
+        }
+        Ok(hashes)
+    }
+
     /// Submit the prebuilt transaction and wait until it is either rejected or applied.
     /// If rejected, return the rejection reason.
     /// Note: `Committed` is emitted after Kura persistence (before WSV apply), so

@@ -2634,8 +2634,16 @@ impl Actor {
                     )
                 },
             );
+        let ingress_starvation_override = self.config.resilience.enabled
+            && self.queue.active_len() > 0
+            && (self.backpressure_override_due(now)
+                || self.frontier_proposal_starved_past_ingress_grace(
+                    now,
+                    self.frontier_ingress_drain_grace(self.runtime_da_enabled()),
+                ));
         let congested_tip_pending = (queue_state.is_saturated() || consensus_queue_backpressure)
-            && live_pending_under_congestion;
+            && live_pending_under_congestion
+            && !ingress_starvation_override;
         let active_pending = pending_votes_or_qc
             || congested_tip_pending
             || blocking_pending > self.config.pacemaker.active_pending_soft_limit;
@@ -2653,13 +2661,7 @@ impl Actor {
             && !rbc_backlog
             && !relay_backpressure
             && !consensus_queue_backpressure;
-        let queue_only_starved = self.config.resilience.enabled
-            && self.queue.active_len() > 0
-            && (self.backpressure_override_due(now)
-                || self.frontier_proposal_starved_past_ingress_grace(
-                    now,
-                    self.frontier_ingress_drain_grace(self.runtime_da_enabled()),
-                ));
+        let queue_only_starved = ingress_starvation_override;
         if queue_only_saturation && queue_only_starved {
             queue_state = BackpressureState::Healthy {
                 queued: queue_state.queued(),
@@ -2959,6 +2961,15 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
+        self.on_pacemaker_propose_ready_with_dependency_override(now, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn on_pacemaker_propose_ready_with_dependency_override(
+        &mut self,
+        now: Instant,
+        allow_dependency_gated_reproposal: bool,
+    ) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
         if self.round_liveness_isolated() {
             self.subsystems.propose.pacemaker.next_deadline = now
@@ -3007,7 +3018,9 @@ impl Actor {
         let topology_peers = self.roster_for_live_vote_with_mode(tracked_height, consensus_mode);
         let active_topology_peers = topology_peers.clone();
         let tracked_view = self.phase_tracker.current_view(tracked_height).unwrap_or(0);
-        if self.proposal_gated_by_missing_dependencies(tracked_height) {
+        if self.proposal_gated_by_missing_dependencies(tracked_height)
+            && !allow_dependency_gated_reproposal
+        {
             self.subsystems.propose.pacemaker.next_deadline = now
                 .checked_add(
                     self.subsystems

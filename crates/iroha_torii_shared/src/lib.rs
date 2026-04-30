@@ -30,6 +30,8 @@ pub mod uri {
     pub const QUERY: &str = "/query";
     /// Transaction URI is used to handle incoming ISI requests.
     pub const TRANSACTION: &str = "/transaction";
+    /// Batched transaction URI is used to handle multiple signed transaction submissions.
+    pub const TRANSACTIONS_BATCH: &str = "/transactions/batch";
     /// Health URI is used to handle incoming Healthcheck requests.
     pub const HEALTH: &str = "/health";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).

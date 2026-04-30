@@ -81,7 +81,7 @@ pub struct IzanamiArgs {
     /// Number of independent transaction submitter loops sharing the global inflight budget.
     #[arg(long, default_value_t = 1)]
     pub submitters: usize,
-    /// Bounded in-memory queue of pre-signed, pre-encoded transactions for high-TPS stable runs.
+    /// Number of transactions to sign, encode, and cache before the timed load window starts.
     #[arg(long, default_value_t = 0)]
     pub prebuild_tx_buffer: usize,
     /// Number of workers used to fill the prebuilt transaction buffer; 0 chooses a host-aware default.

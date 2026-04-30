@@ -2289,6 +2289,23 @@ impl Queue {
         self.push_with_lane_internal_with_state(tx, state, None)
     }
 
+    /// Push transaction into queue using a caller-provided routing decision.
+    ///
+    /// The caller must pass a decision resolved against the same state horizon used for
+    /// admission. This avoids repeating route resolution in batch ingress paths that
+    /// already needed the decision for local/proxy routing.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_with_lane_with_state_and_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_decision: RoutingDecision,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_decision), None)
+    }
+
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
     /// supplied [`StateView`].
     ///

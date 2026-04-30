@@ -10352,8 +10352,43 @@ pub(crate) fn push_accepted_transaction_for_ingress(
     state: Arc<CoreState>,
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
 ) -> Result<RoutingDecision> {
-    queue
-        .push_with_lane_with_state(accepted_tx, state.as_ref())
+    push_accepted_transaction_for_ingress_with_routing(queue, state, accepted_tx, None)
+}
+
+pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_decision: Option<RoutingDecision>,
+) -> Result<RoutingDecision> {
+    let pressure = {
+        let state_view = state.view();
+        let block_time = state_view
+            .world()
+            .parameters()
+            .sumeragi()
+            .effective_block_time();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    if pressure.saturated_by_age {
+        iroha_logger::debug!(
+            tx_hash = %accepted_tx.hash(),
+            queued = pressure.queued_tx_count,
+            tracked = pressure.tracked_tx_count,
+            capacity = pressure.capacity.get(),
+            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
+            "accepting transaction ingress while local queue is latency-saturated"
+        );
+    }
+
+    let result = match routing_decision {
+        Some(decision) => {
+            queue.push_with_lane_with_state_and_routing(accepted_tx, state.as_ref(), decision)
+        }
+        None => queue.push_with_lane_with_state(accepted_tx, state.as_ref()),
+    };
+
+    result
         .map_err(|queue::Failure { tx, err }| {
             iroha_logger::warn!(
                 tx_hash=%tx.as_ref().hash(), ?err,
@@ -48950,6 +48985,86 @@ mod cursor_mode_tests {
         )
         .await;
         assert!(res.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod transaction_ingress_overload_tests {
+    use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::Queue,
+        state::{State, World},
+    };
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::*;
+    use iroha_logger::Level;
+
+    use super::*;
+
+    fn signed_log_transaction(
+        chain_id: &ChainId,
+        key_pair: &KeyPair,
+        label: &str,
+    ) -> SignedTransaction {
+        let authority = AccountId::new(key_pair.public_key().clone());
+        TransactionBuilder::new(chain_id.clone(), authority)
+            .with_instructions([InstructionBox::from(Log::new(
+                Level::INFO,
+                label.to_owned(),
+            ))])
+            .sign(key_pair.private_key())
+    }
+
+    #[tokio::test]
+    async fn transaction_ingress_accepts_latency_saturated_queue_before_capacity() {
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue {
+                capacity: NonZeroUsize::new(32).expect("queue capacity non-zero"),
+                capacity_per_user: NonZeroUsize::new(32).expect("queue per-user capacity non-zero"),
+                transaction_time_to_live: Duration::from_secs(60),
+                ..Default::default()
+            },
+            events,
+        ));
+        let chain_id: Arc<ChainId> = Arc::new("overload-chain".parse().expect("valid chain id"));
+        let first = signed_log_transaction(&chain_id, &KeyPair::random(), "first");
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            first,
+        )
+        .await
+        .expect("first transaction should enter queue");
+
+        queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
+
+        let second = signed_log_transaction(&chain_id, &KeyPair::random(), "second");
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            second,
+        )
+        .await
+        .expect("latency-saturated queue should still accept until capacity");
+
+        let backpressure = queue.current_backpressure();
+        assert!(
+            backpressure.is_saturated(),
+            "latency saturation must remain visible as backpressure telemetry"
+        );
+        assert_eq!(backpressure.queued(), 2);
+        assert_eq!(backpressure.capacity().get(), 32);
     }
 }
 
