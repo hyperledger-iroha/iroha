@@ -1785,7 +1785,7 @@ pub struct SumeragiNposTimeoutsStatus {
     pub witness_ms: u64,
 }
 
-/// Observational NPoS repair fanout stake-coverage snapshot.
+/// Observational `NPoS` repair fanout stake-coverage snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
@@ -2079,7 +2079,7 @@ pub struct SumeragiStatusWire {
     /// DELIVER-to-next-proposal gap snapshot.
     #[norito(default)]
     pub round_gap: SumeragiRoundGapStatus,
-    /// Observational NPoS repair fanout coverage, present only when locally recorded.
+    /// Observational `NPoS` repair fanout coverage, present only when locally recorded.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub npos_repair_coverage: Option<SumeragiNposRepairCoverageStatus>,

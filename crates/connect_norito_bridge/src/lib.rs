@@ -122,6 +122,7 @@ const ERR_FETCH_UNKNOWN_CHUNKER: c_int = -113;
 const ERR_ACCOUNT_ADDRESS: c_int = -200;
 const ERR_ASSET_ID_PARSE: c_int = -301;
 const ERR_JSON_SERIALIZE: c_int = -304;
+const ERR_OFFLINE_NOTE_V2_PROVE: c_int = -310;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -151,6 +152,7 @@ enum BridgeError {
     InvalidRootHint,
     AssetId,
     JsonSerialize,
+    OfflineNoteV2Prove,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -189,6 +191,7 @@ impl BridgeError {
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
+            BridgeError::OfflineNoteV2Prove => ERR_OFFLINE_NOTE_V2_PROVE,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -3571,12 +3574,352 @@ pub unsafe extern "C" fn connect_norito_decode_ciphertext_frame(
     }
 }
 
+// ---------------- Offline Note V2 prover helpers ----------------
+
+/// Generate a recursive Halo2/IPA proof for an Offline V2 redemption.
+///
+/// The input is Norito-archive bytes of
+/// `iroha_data_model::offline::OfflineNoteRedeemV2`. The existing
+/// `recursive_proof` field is ignored, so callers may pass a stub. The output
+/// is Norito-archive bytes of `OfflineNoteRecursiveProofV2`, ready to slot back
+/// into the redemption before transaction submission.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_redeem(
+    redeem_norito_ptr: *const c_uchar,
+    redeem_norito_len: c_ulong,
+    out_recursive_proof_ptr: *mut *mut c_uchar,
+    out_recursive_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if redeem_norito_ptr.is_null()
+            || out_recursive_proof_ptr.is_null()
+            || out_recursive_proof_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
+        let recursive = prove_offline_note_v2_redeem_recursive(bytes)?;
+        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Generate a recursive Halo2/IPA proof for an Offline V2 audit bundle.
+///
+/// The input is Norito-archive bytes of
+/// `iroha_data_model::offline::OfflineNoteAuditBundleV2`. The existing
+/// `recursive_proof` field is ignored, so callers may pass a stub. The output
+/// is Norito-archive bytes of `OfflineNoteRecursiveProofV2`, ready to slot back
+/// into the audit bundle before transaction submission.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_audit(
+    audit_norito_ptr: *const c_uchar,
+    audit_norito_len: c_ulong,
+    out_recursive_proof_ptr: *mut *mut c_uchar,
+    out_recursive_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if audit_norito_ptr.is_null()
+            || out_recursive_proof_ptr.is_null()
+            || out_recursive_proof_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
+        let recursive = prove_offline_note_v2_audit_recursive(bytes)?;
+        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn prove_offline_note_v2_redeem_recursive(
+    redeem_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProofV2> {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, offline_note_v2_recursive_vk_box,
+        prove_offline_note_v2_redeem,
+    };
+    use iroha_data_model::{
+        offline::{OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2},
+        proof::VerifyingKeyId,
+    };
+
+    let redemption: OfflineNoteRedeemV2 =
+        norito::decode_from_bytes(redeem_archive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let vk_box = offline_note_v2_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let proof_box = prove_offline_note_v2_redeem(
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        &vk_box,
+        &redemption,
+        None,
+    )
+    .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let public_inputs_hash = redemption
+        .public_inputs_hash()
+        .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+
+    Ok(OfflineNoteRecursiveProofV2 {
+        verifier_key_id: VerifyingKeyId::new(
+            vk_box.backend.clone(),
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        ),
+        public_inputs_hash,
+        proof: proof_box,
+    })
+}
+
+fn prove_offline_note_v2_audit_recursive(
+    audit_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProofV2> {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, offline_note_v2_recursive_vk_box,
+        prove_offline_note_v2_audit,
+    };
+    use iroha_data_model::{
+        offline::{OfflineNoteAuditBundleV2, OfflineNoteRecursiveProofV2},
+        proof::VerifyingKeyId,
+    };
+
+    let audit: OfflineNoteAuditBundleV2 =
+        norito::decode_from_bytes(audit_archive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let vk_box = offline_note_v2_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let proof_box = prove_offline_note_v2_audit(
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        &vk_box,
+        &audit,
+        None,
+    )
+    .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let public_inputs_hash = audit
+        .public_inputs_hash()
+        .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+
+    Ok(OfflineNoteRecursiveProofV2 {
+        verifier_key_id: VerifyingKeyId::new(
+            vk_box.backend.clone(),
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        ),
+        public_inputs_hash,
+        proof: proof_box,
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
             free(ptr_ as *mut _);
         }
+    }
+}
+
+#[cfg(test)]
+mod offline_note_v2_prover_tests {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        offline_note_v2_recursive_vk_box, verify_backend,
+    };
+    use iroha_data_model::{
+        offline::{
+            OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
+            OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
+            OfflineNoteRedeemV2,
+        },
+        proof::VerifyingKeyId,
+    };
+
+    use super::*;
+
+    fn sample_signature(seed: u8) -> Signature {
+        let mut bytes = [0u8; 64];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
+        }
+        Signature::from_bytes(&bytes)
+    }
+
+    fn sample_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_asset(account: AccountId) -> AssetId {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        AssetId::new(definition, account)
+    }
+
+    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificateV2 {
+        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        OfflineNoteKeyCertificateV2 {
+            version: 2,
+            platform: "ios-appattest".to_owned(),
+            key_id: format!("one-use-key-{seed}"),
+            device_id: "device-1".to_owned(),
+            account_id: account.clone(),
+            public_key: public_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
+            one_use: true,
+            issuer_signature: sample_signature(seed.wrapping_add(1)),
+        }
+    }
+
+    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProofV2 {
+        OfflineNoteRecursiveProofV2 {
+            verifier_key_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            ),
+            public_inputs_hash: Hash::new(b"placeholder-offline-note-v2-public-inputs"),
+            proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
+        }
+    }
+
+    fn sample_redemption() -> OfflineNoteRedeemV2 {
+        let account = sample_account(0xA1);
+        let asset = sample_asset(account.clone());
+        OfflineNoteRedeemV2 {
+            source_note_commitment: Hash::new(b"offline-note-v2-source-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-v2-redeem-nullifier")],
+            sender_key_certificate: sample_certificate(&account, 0xB1),
+            recipient: account,
+            asset,
+            amount: Numeric::new(10, 0),
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    fn sample_audit() -> OfflineNoteAuditBundleV2 {
+        let account = sample_account(0xC1);
+        let asset = sample_asset(account.clone());
+        let certificate = sample_certificate(&account, 0xD1);
+        let issue = OfflineNoteIssueV2 {
+            note_commitment: Hash::new(b"offline-note-v2-audit-input-note"),
+            key_certificate: certificate.clone(),
+            asset: asset.clone(),
+            amount: Numeric::new(10, 0),
+        };
+        OfflineNoteAuditBundleV2 {
+            token_id: Hash::new(b"offline-note-v2-audit-token"),
+            sender_key_certificate: certificate.clone(),
+            input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
+            input_claims: vec![OfflineNoteIssuedClaimV2::from_issue(&issue).expect("input claim")],
+            output_commitments: vec![Hash::new(b"offline-note-v2-audit-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"offline-note-v2-audit-output-note"),
+                key_certificate: certificate,
+                asset,
+                amount: Numeric::new(10, 0),
+            }],
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    fn decode_recursive_proof(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> OfflineNoteRecursiveProofV2 {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out).expect("decode recursive proof")
+    }
+
+    fn assert_recursive_proof_verifies(
+        recursive: &OfflineNoteRecursiveProofV2,
+        expected_public_inputs_hash: Hash,
+    ) {
+        let vk_box = offline_note_v2_recursive_vk_box().expect("offline note v2 verifying key");
+        assert_eq!(
+            recursive.verifier_key_id,
+            VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
+            )
+        );
+        assert_eq!(recursive.public_inputs_hash, expected_public_inputs_hash);
+        assert!(
+            verify_backend(ZK_BACKEND_HALO2_IPA, &recursive.proof, Some(&vk_box)),
+            "bridge output must verify against the canonical Offline V2 verifier"
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_redeem_ffi_returns_verifying_recursive_proof() {
+        let redemption = sample_redemption();
+        let archive = norito::to_bytes(&redemption).expect("encode redemption");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_offline_prove_note_v2_redeem(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let recursive = decode_recursive_proof(out_ptr, out_len);
+        assert_recursive_proof_verifies(
+            &recursive,
+            redemption.public_inputs_hash().expect("public input hash"),
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_audit_ffi_returns_verifying_recursive_proof() {
+        let audit = sample_audit();
+        let archive = norito::to_bytes(&audit).expect("encode audit bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_offline_prove_note_v2_audit(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let recursive = decode_recursive_proof(out_ptr, out_len);
+        assert_recursive_proof_verifies(
+            &recursive,
+            audit.public_inputs_hash().expect("public input hash"),
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_prover_ffi_rejects_invalid_archive() {
+        let bad_archive = b"not a norito archive";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_offline_prove_note_v2_redeem(
+                bad_archive.as_ptr(),
+                bad_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_OFFLINE_NOTE_V2_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 }
 

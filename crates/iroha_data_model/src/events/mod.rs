@@ -489,10 +489,10 @@ impl IntoSchema for SharedDataEvent {
 
     fn update_schema_map(metamap: &mut MetaMap) {
         data::DataEvent::update_schema_map(metamap);
-        if !metamap.contains_key::<Self>() {
-            if let Some(metadata) = metamap.get::<data::DataEvent>() {
-                metamap.insert::<Self>(metadata.clone());
-            }
+        if !metamap.contains_key::<Self>()
+            && let Some(metadata) = metamap.get::<data::DataEvent>()
+        {
+            metamap.insert::<Self>(metadata.clone());
         }
     }
 }
