@@ -18558,6 +18558,9 @@ const AUTH_CHALLENGE_CONSUME_LOCK_TTL_MS = Math.max(AUTH_CHALLENGE_TTL_MS, 15000
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL ?? "").trim();
 const PUBLIC_BASE_ORIGIN = parsePublicOrigin(PUBLIC_BASE_URL);
 const STATE_FILE_PATH = resolveStateFilePath();
+const STATE_FILE_LOCK_DIR = `${STATE_FILE_PATH}.lock`;
+const STATE_FILE_LOCK_STALE_MS = 30000;
+const STATE_FILE_LOCK_TIMEOUT_MS = 5000;
 const SESSION_HMAC_KEY = resolveSessionHmacKey();
 const SHARED_STATE_ADAPTER = resolveSharedStateAdapter();
 
@@ -18666,6 +18669,64 @@ function stableJsonStringify(value) {
   return JSON.stringify(canonicalizeJsonValue(value));
 }
 
+function sleepSync(ms) {
+  const buffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(buffer), 0, 0, ms);
+}
+
+function removeStaleAuthStateLock(nowMs) {
+  try {
+    const stats = fs.statSync(STATE_FILE_LOCK_DIR);
+    if (Number(stats.mtimeMs) + STATE_FILE_LOCK_STALE_MS <= nowMs) {
+      fs.rmSync(STATE_FILE_LOCK_DIR, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+function withAuthStateFileLock(operation) {
+  const directory = path.dirname(STATE_FILE_PATH);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const deadlineMs = Date.now() + STATE_FILE_LOCK_TIMEOUT_MS;
+  let locked = false;
+  while (!locked) {
+    try {
+      fs.mkdirSync(STATE_FILE_LOCK_DIR, { mode: 0o700 });
+      try {
+        fs.writeFileSync(
+          path.join(STATE_FILE_LOCK_DIR, "owner.json"),
+          stableJsonStringify({ created_at_unix_ms: Date.now(), pid: process.pid }),
+          { mode: 0o600 }
+        );
+      } catch (error) {
+        fs.rmSync(STATE_FILE_LOCK_DIR, { recursive: true, force: true });
+        throw error;
+      }
+      locked = true;
+    } catch (error) {
+      if (!error || error.code !== "EEXIST") {
+        throw error;
+      }
+      const nowMs = Date.now();
+      removeStaleAuthStateLock(nowMs);
+      if (nowMs >= deadlineMs) {
+        throw new Error("timed out waiting for auth state file lock");
+      }
+      sleepSync(10);
+    }
+  }
+
+  try {
+    return operation();
+  } finally {
+    fs.rmSync(STATE_FILE_LOCK_DIR, { recursive: true, force: true });
+  }
+}
+
 function readAuthStateSnapshot() {
   try {
     const raw = fs.readFileSync(STATE_FILE_PATH, "utf8");
@@ -18718,9 +18779,11 @@ function statePut(key, value) {
     SHARED_STATE_ADAPTER.put(key, canonical);
     return;
   }
-  const snapshot = readAuthStateSnapshot();
-  snapshot.records[key] = canonical;
-  writeAuthStateSnapshot(snapshot);
+  withAuthStateFileLock(() => {
+    const snapshot = readAuthStateSnapshot();
+    snapshot.records[key] = canonical;
+    writeAuthStateSnapshot(snapshot);
+  });
 }
 
 function statePutIfAbsent(key, value) {
@@ -18732,13 +18795,15 @@ function statePutIfAbsent(key, value) {
     }
     return inserted;
   }
-  const snapshot = readAuthStateSnapshot();
-  if (Object.prototype.hasOwnProperty.call(snapshot.records, key)) {
-    return false;
-  }
-  snapshot.records[key] = canonical;
-  writeAuthStateSnapshot(snapshot);
-  return true;
+  return withAuthStateFileLock(() => {
+    const snapshot = readAuthStateSnapshot();
+    if (Object.prototype.hasOwnProperty.call(snapshot.records, key)) {
+      return false;
+    }
+    snapshot.records[key] = canonical;
+    writeAuthStateSnapshot(snapshot);
+    return true;
+  });
 }
 
 function stateDelete(key) {
@@ -18746,11 +18811,13 @@ function stateDelete(key) {
     SHARED_STATE_ADAPTER.delete(key);
     return;
   }
-  const snapshot = readAuthStateSnapshot();
-  if (Object.prototype.hasOwnProperty.call(snapshot.records, key)) {
-    delete snapshot.records[key];
-    writeAuthStateSnapshot(snapshot);
-  }
+  withAuthStateFileLock(() => {
+    const snapshot = readAuthStateSnapshot();
+    if (Object.prototype.hasOwnProperty.call(snapshot.records, key)) {
+      delete snapshot.records[key];
+      writeAuthStateSnapshot(snapshot);
+    }
+  });
 }
 
 function stateEntries(prefix) {
@@ -19142,6 +19209,16 @@ function sendAuthError(res, status, code, error, extra = {}) {
   sendJson(res, status, Object.assign({ code, error }, extra));
 }
 
+function sendInternalError(res, error) {
+  // eslint-disable-next-line no-console
+  console.error(error?.stack ?? String(error));
+  if (res.headersSent) {
+    res.destroy(error);
+    return;
+  }
+  sendAuthError(res, 500, "INTERNAL_SERVER_ERROR", "internal server error");
+}
+
 async function handleAuthChallenge(req, res) {
   try {
     const body = await readJson(req);
@@ -19309,7 +19386,7 @@ const portArg = process.argv.find((value) => value.startsWith("--port="));
 const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8787");
 const CAPABILITY_MAP = parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", false);
 
-const server = http.createServer(async (req, res) => {
+async function handleWebappRequest(req, res) {
   cleanupExpiredAuthRecords();
 
   if (req.url === "/api/healthz") {
@@ -19351,6 +19428,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   sendJson(res, 404, { code: "NOT_FOUND", error: "not found" });
+}
+
+const server = http.createServer((req, res) => {
+  handleWebappRequest(req, res).catch((error) => sendInternalError(res, error));
 });
 
 server.listen(port, "0.0.0.0", () => {
@@ -19377,7 +19458,7 @@ const CAPABILITY_MAP = parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?
 const consentState = new Map();
 const retentionRuns = [];
 
-const server = http.createServer(async (req, res) => {
+async function handlePiiAppRequest(req, res) {
   cleanupExpiredAuthRecords();
 
   if (req.url === "/pii/api/healthz") {
@@ -19526,6 +19607,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   sendJson(res, 404, { code: "NOT_FOUND", error: "not found" });
+}
+
+const server = http.createServer((req, res) => {
+  handlePiiAppRequest(req, res).catch((error) => sendInternalError(res, error));
 });
 
 server.listen(port, "0.0.0.0", () => {
@@ -32584,6 +32669,8 @@ main().catch((error) => {
         assert!(api.contains("/state/auth/sessions"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED_PREFIX"));
         assert!(api.contains("AUTH_CHALLENGE_CONSUME_LOCK_PREFIX"));
+        assert!(api.contains("withAuthStateFileLock"));
+        assert!(api.contains("sendInternalError"));
         assert!(api.contains("server.address()"));
     }
 
@@ -32614,6 +32701,8 @@ main().catch((error) => {
         assert!(api.contains("/state/auth/sessions"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED_PREFIX"));
         assert!(api.contains("AUTH_CHALLENGE_CONSUME_LOCK_PREFIX"));
+        assert!(api.contains("withAuthStateFileLock"));
+        assert!(api.contains("sendInternalError"));
         assert!(api.contains("server.address()"));
     }
 
@@ -37268,6 +37357,16 @@ assert(
 );
 stateDelete("/state/test/z");
 assert(stateGet("/state/test/z") === null, "stateDelete should remove existing records");
+
+fs.mkdirSync(STATE_FILE_LOCK_DIR, { recursive: true });
+const staleLockTime = new Date(Date.now() - STATE_FILE_LOCK_STALE_MS - 1000);
+fs.utimesSync(STATE_FILE_LOCK_DIR, staleLockTime, staleLockTime);
+statePut("/state/test/stale-lock", { ok: true });
+assert(
+  stateGet("/state/test/stale-lock")?.ok === true,
+  "statePut should recover from stale file locks"
+);
+assert(!fs.existsSync(STATE_FILE_LOCK_DIR), "state lock should be released after mutation");
 
 fs.writeFileSync(STATE_FILE_PATH, "  ");
 assert(
