@@ -2,6 +2,25 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Torii Offline V2 issuer hardening
+
+- Torii Offline V2 issuer certificate minting now requires a signed middleware
+  attestation receipt before certifying hardware one-use keys. Certificate JSON
+  echoes canonical base64 key bytes from the verified receipt instead of
+  client-supplied hex/base64 spellings.
+- Offline V2 note issuance now derives balances from Torii-signed lineage
+  state, treats client `local_balance` / `local_revision` as consistency
+  checks, preserves trusted balance during existing-lineage key refills, and
+  returns the same chain note commitment that is submitted on-chain.
+- `torii.offline_issuer` configuration now requires an attestation verifier
+  public key and explicitly accepts only Ed25519 or Secp256k1 issuer/verifier
+  keys.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_config -p iroha_torii --features app_api`
+  - `cargo test -p iroha_torii offline_v2_issuer`
+  - `cargo test -p iroha_config torii_offline_issuer`
+
 ## 2026-05-01 Iroha Connect default relay TTL restored
 
 - Changed the default Connect P2P relay TTL from `0` to `8` hops so the
