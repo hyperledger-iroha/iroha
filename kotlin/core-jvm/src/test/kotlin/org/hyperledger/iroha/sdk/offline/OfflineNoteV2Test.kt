@@ -3,9 +3,11 @@ package org.hyperledger.iroha.sdk.offline
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Base64
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 class OfflineNoteV2Test {
@@ -40,6 +42,8 @@ class OfflineNoteV2Test {
         assertEquals(string(obj(chain, "redeem"), "public_inputs_hash"), hex(redeem.publicInputsHash()))
         audit.validateProofBinding()
         redeem.validateProofBinding()
+        audit.replacingRecursiveProof(audit.recursiveProof).validateProofBinding()
+        redeem.replacingRecursiveProof(redeem.recursiveProof).validateProofBinding()
     }
 
     @Test
@@ -66,6 +70,87 @@ class OfflineNoteV2Test {
         assertFailsWith<IllegalArgumentException> {
             forged.validateProofBinding()
         }
+    }
+
+    @Test
+    fun instanceValuesMatchRustVectors() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val auditValues = OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(fixture))
+        val redeemValues = OfflineNoteV2.InstanceBuilder.redeemInstanceValues(redeem(fixture))
+        val auditPublic = auditValues.publicValues()
+        val redeemPublic = redeemValues.publicValues()
+
+        assertEquals(
+            string(obj(chain, "audit"), "public_inputs_hash"),
+            hex(hashFromPublicValues(auditPublic)),
+        )
+        assertEquals(
+            string(obj(chain, "redeem"), "public_inputs_hash"),
+            hex(hashFromPublicValues(redeemPublic)),
+        )
+        assertEquals(2L, auditPublic[4])
+        assertEquals(1L, auditPublic[5])
+        assertEquals(2L, auditPublic[6])
+        assertEquals(52L, auditPublic[7])
+        assertEquals(52L, auditPublic[8])
+        assertEquals(1L, redeemPublic[4])
+        assertEquals(1L, redeemPublic[5])
+        assertEquals(1L, redeemPublic[6])
+        assertEquals(5L, redeemPublic[7])
+        assertEquals(5L, redeemPublic[8])
+        assertEquals(52L, auditValues.inputAmounts()[0])
+        assertEquals(5L, auditValues.outputAmounts()[0])
+        assertEquals(47L, auditValues.outputAmounts()[1])
+        assertEquals(5L, redeemValues.inputAmounts()[0])
+        assertEquals(5L, redeemValues.outputAmounts()[0])
+        assertEquals(
+            OfflineNoteV2.instanceScalarBytes(auditPublic[0]).toList(),
+            auditValues.publicInstanceColumns()[0].toList(),
+        )
+    }
+
+    @Test
+    fun nativeHalo2ProverProducesVerifyingPayloadWhenRequested() {
+        if (System.getenv("IROHA_JVM_OFFLINE_V2_PROVER_TEST") != "1") {
+            return
+        }
+        val fixture = loadFixture()
+        val audit = audit(fixture)
+        val values = OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit)
+        OfflineNoteV2Halo2Prover.prewarm()
+        val payload = OfflineNoteV2Halo2Prover.proveZk1Payload(values)
+        System.getenv("IROHA_JVM_OFFLINE_V2_PAYLOAD_OUT")?.let {
+            Files.write(Paths.get(it), payload)
+        }
+
+        assertTrue(OfflineNoteV2Halo2Prover.verifyZk1Payload(payload, values.publicValues()))
+        val proof = OfflineNoteV2Halo2Prover.proveAudit(audit)
+        audit.replacingRecursiveProof(proof).validateProofBinding()
+        assertTrue(proof.proof.bytes().size <= OfflineNoteV2Halo2Prover.MAX_ENVELOPE_BYTES)
+    }
+
+    @Test
+    fun nativeHalo2ProverPerformanceWhenRequested() {
+        if (System.getenv("IROHA_JVM_OFFLINE_V2_BENCH") != "1") {
+            return
+        }
+        val iterations = System.getenv("IROHA_JVM_OFFLINE_V2_BENCH_ITERATIONS")?.toInt() ?: 20
+        assertTrue(iterations > 0)
+        val fixture = loadFixture()
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+        OfflineNoteV2Halo2Prover.prewarm()
+        OfflineNoteV2Halo2Prover.proveAudit(audit)
+        OfflineNoteV2Halo2Prover.proveRedeem(redeem)
+
+        val auditSeconds = benchmarkSeconds(iterations) {
+            OfflineNoteV2Halo2Prover.proveAudit(audit)
+        }
+        val redeemSeconds = benchmarkSeconds(iterations) {
+            OfflineNoteV2Halo2Prover.proveRedeem(redeem)
+        }
+        println("offline_note_v2_jvm_bench audit=${summary(auditSeconds)} redeem=${summary(redeemSeconds)}")
     }
 
     @Test
@@ -184,6 +269,48 @@ class OfflineNoteV2Test {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xFF) }
+
+    private fun hashFromPublicValues(values: LongArray): ByteArray {
+        val out = ByteArray(32)
+        for (idx in 0 until 4) {
+            var word = values[idx]
+            for (offset in 0 until 8) {
+                out[idx * 8 + offset] = (word and 0xffL).toByte()
+                word = word ushr 8
+            }
+        }
+        return out
+    }
+
+    private fun benchmarkSeconds(iterations: Int, body: () -> Unit): DoubleArray {
+        val durations = DoubleArray(iterations)
+        for (idx in 0 until iterations) {
+            val start = System.nanoTime()
+            body()
+            durations[idx] = (System.nanoTime() - start).toDouble() / 1_000_000_000.0
+        }
+        return durations
+    }
+
+    private fun summary(values: DoubleArray): String {
+        val sorted = values.sorted()
+        if (sorted.isEmpty()) {
+            return "empty"
+        }
+        val median = if (sorted.size % 2 == 0) {
+            (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
+        } else {
+            sorted[sorted.size / 2]
+        }
+        val p95Index = minOf(sorted.size - 1, maxOf(0, kotlin.math.ceil(sorted.size * 0.95).toInt() - 1))
+        return "median=%.3fs p95=%.3fs max=%.3fs n=%d".format(
+            Locale.ROOT,
+            median,
+            sorted[p95Index],
+            sorted.last(),
+            sorted.size,
+        )
+    }
 
     private fun hexBytes(value: String): ByteArray {
         require(value.length % 2 == 0) { "hex length must be even" }
