@@ -34,6 +34,67 @@ Last updated: 2026-05-01
   - Kotlin/JVM and Java Android Connect tests could not run because no Java runtime is available.
   - Focused Swift Connect tests could not run because `IrohaSwift/dist/NoritoBridge.xcframework` is missing.
 
+## 2026-05-01 Sumeragi frontier formal corridor hardened
+
+- Strengthened the focused Taira frontier-recovery model with explicit
+  follow-through after payload recovery and quorum retransmit, plus a finite
+  future-frontier/new-view evidence abstraction that can reanchor the pending
+  frontier instead of leaving it behind stale local state.
+- Made Apalache bounds explicit in `scripts/formal/sumeragi_apalache.sh` for
+  every mode, added the manual `frontier-wide` profile, and kept the normal
+  CI gate to the cheaper `frontier-fast` / `frontier-deep` profiles.
+- Added expected-failure stale-owner and vote-queue mutation profiles outside
+  normal CI so model edits can prove that those hang-class assumptions are
+  still actually exercised.
+- Updated the Sumeragi formal README with the model-to-implementation
+  assumption map and refreshed all translated `docs/formal/sumeragi/README.*.md`
+  files so the formal docs pass the current-source metadata gate.
+- No runtime consensus code changed in this hardening pass.
+- Validation completed with local Apalache `0.52.2`:
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-deep`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-wide`
+  - `bash ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash ci/check_sumeragi_formal.sh`
+  - `cargo test -p iroha_core reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
+
+## 2026-04-30 Sumeragi frontier recovery formal model
+
+- Added a focused bounded TLA+/Apalache model for the Taira frontier hang
+  class at `docs/formal/sumeragi/SumeragiFrontierRecovery.tla`, with fast and
+  deep configs. The model keeps signatures/ECDSA abstracted as finite vote
+  evidence and explicitly covers a pending contiguous frontier block, queued
+  commit-vote backlog, missing/local payload state, stale recovery ownership,
+  quorum-reschedule marker/window pacing, and deterministic commit, retransmit,
+  bounded view-rotation, and zero-evidence drop outcomes after GST.
+- The frontier proof checks `TypeInvariant`, commit-implies-vote-quorum,
+  commit-implies-payload-availability, no vote-backed zero-evidence zombie
+  drop, post-GST vote-backed frontier progress, and post-GST eventual
+  resolution by commit, payload recovery, quorum retransmit, or bounded view
+  rotation.
+- Extended `scripts/formal/sumeragi_apalache.sh` with backward-compatible
+  `frontier-fast` and `frontier-deep` modes, and extended
+  `ci/check_sumeragi_formal.sh` so formal CI now runs both the existing
+  commit-path model and the new frontier-recovery model.
+- No runtime consensus code changed in this slice.
+- Validation used local Apalache `0.52.2` (`build: 9103560`, archive sha256
+  `e0ebea7e45c8f99df8d92f2755101dda84ab71df06d1ec3a21955d3b53a886e2`):
+  - `bash scripts/formal/install_apalache.sh 0.52.2`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-deep`
+  - `bash ci/check_sumeragi_formal.sh`
+  - `cargo test -p iroha_core reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal` (passed with
+    the expected stale `source_hash` warnings for existing translated formal
+    README files)
+
 ## 2026-04-30 Iroha Connect session and relay hardening
 
 - Added session-scoped `token_management` and `token_relay` credentials to

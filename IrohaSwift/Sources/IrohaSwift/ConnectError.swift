@@ -222,6 +222,11 @@ extension ConnectCryptoError: ConnectErrorConvertible {
                                 code: "crypto.invalid_session_identifier_length",
                                 message: errorDescription ?? "",
                                 underlying: self)
+        case .invalidRelayToken:
+            return ConnectError(category: .authorization,
+                                code: "crypto.invalid_relay_token",
+                                message: errorDescription ?? "",
+                                underlying: self)
         }
     }
 }
