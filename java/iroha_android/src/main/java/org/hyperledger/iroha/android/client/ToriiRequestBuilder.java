@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -12,6 +13,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 /** Builds Torii HTTP requests for submitting signed transactions. */
 final class ToriiRequestBuilder {
   private static final String SUBMIT_PATH = "/transaction";
+  private static final String SUBMIT_ENTRYPOINT_PATH = "/transaction/entrypoint";
   private static final String STATUS_PATH = "/v1/pipeline/transactions/status";
 
   private ToriiRequestBuilder() {}
@@ -39,6 +41,33 @@ final class ToriiRequestBuilder {
             .addHeader("Content-Type", "application/x-norito")
             .addHeader("Accept", "application/x-norito, application/json")
             .setBody(norito);
+    applyHeaders(builder, extraHeaders);
+    applyTimeout(builder, timeout);
+    return builder.build();
+  }
+
+  static TransportRequest buildSubmitEntrypointRequest(
+      final URI baseUri,
+      final byte[] encodedVersionedEntrypoint,
+      final Duration timeout,
+      final Map<String, String> extraHeaders) {
+    Objects.requireNonNull(baseUri, "baseUri");
+    Objects.requireNonNull(encodedVersionedEntrypoint, "encodedVersionedEntrypoint");
+    if (encodedVersionedEntrypoint.length == 0) {
+      throw new IllegalArgumentException("encodedVersionedEntrypoint must not be empty");
+    }
+    final URI target = resolve(baseUri, SUBMIT_ENTRYPOINT_PATH);
+    final byte[] body =
+        Arrays.copyOf(encodedVersionedEntrypoint, encodedVersionedEntrypoint.length);
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, body);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/x-norito")
+            .addHeader("Accept", "application/x-norito, application/json")
+            .setBody(body);
     applyHeaders(builder, extraHeaders);
     applyTimeout(builder, timeout);
     return builder.build();

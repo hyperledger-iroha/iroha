@@ -528,6 +528,7 @@ mod offline_note_v2_tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn offline_note_v2_claims_and_public_inputs_bind_payload_fields() {
         let account_id = sample_account(0xD4, "offline");
         let definition = AssetDefinitionId::new(

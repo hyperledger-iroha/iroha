@@ -872,7 +872,7 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
     ///
     /// Returns an error when the peer cannot provide its local network identity.
     fn isolated_trusted_peer_entry(&self) -> Result<String>;
-    /// PoP entries that remain valid when the peer is restarted in isolation.
+    /// `PoP` entries that remain valid when the peer is restarted in isolation.
     ///
     /// # Errors
     ///

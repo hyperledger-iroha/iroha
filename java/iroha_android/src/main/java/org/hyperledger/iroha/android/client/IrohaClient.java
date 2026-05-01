@@ -17,6 +17,20 @@ public interface IrohaClient {
   CompletableFuture<ClientResponse> submitTransaction(SignedTransaction transaction);
 
   /**
+   * Submits an already versioned Norito transaction entrypoint to the node.
+   *
+   * <p>This is intended for sealed commitment/reveal entrypoints and other non-legacy transaction
+   * envelopes that are not represented as a plain {@link SignedTransaction}.
+   */
+  default CompletableFuture<ClientResponse> submitTransactionEntrypoint(
+      final byte[] encodedVersionedEntrypoint) {
+    final CompletableFuture<ClientResponse> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("submitTransactionEntrypoint not supported"));
+    return future;
+  }
+
+  /**
    * Polls the pipeline status endpoint until the transaction reaches a terminal state.
    *
    * <p>The default implementation reports that the operation is unsupported.

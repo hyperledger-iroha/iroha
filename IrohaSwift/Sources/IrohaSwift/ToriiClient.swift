@@ -10240,6 +10240,15 @@ public protocol ToriiTransactionSubmitting: AnyObject {
                            completion: @escaping (Swift.Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never>
 }
 
+public protocol ToriiTransactionEntrypointSubmitting: ToriiTransactionSubmitting {
+    func submitTransactionEntrypoint(data: Data,
+                                     idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse?
+    @discardableResult
+    func submitTransactionEntrypoint(data: Data,
+                                     idempotencyKey: String?,
+                                     completion: @escaping (Swift.Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never>
+}
+
 public extension ToriiTransactionSubmitting where Self: Sendable {
     func submitTransaction(data: Data) async throws -> ToriiSubmitTransactionResponse? {
         try await submitTransaction(data: data, mode: .pipeline, idempotencyKey: nil)
@@ -10267,7 +10276,28 @@ public extension ToriiTransactionSubmitting where Self: Sendable {
     }
 }
 
-public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable {
+public extension ToriiTransactionEntrypointSubmitting where Self: Sendable {
+    func submitTransactionEntrypoint(data: Data) async throws -> ToriiSubmitTransactionResponse? {
+        try await submitTransactionEntrypoint(data: data, idempotencyKey: nil)
+    }
+
+    @discardableResult
+    func submitTransactionEntrypoint(data: Data,
+                                     completion: @escaping (Swift.Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        submitTransactionEntrypoint(data: data, idempotencyKey: nil, completion: completion)
+    }
+
+    @discardableResult
+    func submitTransactionEntrypoint(data: Data,
+                                     idempotencyKey: String? = nil,
+                                     completion: @escaping (Swift.Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runCompletionTask(operation: { [self] in
+            try await submitTransactionEntrypoint(data: data, idempotencyKey: idempotencyKey)
+        }, completion: completion)
+    }
+}
+
+public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked Sendable {
     private struct ObservedServerClock: Sendable {
         let serverEpochMs: UInt64
         let observedLocalEpochMs: UInt64
@@ -11144,6 +11174,19 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                   idempotencyKey: String?,
                                   completion: @escaping (Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.submitTransaction(data: data, mode: .pipeline, idempotencyKey: idempotencyKey) }
+    }
+
+    @discardableResult
+    public func submitTransactionEntrypoint(data: Data,
+                                            completion: @escaping (Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitTransactionEntrypoint(data: data) }
+    }
+
+    @discardableResult
+    public func submitTransactionEntrypoint(data: Data,
+                                            idempotencyKey: String?,
+                                            completion: @escaping (Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitTransactionEntrypoint(data: data, idempotencyKey: idempotencyKey) }
     }
 
     @discardableResult
@@ -13543,8 +13586,22 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func submitTransaction(data: Data,
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
+        try await submitNoritoTransactionPayload(path: pipelineEndpoints(for: mode).submit,
+                                                 data: data,
+                                                 idempotencyKey: idempotencyKey)
+    }
+
+    public func submitTransactionEntrypoint(data: Data,
+                                            idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
+        try await submitNoritoTransactionPayload(path: "/transaction/entrypoint",
+                                                 data: data,
+                                                 idempotencyKey: idempotencyKey)
+    }
+
+    private func submitNoritoTransactionPayload(path: String,
+                                                data: Data,
+                                                idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse? {
         try await ensureDataModelValidation()
-        let paths = pipelineEndpoints(for: mode)
         var headers: [String: String] = [
             "Content-Type": "application/x-norito",
             "Accept": "application/x-norito, application/json"
@@ -13552,7 +13609,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         if let key = idempotencyKey, !key.isEmpty {
             headers["Idempotency-Key"] = key
         }
-        let request = try makeRequest(path: paths.submit,
+        let request = try makeRequest(path: path,
                                       method: .post,
                                       body: data,
                                       headers: headers)

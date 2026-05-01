@@ -8,6 +8,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex;
 use iroha_core::state::WorldReadOnly;
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     HasMetadata, Identifiable, ValidationFail,
     account::{AccountEntry, AccountId},
@@ -31,7 +32,7 @@ use iroha_data_model::{
     transaction::{
         error::TransactionRejectionReason,
         executable::Executable,
-        signed::{SignedTransaction, TransactionResult},
+        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
 };
 use iroha_torii_shared::qr::{EcLevel, QrCode, QrError};
@@ -569,7 +570,7 @@ pub(crate) struct ExplorerBlockDto {
 impl ExplorerBlockDto {
     pub(crate) fn from_block(block: &SignedBlock) -> Self {
         let header = block.header();
-        let external_total = block.external_transactions().len();
+        let external_total = block.external_entrypoint_count();
         Self {
             hash: block.hash().to_string(),
             height: header.height().get(),
@@ -880,12 +881,32 @@ pub(crate) fn instruction_dto_with_kind(
     kind: ExplorerInstructionKind,
     index: u32,
 ) -> ExplorerInstructionDto {
+    instruction_dto_with_kind_and_hash(
+        tx,
+        tx.hash_as_entrypoint(),
+        block_height,
+        result,
+        instruction,
+        kind,
+        index,
+    )
+}
+
+pub(crate) fn instruction_dto_with_kind_and_hash(
+    tx: &SignedTransaction,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    block_height: u64,
+    result: &TransactionResult,
+    instruction: &InstructionBox,
+    kind: ExplorerInstructionKind,
+    index: u32,
+) -> ExplorerInstructionDto {
     ExplorerInstructionDto {
         authority: account_literal::display_literal(tx.authority()),
         created_at: duration_to_rfc3339(tx.creation_time()),
         kind: instruction_display_kind(instruction, kind),
         r#box: instruction_box_dto(instruction, kind),
-        transaction_hash: tx.hash_as_entrypoint().to_string(),
+        transaction_hash: entrypoint_hash.to_string(),
         transaction_status: transaction_status_label(result).to_string(),
         block: block_height,
         index,
@@ -1357,9 +1378,18 @@ pub(crate) fn transaction_summary_dto(
     block_height: u64,
     result: &TransactionResult,
 ) -> ExplorerTransactionDto {
+    transaction_summary_dto_with_hash(tx, tx.hash_as_entrypoint(), block_height, result)
+}
+
+pub(crate) fn transaction_summary_dto_with_hash(
+    tx: &SignedTransaction,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    block_height: u64,
+    result: &TransactionResult,
+) -> ExplorerTransactionDto {
     ExplorerTransactionDto {
         authority: account_literal::display_literal(tx.authority()),
-        hash: tx.hash_as_entrypoint().to_string(),
+        hash: entrypoint_hash.to_string(),
         block: block_height,
         created_at: duration_to_rfc3339(tx.creation_time()),
         executable: executable_label(tx.instructions()).to_string(),
@@ -1372,9 +1402,18 @@ pub(crate) fn transaction_detail_dto(
     block_height: u64,
     result: &TransactionResult,
 ) -> ExplorerTransactionDetailDto {
+    transaction_detail_dto_with_hash(tx, tx.hash_as_entrypoint(), block_height, result)
+}
+
+pub(crate) fn transaction_detail_dto_with_hash(
+    tx: &SignedTransaction,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    block_height: u64,
+    result: &TransactionResult,
+) -> ExplorerTransactionDetailDto {
     ExplorerTransactionDetailDto {
         authority: account_literal::display_literal(tx.authority()),
-        hash: tx.hash_as_entrypoint().to_string(),
+        hash: entrypoint_hash.to_string(),
         block: block_height,
         created_at: duration_to_rfc3339(tx.creation_time()),
         executable: executable_label(tx.instructions()).to_string(),
@@ -1875,6 +1914,49 @@ mod tests {
         assert_eq!(dto.transactions_total, 1);
         assert_eq!(dto.transactions_rejected, 1);
         assert_eq!(dto.created_at, "2023-11-14T22:13:20Z");
+        assert!(dto.transactions_hash.is_some());
+    }
+
+    #[test]
+    fn block_dto_counts_sealed_commitment_entrypoints() {
+        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let tx = TransactionBuilder::new(chain.clone(), ALICE_ID.clone())
+            .sign(ALICE_KEYPAIR.private_key());
+        let reveal_deadline_height = 5;
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                &chain,
+                &tx,
+                [0x41; 32],
+                reveal_deadline_height,
+            );
+        let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+            chain_id: chain,
+            authority: ALICE_ID.clone(),
+            commitment,
+            reveal_after_height: 2,
+            reveal_deadline_height,
+            nonce: None,
+        };
+        let sealed_commitment =
+            iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                payload,
+                ALICE_KEYPAIR.private_key(),
+            );
+        let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 1_700_000_001_000, 0);
+        let mut builder = BlockBuilder::new(header);
+        builder.push_sealed_transaction_commitment(sealed_commitment);
+        builder.push_result(TransactionResultInner::Err(
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                "boom".to_string(),
+            )),
+        ));
+        let block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+
+        let dto = ExplorerBlockDto::from_block(&block);
+        assert_eq!(dto.height, 4);
+        assert_eq!(dto.transactions_total, 1);
+        assert_eq!(dto.transactions_rejected, 1);
         assert!(dto.transactions_hash.is_some());
     }
 

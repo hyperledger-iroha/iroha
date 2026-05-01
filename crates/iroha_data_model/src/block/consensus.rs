@@ -2797,6 +2797,8 @@ mod tests {
         let key_pair = KeyPair::random();
         let payload = crate::transaction::TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            signed_transaction_hash: None,
             submitted_at_ms: 10,
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),

@@ -50,6 +50,17 @@ pub struct FastpqPublicInputsTemplate {
     pub perm_root: [u8; 32],
 }
 
+/// Local context needed to build FASTPQ batches outside the consensus commit path.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FastpqWitnessContext {
+    /// Public-input fields shared by every FASTPQ batch in the witness.
+    pub(crate) public_inputs: Option<FastpqPublicInputsTemplate>,
+    /// Hash of external transaction entrypoints in the committed block.
+    pub(crate) tx_set_hash: Option<[u8; 32]>,
+    /// Per-entry dataspace ids keyed by entrypoint hash.
+    pub(crate) entry_dataspaces: BTreeMap<Hash, [u8; 16]>,
+}
+
 impl FastpqPublicInputsTemplate {
     /// Build full public inputs using a precomputed transaction set hash.
     #[must_use]

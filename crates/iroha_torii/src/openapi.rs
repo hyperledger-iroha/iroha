@@ -1227,6 +1227,15 @@ fn transaction_paths() -> Map {
             "#/components/schemas/JsonValue",
         )),
     );
+    paths.insert(
+        "/transaction/entrypoint".to_owned(),
+        Value::Object(binary_post_operation(
+            "Transactions",
+            "Submit a versioned transaction entrypoint.",
+            "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+            "#/components/schemas/JsonValue",
+        )),
+    );
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
@@ -10301,6 +10310,7 @@ mod tests {
         assert!(paths.contains_key("/v1/repo/agreements"));
         assert!(paths.contains_key("/v1/repo/agreements/query"));
         assert!(paths.contains_key("/transaction"));
+        assert!(paths.contains_key("/transaction/entrypoint"));
         assert!(paths.contains_key("/query"));
         assert!(paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));

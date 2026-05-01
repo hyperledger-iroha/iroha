@@ -38,6 +38,10 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofBox},
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
+    transaction::signed::{
+        SealedTransactionCommitmentPayload, SealedTransactionReveal,
+        SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+    },
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
     zk::OpenVerifyEnvelope,
 };
@@ -81,6 +85,106 @@ pub(crate) struct StatefulAdmission {
     pub(crate) allow_unregistered_authority: bool,
     /// Monotonic sequence value to store after successful execution.
     pub(crate) sequence_to_commit: Option<u64>,
+}
+
+#[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
+struct PendingSealedTransactionCommitment {
+    payload: SealedTransactionCommitmentPayload,
+    commit_height: u64,
+    commit_index: u64,
+}
+
+const SEALED_TRANSACTION_STATE_PREFIX: &str = "sealed_tx_commitment_";
+
+fn sealed_commitment_state_key(commitment: &iroha_crypto::Hash) -> iroha_data_model::name::Name {
+    iroha_data_model::name::Name::from_str(&format!(
+        "{SEALED_TRANSACTION_STATE_PREFIX}{}",
+        hex::encode(commitment.as_ref())
+    ))
+    .expect("sealed transaction commitment key is a valid name")
+}
+
+fn sealed_state_decode_error(error: impl fmt::Display) -> TransactionRejectionReason {
+    TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+        "sealed transaction commitment state decode failed: {error}"
+    )))
+}
+
+fn sealed_state_encode_error(error: impl fmt::Display) -> TransactionRejectionReason {
+    TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+        "sealed transaction commitment state encode failed: {error}"
+    )))
+}
+
+pub(crate) fn validate_sealed_commitment_stateless(
+    commitment: &SignedSealedTransactionCommitment,
+    expected_chain_id: &ChainId,
+    _limits: TransactionParameters,
+) -> Result<(), AcceptTransactionFail> {
+    let payload = commitment.payload();
+    if &payload.chain_id != expected_chain_id {
+        return Err(AcceptTransactionFail::ChainIdMismatch(Mismatch {
+            expected: expected_chain_id.clone(),
+            actual: payload.chain_id.clone(),
+        }));
+    }
+    if payload.reveal_deadline_height < payload.reveal_after_height {
+        return Err(AcceptTransactionFail::TransactionLimit(
+            TransactionLimitError {
+                reason: "sealed transaction reveal deadline precedes reveal start".into(),
+            },
+        ));
+    }
+    commitment.verify_signature().map_err(|err| {
+        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+            reason: format!("sealed transaction commitment signature verification failed: {err}"),
+        })
+    })
+}
+
+pub(crate) fn sealed_reveal_execution_key(
+    state_block: &StateBlock<'_>,
+    reveal: &SealedTransactionReveal,
+) -> (u64, iroha_crypto::Hash, u64) {
+    let key = sealed_commitment_state_key(&reveal.commitment);
+    let Some(bytes) = state_block.world.smart_contract_state.get(&key) else {
+        return (u64::MAX, reveal.commitment, u64::MAX);
+    };
+    let Ok(record) = norito::decode_from_bytes::<PendingSealedTransactionCommitment>(bytes) else {
+        return (u64::MAX, reveal.commitment, u64::MAX);
+    };
+    (record.commit_height, reveal.commitment, record.commit_index)
+}
+
+pub(crate) fn prune_expired_sealed_commitments(state_block: &mut StateBlock<'_>) -> usize {
+    let height = state_block._curr_block.height().get();
+    let expired_keys: Vec<_> = state_block
+        .world
+        .smart_contract_state
+        .iter()
+        .filter_map(|(key, bytes)| {
+            if !key.as_ref().starts_with(SEALED_TRANSACTION_STATE_PREFIX) {
+                return None;
+            }
+            let record: PendingSealedTransactionCommitment = match norito::decode_from_bytes(bytes)
+            {
+                Ok(record) => record,
+                Err(error) => {
+                    warn!(
+                        %key,
+                        %error,
+                        "skipping invalid sealed transaction commitment state during expiry pruning"
+                    );
+                    return None;
+                }
+            };
+            (height > record.payload.reveal_deadline_height).then(|| key.clone())
+        })
+        .collect();
+    for key in &expired_keys {
+        state_block.world.smart_contract_state.remove(key.clone());
+    }
+    expired_keys.len()
 }
 
 static FRAUD_ASSESSMENT_BAND_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
@@ -162,6 +266,7 @@ pub struct AcceptedTransaction<'tx> {
     entrypoint_hash: OnceLock<HashOf<TransactionEntrypoint>>,
     signed_hash: OnceLock<HashOf<SignedTransaction>>,
     encoded_len: OnceLock<usize>,
+    entrypoint_bytes: OnceLock<Arc<Vec<u8>>>,
     signed_bytes: OnceLock<Option<Arc<Vec<u8>>>>,
     payload_hash:
         OnceLock<Option<HashOf<iroha_data_model::transaction::signed::TransactionPayload>>>,
@@ -175,6 +280,7 @@ impl Clone for AcceptedTransaction<'_> {
             entrypoint_hash: clone_once_lock(&self.entrypoint_hash),
             signed_hash: clone_once_lock(&self.signed_hash),
             encoded_len: clone_once_lock(&self.encoded_len),
+            entrypoint_bytes: clone_once_lock(&self.entrypoint_bytes),
             signed_bytes: clone_once_lock(&self.signed_bytes),
             payload_hash: clone_once_lock(&self.payload_hash),
             single_ed25519_key: clone_once_lock(&self.single_ed25519_key),
@@ -228,6 +334,8 @@ pub(crate) struct PreparedTransactionMetadata {
     pub(crate) payload_hash: HashOf<iroha_data_model::transaction::signed::TransactionPayload>,
     /// Exact framed Norito length of the signed transaction.
     pub(crate) encoded_len: usize,
+    /// Canonical signed transaction bytes when a caller has already materialized them.
+    pub(crate) signed_bytes: Option<Arc<Vec<u8>>>,
     /// Parsed Ed25519 key when the transaction has a single Ed25519 authority.
     pub(crate) single_ed25519_key: Option<iroha_crypto::Ed25519ParsedPublicKey>,
 }
@@ -799,15 +907,27 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint_hash: OnceLock::new(),
             signed_hash: OnceLock::new(),
             encoded_len: OnceLock::new(),
+            entrypoint_bytes: OnceLock::new(),
             signed_bytes: OnceLock::new(),
             payload_hash: OnceLock::new(),
             single_ed25519_key: OnceLock::new(),
         }
     }
 
-    fn from_external_with_hot_cache(tx: SignedTransaction) -> Self {
-        let signed_bytes =
-            Arc::new(norito::to_bytes(&tx).expect("encode accepted signed transaction"));
+    fn from_external_with_cached_bytes(
+        tx: SignedTransaction,
+        signed_bytes: Option<Arc<Vec<u8>>>,
+    ) -> Self {
+        let signed_bytes = signed_bytes.unwrap_or_else(|| {
+            Arc::new(norito::to_bytes(&tx).expect("encode accepted signed transaction"))
+        });
+        debug_assert_eq!(
+            signed_bytes.as_slice(),
+            norito::to_bytes(&tx)
+                .expect("encode accepted signed transaction for cache check")
+                .as_slice(),
+            "accepted transaction canonical byte cache must match Norito output",
+        );
         let encoded_len = signed_bytes.len();
         let payload_hash = HashOf::new(tx.payload());
         let single_ed25519_key = Self::parsed_single_ed25519_key(&tx);
@@ -822,6 +942,10 @@ impl<'tx> AcceptedTransaction<'tx> {
         let _ = accepted.entrypoint_hash.set(entrypoint_hash);
         let _ = accepted.signed_hash.set(signed_hash);
         accepted
+    }
+
+    fn from_external_with_hot_cache(tx: SignedTransaction) -> Self {
+        Self::from_external_with_cached_bytes(tx, None)
     }
 
     fn compat_signed_hash(
@@ -861,6 +985,10 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn entrypoint_encoded_len(tx: &TransactionEntrypoint) -> usize {
         match tx {
             TransactionEntrypoint::External(signed) => Self::signed_encoded_len(signed),
+            TransactionEntrypoint::SealedCommitment(entrypoint) => {
+                Self::framed_encoded_len(entrypoint)
+            }
+            TransactionEntrypoint::SealedReveal(entrypoint) => Self::framed_encoded_len(entrypoint),
             TransactionEntrypoint::PrivateKaigi(entrypoint) => Self::framed_encoded_len(entrypoint),
             TransactionEntrypoint::Time(entrypoint) => Self::framed_encoded_len(entrypoint),
         }
@@ -876,7 +1004,13 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> u64 {
         prepared.map_or_else(
             || Self::signed_encoded_len_for_limit(tx),
-            |metadata| u64::try_from(metadata.encoded_len).unwrap_or(u64::MAX),
+            |metadata| {
+                let encoded_len = metadata
+                    .signed_bytes
+                    .as_ref()
+                    .map_or(metadata.encoded_len, |bytes| bytes.len());
+                u64::try_from(encoded_len).unwrap_or(u64::MAX)
+            },
         )
     }
 
@@ -907,6 +1041,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint_hash,
             payload_hash: HashOf::new(tx.payload()),
             encoded_len: Self::signed_encoded_len(tx),
+            signed_bytes: None,
             single_ed25519_key: Self::parsed_single_ed25519_key(tx),
         }
     }
@@ -2082,17 +2217,21 @@ impl<'tx> AcceptedTransaction<'tx> {
 
     /// Create [`Self`] assuming the signed transaction is acceptable.
     pub fn new_unchecked(tx: impl Into<Cow<'tx, SignedTransaction>>) -> Self {
-        let tx = tx.into();
-        let entrypoint = match tx {
+        let entrypoint = match tx.into() {
             Cow::Borrowed(signed) => Cow::Owned(TransactionEntrypoint::External(signed.clone())),
-            Cow::Owned(signed) => Cow::Owned(TransactionEntrypoint::External(signed)),
+            Cow::Owned(signed) => return Self::from_external_with_hot_cache(signed),
         };
         Self::from_entrypoint(entrypoint)
     }
 
     /// Create [`Self`] assuming the entrypoint is acceptable.
     pub fn new_unchecked_entrypoint(tx: impl Into<Cow<'tx, TransactionEntrypoint>>) -> Self {
-        Self::from_entrypoint(tx.into())
+        match tx.into() {
+            Cow::Owned(TransactionEntrypoint::External(signed)) => {
+                Self::from_external_with_hot_cache(signed)
+            }
+            entrypoint => Self::from_entrypoint(entrypoint),
+        }
     }
 
     /// Borrow the underlying entrypoint.
@@ -2106,7 +2245,12 @@ impl<'tx> AcceptedTransaction<'tx> {
     pub fn external(&self) -> Option<&SignedTransaction> {
         match self.entrypoint() {
             TransactionEntrypoint::External(entrypoint) => Some(entrypoint),
-            TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                Some(entrypoint.signed_transaction())
+            }
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => None,
         }
     }
 
@@ -2136,6 +2280,7 @@ impl<'tx> AcceptedTransaction<'tx> {
 
     /// Return cached canonical signed-transaction bytes for queue gossip when this is external.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn signed_bytes(&self) -> Option<Arc<Vec<u8>>> {
         self.signed_bytes
             .get_or_init(|| {
@@ -2145,6 +2290,14 @@ impl<'tx> AcceptedTransaction<'tx> {
             })
             .as_ref()
             .map(Arc::clone)
+    }
+
+    /// Return cached canonical transaction-entrypoint bytes for queue gossip.
+    #[must_use]
+    pub(crate) fn entrypoint_bytes(&self) -> Arc<Vec<u8>> {
+        Arc::clone(self.entrypoint_bytes.get_or_init(|| {
+            Arc::new(norito::to_bytes(self.entrypoint()).expect("encode transaction entrypoint"))
+        }))
     }
 
     /// Return cached payload hash when this is an external transaction.
@@ -2184,6 +2337,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint_hash: self.hash_as_entrypoint(),
             payload_hash,
             encoded_len: self.encoded_len(),
+            signed_bytes: self.signed_bytes(),
             single_ed25519_key,
         })
     }
@@ -2211,6 +2365,10 @@ impl<'tx> AcceptedTransaction<'tx> {
     pub fn creation_time(&self) -> Duration {
         match self.entrypoint() {
             TransactionEntrypoint::External(entrypoint) => entrypoint.creation_time(),
+            TransactionEntrypoint::SealedCommitment(_) => Duration::ZERO,
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                entrypoint.signed_transaction().creation_time()
+            }
             TransactionEntrypoint::PrivateKaigi(entrypoint) => entrypoint.creation_time(),
             TransactionEntrypoint::Time(_) => Duration::ZERO,
         }
@@ -2262,6 +2420,24 @@ impl AcceptedTransaction<'static> {
             .map(|()| Self::from_external_with_hot_cache(tx))
     }
 
+    /// Accept transaction using caller-provided canonical signed-transaction bytes.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    #[cfg(test)]
+    pub(crate) fn accept_with_canonical_signed_bytes(
+        tx: SignedTransaction,
+        signed_bytes: Arc<Vec<u8>>,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+    ) -> Result<Self, AcceptTransactionFail> {
+        Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
+            .map(|()| Self::from_external_with_cached_bytes(tx, Some(signed_bytes)))
+    }
+
     /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
     ///
     /// # Errors
@@ -2306,6 +2482,21 @@ impl AcceptedTransaction<'static> {
                 )?;
                 enforce_nts_health_for_time_sensitive(signed)?;
             }
+            TransactionEntrypoint::SealedCommitment(commitment) => {
+                validate_sealed_commitment_stateless(commitment, expected_chain_id, limits)?;
+            }
+            TransactionEntrypoint::SealedReveal(reveal) => {
+                let signed = reveal.signed_transaction();
+                Self::validate_with_now(
+                    signed,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
+                enforce_nts_health_for_time_sensitive(signed)?;
+            }
             TransactionEntrypoint::PrivateKaigi(private) => {
                 Self::validate_private_kaigi_with_now(
                     private,
@@ -2334,6 +2525,10 @@ impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
         match source.entrypoint.into_owned() {
             TransactionEntrypoint::External(entrypoint) => entrypoint,
+            TransactionEntrypoint::SealedReveal(entrypoint) => entrypoint.signed_transaction,
+            TransactionEntrypoint::SealedCommitment(_) => {
+                panic!("sealed commitment entrypoints are not signed transactions")
+            }
             TransactionEntrypoint::PrivateKaigi(_) => {
                 panic!("private Kaigi entrypoints are not signed transactions")
             }
@@ -2560,6 +2755,31 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+        self.validate_transaction_at_entrypoint_index(tx, ivm_cache, None)
+    }
+
+    /// Validate and apply the transaction with the original block entrypoint index available.
+    ///
+    /// Returns the hash and the result of the transaction.
+    pub(crate) fn validate_transaction_with_entrypoint_index(
+        &mut self,
+        tx: AcceptedTransaction<'_>,
+        ivm_cache: &mut IvmCache,
+        entrypoint_index: usize,
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
+        self.validate_transaction_at_entrypoint_index(
+            tx,
+            ivm_cache,
+            Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX)),
+        )
+    }
+
+    fn validate_transaction_at_entrypoint_index(
+        &mut self,
+        tx: AcceptedTransaction<'_>,
+        ivm_cache: &mut IvmCache,
+        entrypoint_index: Option<u64>,
+    ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         // Capture gas accounting inputs up front to avoid borrowing conflicts
         let gas_total_before = self.gas_used_in_block;
         let gas_limit = self.gas_limit_per_block;
@@ -2568,7 +2788,8 @@ impl StateBlock<'_> {
         let proof_bytes_before = self.zk_proof_bytes_in_block;
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
-        let hash = tx.as_ref().hash_as_entrypoint();
+        state_transaction.current_entrypoint_index = entrypoint_index;
+        let hash = tx.hash_as_entrypoint();
         let result = Self::validate_transaction_internal(tx, &mut state_transaction, ivm_cache);
         if result.is_ok() {
             // Enforce block gas limit if configured; accumulate gas used by last tx (IVM path)
@@ -2626,6 +2847,12 @@ impl StateBlock<'_> {
     ) -> TransactionResultInner {
         if let TransactionEntrypoint::PrivateKaigi(private_tx) = tx.entrypoint() {
             return Self::validate_private_kaigi_transaction(private_tx, state_transaction);
+        }
+        if let TransactionEntrypoint::SealedCommitment(commitment) = tx.entrypoint() {
+            return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
+        }
+        if let TransactionEntrypoint::SealedReveal(reveal) = tx.entrypoint() {
+            return Self::validate_sealed_transaction_reveal(reveal, state_transaction, ivm_cache);
         }
         if matches!(tx.entrypoint(), TransactionEntrypoint::Time(_)) {
             return Err(TransactionRejectionReason::Validation(
@@ -2756,6 +2983,131 @@ impl StateBlock<'_> {
                 TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
             })?;
         Ok(DataTriggerSequence::default())
+    }
+
+    fn validate_sealed_transaction_commitment(
+        commitment: &SignedSealedTransactionCommitment,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> TransactionResultInner {
+        validate_sealed_commitment_stateless(
+            commitment,
+            &state_transaction.chain_id,
+            state_transaction.world.parameters().transaction(),
+        )
+        .map_err(|err| match err {
+            AcceptTransactionFail::ChainIdMismatch(mismatch) => {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "chain id mismatch: expected {} got {}",
+                    mismatch.expected, mismatch.actual
+                )))
+            }
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                TransactionRejectionReason::LimitCheck(limit)
+            }
+            other => TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                other.to_string(),
+            )),
+        })?;
+
+        let payload = commitment.payload();
+        let height = state_transaction._curr_block.height().get();
+        if payload.reveal_after_height <= height {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "sealed transaction reveal_after_height {} must be greater than commit height {height}",
+                    payload.reveal_after_height
+                )),
+            ));
+        }
+        let key = sealed_commitment_state_key(&payload.commitment);
+        if state_transaction
+            .world
+            .smart_contract_state
+            .get(&key)
+            .is_some()
+        {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("sealed transaction commitment already exists".into()),
+            ));
+        }
+        let record = PendingSealedTransactionCommitment {
+            payload: payload.clone(),
+            commit_height: height,
+            commit_index: state_transaction.current_entrypoint_index.unwrap_or(0),
+        };
+        let bytes = norito::to_bytes(&record).map_err(sealed_state_encode_error)?;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(key, bytes);
+        Ok(DataTriggerSequence::default())
+    }
+
+    fn validate_sealed_transaction_reveal(
+        reveal: &SealedTransactionReveal,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        ivm_cache: &mut IvmCache,
+    ) -> TransactionResultInner {
+        let key = sealed_commitment_state_key(&reveal.commitment);
+        let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("sealed transaction commitment is not pending".into()),
+            ));
+        };
+        let record: PendingSealedTransactionCommitment =
+            norito::decode_from_bytes(bytes).map_err(sealed_state_decode_error)?;
+        let height = state_transaction._curr_block.height().get();
+        if height < record.payload.reveal_after_height {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "sealed transaction reveal is too early: height {height}, reveal_after_height {}",
+                    record.payload.reveal_after_height
+                )),
+            ));
+        }
+        if height > record.payload.reveal_deadline_height {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "sealed transaction reveal deadline {} passed at height {height}",
+                    record.payload.reveal_deadline_height
+                )),
+            ));
+        }
+        let signed = reveal.signed_transaction();
+        if signed.chain() != &record.payload.chain_id {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "sealed transaction chain mismatch: commitment chain {} reveal chain {}",
+                    record.payload.chain_id,
+                    signed.chain()
+                )),
+            ));
+        }
+        if signed.authority() != &record.payload.authority {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "sealed transaction reveal authority does not match commitment authority"
+                        .into(),
+                ),
+            ));
+        }
+        let expected = compute_sealed_transaction_commitment(
+            &record.payload.chain_id,
+            signed,
+            reveal.salt,
+            record.payload.reveal_deadline_height,
+        );
+        if expected != record.payload.commitment || expected != reveal.commitment {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "sealed transaction reveal does not match commitment".into(),
+                ),
+            ));
+        }
+
+        state_transaction.world.smart_contract_state.remove(key);
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
+        Self::validate_transaction_internal(accepted, state_transaction, ivm_cache)
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -5734,12 +6086,43 @@ pub mod tests {
         assert_eq!(prepared.signed_hash, signed.hash());
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
         assert_eq!(prepared.encoded_len, expected_len);
+        assert!(
+            prepared
+                .signed_bytes
+                .as_ref()
+                .is_some_and(|bytes| Arc::ptr_eq(bytes, &signed_bytes))
+        );
         assert_eq!(accepted.clone().encoded_len(), expected_len);
         let cloned_bytes = accepted
             .clone()
             .signed_bytes()
             .expect("clone should preserve signed bytes");
         assert!(Arc::ptr_eq(&signed_bytes, &cloned_bytes));
+    }
+
+    #[test]
+    fn accept_with_canonical_signed_bytes_reuses_payload_cache() {
+        let chain: ChainId = "accepted-canonical-cache-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain.clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
+            .sign(keypair.private_key());
+        let signed_bytes = Arc::new(norito::to_bytes(&signed).expect("signed transaction encodes"));
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+
+        let accepted = AcceptedTransaction::accept_with_canonical_signed_bytes(
+            signed,
+            Arc::clone(&signed_bytes),
+            &chain,
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("accepted transaction");
+
+        let cached = accepted.signed_bytes().expect("canonical bytes cached");
+        assert!(Arc::ptr_eq(&cached, &signed_bytes));
     }
 
     #[test]

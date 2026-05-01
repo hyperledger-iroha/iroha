@@ -94,6 +94,48 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   @Override
+  public CompletableFuture<ClientResponse> submitTransactionEntrypoint(
+      final byte[] encodedVersionedEntrypoint) {
+    final TransportRequest request =
+        ToriiRequestBuilder.buildSubmitEntrypointRequest(
+            config.baseUri(),
+            encodedVersionedEntrypoint,
+            config.requestTimeout(),
+            config.defaultHeaders());
+    notifyRequest(request);
+    return executor
+        .execute(request)
+        .handle(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                notifyFailure(request, cause);
+                final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
+                failed.completeExceptionally(cause);
+                return failed;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      extractTransactionHash(response).orElse(null),
+                      extractRejectCode(response));
+              if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
+                notifyFailure(
+                    request,
+                    new RuntimeException(
+                        "Torii request failed with status " + clientResponse.statusCode()));
+              } else {
+                notifyResponse(request, clientResponse);
+              }
+              return CompletableFuture.completedFuture(clientResponse);
+            })
+        .thenCompose(future -> future);
+  }
+
+  @Override
   public CompletableFuture<Map<String, Object>> waitForTransactionStatus(
       final String hashHex, final PipelineStatusOptions options) {
     Objects.requireNonNull(hashHex, "hashHex");

@@ -58,6 +58,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Rerun `cargo test -p iroha_core --lib`, including `quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_without_roster_proof` in a fresh cargo process.
   - Rerun `cargo test -p iroha_torii` and `cargo test -p integration_tests -- --nocapture` once the current tree is stable enough for network suites.
   - When validation budget allows, rerun `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`, then capture failures or green status in `status.md`.
+- Carry the sealed transaction pipeline hardening through broader multi-peer validation.
+  - Focused checks for entrypoint gossip, result alignment, receipts, sealed commitment gas, block commit/reveal execution, expiry pruning, and Torii pipeline-status lookup are green as of 2026-05-01.
+  - Add or rerun an integration test that submits a sealed commitment, lets it gossip across at least 4 peers, reveals it in-window, and verifies explorer lookup by the reveal entrypoint hash.
+  - Fold this slice into the next `cargo test -p iroha_core --lib`, `cargo test -p iroha_torii`, `cargo test -p integration_tests -- --nocapture`, and workspace clippy corridor.
 
 ## Consensus and Izanami
 
@@ -85,10 +89,33 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Repeat permissioned and NPoS passes on the same hardware envelope and compare against the archived `25-50 TPS` / `75-100 TPS` baselines.
   - Record the new knee points and any regressions in `status.md`.
 - Validate the 20k hot-path cache push under the release Izanami profile.
-  - Rebuild release `izanami` and `iroha3d` after the cache changes.
-  - Rerun 4-peer no-fault prebuilt `5k`, `10k`, and `20k TPS` rows as needed to locate the new knee.
-  - Capture a sampled 20k run and record the remaining top stacks before tuning block validation or consensus worker budgets again.
-  - Investigate the latest 20k rerun's height-9 RBC payload/materialization gap and commit-QC-before-validation deferral before treating queue capacity or Torii ingress as the primary remaining limiter.
+  - The first post-cache 4-peer no-fault prebuilt `20k TPS` / `120s` release
+    gate at `dist/izanami-prebuilt-20k-hotpath-120s-20260501-142015` improved
+    strict approved transactions to `28,713` but still failed the committed
+    20k target.
+  - A same-shape repeat at
+    `dist/izanami-prebuilt-20k-cachepass-120s-20260501-142429` accepted
+    `52,167` ingress transactions but only reached `24,623` strict approved
+    transactions, confirming material run-to-run variance and the same
+    queue-drain/block-validation bottleneck.
+  - The fresh post-cache sampled 20k profile at
+    `dist/izanami-profile-20k-cachepass-sampled-30s-20260501-152126` confirms
+    the next target has moved from queue gossip encoding to
+    `validate_block_for_voting` / `validate_and_record_transactions` /
+    `TxOverlay::apply_with_chunk`, incoming transaction-gossip Norito decode,
+    and the remaining `AcceptedTransaction::signed_encoded_len` serialization
+    fallback.
+  - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate the new knee.
+  - Remove the remaining signed length/serialization metadata walk, reduce
+    repeated incoming transaction-gossip decode/materialization, and shrink the
+    state overlay work inside block validation before tuning queue capacity.
+  - Treat RBC authoritative-payload delays as symptoms of slow validation and
+    materialization unless a later profile shows DA/RBC storage pressure,
+    missing `BlockCreated`, or QC payload-missing counters.
+  - Keep Ed25519 and FASTPQ/Poseidon budgeted but secondary for this pass:
+    Ed25519 curve math is the largest active leaf class but not the blocking
+    commit-progress stack, while FASTPQ/Poseidon remains small in recursive
+    attribution.
 - Turn the proposal-gap / queue-pressure investigation into a reproducible measurement pass.
   - Rerun the 7-peer load that previously advanced slowly or stalled under backlog.
   - Sample `/v1/sumeragi/status`, pending-block / commit-inflight metrics, and queue depths throughout the run.

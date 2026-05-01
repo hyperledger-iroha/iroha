@@ -3,12 +3,24 @@
 
 use std::time::Duration;
 
-use eyre::Result;
+use eyre::{Result, bail, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::data_model::{prelude::*, query::parameters::Pagination};
+use iroha::{
+    client::Client,
+    data_model::{
+        prelude::*,
+        query::parameters::Pagination,
+        transaction::signed::{
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+        },
+    },
+};
+use iroha_crypto::{Hash, HashOf};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
+use tokio::time::{Instant, sleep};
 
 #[test]
 fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()> {
@@ -85,11 +97,210 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
                 TransactionEntrypoint::PrivateKaigi(_) => {
                     panic!("unexpected private Kaigi entrypoint");
                 }
+                TransactionEntrypoint::SealedCommitment(_) => {
+                    panic!("unexpected sealed commitment entrypoint");
+                }
+                TransactionEntrypoint::SealedReveal(_) => {
+                    panic!("unexpected sealed reveal entrypoint");
+                }
                 TransactionEntrypoint::Time(_) => {
                     panic!("unexpected time-triggered entrypoint");
                 }
             }
         });
+
+    Ok(())
+}
+
+fn encode_versioned_entrypoint(entrypoint: &TransactionEntrypoint) -> Vec<u8> {
+    let mut bytes = vec![1];
+    bytes.extend(norito::codec::encode_adaptive(entrypoint));
+    bytes
+}
+
+fn entrypoint_status_hash(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> HashOf<SignedTransaction> {
+    HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash))
+}
+
+async fn submit_entrypoint(
+    http: &reqwest::Client,
+    client: &Client,
+    entrypoint: TransactionEntrypoint,
+) -> Result<HashOf<TransactionEntrypoint>> {
+    let entrypoint_hash = entrypoint.hash();
+    let response = http
+        .post(client.torii_url.join("/transaction/entrypoint")?)
+        .header("content-type", "application/x-norito")
+        .body(encode_versioned_entrypoint(&entrypoint))
+        .send()
+        .await?;
+    let status = response.status();
+    let header_hash = response
+        .headers()
+        .get("x-iroha-transaction-hash")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let body = response.text().await.unwrap_or_default();
+    ensure!(
+        status == reqwest::StatusCode::ACCEPTED,
+        "entrypoint submit failed with {status}: {body}"
+    );
+    assert_eq!(
+        header_hash.as_deref(),
+        Some(entrypoint_hash.to_string().as_str()),
+        "Torii should return the submitted entrypoint hash"
+    );
+    Ok(entrypoint_hash)
+}
+
+async fn wait_for_entrypoint_applied(
+    client: &Client,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    timeout: Duration,
+) -> Result<()> {
+    let hash = entrypoint_status_hash(entrypoint_hash);
+    let deadline = Instant::now() + timeout;
+    let mut last_status = None;
+    while Instant::now() < deadline {
+        let poll_client = client.clone();
+        let status =
+            tokio::task::spawn_blocking(move || poll_client.get_transaction_status_response(hash))
+                .await??;
+        if let Some(status) = status {
+            let kind = status.status.kind.clone();
+            if kind == "Applied" {
+                return Ok(());
+            }
+            if kind == "Rejected" {
+                bail!("entrypoint {entrypoint_hash} was rejected: {status:?}");
+            }
+            last_status = Some(kind);
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    Err(eyre!(
+        "timed out waiting for entrypoint {entrypoint_hash} to apply; last status={last_status:?}"
+    ))
+}
+
+async fn wait_for_height(client: &Client, target: u64, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_height = 0;
+    while Instant::now() < deadline {
+        let poll_client = client.clone();
+        let status = tokio::task::spawn_blocking(move || poll_client.get_status()).await??;
+        last_height = status.blocks;
+        if last_height >= target {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    Err(eyre!(
+        "timed out waiting for height {target}; last height={last_height}"
+    ))
+}
+
+async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
+    while network.client().get_status()?.blocks < target {
+        let submit_client = network.client();
+        tokio::task::spawn_blocking(move || {
+            submit_client.submit(Log::new(
+                Level::INFO,
+                "sealed reveal height tick".to_owned(),
+            ))
+        })
+        .await??;
+    }
+    wait_for_height(&network.client(), target, network.sync_timeout()).await
+}
+
+#[tokio::test]
+async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_hash() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new().with_min_peers(4),
+        stringify!(sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_hash),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let client = network.client();
+    let http = reqwest::Client::new();
+    let starting_height = client.get_status()?.blocks;
+    let reveal_after_height = starting_height + 2;
+    let reveal_deadline_height = starting_height + 100;
+    let marker = "sealed_reveal_marker".parse::<Name>()?;
+    let inner_tx = TransactionBuilder::new(client.chain.clone(), client.account.clone())
+        .with_instructions([SetKeyValue::account(
+            client.account.clone(),
+            marker,
+            Json::new("revealed"),
+        )])
+        .sign(client.key_pair.private_key());
+    let salt = [0xC3; 32];
+    let commitment_hash = compute_sealed_transaction_commitment(
+        &client.chain,
+        &inner_tx,
+        salt,
+        reveal_deadline_height,
+    );
+    let commitment_payload = SealedTransactionCommitmentPayload::new(
+        client.chain.clone(),
+        client.account.clone(),
+        commitment_hash,
+        reveal_after_height,
+        reveal_deadline_height,
+        None,
+    );
+    let commitment =
+        SignedSealedTransactionCommitment::sign(commitment_payload, client.key_pair.private_key());
+    let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(commitment);
+    let commitment_entrypoint_hash =
+        submit_entrypoint(&http, &client, commitment_entrypoint).await?;
+    wait_for_entrypoint_applied(
+        &client,
+        commitment_entrypoint_hash,
+        network.sync_timeout().max(Duration::from_secs(60)),
+    )
+    .await?;
+
+    advance_to_height(&network, reveal_after_height).await?;
+
+    let reveal = SealedTransactionReveal::new(commitment_hash, inner_tx, salt);
+    let reveal_entrypoint = TransactionEntrypoint::SealedReveal(reveal);
+    let reveal_entrypoint_hash = submit_entrypoint(&http, &client, reveal_entrypoint).await?;
+    wait_for_entrypoint_applied(
+        &client,
+        reveal_entrypoint_hash,
+        network.sync_timeout().max(Duration::from_secs(60)),
+    )
+    .await?;
+
+    let detail_url = client.torii_url.join(&format!(
+        "/v1/explorer/transactions/{reveal_entrypoint_hash}"
+    ))?;
+    let response = http
+        .get(detail_url)
+        .header("accept", "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    ensure!(
+        status.is_success(),
+        "explorer detail lookup failed with {status}: {body}"
+    );
+    let payload: norito::json::Value = norito::json::from_str(&body)?;
+    assert_eq!(
+        payload.get("hash").and_then(norito::json::Value::as_str),
+        Some(reveal_entrypoint_hash.to_string().as_str())
+    );
+    assert_eq!(
+        payload.get("status").and_then(norito::json::Value::as_str),
+        Some("Committed")
+    );
 
     Ok(())
 }

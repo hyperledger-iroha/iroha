@@ -8,7 +8,7 @@ use std::{
 
 use fastpq_prover::{
     ExecutionMode as ProverExecutionMode, MetalOverrides,
-    PoseidonExecutionMode as ProverPoseidonMode, Prover, apply_metal_overrides,
+    PoseidonExecutionMode as ProverPoseidonMode, Prover, TransitionBatch, apply_metal_overrides,
     set_metal_queue_policy,
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
@@ -20,7 +20,8 @@ use iroha_logger::{debug, info, warn};
 use tokio::sync::mpsc;
 
 use crate::fastpq::{
-    ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, batches_from_exec_witness,
+    ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
+    TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
 };
 
 /// Handle used to submit FASTPQ prover jobs.
@@ -60,6 +61,8 @@ pub struct FastpqWitnessJob {
     pub view: u64,
     /// Execution witness carrying FASTPQ transcripts/batches.
     pub witness: ExecWitness,
+    /// Local-only batch construction context captured outside the witness wire payload.
+    pub(crate) context: FastpqWitnessContext,
 }
 
 /// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
@@ -189,7 +192,7 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
         );
         return;
     }
-    let batches = match batches_from_exec_witness(&job.witness) {
+    let batches = match batches_for_job(job) {
         Ok(batches) => batches,
         Err(err) => {
             warn!(
@@ -279,6 +282,8 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
@@ -341,6 +346,7 @@ mod tests {
             height: 42,
             view: 7,
             witness,
+            context: FastpqWitnessContext::default(),
         };
         assert!(try_submit(job));
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -354,6 +360,46 @@ mod tests {
             );
             sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    #[test]
+    fn job_context_builds_batches_for_transcript_only_witness() {
+        let bundle = sample_bundle();
+        let template = FastpqPublicInputsTemplate {
+            dsid: [0u8; 16],
+            slot: 123,
+            old_root: [0x11; 32],
+            new_root: [0x22; 32],
+            perm_root: [0x33; 32],
+        };
+        let tx_set_hash = [0x44; 32];
+        let dsid = [0x55; 16];
+        let mut entry_dataspaces = BTreeMap::new();
+        entry_dataspaces.insert(bundle.entry_hash, dsid);
+        let witness = ExecWitness {
+            reads: Vec::new(),
+            writes: Vec::new(),
+            fastpq_transcripts: vec![bundle],
+            fastpq_batches: Vec::new(),
+        };
+        let job = FastpqWitnessJob {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            height: 42,
+            view: 7,
+            witness,
+            context: FastpqWitnessContext {
+                public_inputs: Some(template),
+                tx_set_hash: Some(tx_set_hash),
+                entry_dataspaces,
+            },
+        };
+
+        let batches = batches_for_job(&job).expect("context builds batches");
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].public_inputs.dsid, dsid);
+        assert_eq!(batches[0].public_inputs.tx_set_hash, tx_set_hash);
+        assert_eq!(batches[0].public_inputs.perm_root, template.perm_root);
     }
 
     #[derive(Clone)]
@@ -419,4 +465,41 @@ mod tests {
         assert!(overrides.debug_enum);
         assert!(overrides.debug_fused);
     }
+}
+
+fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
+    match batches_from_exec_witness(&job.witness) {
+        Ok(batches) => return Ok(batches),
+        Err(TranscriptBatchError::MissingFastpqBatches) => {}
+        Err(err) => return Err(err),
+    }
+
+    if job.witness.fastpq_transcripts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some(public_inputs) = job.context.public_inputs else {
+        return Err(TranscriptBatchError::MissingFastpqBatches);
+    };
+    let Some(tx_set_hash) = job.context.tx_set_hash else {
+        return Err(TranscriptBatchError::MissingFastpqBatches);
+    };
+
+    let mut batches = batches_from_bundles(
+        FASTPQ_CANONICAL_PARAMETER_SET,
+        public_inputs,
+        tx_set_hash,
+        job.witness.fastpq_transcripts.iter(),
+    )?;
+    for (bundle, batch) in job
+        .witness
+        .fastpq_transcripts
+        .iter()
+        .zip(batches.iter_mut())
+    {
+        if let Some(dsid) = job.context.entry_dataspaces.get(&bundle.entry_hash) {
+            batch.public_inputs.dsid = *dsid;
+        }
+    }
+    Ok(batches)
 }

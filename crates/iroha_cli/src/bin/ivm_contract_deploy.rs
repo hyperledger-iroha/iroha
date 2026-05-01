@@ -1,5 +1,16 @@
 //! Deploy a contract by registering code/manifest through an IVM transaction,
 //! then activating and alias-binding it through a plain instruction batch.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::items_after_test_module,
+    clippy::needless_borrow,
+    clippy::needless_borrows_for_generic_args,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_lines
+)]
 
 use std::{
     fs,

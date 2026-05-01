@@ -19540,7 +19540,7 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             .as_table_mut()
             .expect("soracloud_runtime table");
         let removed_field = ["native", "process"].join("_");
-        runtime.insert(removed_field.into(), Value::Table(Table::new()));
+        runtime.insert(removed_field, Value::Table(Table::new()));
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("removed legacy runtime section must not parse");

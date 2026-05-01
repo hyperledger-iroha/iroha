@@ -25,7 +25,7 @@ const RC_INVALID: i32 = 1;
 #[cfg_attr(all(jsonstage1_cuda_available, crc64_cuda_available), allow(dead_code))]
 const RC_GPU_UNAVAILABLE: i32 = 3;
 
-#[cfg_attr(jsonstage1_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), jsonstage1_cuda_available), allow(dead_code))]
 fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize {
     let mut count = 0usize;
     let mut base = 0usize;
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn json_stage1_build_tape(
     }
 }
 
-#[cfg_attr(jsonstage1_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), jsonstage1_cuda_available), allow(dead_code))]
 unsafe fn json_stage1_build_tape_cpu(
     input_ptr: *const u8,
     input_len: usize,
@@ -140,7 +140,7 @@ unsafe fn json_stage1_build_tape_cpu(
     0
 }
 
-#[cfg_attr(crc64_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), crc64_cuda_available), allow(dead_code))]
 fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     const POLY: u64 = 0xC96C_5795_D787_0F42;
     let mut crc = init;
@@ -157,7 +157,7 @@ fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     crc
 }
 
-#[cfg_attr(crc64_cuda_available, allow(dead_code))]
+#[cfg_attr(any(not(test), crc64_cuda_available), allow(dead_code))]
 fn crc64_cpu(bytes: &[u8]) -> u64 {
     const INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;

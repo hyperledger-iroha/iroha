@@ -162,6 +162,7 @@ pub(super) enum CommitOutcome {
     Success {
         committed_block: crate::block::CommittedBlock,
         exec_witness: Option<ExecWitness>,
+        fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
         pipeline_events: Vec<PipelineEventBox>,
         state_events: Vec<EventBox>,
         post_apply_snapshot: CommitPostApplySnapshot,
@@ -483,6 +484,7 @@ pub(super) fn execute_commit_work(
     match result {
         Ok((committed_block, mut state_block)) => {
             let exec_witness = state_block.take_exec_witness();
+            let fastpq_witness_context = state_block.take_fastpq_witness_context();
             let persist_start = Instant::now();
             let pipeline_events = pipeline_events;
             let _validated_commit_artifact = validated_commit_artifact.or_else(|| {
@@ -566,6 +568,7 @@ pub(super) fn execute_commit_work(
                 CommitOutcome::Success {
                     committed_block,
                     exec_witness,
+                    fastpq_witness_context,
                     pipeline_events,
                     state_events,
                     post_apply_snapshot,
@@ -1208,7 +1211,10 @@ impl Actor {
         let now = Instant::now();
         let da_enabled = self.runtime_da_enabled();
         let mut block_hash_to_clean = None;
-        let mut exec_witness_to_emit: Option<ExecWitness> = None;
+        let mut exec_witness_to_emit: Option<(
+            ExecWitness,
+            Option<crate::fastpq::FastpqWitnessContext>,
+        )> = None;
         let mut parent_to_cleanup: Option<HashOf<BlockHeader>> = None;
         let mut reschedule_quorum: Option<(
             PendingBlock,
@@ -1300,6 +1306,7 @@ impl Actor {
             CommitOutcome::Success {
                 committed_block,
                 exec_witness,
+                fastpq_witness_context,
                 pipeline_events,
                 state_events,
                 post_apply_snapshot,
@@ -1417,7 +1424,8 @@ impl Actor {
                     block = %block_hash,
                     "state committed for block"
                 );
-                exec_witness_to_emit = exec_witness;
+                exec_witness_to_emit =
+                    exec_witness.map(|witness| (witness, fastpq_witness_context));
                 parent_to_cleanup = pending.block.header().prev_block_hash();
                 committed_pipeline_events_tail = pipeline_events;
                 committed_state_events_tail = state_events;
@@ -2175,8 +2183,14 @@ impl Actor {
                 }
             }
 
-            if let Some(witness) = exec_witness_to_emit {
-                self.emit_exec_artifacts(block_hash, pending_height, pending_view, witness);
+            if let Some((witness, fastpq_context)) = exec_witness_to_emit {
+                self.emit_exec_artifacts(
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    witness,
+                    fastpq_context,
+                );
             }
             // Commit finished; keep undelivered RBC sessions alive under DA so peers that
             // committed through another path can still converge their local RBC status.
@@ -5351,6 +5365,7 @@ impl Actor {
         height: u64,
         view: u64,
         witness: ExecWitness,
+        fastpq_context: Option<crate::fastpq::FastpqWitnessContext>,
     ) {
         if self.is_observer() {
             return;
@@ -5451,6 +5466,7 @@ impl Actor {
             height,
             view,
             witness,
+            context: fastpq_context.unwrap_or_default(),
         };
         if !crate::fastpq::lane::try_submit(fastpq_job) {
             debug!(

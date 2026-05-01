@@ -6025,6 +6025,8 @@ pub struct StateBlock<'state> {
     fastpq_tx_set_hash: Option<[u8; 32]>,
     /// Dataspace assignments for FASTPQ entry hashes in this block.
     fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,
+    /// Local-only context for background FASTPQ batch construction.
+    fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
     /// Captured execution witness for the block (SBV‑AM).
@@ -6429,6 +6431,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash:
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// Original block entrypoint index for the current transaction, when known.
+    pub(crate) current_entrypoint_index: Option<u64>,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -17760,6 +17764,7 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -18238,6 +18243,7 @@ impl State {
             fastpq_transcripts: BTreeMap::new(),
             fastpq_tx_set_hash: None,
             fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
             touched_lanes: BTreeSet::new(),
             exec_witness: None,
@@ -20878,7 +20884,7 @@ fn block_proofs_for_entry_from_kura(
             block_height,
         })?;
 
-    let external_count = block.external_transactions().len();
+    let external_count = block.external_entrypoint_count();
     let entry_root = if entry_index < external_count {
         header
             .merkle_root()
@@ -21804,6 +21810,8 @@ impl<'state> StateBlock<'state> {
                 .iter()
                 .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
                 .collect();
+            let has_fastpq =
+                !witness.fastpq_transcripts.is_empty() || !witness.fastpq_batches.is_empty();
             let tx_set_hash = if witness.fastpq_transcripts.is_empty()
                 && witness.fastpq_batches.is_empty()
             {
@@ -21831,33 +21839,13 @@ impl<'state> StateBlock<'state> {
                         self.world.roles.iter(),
                     ))
                 };
-            if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
-                let template = crate::fastpq::public_inputs_template_from_block(
+            let public_inputs = perm_root.map(|perm_root| {
+                crate::fastpq::public_inputs_template_from_block(
                     &self._curr_block,
                     &witness,
-                    perm_root.unwrap_or([0u8; 32]),
-                );
-                let tx_set_hash = tx_set_hash.unwrap_or([0u8; 32]);
-                match crate::fastpq::batches_from_bundles(
-                    crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
-                    template,
-                    tx_set_hash,
-                    witness.fastpq_transcripts.iter(),
-                ) {
-                    Ok(batches) => {
-                        witness.fastpq_batches = batches
-                            .iter()
-                            .map(crate::fastpq::transition_batch_to_dto)
-                            .collect();
-                    }
-                    Err(err) => {
-                        iroha_logger::warn!(
-                            ?err,
-                            "failed to build FASTPQ batches for exec witness"
-                        );
-                    }
-                }
-            }
+                    perm_root,
+                )
+            });
             if !entry_dsid_bytes.is_empty()
                 && !witness.fastpq_batches.is_empty()
                 && !witness.fastpq_transcripts.is_empty()
@@ -21882,6 +21870,12 @@ impl<'state> StateBlock<'state> {
                     batch.public_inputs.perm_root = perm_root;
                 }
             }
+            self.fastpq_witness_context =
+                has_fastpq.then_some(crate::fastpq::FastpqWitnessContext {
+                    public_inputs,
+                    tx_set_hash,
+                    entry_dataspaces: entry_dsid_bytes,
+                });
             self.exec_witness = Some(witness);
         } else {
             let _ = crate::sumeragi::witness::drain_exec_witness();
@@ -21891,6 +21885,13 @@ impl<'state> StateBlock<'state> {
     /// Take the captured execution witness, if any, transferring ownership to the caller.
     pub(crate) fn take_exec_witness(&mut self) -> Option<crate::sumeragi::consensus::ExecWitness> {
         self.exec_witness.take()
+    }
+
+    /// Take the local-only FASTPQ witness context, if one was captured.
+    pub(crate) fn take_fastpq_witness_context(
+        &mut self,
+    ) -> Option<crate::fastpq::FastpqWitnessContext> {
+        self.fastpq_witness_context.take()
     }
 
     fn ingest_da_pin_intent_bundle(
@@ -22007,6 +22008,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
             current_tx_hash: None,
+            current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
@@ -22236,10 +22238,12 @@ impl<'state> StateBlock<'state> {
             .height()
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
-        let transactions = block
+        let transactions: std::collections::HashSet<_> = block
             .as_ref()
-            .external_transactions()
-            .map(SignedTransaction::hash)
+            .external_entrypoints_cloned()
+            .map(|entrypoint| {
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
+            })
             .collect();
         self.transactions.insert_block(transactions, block_height);
 
@@ -23815,11 +23819,11 @@ mod fastpq_tx_set_hash_tests {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("exec witness");
-        assert_eq!(witness.fastpq_batches.len(), 1);
-        assert_eq!(
-            witness.fastpq_batches[0].public_inputs.tx_set_hash,
-            tx_set_hash
-        );
+        let context = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert!(witness.fastpq_batches.is_empty());
+        assert_eq!(context.tx_set_hash, Some(tx_set_hash));
     }
 
     #[test]
@@ -23866,10 +23870,13 @@ mod fastpq_tx_set_hash_tests {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("exec witness");
-        assert_eq!(witness.fastpq_batches.len(), 1);
+        let context = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert!(witness.fastpq_batches.is_empty());
         assert_eq!(
-            witness.fastpq_batches[0].public_inputs.dsid,
-            crate::fastpq::dataspace_id_bytes(dsid)
+            context.entry_dataspaces.get(&batch_hash),
+            Some(&crate::fastpq::dataspace_id_bytes(dsid))
         );
     }
 
@@ -23927,8 +23934,14 @@ mod fastpq_tx_set_hash_tests {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("exec witness");
-        assert_eq!(witness.fastpq_batches.len(), 1);
-        assert_eq!(witness.fastpq_batches[0].public_inputs.perm_root, expected);
+        let context = state_block
+            .take_fastpq_witness_context()
+            .expect("FASTPQ context");
+        assert!(witness.fastpq_batches.is_empty());
+        assert_eq!(
+            context.public_inputs.expect("public inputs").perm_root,
+            expected
+        );
     }
 }
 
@@ -30428,6 +30441,146 @@ mod tests {
         let unknown =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([9; Hash::LENGTH]));
         assert_eq!(state.committed_transaction_height(&unknown), None);
+    }
+
+    #[test]
+    fn apply_without_execution_indexes_sealed_commitment_entrypoint_hash() {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let inner_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .sign(keypair.private_key());
+        let salt = [0x57; 32];
+        let reveal_deadline_height = 3;
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                &chain_id,
+                &inner_tx,
+                salt,
+                reveal_deadline_height,
+            );
+        let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+            chain_id,
+            authority,
+            commitment,
+            reveal_after_height: 2,
+            reveal_deadline_height,
+            nonce: None,
+        };
+        let entrypoint = TransactionEntrypoint::SealedCommitment(
+            iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                payload,
+                keypair.private_key(),
+            ),
+        );
+        let entrypoint_hash = entrypoint.hash();
+        let indexed_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash));
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint));
+
+        let new_block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(new_block.header());
+        let valid_block = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("sealed commitment block should commit");
+
+        assert!(state.has_committed_transaction(indexed_hash));
+        assert_eq!(
+            state.committed_transaction_height(&indexed_hash),
+            Some(nonzero!(1_usize))
+        );
+    }
+
+    #[test]
+    fn block_proofs_for_sealed_commitment_use_external_merkle_root() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let chain: ChainId = "block-proof-sealed".parse().expect("chain id");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let tx =
+            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let reveal_deadline_height = 5;
+        let commitment =
+            iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+                &chain,
+                &tx,
+                [0xA5; 32],
+                reveal_deadline_height,
+            );
+        let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
+            chain_id: chain,
+            authority: authority.clone(),
+            commitment,
+            reveal_after_height: 2,
+            reveal_deadline_height,
+            nonce: None,
+        };
+        let signed_commitment =
+            iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
+                payload,
+                keypair.private_key(),
+            );
+        let sealed_hash = TransactionEntrypoint::SealedCommitment(signed_commitment.clone()).hash();
+        let time_trigger = iroha_data_model::trigger::TimeTriggerEntrypoint {
+            id: "sealed-cleanup".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority,
+        };
+        let time_hash = time_trigger.hash_as_entrypoint();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.push_sealed_transaction_commitment(signed_commitment);
+        builder.push_time_trigger(time_trigger);
+        builder.push_result(TransactionResultInner::Ok(
+            iroha_data_model::trigger::DataTriggerSequence::default(),
+        ));
+        builder.push_result(TransactionResultInner::Ok(
+            iroha_data_model::trigger::DataTriggerSequence::default(),
+        ));
+        let block = builder.build_with_signature(0, keypair.private_key());
+        let block_arc = Arc::new(block);
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store block");
+
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push(block_arc.hash());
+            hashes.commit();
+        }
+
+        let proofs = state
+            .block_proofs_for_entry(block_arc.header().height(), sealed_hash)
+            .expect("proofs available");
+        let external_root = block_arc.header().merkle_root().expect("external root");
+        assert_ne!(block_arc.full_entry_merkle_root(), Some(external_root));
+        assert_eq!(proofs.entry_root, external_root);
+        assert!(proofs.entry_proof.verify(&external_root));
+        assert_eq!(
+            block_arc.entrypoint_hashes().collect::<Vec<_>>()[1],
+            time_hash
+        );
     }
 
     #[test]

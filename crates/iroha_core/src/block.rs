@@ -82,7 +82,8 @@ use iroha_data_model::{
     },
     peer::PeerId,
     transaction::{
-        SignedTransaction, TransactionEntrypoint, error::TransactionRejectionReason,
+        SignedTransaction, TransactionEntrypoint,
+        error::{TransactionLimitError, TransactionRejectionReason},
         signed::TransactionResultInner,
     },
 };
@@ -4498,11 +4499,11 @@ pub(crate) mod valid {
                     }
                 }
             };
+            let prepared_txs = Self::prepare_external_transactions(&block);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                Self::committed_heights_for_block(&block, &transactions_view)
+                Self::committed_heights_for_prepared_transactions(&prepared_txs, &transactions_view)
             };
-            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
@@ -4527,6 +4528,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                &prepared_txs,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -4541,13 +4543,15 @@ pub(crate) mod valid {
                 // No callback available here; rejection is emitted by the caller in
                 // `_with_events` variants. Keep behavior unchanged.
                 let _ = ev; // avoid unused warning if optimized out
+                drop(prepared_txs);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for tx in txs_for_cache {
+                for prepared in &prepared_txs {
+                    let tx = prepared.tx;
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4556,9 +4560,10 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
+            drop(prepared_txs);
             if let Some(timings) = timings.as_deref_mut() {
                 timings.stateless_snapshot_ms = to_ms(static_snapshot_start.elapsed());
             }
@@ -4692,11 +4697,11 @@ pub(crate) mod valid {
                     }
                 }
             };
+            let prepared_txs = Self::prepare_external_transactions(&block);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                Self::committed_heights_for_block(&block, &transactions_view)
+                Self::committed_heights_for_prepared_transactions(&prepared_txs, &transactions_view)
             };
-            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
@@ -4720,6 +4725,7 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                &prepared_txs,
                 metrics,
             ) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -4727,13 +4733,15 @@ pub(crate) mod valid {
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
                 });
                 send_events(ev);
+                drop(prepared_txs);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for tx in txs_for_cache {
+                for prepared in &prepared_txs {
+                    let tx = prepared.tx;
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4742,9 +4750,10 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
+            drop(prepared_txs);
             // Release block writer before creating new one
             let _ = voting_block.take();
             if let Err(error) = state.ensure_da_indexes_hydrated() {
@@ -5046,24 +5055,44 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        fn committed_heights_for_block(
-            block: &SignedBlock,
+        fn committed_heights_for_prepared_transactions(
+            prepared_txs: &[PreparedBlockTransaction<'_>],
             transactions: &impl TransactionsReadOnly,
         ) -> Vec<Option<NonZeroUsize>> {
-            block
-                .external_transactions()
-                .map(|tx| transactions.get(&tx.hash()))
+            prepared_txs
+                .iter()
+                .map(|prepared| transactions.get(&prepared.metadata.signed_hash))
                 .collect()
         }
 
         fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction<'_>> {
-            block
-                .external_transactions()
-                .map(|tx| PreparedBlockTransaction {
-                    tx,
-                    metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
-                })
-                .collect()
+            if let Some(entries) = block.external_entrypoints_slice() {
+                entries
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        TransactionEntrypoint::External(tx) => Some(tx),
+                        TransactionEntrypoint::SealedReveal(reveal) => {
+                            Some(reveal.signed_transaction())
+                        }
+                        TransactionEntrypoint::SealedCommitment(_)
+                        | TransactionEntrypoint::PrivateKaigi(_)
+                        | TransactionEntrypoint::Time(_) => None,
+                    })
+                    .map(|tx| PreparedBlockTransaction {
+                        tx,
+                        metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
+                    })
+                    .collect()
+            } else {
+                block
+                    .transactions_vec()
+                    .iter()
+                    .map(|tx| PreparedBlockTransaction {
+                        tx,
+                        metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
+                    })
+                    .collect()
+            }
         }
 
         /// Static checks that do not require holding a state view.
@@ -5082,6 +5111,7 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
+            prepared_txs: &[PreparedBlockTransaction<'_>],
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
@@ -5092,7 +5122,6 @@ pub(crate) mod valid {
             let pipeline_cfg = &static_data.pipeline_cfg;
             let crypto_cfg = &static_data.crypto_cfg;
             let block_creation_time = block.header().creation_time();
-            let prepared_txs = Self::prepare_external_transactions(block);
             debug_assert_eq!(
                 committed_heights.len(),
                 prepared_txs.len(),
@@ -5100,8 +5129,7 @@ pub(crate) mod valid {
             );
             let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
                 std::collections::BTreeSet::new();
-            let mut entrypoints: Vec<HashOf<TransactionEntrypoint>> =
-                Vec::with_capacity(prepared_txs.len());
+            let mut seen_sealed_commitments = std::collections::BTreeSet::new();
 
             for (prepared, committed_height) in prepared_txs.iter().zip(committed_heights.iter()) {
                 let tx = prepared.tx;
@@ -5126,8 +5154,68 @@ pub(crate) mod valid {
                 if tx.creation_time() >= block_creation_time {
                     return Err(BlockValidationError::TransactionInTheFuture);
                 }
-
-                entrypoints.push(prepared.metadata.entrypoint_hash);
+            }
+            let mut entrypoint_hashes = Vec::with_capacity(block.external_entrypoint_count());
+            let mut prepared_signed_idx = 0usize;
+            if let Some(external_entrypoints) = block.external_entrypoints_slice() {
+                for entrypoint in external_entrypoints {
+                    match entrypoint {
+                        TransactionEntrypoint::External(_) => {
+                            let prepared = prepared_txs
+                                .get(prepared_signed_idx)
+                                .ok_or(BlockValidationError::MerkleRootMismatch)?;
+                            entrypoint_hashes.push(prepared.metadata.entrypoint_hash);
+                            prepared_signed_idx = prepared_signed_idx.saturating_add(1);
+                        }
+                        TransactionEntrypoint::SealedReveal(_) => {
+                            let _prepared = prepared_txs
+                                .get(prepared_signed_idx)
+                                .ok_or(BlockValidationError::MerkleRootMismatch)?;
+                            entrypoint_hashes.push(entrypoint.hash());
+                            prepared_signed_idx = prepared_signed_idx.saturating_add(1);
+                        }
+                        TransactionEntrypoint::SealedCommitment(commitment) => {
+                            crate::tx::validate_sealed_commitment_stateless(
+                                commitment, chain_id, tx_params,
+                            )
+                            .map_err(BlockValidationError::TransactionAccept)?;
+                            if commitment.payload().reveal_after_height
+                                <= u64::try_from(expected_block_height).unwrap_or(u64::MAX)
+                            {
+                                return Err(BlockValidationError::TransactionAccept(
+                                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                                        reason: "sealed transaction reveal_after_height must be greater than commit height".into(),
+                                    }),
+                                ));
+                            }
+                            if !seen_sealed_commitments.insert(*commitment.commitment()) {
+                                return Err(BlockValidationError::DuplicateTransactions);
+                            }
+                            entrypoint_hashes.push(entrypoint.hash());
+                        }
+                        TransactionEntrypoint::PrivateKaigi(_) => {
+                            entrypoint_hashes.push(entrypoint.hash());
+                        }
+                        TransactionEntrypoint::Time(_) => {
+                            return Err(BlockValidationError::TransactionAccept(
+                                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                                    reason: "time entrypoints cannot be embedded as external block entrypoints".into(),
+                                }),
+                            ));
+                        }
+                    }
+                }
+                debug_assert_eq!(
+                    prepared_signed_idx,
+                    prepared_txs.len(),
+                    "signed entrypoint preparation must align with external entries",
+                );
+            } else {
+                entrypoint_hashes.extend(
+                    prepared_txs
+                        .iter()
+                        .map(|prepared| prepared.metadata.entrypoint_hash),
+                );
             }
 
             use rayon::prelude::*;
@@ -5136,47 +5224,71 @@ pub(crate) mod valid {
             let mut ed25519_prechecked = vec![false; prepared_txs.len()];
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
-                struct Ed25519BatchItem<'a> {
+                struct Ed25519BatchItem {
                     idx: usize,
-                    message: &'a [u8],
-                    signature: &'a [u8],
-                    public_key: iroha_crypto::Ed25519ParsedPublicKey,
                 }
 
-                fn verify_ed25519_batch_items(
-                    items: &[Ed25519BatchItem<'_>],
+                fn verify_ed25519_batch_slices(
+                    messages: &[&[u8]],
+                    signatures: &[&[u8]],
+                    public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+                    scratch: &mut iroha_crypto::Ed25519BatchScratch,
                 ) -> Result<(), iroha_crypto::Error> {
-                    let messages: Vec<&[u8]> = items.iter().map(|item| item.message).collect();
-                    let signatures: Vec<&[u8]> = items.iter().map(|item| item.signature).collect();
-                    let public_keys: Vec<iroha_crypto::Ed25519ParsedPublicKey> =
-                        items.iter().map(|item| item.public_key).collect();
-                    iroha_crypto::ed25519_verify_batch_preparsed_deterministic(
-                        &messages,
-                        &signatures,
-                        &public_keys,
+                    iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+                        messages,
+                        signatures,
+                        public_keys,
                         [0; 32],
+                        scratch,
                     )
                 }
 
-                fn first_bad_ed25519_item(
-                    items: &[Ed25519BatchItem<'_>],
+                fn first_bad_ed25519_slice(
+                    messages: &[&[u8]],
+                    signatures: &[&[u8]],
+                    public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+                    scratch: &mut iroha_crypto::Ed25519BatchScratch,
                 ) -> Option<(usize, String)> {
-                    if items.is_empty() || verify_ed25519_batch_items(items).is_ok() {
+                    if messages.is_empty()
+                        || verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
+                            .is_ok()
+                    {
                         return None;
                     }
-                    if items.len() == 1 {
-                        let detail = verify_ed25519_batch_items(items)
-                            .expect_err("single invalid Ed25519 item must fail")
-                            .to_string();
-                        return Some((items[0].idx, detail));
+                    if messages.len() == 1 {
+                        let detail =
+                            verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
+                                .expect_err("single invalid Ed25519 item must fail")
+                                .to_string();
+                        return Some((0, detail));
                     }
 
-                    let split = items.len() / 2;
-                    let (left, right) = items.split_at(split);
-                    first_bad_ed25519_item(left).or_else(|| first_bad_ed25519_item(right))
+                    let split = messages.len() / 2;
+                    let (left_messages, right_messages) = messages.split_at(split);
+                    let (left_signatures, right_signatures) = signatures.split_at(split);
+                    let (left_public_keys, right_public_keys) = public_keys.split_at(split);
+                    first_bad_ed25519_slice(
+                        left_messages,
+                        left_signatures,
+                        left_public_keys,
+                        scratch,
+                    )
+                    .or_else(|| {
+                        first_bad_ed25519_slice(
+                            right_messages,
+                            right_signatures,
+                            right_public_keys,
+                            scratch,
+                        )
+                        .map(|(idx, detail)| (idx + split, detail))
+                    })
                 }
 
                 let mut items = Vec::new();
+                let mut messages = Vec::new();
+                let mut signatures = Vec::new();
+                let mut public_keys = Vec::new();
+                let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
                 for (idx, prepared) in prepared_txs.iter().enumerate() {
                     let tx = prepared.tx;
                     let signature = tx.signature().payload().payload();
@@ -5186,12 +5298,10 @@ pub(crate) mod valid {
                     let Some(public_key) = prepared.metadata.single_ed25519_key else {
                         continue;
                     };
-                    items.push(Ed25519BatchItem {
-                        idx,
-                        message: prepared.metadata.payload_hash.as_ref().as_slice(),
-                        signature,
-                        public_key,
-                    });
+                    items.push(Ed25519BatchItem { idx });
+                    messages.push(prepared.metadata.payload_hash.as_ref().as_slice());
+                    signatures.push(signature);
+                    public_keys.push(public_key);
                 }
 
                 let signature_error = |tx: &SignedTransaction, detail: String| {
@@ -5206,15 +5316,26 @@ pub(crate) mod valid {
                     )
                 };
 
-                for chunk in items.chunks(ed25519_batch_cap) {
-                    if let Err(err) = verify_ed25519_batch_items(chunk) {
-                        if let Some((idx, detail)) = first_bad_ed25519_item(chunk) {
+                for range_start in (0..items.len()).step_by(ed25519_batch_cap) {
+                    let range_end = range_start
+                        .saturating_add(ed25519_batch_cap)
+                        .min(items.len());
+                    let messages = &messages[range_start..range_end];
+                    let signatures = &signatures[range_start..range_end];
+                    let public_keys = &public_keys[range_start..range_end];
+                    if let Err(err) =
+                        verify_ed25519_batch_slices(messages, signatures, public_keys, &mut scratch)
+                    {
+                        if let Some((relative_idx, detail)) =
+                            first_bad_ed25519_slice(messages, signatures, public_keys, &mut scratch)
+                        {
+                            let idx = items[range_start + relative_idx].idx;
                             return Err(signature_error(prepared_txs[idx].tx, detail));
                         }
-                        let idx = chunk.first().map_or(0, |item| item.idx);
+                        let idx = items.get(range_start).map_or(0, |item| item.idx);
                         return Err(signature_error(prepared_txs[idx].tx, err.to_string()));
                     }
-                    for item in chunk {
+                    for item in &items[range_start..range_end] {
                         ed25519_prechecked[item.idx] = true;
                     }
                 }
@@ -5299,8 +5420,8 @@ pub(crate) mod valid {
 
             let mut merkle_tree: MerkleTree<TransactionEntrypoint> =
                 core::iter::empty::<HashOf<TransactionEntrypoint>>().collect();
-            for entry in entrypoints {
-                merkle_tree.add(entry);
+            for hash in entrypoint_hashes {
+                merkle_tree.add(hash);
             }
 
             let expected_merkle_root = merkle_tree.root();
@@ -5339,8 +5460,11 @@ pub(crate) mod valid {
                 time_source,
                 false,
             )?;
-            let committed_heights = Self::committed_heights_for_block(block, state.transactions());
-            let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
+            let prepared_txs = Self::prepare_external_transactions(block);
+            let committed_heights = Self::committed_heights_for_prepared_transactions(
+                &prepared_txs,
+                state.transactions(),
+            );
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
             let max_clock_drift_ms = static_data.max_clock_drift.as_millis();
@@ -5364,13 +5488,15 @@ pub(crate) mod valid {
                 genesis_account,
                 &static_data,
                 &committed_heights,
+                &prepared_txs,
                 metrics,
             )?;
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for tx in txs_for_cache {
+                for prepared in &prepared_txs {
+                    let tx = prepared.tx;
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -5379,10 +5505,139 @@ pub(crate) mod valid {
                         .creation_time()
                         .as_millis()
                         .saturating_sub(max_clock_drift_ms);
-                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                    cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
             Ok(())
+        }
+
+        fn validate_and_record_entrypoints_sequential(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            mut timings: Option<&mut ValidationTimings>,
+            entrypoints: Vec<TransactionEntrypoint>,
+        ) {
+            let to_ms = |duration: Duration| -> u64 {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            };
+            let start = timings.as_ref().map(|_| Instant::now());
+            let n = entrypoints.len();
+            #[allow(clippy::disallowed_types)]
+            let tx_hashes: std::collections::HashSet<_> = entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    HashOf::<SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::from(
+                        entrypoint.hash(),
+                    ))
+                })
+                .collect();
+            let height_u64 = block.header().height().get();
+            let height_usize = height_u64.try_into().expect("block height fits usize");
+            let block_height =
+                std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
+            state_block
+                .transactions
+                .insert_block(tx_hashes, block_height);
+
+            let mut execution_order: Vec<usize> = (0..n).collect();
+            let reveal_positions: Vec<usize> = execution_order
+                .iter()
+                .copied()
+                .filter(|idx| matches!(entrypoints[*idx], TransactionEntrypoint::SealedReveal(_)))
+                .collect();
+            if reveal_positions.len() > 1 {
+                let mut sorted_reveals = reveal_positions.clone();
+                sorted_reveals.sort_by_key(|idx| match &entrypoints[*idx] {
+                    TransactionEntrypoint::SealedReveal(reveal) => {
+                        crate::tx::sealed_reveal_execution_key(state_block, reveal)
+                    }
+                    _ => unreachable!("filtered to sealed reveals"),
+                });
+                for (slot, sorted_idx) in reveal_positions.into_iter().zip(sorted_reveals) {
+                    execution_order[slot] = sorted_idx;
+                }
+            }
+
+            let mut ivm_cache = IvmCache::new();
+            let mut hashes: Vec<Option<HashOf<TransactionEntrypoint>>> = vec![None; n];
+            let mut results: Vec<Option<TransactionResultInner>> = vec![None; n];
+            for idx in execution_order {
+                let entrypoint = entrypoints[idx].clone();
+                let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                    Cow::Owned(entrypoint),
+                );
+                let (hash, result) = state_block.validate_transaction_with_entrypoint_index(
+                    accepted,
+                    &mut ivm_cache,
+                    idx,
+                );
+                hashes[idx] = Some(hash);
+                results[idx] = Some(result);
+            }
+
+            let mut ordered_hashes = Vec::with_capacity(n);
+            let mut ordered_results = Vec::with_capacity(n);
+            for idx in 0..n {
+                ordered_hashes.push(hashes[idx].unwrap_or_else(|| entrypoints[idx].hash()));
+                ordered_results.push(results[idx].take().unwrap_or_else(|| {
+                    Err(TransactionRejectionReason::Validation(
+                        iroha_data_model::ValidationFail::InternalError(format!(
+                            "missing transaction result for idx {idx}"
+                        )),
+                    ))
+                }));
+            }
+
+            let (time_trgs, mut time_hashes, mut time_results) =
+                state_block.execute_time_triggers(&block.header());
+            execute_soracloud_mailbox_runtime(state_block);
+            let pruned_sealed_commitments =
+                crate::tx::prune_expired_sealed_commitments(state_block);
+            if pruned_sealed_commitments > 0 {
+                iroha_logger::debug!(
+                    count = pruned_sealed_commitments,
+                    "pruned expired sealed transaction commitments"
+                );
+            }
+            let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
+            for entry_hash in &ordered_hashes {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
+            }
+            for entry_hash in &time_hashes {
+                fastpq_entry_dataspaces.insert(
+                    iroha_crypto::Hash::from(*entry_hash),
+                    DataSpaceId::UNIVERSAL,
+                );
+            }
+            ordered_hashes.append(&mut time_hashes);
+            ordered_results.append(&mut time_results);
+
+            let mut tx_set_hashes = ordered_hashes.clone();
+            tx_set_hashes.sort_unstable();
+            let tx_set_hash =
+                crate::fastpq::tx_set_hash_from_ordered_hashes(tx_set_hashes.iter().copied());
+            state_block.set_fastpq_tx_set_hash(tx_set_hash);
+            state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
+
+            let fastpq_transcripts = state_block.drain_transfer_transcripts();
+            let axt_envelopes = state_block.drain_axt_envelopes();
+            let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            block.set_transaction_results_with_transcripts(
+                time_trgs,
+                ordered_hashes.as_slice(),
+                ordered_results,
+                fastpq_transcripts,
+                axt_envelopes,
+                axt_policy_snapshot,
+            );
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
+                let elapsed = to_ms(start.elapsed());
+                timings.execution_tx_apply_ms = elapsed;
+                timings.execution_tx_apply_sequential_ms = elapsed;
+            }
         }
 
         /// Validate each transaction in the block, apply resulting state changes,
@@ -5427,6 +5682,20 @@ pub(crate) mod valid {
 
             // Start a new witness window for this block (SBV‑AM prototype)
             crate::sumeragi::witness::start_block();
+
+            let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
+            if external_entrypoints
+                .iter()
+                .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
+            {
+                Self::validate_and_record_entrypoints_sequential(
+                    block,
+                    state_block,
+                    timings,
+                    external_entrypoints,
+                );
+                return;
+            }
 
             // Prepare scheduling: collect transactions, their access sets, and hashes
             let prepared_txs = Self::prepare_external_transactions(block);
@@ -8356,6 +8625,14 @@ pub(crate) mod valid {
                 timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
             }
             execute_soracloud_mailbox_runtime(state_block);
+            let pruned_sealed_commitments =
+                crate::tx::prune_expired_sealed_commitments(state_block);
+            if pruned_sealed_commitments > 0 {
+                iroha_logger::debug!(
+                    count = pruned_sealed_commitments,
+                    "pruned expired sealed transaction commitments"
+                );
+            }
             let finalize_start = timings.as_ref().map(|_| Instant::now());
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
             for (idx, entry_hash) in call_hashes.iter().enumerate() {
@@ -10026,9 +10303,13 @@ pub(crate) mod valid {
                 )
                 .expect("static state-dependent validation should succeed")
             };
+            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+                ValidBlock::committed_heights_for_prepared_transactions(
+                    &prepared_txs,
+                    &transactions_view,
+                )
             };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
@@ -10040,6 +10321,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                &prepared_txs,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -10101,9 +10383,13 @@ pub(crate) mod valid {
                 )
                 .expect("static state-dependent validation should succeed")
             };
+            let prepared_txs = ValidBlock::prepare_external_transactions(&signed);
             let committed_heights = {
                 let transactions_view = state.transactions.view();
-                ValidBlock::committed_heights_for_block(&signed, &transactions_view)
+                ValidBlock::committed_heights_for_prepared_transactions(
+                    &prepared_txs,
+                    &transactions_view,
+                )
             };
             #[cfg(feature = "telemetry")]
             let metrics = Some(&state.telemetry);
@@ -10116,6 +10402,7 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &static_data,
                 &committed_heights,
+                &prepared_txs,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
@@ -14276,7 +14563,14 @@ mod tests {
     use core::time::Duration;
     use std::{borrow::Cow, num::NonZeroU64};
 
-    use iroha_data_model::{errors::AmxStage, prelude::*};
+    use iroha_data_model::{
+        errors::AmxStage,
+        prelude::*,
+        transaction::signed::{
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+        },
+    };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_primitives::json::Json;
     use iroha_primitives::time::TimeSource;
@@ -14772,6 +15066,181 @@ mod tests {
             .next()
             .map(|(_, err)| format!("{err:?}"))
             .expect("block must contain a transaction error")
+    }
+
+    fn sealed_set_key_entrypoints(
+        chain_id: &ChainId,
+        authority: &AccountId,
+        keypair: &KeyPair,
+        reveal_after_height: u64,
+        reveal_deadline_height: u64,
+        metadata_key: Name,
+    ) -> (TransactionEntrypoint, TransactionEntrypoint) {
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone());
+        builder.set_creation_time(Duration::ZERO);
+        let signed = builder
+            .with_instructions([SetKeyValue::account(
+                authority.clone(),
+                metadata_key,
+                Json::new("revealed"),
+            )])
+            .sign(keypair.private_key());
+        let salt = [0x5A; 32];
+        let commitment =
+            compute_sealed_transaction_commitment(chain_id, &signed, salt, reveal_deadline_height);
+        let payload = SealedTransactionCommitmentPayload::new(
+            chain_id.clone(),
+            authority.clone(),
+            commitment,
+            reveal_after_height,
+            reveal_deadline_height,
+            None,
+        );
+        let signed_commitment =
+            SignedSealedTransactionCommitment::sign(payload, keypair.private_key());
+        let reveal = SealedTransactionReveal::new(commitment, signed, salt);
+
+        (
+            TransactionEntrypoint::SealedCommitment(signed_commitment),
+            TransactionEntrypoint::SealedReveal(reveal),
+        )
+    }
+
+    #[test]
+    fn block_pipeline_executes_sealed_reveal_and_records_entrypoint_hash() {
+        let chain_id = ChainId::from("sealed-block-pipeline");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let metadata_key = Name::from_str("sealed_reveal_executed").expect("metadata key");
+        let (commitment_entrypoint, reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key.clone());
+        let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let reveal_entrypoint_hash = reveal_entrypoint.hash();
+
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let (_commit_clock, commit_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let commitment_block =
+            BlockBuilder::new_with_time_source(vec![accepted_commitment], commit_time_source)
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut commitment_state_block = state.block(commitment_block.header);
+        let initial_smart_contract_state_len =
+            commitment_state_block.world.smart_contract_state.len();
+        let valid_commitment_block = commitment_block
+            .validate_and_record_transactions(&mut commitment_state_block)
+            .unpack(|_| {});
+
+        let commitment_result = valid_commitment_block
+            .as_ref()
+            .entrypoint_results()
+            .next()
+            .expect("commitment result");
+        assert_eq!(commitment_result.1.hash(), commitment_entrypoint_hash);
+        assert!(
+            commitment_result.2.0.is_ok(),
+            "sealed commitment must execute successfully: {:?}",
+            commitment_result.2
+        );
+        assert_eq!(
+            commitment_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len + 1,
+            "commitment block should leave one pending sealed commitment"
+        );
+        commitment_state_block.commit().expect("commitment commit");
+        let commitment_signed_block: SignedBlock = valid_commitment_block.into();
+
+        let accepted_reveal =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(reveal_entrypoint));
+        let (_reveal_clock, reveal_time_source) = TimeSource::new_mock(Duration::from_millis(2));
+        let reveal_block =
+            BlockBuilder::new_with_time_source(vec![accepted_reveal], reveal_time_source)
+                .chain(0, Some(&commitment_signed_block))
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut reveal_state_block = state.block(reveal_block.header);
+        let valid_reveal_block = reveal_block
+            .validate_and_record_transactions(&mut reveal_state_block)
+            .unpack(|_| {});
+
+        let reveal_result = valid_reveal_block
+            .as_ref()
+            .entrypoint_results()
+            .next()
+            .expect("reveal result");
+        assert_eq!(reveal_result.1.hash(), reveal_entrypoint_hash);
+        assert!(
+            reveal_result.2.0.is_ok(),
+            "sealed reveal must execute the inner transaction: {:?}",
+            reveal_result.2
+        );
+        assert_eq!(
+            reveal_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len,
+            "successful reveal should consume the pending commitment"
+        );
+        let metadata_value = reveal_state_block
+            .world
+            .map_account(&authority, |account| {
+                account.value().metadata().get(&metadata_key).cloned()
+            })
+            .expect("authority account exists");
+        assert_eq!(metadata_value, Some(Json::new("revealed")));
+    }
+
+    #[test]
+    fn prune_expired_sealed_commitments_removes_pending_state_after_deadline() {
+        let chain_id = ChainId::from("sealed-prune-pipeline");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let metadata_key = Name::from_str("sealed_prune_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 2, metadata_key);
+
+        let accepted_commitment =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let (_commit_clock, commit_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let commitment_block =
+            BlockBuilder::new_with_time_source(vec![accepted_commitment], commit_time_source)
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+        let mut commitment_state_block = state.block(commitment_block.header);
+        let initial_smart_contract_state_len =
+            commitment_state_block.world.smart_contract_state.len();
+        let valid_commitment_block = commitment_block
+            .validate_and_record_transactions(&mut commitment_state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_commitment_block
+                .as_ref()
+                .entrypoint_results()
+                .all(|(_, _, result)| result.0.is_ok()),
+            "commitment block should not reject the sealed commitment"
+        );
+        assert_eq!(
+            commitment_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len + 1
+        );
+        commitment_state_block.commit().expect("commitment commit");
+
+        let prune_header = BlockHeader::new(nonzero!(3_u64), None, None, None, 3, 0);
+        let mut prune_state_block = state.block(prune_header);
+        assert_eq!(
+            prune_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len + 1,
+            "pending commitment should still be visible before pruning"
+        );
+
+        let pruned = crate::tx::prune_expired_sealed_commitments(&mut prune_state_block);
+
+        assert_eq!(pruned, 1);
+        assert_eq!(
+            prune_state_block.world.smart_contract_state.len(),
+            initial_smart_contract_state_len,
+            "expired sealed commitment should be removed after its deadline"
+        );
     }
 
     #[test]

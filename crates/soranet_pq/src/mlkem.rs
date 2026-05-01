@@ -1017,7 +1017,7 @@ mod tests {
         let rendered = err.to_string();
 
         assert!(rendered.contains("ML-KEM-768 secret key"));
-        assert!(rendered.contains("7"));
+        assert!(rendered.contains('7'));
         assert!(rendered.contains("2400"));
     }
 

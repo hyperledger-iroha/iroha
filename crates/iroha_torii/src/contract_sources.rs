@@ -772,11 +772,22 @@ fn locate_instruction_box(
         };
         if let Some(block) = state.block_by_height(nonzero_height) {
             let block_ref = block.as_ref();
-            let external_total = block_ref.external_transactions().len();
-            for tx in block_ref.external_transactions().take(external_total) {
-                if tx.hash_as_entrypoint() != target {
+            for (entrypoint_index, entrypoint, _) in block_ref.entrypoint_results() {
+                if entrypoint_index >= block_ref.external_entrypoint_count() {
+                    break;
+                }
+                if entrypoint.hash() != target {
                     continue;
                 }
+                let tx = match entrypoint {
+                    TransactionEntrypoint::External(tx) => tx,
+                    TransactionEntrypoint::SealedReveal(reveal) => {
+                        reveal.signed_transaction().clone()
+                    }
+                    TransactionEntrypoint::SealedCommitment(_)
+                    | TransactionEntrypoint::PrivateKaigi(_)
+                    | TransactionEntrypoint::Time(_) => return Err(not_found()),
+                };
                 let Executable::Instructions(instructions) = tx.instructions() else {
                     return Err(not_found());
                 };

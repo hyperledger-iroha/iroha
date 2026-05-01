@@ -84,7 +84,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, Signa
 use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
-    block::{BlockHeader, consensus::EvidenceRecord},
+    block::{BlockHeader, SignedBlock, consensus::EvidenceRecord},
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
@@ -2006,6 +2006,14 @@ fn kaigi_signal_from_transaction(
             signed.metadata(),
             reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
             u64::try_from(signed.creation_time().as_millis()).ok(),
+        ),
+        TransactionEntrypoint::SealedCommitment(_) => return None,
+        TransactionEntrypoint::SealedReveal(reveal) => (
+            reveal.signed_transaction().metadata(),
+            reveal_authorities.then(|| {
+                crate::account_literal::display_literal(reveal.signed_transaction().authority())
+            }),
+            u64::try_from(reveal.signed_transaction().creation_time().as_millis()).ok(),
         ),
         TransactionEntrypoint::PrivateKaigi(private) => {
             (&private.metadata, None, Some(private.creation_time_ms))
@@ -10301,6 +10309,21 @@ pub fn accept_transaction_for_ingress(
     #[cfg(feature = "telemetry")]
     let (signature_count, signature_limit, authority_label) = match &tx {
         TransactionEntrypoint::External(signed) => {
+            let authority_label = match signed.authority().controller() {
+                iroha_data_model::account::AccountController::Single(_) => "single",
+                iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+            };
+            (
+                signed.signature_count() as u64,
+                tx_limits.max_signatures().get(),
+                authority_label,
+            )
+        }
+        TransactionEntrypoint::SealedCommitment(_) => {
+            (1, tx_limits.max_signatures().get(), "sealed_commitment")
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            let signed = reveal.signed_transaction();
             let authority_label = match signed.authority().controller() {
                 iroha_data_model::account::AccountController::Single(_) => "single",
                 iroha_data_model::account::AccountController::Multisig(_) => "multisig",
@@ -30805,6 +30828,12 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(_) => {
                 "external".to_owned()
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(_) => {
+                "sealed_commitment".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(_) => {
+                "sealed_reveal".to_owned()
+            }
             iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
                 "private_kaigi".to_owned()
             }
@@ -30819,6 +30848,12 @@ fn tx_field_value(
                 // transparent_api feature. The response projection still controls visibility.
                 Some(signed.payload().authority.to_string())
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(
+                commitment,
+            ) => Some(commitment.authority().to_string()),
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(reveal.signed_transaction().authority().to_string())
+            }
             iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => None,
             _ => None,
         },
@@ -30827,6 +30862,15 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                 // Use API method to avoid relying on internal payload field names
                 Some(format!("{}", signed.creation_time().as_millis()))
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(_) => {
+                None
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(format!(
+                    "{}",
+                    reveal.signed_transaction().creation_time().as_millis()
+                ))
             }
             iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
                 Some(tx.creation_time_ms.to_string())
@@ -30851,6 +30895,16 @@ fn tx_field_value(
                 iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                     signed.metadata().get(&name).map(|json| json.get().clone())
                 }
+                iroha_data_model::transaction::signed::TransactionEntrypoint::SealedCommitment(
+                    _,
+                ) => None,
+                iroha_data_model::transaction::signed::TransactionEntrypoint::SealedReveal(
+                    reveal,
+                ) => reveal
+                    .signed_transaction()
+                    .metadata()
+                    .get(&name)
+                    .map(|json| json.get().clone()),
                 iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
                     tx.metadata.get(&name).map(|json| json.get().clone())
                 }
@@ -31251,6 +31305,12 @@ fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::SealedCommitment(commitment) => commitment.authority() == expected,
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            let signed = reveal.signed_transaction();
+            signed.authority() == expected
+                || executable_contains_account_id(signed.instructions(), expected)
+        }
         TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
@@ -31267,6 +31327,10 @@ fn tx_references_domain_id(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             executable_contains_domain_id(signed.instructions(), expected)
+        }
+        TransactionEntrypoint::SealedCommitment(_) => false,
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            executable_contains_domain_id(reveal.signed_transaction().instructions(), expected)
         }
         TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
             iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
@@ -31428,6 +31492,16 @@ fn tx_collect_asset_ids(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             if let Executable::Instructions(instructions) = signed.instructions() {
+                for instr in instructions.iter() {
+                    visit_instruction(instr);
+                }
+            }
+        }
+        TransactionEntrypoint::SealedCommitment(_) => {}
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            if let Executable::Instructions(instructions) =
+                reveal.signed_transaction().instructions()
+            {
                 for instr in instructions.iter() {
                     visit_instruction(instr);
                 }
@@ -32053,6 +32127,12 @@ fn tx_matches_account_history_subject(
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
             signed.authority().controller() == account_id.controller()
+        }
+        TransactionEntrypoint::SealedCommitment(commitment) => {
+            commitment.authority().controller() == account_id.controller()
+        }
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            reveal.signed_transaction().authority().controller() == account_id.controller()
         }
         TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(_) => false,
@@ -55184,10 +55264,7 @@ pub async fn handle_v1_confidential_notes(
             };
             if let Some(block) = state.block_by_height(nonzero_height) {
                 let block_ref = block.as_ref();
-                let external_total = block_ref.external_transactions().len();
-                for (tx, result) in block_ref
-                    .external_transactions()
-                    .zip(block_ref.results().take(external_total))
+                for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref)
                 {
                     if result.as_ref().is_err() {
                         continue;
@@ -55204,7 +55281,7 @@ pub async fn handle_v1_confidential_notes(
                     if confidential_instructions.is_empty() {
                         continue;
                     }
-                    let tx_hash = tx.hash_as_entrypoint().to_string();
+                    let tx_hash = entrypoint_hash.to_string();
                     items.push(ConfidentialNoteRecordDto {
                         entrypoint_hash: tx_hash.clone(),
                         transaction_hash: tx_hash,
@@ -59762,6 +59839,7 @@ struct ExplorerInstructionFilters {
 impl ExplorerInstructionFilters {
     fn matches_transaction(
         &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
         tx: &SignedTransaction,
         block_height: u64,
         result: &TransactionResult,
@@ -59772,7 +59850,7 @@ impl ExplorerInstructionFilters {
             }
         }
         if let Some(expected_hash) = &self.transaction_hash {
-            if tx.hash_as_entrypoint() != *expected_hash {
+            if entrypoint_hash != *expected_hash {
                 return false;
             }
         }
@@ -60192,6 +60270,34 @@ pub async fn handle_v1_explorer_instruction_detail(
 }
 
 #[cfg(feature = "app_api")]
+fn external_signed_transaction_results(
+    block: &SignedBlock,
+) -> impl Iterator<
+    Item = (
+        HashOf<TransactionEntrypoint>,
+        SignedTransaction,
+        &TransactionResult,
+    ),
+> + '_ {
+    let external_total = block.external_entrypoint_count();
+    block
+        .external_entrypoints_cloned()
+        .take(external_total)
+        .zip(block.results().take(external_total))
+        .filter_map(|(entrypoint, result)| {
+            let entrypoint_hash = entrypoint.hash();
+            let signed = match entrypoint {
+                TransactionEntrypoint::External(signed) => signed,
+                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => return None,
+            };
+            Some((entrypoint_hash, signed, result))
+        })
+}
+
+#[cfg(feature = "app_api")]
 fn collect_transaction_summaries_from_kura(
     kura: &Kura,
     start_height: u64,
@@ -60213,13 +60319,14 @@ fn collect_transaction_summaries_from_kura(
             .get_block(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if filters.matches(tx, height, result) {
-                out.push(crate::explorer::transaction_summary_dto(tx, height, result));
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if filters.matches(&tx, height, result) {
+                out.push(crate::explorer::transaction_summary_dto_with_hash(
+                    &tx,
+                    entrypoint_hash,
+                    height,
+                    result,
+                ));
             }
         }
         if height == lower_bound || height == 1 {
@@ -60254,15 +60361,16 @@ fn collect_latest_transaction_summaries(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches(&tx, height, result) {
                 continue;
             }
-            out.push(crate::explorer::transaction_summary_dto(tx, height, result));
+            out.push(crate::explorer::transaction_summary_dto_with_hash(
+                &tx,
+                entrypoint_hash,
+                height,
+                result,
+            ));
             if (out.len() as u64) >= limit {
                 return Ok(out);
             }
@@ -60329,14 +60437,15 @@ fn collect_transaction_summaries(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if filters.matches(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if filters.matches(&tx, height, result) {
                 if total_items >= start_index && total_items < end_index {
-                    out.push(crate::explorer::transaction_summary_dto(tx, height, result));
+                    out.push(crate::explorer::transaction_summary_dto_with_hash(
+                        &tx,
+                        entrypoint_hash,
+                        height,
+                        result,
+                    ));
                 }
                 total_items = total_items.saturating_add(1);
             }
@@ -60371,12 +60480,8 @@ fn collect_instruction_history_from_kura(
             .get_block(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches_transaction(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
             let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60398,8 +60503,9 @@ fn collect_instruction_history_from_kura(
                     }
                 }
                 let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind(
-                    tx,
+                out.push(crate::explorer::instruction_dto_with_kind_and_hash(
+                    &tx,
+                    entrypoint_hash,
                     height,
                     result,
                     instruction,
@@ -60440,12 +60546,8 @@ fn collect_latest_instruction_history(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches_transaction(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
             let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60467,8 +60569,9 @@ fn collect_latest_instruction_history(
                     }
                 }
                 let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind(
-                    tx,
+                out.push(crate::explorer::instruction_dto_with_kind_and_hash(
+                    &tx,
+                    entrypoint_hash,
                     height,
                     result,
                     instruction,
@@ -60520,12 +60623,8 @@ fn collect_instruction_history(
             .block_by_height(nonzero_height)
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
-            if !filters.matches_transaction(tx, height, result) {
+        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
                 continue;
             }
             let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60548,8 +60647,9 @@ fn collect_instruction_history(
                 }
                 if total_items >= start_index && total_items < end_index {
                     let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                    out.push(crate::explorer::instruction_dto_with_kind(
-                        tx,
+                    out.push(crate::explorer::instruction_dto_with_kind_and_hash(
+                        &tx,
+                        entrypoint_hash,
                         height,
                         result,
                         instruction,
@@ -60650,14 +60750,13 @@ fn transaction_detail_at_height(
         return Ok(None);
     };
     let block_ref = block.as_ref();
-    let external_total = block_ref.external_transactions().len();
-    for (tx, result) in block_ref
-        .external_transactions()
-        .zip(block_ref.results().take(external_total))
-    {
-        if tx.hash_as_entrypoint() == target {
-            return Ok(Some(crate::explorer::transaction_detail_dto(
-                tx, height, result,
+    for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+        if entrypoint_hash == target {
+            return Ok(Some(crate::explorer::transaction_detail_dto_with_hash(
+                &tx,
+                entrypoint_hash,
+                height,
+                result,
             )));
         }
     }
@@ -60700,12 +60799,8 @@ fn instruction_detail_at_height(
         return Ok(None);
     };
     let block_ref = block.as_ref();
-    let external_total = block_ref.external_transactions().len();
-    for (tx, result) in block_ref
-        .external_transactions()
-        .zip(block_ref.results().take(external_total))
-    {
-        if tx.hash_as_entrypoint() != target {
+    for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
+        if entrypoint_hash != target {
             continue;
         }
         let Executable::Instructions(instructions) = tx.instructions() else {
@@ -60716,8 +60811,9 @@ fn instruction_detail_at_height(
             .ok_or_else(explorer_not_found)?;
         let kind = crate::explorer::instruction_kind(instruction);
         let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
-        return Ok(Some(crate::explorer::instruction_dto_with_kind(
-            tx,
+        return Ok(Some(crate::explorer::instruction_dto_with_kind_and_hash(
+            &tx,
+            entrypoint_hash,
             height,
             result,
             instruction,
@@ -61271,11 +61367,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                 break;
             }
 
-            let external_total = block_ref.external_transactions().len();
-            for (tx, result) in block_ref
-                .external_transactions()
-                .zip(block_ref.results().take(external_total))
-            {
+            for (_, tx, result) in external_signed_transaction_results(block_ref) {
                 // Ignore rejected transactions.
                 if result.as_ref().is_err() {
                     continue;

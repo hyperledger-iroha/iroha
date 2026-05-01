@@ -802,6 +802,10 @@ fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx
         iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
             Some(signed.instructions())
         }
+        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => None,
+        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(reveal.signed_transaction().instructions())
+        }
         iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => None,
         iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
     }
@@ -2304,6 +2308,17 @@ fn instructions_match(
     match tx.entrypoint() {
         iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
             let executable = signed.instructions();
+            let Executable::Instructions(batch) = executable else {
+                return false;
+            };
+
+            batch.iter().any(|instruction| {
+                instruction_matches(matcher_label, destination_scope, &**instruction, state_view)
+            })
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => false,
+        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+            let executable = reveal.signed_transaction().instructions();
             let Executable::Instructions(batch) = executable else {
                 return false;
             };

@@ -15325,6 +15325,10 @@ mod tests {
             iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
         let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
             tx_hash: tx_hash.clone(),
+            entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::from(tx_hash.clone()),
+            ),
+            signed_transaction_hash: Some(tx_hash.clone()),
             submitted_at_ms: 1,
             submitted_at_height: 1,
             signer: key_pair.public_key().clone(),

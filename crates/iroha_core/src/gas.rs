@@ -54,6 +54,7 @@ const BASE_KAIGI_USAGE: u64 = 240;
 const BASE_KAIGI_JOIN_ZK: u64 = 1_520;
 const BASE_KAIGI_LEAVE_ZK: u64 = 1_520;
 const BASE_KAIGI_USAGE_ZK: u64 = 1_180;
+const BASE_SEALED_COMMITMENT: u64 = 96;
 /// Default gas charged for a single confidential proof verification before any other factors.
 pub const DEFAULT_ZK_GAS_BASE_VERIFY: u64 = 250_000;
 /// Default gas multiplier per public input exposed by a confidential proof.
@@ -70,6 +71,7 @@ const FIELD_ELEMENT_BYTES: usize = 32;
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
 const PER_BYTE_GENERIC: u64 = 0; // currently unused; reserved for future
 const PER_KAIGI_PROOF_BYTE: u64 = 5;
+const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
 
 static ZK_GAS_BASE_VERIFY: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_BASE_VERIFY);
 static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PUBLIC_INPUT);
@@ -127,6 +129,13 @@ pub fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
     ZK_GAS_PER_PROOF_BYTE.store(schedule.per_proof_byte, Ordering::Relaxed);
     ZK_GAS_PER_NULLIFIER.store(schedule.per_nullifier, Ordering::Relaxed);
     ZK_GAS_PER_COMMITMENT.store(schedule.per_commitment, Ordering::Relaxed);
+}
+
+/// Deterministic cost for storing a sealed transaction commitment.
+#[must_use]
+pub fn meter_sealed_transaction_commitment(encoded_len: usize) -> u64 {
+    let encoded_len = u64::try_from(encoded_len).unwrap_or(u64::MAX);
+    BASE_SEALED_COMMITMENT.saturating_add(PER_BYTE_SEALED_COMMITMENT.saturating_mul(encoded_len))
 }
 
 #[cfg(test)]
@@ -496,6 +505,14 @@ mod tests {
             xfer,
         )));
         assert!(g_mint > 0 && g_xfer > 0);
+    }
+
+    #[test]
+    fn sealed_commitment_cost_is_nonzero_and_size_sensitive() {
+        let small = meter_sealed_transaction_commitment(32);
+        let large = meter_sealed_transaction_commitment(256);
+        assert!(small > 0);
+        assert!(large > small);
     }
 
     #[test]

@@ -3702,7 +3702,7 @@ async fn observer_skips_votes_and_exec_artifacts() {
         fastpq_batches: Vec::new(),
     };
     let _ = harness.background_rx.try_iter().count();
-    actor.emit_exec_artifacts(block_hash, height, view, witness);
+    actor.emit_exec_artifacts(block_hash, height, view, witness, None);
     assert!(
         harness.background_rx.try_iter().next().is_none(),
         "observer should not broadcast exec witness"
@@ -22012,37 +22012,46 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         &actor.genesis_account,
         work,
     );
-    let (committed_block, exec_witness, pipeline_events, state_events, post_apply_snapshot) =
-        match outcome {
-            commit::CommitOutcome::Success {
-                committed_block,
-                exec_witness,
-                pipeline_events,
-                state_events,
-                post_apply_snapshot,
-            } => (
-                committed_block,
-                exec_witness,
-                pipeline_events,
-                state_events,
-                post_apply_snapshot,
-            ),
-            commit::CommitOutcome::Rejected { error, .. } => {
-                panic!("commit work should succeed: rejected with {error:?}");
-            }
-            commit::CommitOutcome::KuraStoreFailed { error, .. } => {
-                panic!("commit work should succeed: Kura store failed: {error:?}");
-            }
-            commit::CommitOutcome::StateCommitFailed { error, .. } => {
-                panic!("commit work should succeed: state commit failed: {error}");
-            }
-        };
+    let (
+        committed_block,
+        exec_witness,
+        fastpq_witness_context,
+        pipeline_events,
+        state_events,
+        post_apply_snapshot,
+    ) = match outcome {
+        commit::CommitOutcome::Success {
+            committed_block,
+            exec_witness,
+            fastpq_witness_context,
+            pipeline_events,
+            state_events,
+            post_apply_snapshot,
+        } => (
+            committed_block,
+            exec_witness,
+            fastpq_witness_context,
+            pipeline_events,
+            state_events,
+            post_apply_snapshot,
+        ),
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should succeed: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should succeed: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should succeed: state commit failed: {error}");
+        }
+    };
     result_tx
         .send(commit::CommitResult {
             id: 11,
             outcome: commit::CommitOutcome::Success {
                 committed_block,
                 exec_witness,
+                fastpq_witness_context,
                 pipeline_events,
                 state_events,
                 post_apply_snapshot,
@@ -22392,31 +22401,39 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
         &actor.genesis_account,
         work,
     );
-    let (committed_block, exec_witness, pipeline_events, state_events, post_apply_snapshot) =
-        match outcome {
-            commit::CommitOutcome::Success {
-                committed_block,
-                exec_witness,
-                pipeline_events,
-                state_events,
-                post_apply_snapshot,
-            } => (
-                committed_block,
-                exec_witness,
-                pipeline_events,
-                state_events,
-                post_apply_snapshot,
-            ),
-            commit::CommitOutcome::Rejected { error, .. } => {
-                panic!("commit work should succeed: rejected with {error:?}");
-            }
-            commit::CommitOutcome::KuraStoreFailed { error, .. } => {
-                panic!("commit work should succeed: Kura store failed: {error:?}");
-            }
-            commit::CommitOutcome::StateCommitFailed { error, .. } => {
-                panic!("commit work should succeed: state commit failed: {error}");
-            }
-        };
+    let (
+        committed_block,
+        exec_witness,
+        fastpq_witness_context,
+        pipeline_events,
+        state_events,
+        post_apply_snapshot,
+    ) = match outcome {
+        commit::CommitOutcome::Success {
+            committed_block,
+            exec_witness,
+            fastpq_witness_context,
+            pipeline_events,
+            state_events,
+            post_apply_snapshot,
+        } => (
+            committed_block,
+            exec_witness,
+            fastpq_witness_context,
+            pipeline_events,
+            state_events,
+            post_apply_snapshot,
+        ),
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should succeed: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should succeed: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should succeed: state commit failed: {error}");
+        }
+    };
 
     result_tx
         .send(commit::CommitResult {
@@ -22424,6 +22441,7 @@ async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
             outcome: commit::CommitOutcome::Success {
                 committed_block,
                 exec_witness,
+                fastpq_witness_context,
                 pipeline_events,
                 state_events,
                 post_apply_snapshot,
@@ -29037,7 +29055,7 @@ async fn exec_witness_targets_collectors_even_when_redundant_r_below_quorum() {
     };
 
     let _ = harness.background_rx.try_iter().count();
-    actor.emit_exec_artifacts(block_hash, height, view, witness);
+    actor.emit_exec_artifacts(block_hash, height, view, witness, None);
 
     let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let topology_peers = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
@@ -77125,6 +77143,7 @@ async fn apply_commit_outcome_updates_view_change_install() {
             outcome: commit::CommitOutcome::Success {
                 committed_block,
                 exec_witness: None,
+                fastpq_witness_context: None,
                 pipeline_events: Vec::new(),
                 state_events: Vec::new(),
                 post_apply_snapshot: commit::CommitPostApplySnapshot::default(),
@@ -96099,6 +96118,8 @@ async fn censorship_evidence_triggers_view_change() {
             let keypair = &harness.key_pairs[idx];
             let payload = TransactionSubmissionReceiptPayload {
                 tx_hash,
+                entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+                signed_transaction_hash: Some(tx_hash),
                 submitted_at_ms: 1,
                 submitted_at_height: 1,
                 signer: keypair.public_key().clone(),

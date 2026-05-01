@@ -1045,6 +1045,12 @@ mod tests {
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition};
 
+    fn verify_limits_with_override(apply: impl FnOnce(&mut VerifyLimits)) -> VerifyLimits {
+        let mut limits = VerifyLimits::default();
+        apply(&mut limits);
+        limits
+    }
+
     fn annotate_batch(batch: &mut TransitionBatch) {
         batch.public_inputs.dsid = [0x11; 16];
         batch.public_inputs.slot = 42;
@@ -2233,8 +2239,9 @@ mod tests {
         let proof_batch = sample_batch();
         let proof = prover.prove(&proof_batch).unwrap();
         let batch = sample_batch_with_size(3);
-        let mut limits = VerifyLimits::default();
-        limits.max_transitions = batch.transitions.len() - 1;
+        let limits = verify_limits_with_override(|limits| {
+            limits.max_transitions = batch.transitions.len() - 1
+        });
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2253,8 +2260,7 @@ mod tests {
         let proof = prover.prove(&batch).unwrap();
         let batch_bytes = batch_size_hint(&batch);
         assert!(batch_bytes > 0, "sample batch must have a byte footprint");
-        let mut limits = VerifyLimits::default();
-        limits.max_batch_bytes = batch_bytes - 1;
+        let limits = verify_limits_with_override(|limits| limits.max_batch_bytes = batch_bytes - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2273,8 +2279,7 @@ mod tests {
         let proof = prover.prove(&batch).unwrap();
         let layer_count = proof.fri_layers.len();
         assert!(layer_count > 0, "proof must carry FRI layer roots");
-        let mut limits = VerifyLimits::default();
-        limits.max_fri_layers = layer_count - 1;
+        let limits = verify_limits_with_override(|limits| limits.max_fri_layers = layer_count - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2298,8 +2303,7 @@ mod tests {
             .current_row
             .len();
         assert!(row_len > 0, "AIR row must carry trace values");
-        let mut limits = VerifyLimits::default();
-        limits.max_air_row_values = row_len - 1;
+        let limits = verify_limits_with_override(|limits| limits.max_air_row_values = row_len - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2318,8 +2322,7 @@ mod tests {
         let proof = prover.prove(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
-        let mut limits = VerifyLimits::default();
-        limits.max_queries = query_count - 1;
+        let limits = verify_limits_with_override(|limits| limits.max_queries = query_count - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2344,8 +2347,7 @@ mod tests {
             .expect("expected sampled FRI query")
             .clone();
         proof.fri_queries.push(extra);
-        let mut limits = VerifyLimits::default();
-        limits.max_queries = query_count;
+        let limits = verify_limits_with_override(|limits| limits.max_queries = query_count);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2370,8 +2372,7 @@ mod tests {
             .expect("expected sampled AIR opening")
             .clone();
         proof.air_openings.push(extra);
-        let mut limits = VerifyLimits::default();
-        limits.max_queries = query_count;
+        let limits = verify_limits_with_override(|limits| limits.max_queries = query_count);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2395,8 +2396,8 @@ mod tests {
             .chunk_values
             .len();
         assert!(chunk_len > 0, "query chunk must carry values");
-        let mut limits = VerifyLimits::default();
-        limits.max_query_chunk_values = chunk_len - 1;
+        let limits =
+            verify_limits_with_override(|limits| limits.max_query_chunk_values = chunk_len - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2454,8 +2455,7 @@ mod tests {
         let batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
         proof.air_openings[0].next_row_path.push(7);
-        let mut limits = VerifyLimits::default();
-        limits.max_query_path_len = 0;
+        let limits = verify_limits_with_override(|limits| limits.max_query_path_len = 0);
         let err = enforce_verify_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2491,8 +2491,7 @@ mod tests {
             .current_row_path
             .len();
         assert!(path_len > 0, "AIR opening must carry Merkle siblings");
-        let mut limits = VerifyLimits::default();
-        limits.max_query_path_len = path_len - 1;
+        let limits = verify_limits_with_override(|limits| limits.max_query_path_len = path_len - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -2540,8 +2539,8 @@ mod tests {
             .values
             .len();
         assert!(values_len > 0, "FRI round must carry opened values");
-        let mut limits = VerifyLimits::default();
-        limits.max_fri_round_values = values_len - 1;
+        let limits =
+            verify_limits_with_override(|limits| limits.max_fri_round_values = values_len - 1);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
         assert!(matches!(
             err,
@@ -3143,8 +3142,9 @@ mod tests {
         let small_batch = sample_batch();
         let proof = prover.prove(&small_batch).unwrap();
         let large_batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
-        let mut limits = VerifyLimits::default();
-        limits.max_transitions = large_batch.transitions.len();
+        let limits = verify_limits_with_override(|limits| {
+            limits.max_transitions = large_batch.transitions.len()
+        });
         let err = verify_with_limits(&large_batch, &proof, limits).unwrap_err();
         assert!(matches!(err, Error::CommitmentMismatch));
     }
@@ -3154,8 +3154,8 @@ mod tests {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
         let proof = prover.prove(&batch).unwrap();
-        let mut limits = VerifyLimits::default();
-        limits.max_transitions = batch.transitions.len();
+        let limits =
+            verify_limits_with_override(|limits| limits.max_transitions = batch.transitions.len());
         verify_with_limits(&batch, &proof, limits).unwrap();
     }
 

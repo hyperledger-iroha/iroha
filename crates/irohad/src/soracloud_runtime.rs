@@ -21335,6 +21335,48 @@ mod tests {
     }
 
     #[test]
+    fn resolve_inrou_allowlist_endpoints_deduplicates_ipv4_entries() -> Result<()>
+    {
+        let endpoints = resolve_inrou_allowlist_endpoints(&[
+            SoraNetworkAllowlistEntryV1::new(" 127.0.0.1 ", [443, 443]),
+            SoraNetworkAllowlistEntryV1::new("127.0.0.1", [443]),
+        ])?;
+
+        assert_eq!(
+            endpoints,
+            vec![InrouTapResolvedAllowlistEndpoint {
+                host: "127.0.0.1".to_owned(),
+                address: "127.0.0.1".parse().expect("valid IPv4"),
+                port: 443,
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_inrou_allowlist_endpoints_rejects_ipv6_only_literals() {
+        let error =
+            resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new("::1", [443])])
+                .expect_err("IPv6-only allowlist entries should fail closed");
+        let message = error.to_string();
+        assert!(message.contains("no IPv4 endpoints"));
+        assert!(message.contains("::1"));
+    }
+
+    #[test]
+    fn resolve_inrou_allowlist_endpoints_rejects_empty_port_lists() {
+        let error = resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
+            "127.0.0.1",
+            Vec::<u16>::new(),
+        )])
+        .expect_err("allowlist entries without ports should fail closed");
+        let message = error.to_string();
+        assert!(message.contains("no IPv4 endpoints"));
+        assert!(message.contains("127.0.0.1"));
+        assert!(message.contains("[]"));
+    }
+
+    #[test]
     fn inrou_tap_firewall_plan_rejects_allowlist_without_ipv4_endpoints() {
         let error = inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
             SoraNetworkAllowlistEntryV1::new("::1", [443]),
@@ -21391,6 +21433,26 @@ mod tests {
     }
 
     #[test]
+    fn planned_inrou_tap_firewall_rules_allowlist_empty_keeps_default_drop() {
+        let rules = planned_inrou_tap_firewall_rules(
+            "irtest0",
+            "172.31.10.2/32",
+            &InrouTapFirewallPlan::Allowlist(Vec::new()),
+        );
+
+        assert_eq!(rules.len(), 6);
+        assert_eq!(
+            rules[5].context,
+            "install Inrou allowlist default-drop rule"
+        );
+        assert_eq!(rules[5].args[0], "-I");
+        assert_eq!(rules[5].args[1], "FORWARD");
+        assert_eq!(rules[5].args[4], "irtest0");
+        assert_eq!(rules[5].args[5], "-j");
+        assert_eq!(rules[5].args[6], "DROP");
+    }
+
+    #[test]
     fn planned_inrou_tap_firewall_rules_keep_isolated_policy_private() {
         let rules = planned_inrou_tap_firewall_rules(
             "irtest0",
@@ -21420,6 +21482,39 @@ mod tests {
         );
         assert_eq!(rules[3].args[1], "FORWARD");
         assert_eq!(rules[3].args[6], "DROP");
+    }
+
+    #[test]
+    fn planned_inrou_tap_firewall_rules_open_policy_keeps_return_path_before_forward_out() {
+        let rules = planned_inrou_tap_firewall_rules(
+            "irtest0",
+            "172.31.10.2/32",
+            &InrouTapFirewallPlan::Open,
+        );
+
+        assert_eq!(rules.len(), 6);
+        assert_eq!(
+            rules[0].context,
+            "install Inrou shared-storage ingress rule"
+        );
+        assert_eq!(rules[1].context, "install Inrou egress masquerade rule");
+        assert_eq!(
+            rules[2].context,
+            "install Inrou established host-input rule"
+        );
+        assert_eq!(
+            rules[3].context,
+            "install Inrou host-input default-drop rule"
+        );
+        assert_eq!(rules[4].context, "install Inrou return-traffic rule");
+        assert_eq!(rules[5].context, "install Inrou forward-out rule");
+        assert_eq!(rules[4].args[1], "FORWARD");
+        assert_eq!(rules[4].args[3], "-o");
+        assert_eq!(rules[4].args[4], "irtest0");
+        assert_eq!(rules[5].args[1], "FORWARD");
+        assert_eq!(rules[5].args[3], "-i");
+        assert_eq!(rules[5].args[4], "irtest0");
+        assert_eq!(rules[5].args[6], "ACCEPT");
     }
 
     #[test]
@@ -21781,6 +21876,71 @@ mod tests {
         assert!(args.contains("raw"));
         assert!(args.contains(base_rootfs_image_path.display().to_string().as_str()));
         assert!(args.contains(root_disk_path.display().to_string().as_str()));
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_root_disk_reuses_existing_overlay_without_qemu_img() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume");
+        let root_disk_path = PathBuf::from(&root_volume.local_materialization_dir)
+            .join("rootfs.qcow2");
+        fs::create_dir_all(root_disk_path.parent().expect("root disk parent"))?;
+        fs::write(&root_disk_path, b"existing-overlay")?;
+
+        let qemu_img = temp_dir.path().join("qemu-img");
+        fs::write(&qemu_img, "#!/bin/sh\nexit 99\n")?;
+        fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
+        let missing_base_rootfs = temp_dir.path().join("missing-base-rootfs.ext4");
+
+        let reused =
+            ensure_inrou_portable_root_disk(&qemu_img, &missing_base_rootfs, root_volume)?;
+
+        assert_eq!(reused, root_disk_path);
+        assert_eq!(fs::read(&reused)?, b"existing-overlay");
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_root_disk_rejects_base_larger_than_budget() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let base_rootfs_image_path = temp_dir.path().join("base-rootfs.ext4");
+        fs::write(&base_rootfs_image_path, b"larger-than-budget")?;
+        let mut root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume")
+            .clone();
+        root_volume.max_total_bytes = 4;
+        let qemu_img = temp_dir.path().join("missing-qemu-img");
+
+        let error = ensure_inrou_portable_root_disk(
+            &qemu_img,
+            &base_rootfs_image_path,
+            &root_volume,
+        )
+        .expect_err("oversized base rootfs should fail before qemu-img runs");
+
+        let message = error.to_string();
+        assert!(message.contains("exceeds root lease budget"));
+        assert!(message.contains(root_volume.volume_name.as_str()));
+        let root_disk_path = PathBuf::from(&root_volume.local_materialization_dir)
+            .join("rootfs.qcow2");
+        assert!(
+            !root_disk_path.exists(),
+            "oversized base rootfs must not leave a qcow2 overlay behind"
+        );
         Ok(())
     }
 

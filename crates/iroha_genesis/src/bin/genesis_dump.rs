@@ -46,7 +46,7 @@ fn main() -> Result<()> {
                     {
                         println!("tx[{tx_index}].instr[{instr_index}] set_alias={alias:?}");
                     } else {
-                        println!("tx[{tx_index}].instr[{instr_index}] {:?}", instruction);
+                        println!("tx[{tx_index}].instr[{instr_index}] {instruction:?}");
                     }
                 }
             }

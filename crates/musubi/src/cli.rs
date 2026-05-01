@@ -1,4 +1,11 @@
 //! Command implementation for the `musubi` Kotodama package manager.
+#![allow(
+    clippy::match_same_arms,
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else,
+    clippy::struct_field_names,
+    clippy::too_many_lines
+)]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -62,7 +69,7 @@ const DEFAULT_DIST_DIR: &str = ".musubi/dist";
 const ARCHIVE_DOMAIN_SEPARATOR: &[u8] = b"musubi-source-archive-v1";
 
 /// Run the Musubi command-line interface.
-pub(crate) fn run() -> Result<()> {
+pub fn run() -> Result<()> {
     Args::parse().run()
 }
 
@@ -396,7 +403,7 @@ struct GatewayFetchArgs {
     /// Gateway provider descriptor: name=<alias>,provider-id=<64-hex>,base-url=<url>,stream-token=<base64>[,privacy-url=<url>][,package=<alias-or-ref>][,manifest=<64-hex>]
     #[arg(long = "gateway-provider", value_name = "SPEC")]
     gateway_provider: Vec<GatewayProviderSpec>,
-    /// Client label sent to SoraFS gateway providers for audit and rate limiting
+    /// Client label sent to `SoraFS` gateway providers for audit and rate limiting.
     #[arg(long)]
     gateway_client_id: Option<String>,
     /// Maximum retry attempts per chunk during gateway fetch
@@ -411,7 +418,7 @@ struct GatewayFetchArgs {
     /// Persist the gateway fetch scoreboard JSON artifact
     #[arg(long, value_name = "PATH")]
     gateway_scoreboard_out: Option<PathBuf>,
-    /// Permit http://localhost, http://127.0.0.1, or http://[::1] gateway URLs for local testing
+    /// Permit `<http://localhost>`, `<http://127.0.0.1>`, or `<http://[::1]>` gateway URLs for local testing.
     #[arg(long = "gateway-allow-insecure-localhost")]
     gateway_allow_insecure_localhost: bool,
 }
@@ -524,9 +531,11 @@ impl BuildArgs {
         } else {
             parse_kotodama(&source).map_err(|err| eyre!("Kotodama parse error: {err}"))?
         };
-        let mut opts = CompilerOptions::default();
-        opts.abi_version = self.abi;
-        opts.debug_source_name = Some(self.source.display().to_string());
+        let opts = CompilerOptions {
+            abi_version: self.abi,
+            debug_source_name: Some(self.source.display().to_string()),
+            ..Default::default()
+        };
         let compiler = KotodamaCompiler::new_with_options(opts);
         let (bytecode, contract_manifest) = compiler
             .compile_program_with_manifest(&program)
@@ -566,10 +575,10 @@ struct PackArgs {
     /// Path to the Musubi package manifest
     #[arg(long, default_value = DEFAULT_MANIFEST)]
     manifest: PathBuf,
-    /// Write a deterministic SoraFS CAR payload to this path
+    /// Write a deterministic `SoraFS` CAR payload to this path.
     #[arg(long)]
     car_out: Option<PathBuf>,
-    /// Write a SoraFS manifest to this path
+    /// Write a `SoraFS` manifest to this path.
     #[arg(long)]
     sorafs_manifest_out: Option<PathBuf>,
     /// Write the Musubi source archive plan as Norito bytes to this path
@@ -634,7 +643,7 @@ struct PublishArgs {
     /// Path to the Musubi package manifest
     #[arg(long, default_value = DEFAULT_MANIFEST)]
     manifest: PathBuf,
-    /// SoraFS manifest digest for the uploaded source archive
+    /// `SoraFS` manifest digest for the uploaded source archive.
     #[arg(long, value_name = "HEX")]
     sorafs_manifest_digest: Option<String>,
     /// Precomputed source archive BLAKE3-256 hash; defaults to hashing the manifest directory
@@ -643,13 +652,13 @@ struct PublishArgs {
     /// Optional CAR output path to prepare before publishing
     #[arg(long)]
     car_out: Option<PathBuf>,
-    /// Optional SoraFS manifest output path to prepare before publishing
+    /// Optional `SoraFS` manifest output path to prepare before publishing.
     #[arg(long)]
     sorafs_manifest_out: Option<PathBuf>,
     /// Optional Musubi source archive plan output path
     #[arg(long)]
     source_plan_out: Option<PathBuf>,
-    /// Upload the generated manifest and payload through Torii's SoraFS storage pin endpoint
+    /// Upload the generated manifest and payload through Torii's `SoraFS` storage pin endpoint.
     #[arg(long)]
     upload: bool,
     /// Lockfile used to pin resolved dependency versions in the release record
@@ -1421,7 +1430,7 @@ fn parse_lockfile(body: &str) -> Result<MusubiLockfile> {
         let resolved = table
             .get("resolved")
             .and_then(toml::Value::as_bool)
-            .unwrap_or(archive.is_some());
+            .unwrap_or_else(|| archive.is_some());
         locked.push(LockedPackage {
             alias,
             package: MusubiPackageRef::new(package_id, locked_version),
@@ -3705,7 +3714,7 @@ mod tests {
                         args: Vec::new(),
                     })],
                 },
-                modifiers: Default::default(),
+                modifiers: ivm::kotodama::ast::FunctionModifiers::default(),
                 location: ivm::kotodama::ast::SourceLocation { line: 1, column: 1 },
             })],
             contract_meta: None,

@@ -7,7 +7,7 @@ use norito::{
     core::NoritoSerialize,
 };
 
-use super::SignedTransaction;
+use super::{SignedTransaction, signed::TransactionEntrypoint};
 
 /// Domain tag for transaction submission receipt signatures.
 pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
@@ -19,8 +19,14 @@ pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct TransactionSubmissionReceiptPayload {
-    /// Hash of the submitted transaction.
+    /// Canonical transaction entrypoint hash exposed under the legacy field name.
     pub tx_hash: HashOf<SignedTransaction>,
+    /// Hash of the submitted transaction entrypoint.
+    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Hash of the inner signed transaction, when the entrypoint carries one.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub signed_transaction_hash: Option<HashOf<SignedTransaction>>,
     /// Unix timestamp (ms) when Torii accepted the submission.
     pub submitted_at_ms: u64,
     /// Block height observed when the receipt was issued.
@@ -84,6 +90,12 @@ mod tests {
         let key_pair = KeyPair::random();
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xA5; 32])),
+            entrypoint_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                [0xA5; 32],
+            )),
+            signed_transaction_hash: Some(HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xB6; 32]),
+            )),
             submitted_at_ms: 42,
             submitted_at_height: 7,
             signer: key_pair.public_key().clone(),

@@ -63,6 +63,38 @@ class HttpClientTransport(
         return flushPendingQueue().exceptionally { null }.thenCompose { submitWithRetryInternal(transaction, hashHex, 1, true) }
     }
 
+    override fun submitTransactionEntrypoint(encodedVersionedEntrypoint: ByteArray): CompletableFuture<ClientResponse> {
+        val request = ToriiRequestBuilder.buildSubmitEntrypointRequest(
+            config.baseUri(),
+            encodedVersionedEntrypoint,
+            config.requestTimeout(),
+            config.defaultHeaders(),
+        )
+        notifyRequest(request)
+        return executor.execute(request).handle { response, throwable ->
+            if (throwable != null) {
+                val cause = if (throwable is CompletionException) throwable.cause else throwable
+                notifyFailure(request, cause!!)
+                val failed = CompletableFuture<ClientResponse>()
+                failed.completeExceptionally(cause)
+                return@handle failed
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                extractTransactionHash(response),
+                extractRejectCode(response),
+            )
+            if (clientResponse.statusCode < 200 || clientResponse.statusCode >= 300) {
+                notifyFailure(request, RuntimeException("Torii request failed with status ${clientResponse.statusCode}"))
+            } else {
+                notifyResponse(request, clientResponse)
+            }
+            CompletableFuture.completedFuture(clientResponse)
+        }.thenCompose { it }
+    }
+
     override fun waitForTransactionStatus(hashHex: String, options: PipelineStatusOptions?): CompletableFuture<Map<String, Any>> {
         val resolved = PipelineStatusOptions.resolve(options)
         val deadline = if (resolved.timeoutMillis == null) Long.MAX_VALUE else System.currentTimeMillis() + maxOf(0L, resolved.timeoutMillis!!)

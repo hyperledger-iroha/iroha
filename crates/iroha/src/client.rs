@@ -7561,7 +7561,11 @@ impl Client {
             crate::data_model::transaction::TransactionEntrypoint::External(entry) => {
                 entry.hash() == target
             }
-            crate::data_model::transaction::TransactionEntrypoint::Time(_)
+            crate::data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                reveal.signed_transaction().hash() == target
+            }
+            crate::data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+            | crate::data_model::transaction::TransactionEntrypoint::Time(_)
             | crate::data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => false,
         }
     }
@@ -19331,6 +19335,7 @@ mod tests {
         (bundle, payload)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
         use iroha_sccp::{
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,

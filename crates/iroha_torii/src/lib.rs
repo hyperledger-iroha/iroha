@@ -2122,17 +2122,18 @@ impl PipelineStatusCache {
             );
             return BlockRecordOutcome::HashMismatch;
         }
-        let external_total = block_ref.external_transactions().len();
-        for (tx, result) in block_ref
-            .external_transactions()
-            .zip(block_ref.results().take(external_total))
-        {
+        for (index, entrypoint, result) in block_ref.entrypoint_results() {
+            if index >= block_ref.external_entrypoint_count() {
+                break;
+            }
             let (entry_kind, rejection) = match &result.0 {
                 Ok(_) => (kind, None),
                 Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
             };
             let incoming = PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
-            self.record_entry_inner(tx.hash(), incoming);
+            let hash =
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
+            self.record_entry_inner(hash, incoming);
         }
         BlockRecordOutcome::Recorded
     }
@@ -11225,14 +11226,29 @@ fn transaction_submission_prefers_minimal_response(headers: &HeaderMap) -> bool 
         .any(|value| header_contains_preference(value, PREFER_RETURN_MINIMAL))
 }
 
+fn signed_transaction_hash_for_entrypoint(
+    entrypoint: &TransactionEntrypoint,
+) -> Option<HashOf<SignedTransaction>> {
+    match entrypoint {
+        TransactionEntrypoint::External(signed) => Some(signed.hash()),
+        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
+        TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::PrivateKaigi(_)
+        | TransactionEntrypoint::Time(_) => None,
+    }
+}
+
 fn transaction_submission_response(
     app: &AppState,
-    tx_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
     routing_decision: RoutingDecision,
     routed_by: &'static str,
     minimal_response: bool,
 ) -> Response {
-    let tx_hash_header = tx_hash.to_string();
+    let tx_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
+    let tx_hash_header = entrypoint_hash.to_string();
     let mut response = if minimal_response {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::ACCEPTED;
@@ -11249,6 +11265,8 @@ fn transaction_submission_response(
             .unwrap_or(0);
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash,
+            signed_transaction_hash: signed_transaction_hash.clone(),
             submitted_at_ms,
             submitted_at_height,
             signer: app.da_receipt_signer.public_key().clone(),
@@ -11257,9 +11275,21 @@ fn transaction_submission_response(
         (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response()
     };
     if let Ok(header) = HeaderValue::from_str(&tx_hash_header) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-entrypoint-hash"),
+            header.clone(),
+        );
         response
             .headers_mut()
             .insert(HeaderName::from_static("x-iroha-transaction-hash"), header);
+    }
+    if let Some(signed_transaction_hash) = signed_transaction_hash {
+        if let Ok(header) = HeaderValue::from_str(&signed_transaction_hash.to_string()) {
+            response.headers_mut().insert(
+                HeaderName::from_static("x-iroha-signed-transaction-hash"),
+                header,
+            );
+        }
     }
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
@@ -20251,8 +20281,8 @@ async fn execute_incoming_torii_proxy_request(
             transaction,
             expected_route,
         } => {
-            let tx_hash =
-                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(transaction.hash()));
+            let entrypoint_hash = transaction.hash();
+            let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
             match routing::accept_transaction_for_ingress(
                 app.chain_id.clone(),
                 app.state.clone(),
@@ -20285,7 +20315,8 @@ async fn execute_incoming_torii_proxy_request(
                             ) {
                                 Ok(_) => transaction_submission_response(
                                     app.as_ref(),
-                                    tx_hash,
+                                    entrypoint_hash,
+                                    signed_transaction_hash,
                                     routing_decision,
                                     "proxy",
                                     false,
@@ -28420,7 +28451,8 @@ async fn handler_post_transaction(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let tx_hash = transaction.hash();
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let signed_transaction_hash = Some(transaction.hash());
     let transaction = TransactionEntrypoint::External(transaction);
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
@@ -28457,7 +28489,84 @@ async fn handler_post_transaction(
     )?;
     let response = transaction_submission_response(
         app.as_ref(),
-        tx_hash,
+        entrypoint_hash,
+        signed_transaction_hash,
+        routing_decision,
+        "local",
+        transaction_submission_prefers_minimal_response(&headers),
+    );
+    Ok(response)
+}
+
+async fn handler_post_transaction_entrypoint(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoVersioned(transaction): NoritoVersioned<TransactionEntrypoint>,
+) -> Result<impl IntoResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = token_hdr.unwrap_or_else(|| {
+        transaction
+            .authority_opt()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| transaction.hash().to_string())
+    });
+    if !app.tx_rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let accepted_tx = {
+        let chain_id = app.chain_id.clone();
+        let state = app.state.clone();
+        let transaction_for_admission = transaction.clone();
+        let telemetry = app.telemetry.clone();
+        tokio::task::spawn_blocking(move || {
+            routing::accept_transaction_for_ingress(
+                chain_id,
+                state,
+                transaction_for_admission,
+                &telemetry,
+            )
+        })
+        .await
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: "transaction_entrypoint_admission_worker_failed",
+            message: error.to_string(),
+        })??
+    };
+    let entrypoint_hash = accepted_tx.hash_as_entrypoint();
+    let signed_transaction_hash = accepted_tx.external().map(SignedTransaction::hash);
+    #[allow(unused_variables)]
+    let routing_decision = app
+        .queue
+        .route_with_state(&accepted_tx, app.state.as_ref())
+        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    if !should_execute_route_locally(app.as_ref(), routing_decision) {
+        return Ok(execute_torii_transaction_via_proxy(&app, transaction, routing_decision).await);
+    }
+    let routing_decision = routing::push_accepted_transaction_for_ingress(
+        app.queue.clone(),
+        app.state.clone(),
+        accepted_tx,
+    )?;
+    let response = transaction_submission_response(
+        app.as_ref(),
+        entrypoint_hash,
+        signed_transaction_hash,
         routing_decision,
         "local",
         transaction_submission_prefers_minimal_response(&headers),
@@ -28865,12 +28974,13 @@ fn pipeline_status_from_state(
     let height_nz = NonZeroU64::new(height_u64)?;
     let block = app.kura.get_block(height)?;
     let block_ref = block.as_ref();
-    let external_total = block_ref.external_transactions().len();
-    for (tx, result) in block_ref
-        .external_transactions()
-        .zip(block_ref.results().take(external_total))
-    {
-        if tx.hash() != *hash {
+    for (index, entrypoint, result) in block_ref.entrypoint_results() {
+        if index >= block_ref.external_entrypoint_count() {
+            break;
+        }
+        let entrypoint_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
+        if entrypoint_hash != *hash {
             continue;
         }
         let (kind, rejection) = match &result.0 {
@@ -32191,6 +32301,10 @@ impl Torii {
         builder.apply(|router| {
             let router = router
                 .route(uri::TRANSACTION, post(handler_post_transaction))
+                .route(
+                    uri::TRANSACTION_ENTRYPOINT,
+                    post(handler_post_transaction_entrypoint),
+                )
                 .route(
                     uri::TRANSACTIONS_BATCH,
                     post(handler_post_transactions_batch),
@@ -36928,7 +37042,11 @@ pub(crate) mod tests_runtime_handlers {
         },
         transaction::{
             error::TransactionRejectionReason,
-            signed::{TransactionBuilder, TransactionResultInner},
+            signed::{
+                SealedTransactionReveal, SignedTransaction, TransactionBuilder,
+                TransactionEntrypoint, TransactionResultInner,
+                compute_sealed_transaction_commitment,
+            },
         },
         trigger::DataTriggerSequence,
     };
@@ -38850,6 +38968,43 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "entrypoint-submit".to_string())])
+            .sign(keypair.private_key());
+        let entrypoint = TransactionEntrypoint::External(transaction);
+        let submitted_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
+                .to_string();
+
+        let response = super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(entrypoint),
+        )
+        .await
+        .expect("accepted")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-transaction-hash")
+                .and_then(|value| value.to_str().ok()),
+            Some(submitted_hash.as_str())
+        );
+        assert_eq!(app.queue.active_len(), 1);
+    }
+
+    #[tokio::test]
     async fn handler_post_transaction_honors_prefer_return_minimal() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
@@ -40607,6 +40762,112 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
+    async fn torii_proxy_snapshot_restore_drops_invalid_headers_and_status() {
+        let snapshot = ToriiProxyHttpResponseV1 {
+            status_code: 99,
+            headers: vec![
+                iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                    name: "x-valid-proxy-header".to_owned(),
+                    value: b"kept".to_vec(),
+                },
+                iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                    name: "bad header".to_owned(),
+                    value: b"dropped".to_vec(),
+                },
+                iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                    name: "x-invalid-value".to_owned(),
+                    value: b"bad\nvalue".to_vec(),
+                },
+            ],
+            body: b"restored".to_vec(),
+        };
+
+        let restored = super::torii_proxy_snapshot_to_response(snapshot);
+
+        assert_eq!(restored.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            restored
+                .headers()
+                .get("x-valid-proxy-header")
+                .and_then(|value| value.to_str().ok()),
+            Some("kept")
+        );
+        assert!(restored.headers().get("bad header").is_none());
+        assert!(restored.headers().get("x-invalid-value").is_none());
+        let body = axum::body::to_bytes(restored.into_body(), usize::MAX)
+            .await
+            .expect("restored body");
+        assert_eq!(body.as_ref(), b"restored");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn torii_proxy_header_conversion_preserves_duplicates_and_skips_invalid() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            axum::http::HeaderName::from_static("x-repeat"),
+            HeaderValue::from_static("one"),
+        );
+        headers.append(
+            axum::http::HeaderName::from_static("x-repeat"),
+            HeaderValue::from_static("two"),
+        );
+        headers.insert(
+            axum::http::HeaderName::from_static("x-single"),
+            HeaderValue::from_static("kept"),
+        );
+
+        let mut proxy_headers = super::header_map_to_torii_proxy_headers(&headers);
+        proxy_headers.push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+            name: "bad header".to_owned(),
+            value: b"dropped".to_vec(),
+        });
+        proxy_headers.push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+            name: "x-bad-value".to_owned(),
+            value: b"bad\r\nvalue".to_vec(),
+        });
+        let restored = super::torii_proxy_headers_to_header_map(&proxy_headers);
+        let repeated = restored
+            .get_all("x-repeat")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect::<Vec<_>>();
+
+        assert_eq!(repeated, vec!["one", "two"]);
+        assert_eq!(
+            restored
+                .get("x-single")
+                .and_then(|value| value.to_str().ok()),
+            Some("kept")
+        );
+        assert!(restored.get("bad header").is_none());
+        assert!(restored.get("x-bad-value").is_none());
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_snapshot_accepts_exact_limit_and_preserves_headers() {
+        let mut response = Response::new(Body::from("four"));
+        *response.status_mut() = StatusCode::CREATED;
+        response.headers_mut().insert(
+            axum::http::HeaderName::from_static("x-proxy-test"),
+            HeaderValue::from_static("kept"),
+        );
+
+        let snapshot = super::response_to_torii_proxy_snapshot(response, 4).await;
+
+        assert_eq!(snapshot.status_code, StatusCode::CREATED.as_u16());
+        assert_eq!(snapshot.body, b"four");
+        assert!(
+            snapshot.headers.iter().any(|header| {
+                header.name == "x-proxy-test" && header.value.as_slice() == b"kept"
+            }),
+            "exact-limit responses should keep proxied headers"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
     async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
         let upstream = axum::Router::new().route(
             "/oversized",
@@ -40634,6 +40895,131 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             error.contains("configured limit of 4 bytes"),
             "unexpected cap error: {error}"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
+        let upstream = axum::Router::new().route(
+            "/exact",
+            axum::routing::get(|| async {
+                let mut response = Response::new(Body::from("four"));
+                *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                response.headers_mut().insert(
+                    axum::http::HeaderName::from_static("x-upstream-test"),
+                    HeaderValue::from_static("kept"),
+                );
+                response
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream listener");
+        let addr = listener.local_addr().expect("upstream addr");
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream.into_make_service())
+                .await
+                .expect("serve upstream");
+        });
+
+        let response = reqwest::get(format!("http://{addr}/exact"))
+            .await
+            .expect("fetch upstream response");
+        let snapshot = super::reqwest_response_to_torii_proxy_snapshot(response, 4)
+            .await
+            .expect("exact-limit response should be accepted");
+        upstream_task.abort();
+
+        assert_eq!(snapshot.status_code, StatusCode::PARTIAL_CONTENT.as_u16());
+        assert_eq!(snapshot.body, b"four");
+        assert!(
+            snapshot.headers.iter().any(|header| {
+                header.name == "x-upstream-test" && header.value.as_slice() == b"kept"
+            }),
+            "exact-limit bridge responses should keep proxied headers"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn torii_proxy_response_body_limit_only_caps_hosted_http() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_public_max_response_bytes = 0;
+        let route = RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12));
+        let hosted_request = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+            service_name: "svc".to_owned(),
+            service_version: "v1".to_owned(),
+            replica_slot: 1,
+            request_path: "/health".to_owned(),
+            method: "GET".to_owned(),
+            query_string: None,
+            headers: Vec::new(),
+            body: Vec::new(),
+            remote_ip: None,
+        });
+        let query_request = ToriiProxyRequestKindV1::VerifiedQuery {
+            request_bytes: Vec::new(),
+            expected_route: ToriiRouteHintV1::from(route),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        };
+
+        assert_eq!(
+            super::torii_proxy_response_body_limit(app.as_ref(), &hosted_request),
+            1,
+            "hosted HTTP proxy responses clamp zero config to a one-byte cap"
+        );
+        assert_eq!(
+            super::torii_proxy_response_body_limit(app.as_ref(), &query_request),
+            usize::MAX,
+            "non-hosted proxy responses are not capped by the public HTTP response limit"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn torii_proxy_retry_policy_only_retries_gateway_class_statuses() {
+        assert!(super::should_retry_torii_proxy_status(
+            StatusCode::BAD_GATEWAY
+        ));
+        assert!(super::should_retry_torii_proxy_status(
+            StatusCode::SERVICE_UNAVAILABLE
+        ));
+        assert!(super::should_retry_torii_proxy_status(
+            StatusCode::GATEWAY_TIMEOUT
+        ));
+        assert!(!super::should_retry_torii_proxy_status(
+            StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(!super::should_retry_torii_proxy_status(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
+        let hosted_request = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+            service_name: "svc".to_owned(),
+            service_version: "v1".to_owned(),
+            replica_slot: 1,
+            request_path: "/health".to_owned(),
+            method: "GET".to_owned(),
+            query_string: Some("ready=true".to_owned()),
+            headers: Vec::new(),
+            body: Vec::new(),
+            remote_ip: Some("127.0.0.1".to_owned()),
+        });
+
+        assert_eq!(
+            super::torii_proxy_attempt_timeout(&hosted_request),
+            DEFAULT_ROUTE_TIMEOUT
+        );
+        assert_eq!(
+            super::torii_proxy_request_kind_name(&hosted_request),
+            "hosted_http"
         );
     }
 
@@ -40907,6 +41293,176 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("response body should be readable");
         assert_eq!(body.as_ref(), b"retry-then-ok");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_without_candidates()
+     {
+        let route = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(5));
+        let request_id = Hash::new(b"torii-proxy-no-candidates");
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: request_id.clone(),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+        let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let completed_ref = completed.clone();
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            Vec::new(),
+            route,
+            request,
+            Duration::from_millis(20),
+            |_candidate, _request| async move {
+                Err::<ToriiProxyHttpResponseV1, String>(
+                    "execute should not be called without candidates".to_owned(),
+                )
+            },
+            move |completed_request_id| {
+                let completed = completed_ref.clone();
+                async move {
+                    completed
+                        .lock()
+                        .expect("completion tracker should lock")
+                        .push(completed_request_id);
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+        assert_eq!(
+            completed
+                .lock()
+                .expect("completion tracker should lock")
+                .as_slice(),
+            &[request_id]
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_response() {
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let route = RoutingDecision::new(LaneId::new(6), DataSpaceId::new(7));
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"torii-proxy-last-retryable"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![ToriiProxyCandidate::P2p(peer_id)],
+            route,
+            request,
+            Duration::from_millis(20),
+            |_candidate, _request| async move {
+                Ok(ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                        name: "x-iroha-reject-code".to_owned(),
+                        value: b"route_unavailable".to_vec(),
+                    }],
+                    body: b"retry-later".to_vec(),
+                })
+            },
+            |_request_id| async move {},
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-transport")
+                .and_then(|value| value.to_str().ok()),
+            Some("p2p_proxy")
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        assert_eq!(body.as_ref(), b"retry-later");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_after_transport_errors()
+     {
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let route = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9));
+        let request_id = Hash::new(b"torii-proxy-all-transport-errors");
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: request_id.clone(),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+        let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let completed_ref = completed.clone();
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![ToriiProxyCandidate::P2p(peer_id)],
+            route,
+            request,
+            Duration::from_millis(20),
+            |_candidate, _request| async move {
+                Err::<ToriiProxyHttpResponseV1, String>("transport unavailable".to_owned())
+            },
+            move |completed_request_id| {
+                let completed = completed_ref.clone();
+                async move {
+                    completed
+                        .lock()
+                        .expect("completion tracker should lock")
+                        .push(completed_request_id);
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+        assert_eq!(
+            completed
+                .lock()
+                .expect("completion tracker should lock")
+                .as_slice(),
+            &[request_id]
+        );
     }
 
     #[cfg(feature = "telemetry")]
@@ -42063,6 +42619,42 @@ pub(crate) mod tests_runtime_handlers {
         (block, entry_hash)
     }
 
+    fn make_sealed_reveal_block(
+        height: u64,
+        prev_hash: Option<HashOf<BlockHeader>>,
+    ) -> (SignedBlock, HashOf<TransactionEntrypoint>) {
+        let keypair = KeyPair::random();
+        let chain: ChainId = "block-header-tests".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new(chain.clone(), authority).sign(keypair.private_key());
+        let salt = [0xA7; 32];
+        let commitment = compute_sealed_transaction_commitment(&chain, &tx, salt, height + 2);
+        let reveal = SealedTransactionReveal::new(commitment, tx.clone(), salt);
+        let entrypoint = TransactionEntrypoint::SealedReveal(reveal);
+        let entry_hash = entrypoint.hash();
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            prev_hash,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block.set_external_entrypoints(vec![entrypoint]);
+        let entry_hashes = [entry_hash];
+        block.set_transaction_results(
+            Vec::new(),
+            &entry_hashes,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        (block, entry_hash)
+    }
+
     fn store_block(app: &SharedAppState, block: SignedBlock) -> HashOf<BlockHeader> {
         let hash = block.hash();
         app.kura.store_block(Arc::new(block)).expect("store block");
@@ -42940,6 +43532,55 @@ pub(crate) mod tests_runtime_handlers {
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind_entry, Some("Applied"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_returns_applied_for_sealed_reveal_entrypoint_hash() {
+        let app = mk_app_state_for_tests();
+        let (block, reveal_entry_hash) = make_sealed_reveal_block(1, None);
+        let header = block.header();
+        store_block(&app, block);
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let reveal_status_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(reveal_entry_hash));
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [reveal_status_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(reveal_status_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload
+                .get("status")
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Applied")
+        );
+        assert_eq!(
+            payload
+                .get("resolved_from")
+                .and_then(norito::json::Value::as_str),
+            Some("state")
+        );
     }
 
     #[tokio::test]

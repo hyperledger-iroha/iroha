@@ -1220,7 +1220,7 @@ pub mod prelude {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf, Signature};
+    use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::Encode;
 
@@ -1229,12 +1229,13 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
     #[cfg(feature = "transparent_api")]
-    use crate::transaction::signed::{TransactionEntrypoint, TransactionResultInner};
+    use crate::transaction::signed::TransactionResultInner;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::DataTriggerSequence;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::TimeTriggerEntrypoint;
     use crate::{
+        ChainId,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -1243,6 +1244,7 @@ mod tests {
         nexus::LaneId,
         query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
         sorafs::pin_registry::ManifestDigest,
+        transaction::{TransactionBuilder, signed::TransactionEntrypoint},
     };
 
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
@@ -1284,6 +1286,56 @@ mod tests {
         };
 
         assert!(block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_wire_skips_runtime_transaction_caches() {
+        let key_pair = KeyPair::random();
+        let authority = crate::account::AccountId::new(key_pair.public_key().clone());
+        let chain: ChainId = "cache-test-chain".parse().expect("chain id");
+        let tx = TransactionBuilder::new(chain, authority).sign(key_pair.private_key());
+        let entrypoint = TransactionEntrypoint::from(tx.clone());
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+
+        let mut block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: vec![tx.clone()],
+                external_entrypoints: vec![entrypoint.clone()],
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+            },
+            result: Some(BlockResult {
+                external_entrypoints: vec![entrypoint.clone()],
+                ..BlockResult::default()
+            }),
+        };
+        let encoded = block.encode_versioned();
+
+        block.payload.transactions.clear();
+        assert_eq!(
+            encoded,
+            block.encode_versioned(),
+            "legacy signed-transaction cache must not be serialized"
+        );
+
+        block.result.as_mut().unwrap().external_entrypoints.clear();
+        assert_eq!(
+            encoded,
+            block.encode_versioned(),
+            "legacy result entrypoint cache must not be serialized"
+        );
+
+        let decoded = SignedBlock::decode_all_versioned(&encoded).expect("decode versioned block");
+        assert!(decoded.transactions_vec().is_empty());
+        assert_eq!(
+            decoded.external_entrypoints_cloned().collect::<Vec<_>>(),
+            vec![entrypoint]
+        );
+        assert_eq!(decoded.external_transactions().next(), Some(&tx));
     }
 
     #[test]
@@ -1563,8 +1615,8 @@ mod tests {
 
         for decoded in [&decoded_versioned, &decoded_framed] {
             let tx = decoded
-                .transactions_vec()
-                .first()
+                .external_transactions()
+                .next()
                 .expect("block must contain one transaction");
             let Executable::Instructions(actual) = tx.instructions() else {
                 panic!("expected instruction executable after block roundtrip");

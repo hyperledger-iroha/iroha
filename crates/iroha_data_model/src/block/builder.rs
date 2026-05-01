@@ -17,7 +17,8 @@ use crate::{
     transaction::{
         PrivateKaigiTransaction,
         signed::{
-            SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
+            SealedTransactionReveal, SignedSealedTransactionCommitment, SignedTransaction,
+            TransactionEntrypoint, TransactionResult, TransactionResultInner,
         },
     },
     trigger::TimeTriggerEntrypoint,
@@ -66,6 +67,29 @@ impl BlockBuilder {
         self.external_entrypoints
             .push(TransactionEntrypoint::External(tx.clone()));
         self.transactions.push(tx);
+        idx
+    }
+
+    /// Push a sealed transaction commitment and update the entrypoint Merkle tree.
+    pub fn push_sealed_transaction_commitment(
+        &mut self,
+        commitment: SignedSealedTransactionCommitment,
+    ) -> usize {
+        let idx = self.external_entrypoints.len();
+        let entrypoint = TransactionEntrypoint::SealedCommitment(commitment);
+        let h: HashOf<TransactionEntrypoint> = entrypoint.hash();
+        self.entry_merkle.add(h);
+        self.external_entrypoints.push(entrypoint);
+        idx
+    }
+
+    /// Push a sealed transaction reveal and update the entrypoint Merkle tree.
+    pub fn push_sealed_transaction_reveal(&mut self, reveal: SealedTransactionReveal) -> usize {
+        let idx = self.external_entrypoints.len();
+        let entrypoint = TransactionEntrypoint::SealedReveal(reveal);
+        let h: HashOf<TransactionEntrypoint> = entrypoint.hash();
+        self.entry_merkle.add(h);
+        self.external_entrypoints.push(entrypoint);
         idx
     }
 

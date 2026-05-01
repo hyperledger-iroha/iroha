@@ -5846,13 +5846,6 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
-    use iroha_data_model::soranet::privacy_metrics::{
-        SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
-        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
-        SoranetPrivacyEventThrottleV1, SoranetPrivacyEventV1, SoranetPrivacyEventVerifiedBytesV1,
-        SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-        SoranetPrivacyThrottleScopeV1,
-    };
     use iroha_logger::{telemetry::Channel, test_logger};
     use iroha_telemetry::metrics::global_or_default;
     use norito::json::{self, Map, Value};
@@ -5869,7 +5862,6 @@ mod tests {
     use super::*;
     use crate::{
         bindings::{config_from_json, config_to_json},
-        proxy::ProxyMode,
         soranet::{
             CircuitId, CircuitRetirementReason, Endpoint, GuardRecord, GuardSet, PathMetadata,
             RelayDescriptor, RelayDirectory, RelayRoles,

@@ -1752,6 +1752,44 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionEntrypointAsync() async throws {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody())
+            case "/transaction/entrypoint":
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(self.bodyData(from: request), Data([0xAA, 0xBB]))
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"entry","submitted_at_ms":3,"submitted_at_height":4,"signer":"entry-signer"},"signature":"feedface"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let payload = try await makeClient().submitTransactionEntrypoint(data: Data([0xAA, 0xBB]))
+        XCTAssertEqual(payload?.hash, "entry")
+        XCTAssertEqual(payload?.payload.submittedAtMs, 3)
+        XCTAssertEqual(payload?.payload.submittedAtHeight, 4)
+        XCTAssertEqual(payload?.payload.signer, "entry-signer")
+        XCTAssertEqual(payload?.signature, "feedface")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionRejectCodeHeaderSurfaced() async throws {
         StubURLProtocol.handler = { request in
             switch request.url?.path {

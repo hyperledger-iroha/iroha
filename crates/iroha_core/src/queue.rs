@@ -44,13 +44,14 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    transaction::Executable,
+    transaction::{Executable, TransactionEntrypoint},
 };
 use iroha_logger::{trace, warn};
 use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
+#[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
 pub use router::{
@@ -749,13 +750,7 @@ impl Queue {
     }
 
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
-        if let Some(encoded) = tx.signed_bytes() {
-            return encoded;
-        }
-        let signed = tx
-            .external()
-            .expect("queue gossip only supports external signed transactions");
-        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction gossip payload"))
+        tx.entrypoint_bytes()
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
@@ -778,6 +773,39 @@ impl Queue {
                                     ?err,
                                     tx = %tx.hash(),
                                     "invalid gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                        }
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                }
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => {
+                gas::meter_sealed_transaction_commitment(tx.encoded_len())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                match reveal.signed_transaction().instructions() {
+                    Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::ContractCall(_) | Executable::Ivm(_) => {
+                        match crate::executor::parse_gas_limit(
+                            reveal.signed_transaction().metadata(),
+                        ) {
+                            Ok(Some(limit)) => limit,
+                            Ok(None) => {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas_limit metadata while deriving proposal gas cost for sealed reveal"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "invalid gas_limit metadata while deriving proposal gas cost for sealed reveal"
                                 );
                                 0
                             }
@@ -1532,6 +1560,11 @@ impl Queue {
 
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
+        if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
+            // Sealed commitments have no wall-clock creation timestamp; their lifetime is
+            // bounded by reveal heights during block execution.
+            return false;
+        }
         let tx_creation_time = tx.creation_time();
         let time_limit = self.effective_tx_time_to_live(tx);
 
@@ -2185,7 +2218,7 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         let provided_gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
-        let canonical_gossip_payload = checked.as_accepted().signed_bytes();
+        let canonical_gossip_payload = Some(checked.as_accepted().entrypoint_bytes());
         let gossip_payload = match (provided_gossip_payload, canonical_gossip_payload) {
             (Some(provided), Some(canonical)) if provided.as_slice() == canonical.as_slice() => {
                 Some(provided)
@@ -3819,6 +3852,29 @@ impl Queue {
                     Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
                 }
             }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_) => {
+                gas::meter_sealed_transaction_commitment(tx.encoded_len())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+                match reveal.signed_transaction().instructions() {
+                    Executable::Instructions(batch) => {
+                        let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
+                        gas::meter_instructions(&instructions)
+                    }
+                    Executable::ContractCall(_) => {
+                        match crate::executor::parse_gas_limit(
+                            reveal.signed_transaction().metadata(),
+                        ) {
+                            Ok(Some(limit)) => limit,
+                            _ => 0,
+                        }
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                    Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
+                }
+            }
             iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
                 crate::smartcontracts::isi::kaigi::private_instruction_box(private)
                     .map(|instruction| gas::meter_instruction(&instruction))
@@ -4364,6 +4420,7 @@ impl Queue {
 /// Test helpers and cases for `Queue` and related logic.
 pub mod tests {
     use std::{
+        borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         num::NonZeroU32,
         path::PathBuf,
@@ -4393,6 +4450,10 @@ pub mod tests {
         prelude::*,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         runtime::RuntimeUpgradeManifest,
+        transaction::signed::{
+            SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+            compute_sealed_transaction_commitment,
+        },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
     use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
@@ -6011,7 +6072,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
+        let payload = tx.entrypoint_bytes();
 
         queue
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
@@ -6042,7 +6103,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
+        let payload = tx.entrypoint_bytes();
         let state_view = state.view();
 
         queue
@@ -6063,7 +6124,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
+        let payload = tx.entrypoint_bytes();
 
         queue
             .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
@@ -6074,7 +6135,7 @@ pub mod tests {
     }
 
     #[test]
-    fn queue_generated_gossip_payload_uses_framed_signed_transaction_wire() {
+    fn queue_generated_gossip_payload_uses_framed_entrypoint_wire() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -6082,10 +6143,9 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let cached_payload = tx
-            .signed_bytes()
-            .expect("accepted external tx caches signed bytes");
-        let expected_payload = ncore::to_bytes(tx.as_ref()).expect("encode signed transaction");
+        let cached_payload = tx.entrypoint_bytes();
+        let expected_payload =
+            ncore::to_bytes(tx.entrypoint()).expect("encode transaction entrypoint");
 
         queue.push(tx, state.view()).expect("push tx");
 
@@ -6094,7 +6154,50 @@ pub mod tests {
         assert_eq!(batch[0].payload.as_slice(), expected_payload.as_slice());
         assert!(
             Arc::ptr_eq(&batch[0].payload, &cached_payload),
-            "queue gossip should reuse accepted transaction signed bytes"
+            "queue gossip should reuse accepted transaction entrypoint bytes"
+        );
+    }
+
+    #[test]
+    fn sealed_commitment_is_not_expired_by_wall_clock_queue_ttl() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_secs(3600));
+        let queue = Queue::test(config_factory(), &time_source);
+        let chain_id = ChainId::from("sealed-queue-expiry");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let inner_tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            authority.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "sealed queue expiry inner".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let salt = [0xD4; 32];
+        let reveal_deadline_height = 10;
+        let commitment_hash = compute_sealed_transaction_commitment(
+            &chain_id,
+            &inner_tx,
+            salt,
+            reveal_deadline_height,
+        );
+        let payload = SealedTransactionCommitmentPayload::new(
+            chain_id,
+            authority,
+            commitment_hash,
+            2,
+            reveal_deadline_height,
+            None,
+        );
+        let commitment = SignedSealedTransactionCommitment::sign(payload, keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::SealedCommitment(commitment),
+        ));
+
+        assert!(
+            !queue.is_expired(&accepted),
+            "sealed commitment queue lifetime is height-based, not wall-clock based"
         );
     }
 
@@ -7176,7 +7279,7 @@ pub mod tests {
         let entry = &batch[0];
         assert_eq!(entry.tx.as_ref().hash(), hash);
         let expected_payload =
-            ncore::to_bytes(entry.tx.as_ref()).expect("encode signed transaction");
+            ncore::to_bytes(entry.tx.entrypoint()).expect("encode transaction entrypoint");
         assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
         assert_eq!(entry.routing.dataspace_id, DataSpaceId::UNIVERSAL);

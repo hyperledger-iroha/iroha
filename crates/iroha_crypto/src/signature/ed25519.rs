@@ -763,7 +763,7 @@ mod test {
             .collect::<Vec<_>>();
         let public_keys = triples
             .iter()
-            .map(|(_, _, public_key)| public_key.clone())
+            .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
         Ed25519Sha512::verify_batch_preparsed_deterministic(
             &messages,
@@ -784,7 +784,7 @@ mod test {
             .collect::<Vec<_>>();
         let public_keys = reordered
             .iter()
-            .map(|(_, _, public_key)| public_key.clone())
+            .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
         Ed25519Sha512::verify_batch_preparsed_deterministic(
             &messages,
@@ -809,7 +809,7 @@ mod test {
             .collect::<Vec<_>>();
         let public_keys = triples
             .iter()
-            .map(|(_, _, public_key)| public_key.clone())
+            .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
 
         let err = Ed25519Sha512::verify_batch_preparsed_deterministic(
@@ -850,7 +850,7 @@ mod test {
         let public_keys = triples
             .iter()
             .take(1)
-            .map(|(_, _, public_key)| public_key.clone())
+            .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
         assert_eq!(
             Ed25519Sha512::verify_batch_preparsed_deterministic(
@@ -898,6 +898,16 @@ mod test {
             [0x66; 32],
         )
         .expect("preparsed batch API");
+
+        let mut scratch = crate::Ed25519BatchScratch::default();
+        crate::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+            &messages,
+            &signatures,
+            &parsed_public_keys,
+            [0x66; 32],
+            &mut scratch,
+        )
+        .expect("preparsed batch API with scratch");
     }
 
     #[test]

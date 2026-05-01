@@ -509,9 +509,7 @@ fn build_coverage_functions(
         .source_map
         .iter()
         .filter_map(|entry| {
-            let Some(display_name) = normalize_user_function_name(&entry.function_name) else {
-                return None;
-            };
+            let display_name = normalize_user_function_name(&entry.function_name)?;
             if test_names.contains(display_name) {
                 return None;
             }
@@ -661,7 +659,7 @@ fn apply_fixture_action(
                 host.inner_mut().wsv.grant_permission(&account, permission);
                 return Ok(());
             }
-            return Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string());
+            Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string())
         }
         "register_domain" => {
             expect_arg_count(action, 1)?;

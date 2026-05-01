@@ -258,7 +258,7 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                             &telemetry,
                         )
                         .expect("transaction admission succeeds");
-                        let decision = queue
+                        queue
                             .push(accepted, tx_state.view())
                             .expect("sustained enqueue succeeds");
 
@@ -269,7 +269,7 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                             &mut guards,
                         );
 
-                        std::hint::black_box(decision);
+                        std::hint::black_box(());
                         std::hint::black_box(queue.pressure_snapshot());
                         drop(guards);
                     },

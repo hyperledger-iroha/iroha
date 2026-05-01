@@ -1063,6 +1063,8 @@ mod tests {
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB0; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+            signed_transaction_hash: Some(tx_hash),
             submitted_at_ms: 1,
             submitted_at_height: 10,
             signer: key_pair.public_key().clone(),
@@ -1092,6 +1094,8 @@ mod tests {
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+            signed_transaction_hash: Some(tx_hash),
             submitted_at_ms: 1,
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),
@@ -1782,6 +1786,8 @@ mod tests {
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+            signed_transaction_hash: Some(tx_hash),
             submitted_at_ms: 10,
             submitted_at_height: 2,
             signer: key_pair.public_key().clone(),

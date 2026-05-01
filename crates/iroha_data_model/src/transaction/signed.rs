@@ -128,6 +128,55 @@ mod model {
         }
     }
 
+    /// Payload signed when committing to a sealed transaction.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct SealedTransactionCommitmentPayload {
+        /// Unique id of the blockchain.
+        pub chain_id: ChainId,
+        /// Account authorized to later reveal the transaction.
+        pub authority: AccountId,
+        /// Commitment to the canonical signed transaction bytes and salt.
+        pub commitment: Hash,
+        /// First block height where the reveal may execute.
+        pub reveal_after_height: u64,
+        /// Last block height where the reveal may execute.
+        pub reveal_deadline_height: u64,
+        /// Optional nonce to let an authority submit multiple indistinguishable commitments.
+        pub nonce: Option<NonZeroU64>,
+    }
+
+    /// Signed sealed-transaction commitment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct SignedSealedTransactionCommitment {
+        /// Signature over [`Self::payload`].
+        pub(super) signature: SignatureOf<SealedTransactionCommitmentPayload>,
+        /// Commitment payload.
+        pub(super) payload: SealedTransactionCommitmentPayload,
+    }
+
+    /// Reveal data for a previously committed sealed transaction.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct SealedTransactionReveal {
+        /// Commitment hash being opened.
+        pub commitment: Hash,
+        /// Canonical signed transaction hidden by the commitment.
+        pub signed_transaction: SignedTransaction,
+        /// Salt used when computing the commitment.
+        pub salt: [u8; 32],
+    }
+
     /// Transaction containing a payload, signature, and optional proof attachments.
     ///
     /// `Iroha` and its clients use [`Self`] to send transactions over the network.
@@ -183,6 +232,10 @@ mod model {
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
+        /// Commitment to a sealed transaction, executed after reveal.
+        SealedCommitment(SignedSealedTransactionCommitment),
+        /// Reveal of a previously committed sealed transaction.
+        SealedReveal(SealedTransactionReveal),
         /// Authority-free private Kaigi request.
         PrivateKaigi(PrivateKaigiTransaction),
         /// Scheduled time trigger that initiates a transaction.
@@ -310,6 +363,9 @@ static EXPIRES_AT_HEIGHT_NAME: LazyLock<Name> = LazyLock::new(|| {
 /// Stable reason string for rejecting multisig controllers in tx signing paths.
 pub const MULTISIG_SIGNING_UNSUPPORTED_REASON: &str =
     "multisig authority requires bundled signatures for verification";
+
+/// Domain separation tag for sealed transaction commitment hashing.
+pub const SEALED_TRANSACTION_COMMITMENT_DOMAIN: &[u8] = b"iroha.sealed_tx.v1";
 
 static TX_SEQUENCE_NAME: LazyLock<Name> =
     LazyLock::new(|| Name::from_str("tx_sequence").expect("tx_sequence is a valid metadata key"));
@@ -542,6 +598,160 @@ impl SignedTransaction {
     }
 }
 
+impl SealedTransactionCommitmentPayload {
+    /// Construct a sealed transaction commitment payload.
+    #[must_use]
+    pub fn new(
+        chain_id: ChainId,
+        authority: AccountId,
+        commitment: Hash,
+        reveal_after_height: u64,
+        reveal_deadline_height: u64,
+        nonce: Option<NonZeroU64>,
+    ) -> Self {
+        Self {
+            chain_id,
+            authority,
+            commitment,
+            reveal_after_height,
+            reveal_deadline_height,
+            nonce,
+        }
+    }
+}
+
+impl SignedSealedTransactionCommitment {
+    /// Sign a sealed transaction commitment payload.
+    #[must_use]
+    pub fn sign(
+        payload: SealedTransactionCommitmentPayload,
+        private_key: &iroha_crypto::PrivateKey,
+    ) -> Self {
+        Self {
+            signature: SignatureOf::new(private_key, &payload),
+            payload,
+        }
+    }
+
+    /// Commitment payload.
+    #[inline]
+    #[must_use]
+    pub fn payload(&self) -> &SealedTransactionCommitmentPayload {
+        &self.payload
+    }
+
+    /// Account authorized to reveal the transaction.
+    #[inline]
+    #[must_use]
+    pub fn authority(&self) -> &AccountId {
+        &self.payload.authority
+    }
+
+    /// Commitment hash.
+    #[inline]
+    #[must_use]
+    pub fn commitment(&self) -> &Hash {
+        &self.payload.commitment
+    }
+
+    /// Signature over the commitment payload.
+    #[inline]
+    #[must_use]
+    pub fn signature(&self) -> &SignatureOf<SealedTransactionCommitmentPayload> {
+        &self.signature
+    }
+
+    /// Verify the commitment signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the authority is multisig or signature verification fails.
+    #[inline]
+    pub fn verify_signature(&self) -> Result<(), TransactionSignatureError> {
+        match self.payload.authority.controller() {
+            AccountController::Single(signatory) => self
+                .signature
+                .verify(signatory, &self.payload)
+                .map_err(|err| TransactionSignatureError::CryptoError(err.to_string())),
+            AccountController::Multisig(_) => {
+                Err(TransactionSignatureError::UnsupportedMultisigAuthority)
+            }
+        }
+    }
+}
+
+impl core::fmt::Display for SignedSealedTransactionCommitment {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.commitment().fmt(f)
+    }
+}
+
+impl SealedTransactionReveal {
+    /// Construct a sealed transaction reveal.
+    #[must_use]
+    pub fn new(commitment: Hash, signed_transaction: SignedTransaction, salt: [u8; 32]) -> Self {
+        Self {
+            commitment,
+            signed_transaction,
+            salt,
+        }
+    }
+
+    /// Revealed signed transaction.
+    #[inline]
+    #[must_use]
+    pub fn signed_transaction(&self) -> &SignedTransaction {
+        &self.signed_transaction
+    }
+
+    /// Recompute the expected commitment using the stored commitment deadline.
+    #[must_use]
+    pub fn expected_commitment_with_deadline(&self, reveal_deadline_height: u64) -> Hash {
+        compute_sealed_transaction_commitment(
+            self.signed_transaction.chain(),
+            &self.signed_transaction,
+            self.salt,
+            reveal_deadline_height,
+        )
+    }
+}
+
+impl core::fmt::Display for SealedTransactionReveal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.commitment.fmt(f)
+    }
+}
+
+/// Compute the canonical sealed transaction commitment.
+///
+/// The input is domain-separated and includes the chain id, the hash of canonical Norito
+/// signed-transaction bytes, the salt, and the reveal deadline height.
+#[must_use]
+pub fn compute_sealed_transaction_commitment(
+    chain_id: &ChainId,
+    signed_transaction: &SignedTransaction,
+    salt: [u8; 32],
+    reveal_deadline_height: u64,
+) -> Hash {
+    let tx_bytes =
+        norito::to_bytes(signed_transaction).expect("signed transaction must encode to Norito");
+    let tx_hash = Hash::new(tx_bytes);
+    let chain_bytes = norito::to_bytes(chain_id).expect("chain id must encode to Norito");
+    let mut bytes = Vec::with_capacity(
+        SEALED_TRANSACTION_COMMITMENT_DOMAIN.len()
+            + chain_bytes.len()
+            + Hash::LENGTH
+            + salt.len()
+            + core::mem::size_of::<u64>(),
+    );
+    bytes.extend_from_slice(SEALED_TRANSACTION_COMMITMENT_DOMAIN);
+    bytes.extend_from_slice(&chain_bytes);
+    bytes.extend_from_slice(tx_hash.as_ref());
+    bytes.extend_from_slice(&salt);
+    bytes.extend_from_slice(&reveal_deadline_height.to_le_bytes());
+    Hash::new(bytes)
+}
+
 impl SignedTransaction {
     fn verify_multisig_signatures(
         &self,
@@ -688,6 +898,16 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(tx, out);
             }
+            TransactionEntrypoint::SealedCommitment(commitment) => {
+                norito::json::write_json_string("SealedCommitment", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(commitment, out);
+            }
+            TransactionEntrypoint::SealedReveal(reveal) => {
+                norito::json::write_json_string("SealedReveal", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(reveal, out);
+            }
             TransactionEntrypoint::PrivateKaigi(tx) => {
                 norito::json::write_json_string("PrivateKaigi", out);
                 out.push(':');
@@ -715,6 +935,14 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "External" => {
                 let tx = SignedTransaction::json_deserialize(parser)?;
                 TransactionEntrypoint::External(tx)
+            }
+            "SealedCommitment" => {
+                let commitment = SignedSealedTransactionCommitment::json_deserialize(parser)?;
+                TransactionEntrypoint::SealedCommitment(commitment)
+            }
+            "SealedReveal" => {
+                let reveal = SealedTransactionReveal::json_deserialize(parser)?;
+                TransactionEntrypoint::SealedReveal(reveal)
             }
             "PrivateKaigi" => {
                 let tx = PrivateKaigiTransaction::json_deserialize(parser)?;
@@ -1640,6 +1868,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sealed_transaction_commitment_signs_and_reveals_expected_hash() {
+        let tx = sample_signed_transaction();
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let salt = [0xA5; 32];
+        let reveal_deadline_height = 42;
+        let commitment =
+            compute_sealed_transaction_commitment(tx.chain(), &tx, salt, reveal_deadline_height);
+        let payload = SealedTransactionCommitmentPayload::new(
+            tx.chain().clone(),
+            tx.authority().clone(),
+            commitment,
+            10,
+            reveal_deadline_height,
+            core::num::NonZeroU64::new(7),
+        );
+        let signed = SignedSealedTransactionCommitment::sign(payload.clone(), &private_key);
+
+        signed
+            .verify_signature()
+            .expect("sealed commitment signature verifies");
+        assert_eq!(signed.payload(), &payload);
+        assert_eq!(signed.commitment(), &commitment);
+
+        let reveal = SealedTransactionReveal::new(commitment, tx, salt);
+        assert_eq!(
+            reveal.expected_commitment_with_deadline(reveal_deadline_height),
+            commitment
+        );
+        assert_ne!(
+            reveal.expected_commitment_with_deadline(reveal_deadline_height + 1),
+            commitment
+        );
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn transaction_entrypoint_json_roundtrip() {
@@ -1920,6 +2186,10 @@ impl TransactionEntrypoint {
     pub fn authority_opt(&self) -> Option<&AccountId> {
         match self {
             TransactionEntrypoint::External(entrypoint) => Some(entrypoint.authority()),
+            TransactionEntrypoint::SealedCommitment(entrypoint) => Some(entrypoint.authority()),
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                Some(entrypoint.signed_transaction().authority())
+            }
             TransactionEntrypoint::PrivateKaigi(_) => None,
             TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
         }
@@ -1935,6 +2205,10 @@ impl TransactionEntrypoint {
     pub fn authority(&self) -> &AccountId {
         match self {
             TransactionEntrypoint::External(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::SealedCommitment(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                entrypoint.signed_transaction().authority()
+            }
             TransactionEntrypoint::PrivateKaigi(_) => {
                 panic!("private kaigi entrypoints do not carry a public authority")
             }
@@ -1949,8 +2223,11 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::External(entrypoint) => {
                 u64::try_from(entrypoint.creation_time().as_millis()).ok()
             }
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                u64::try_from(entrypoint.signed_transaction().creation_time().as_millis()).ok()
+            }
             TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(entrypoint.creation_time_ms),
-            TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
 
@@ -1959,8 +2236,11 @@ impl TransactionEntrypoint {
     pub fn metadata(&self) -> Option<&Metadata> {
         match self {
             TransactionEntrypoint::External(entrypoint) => Some(entrypoint.metadata()),
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                Some(entrypoint.signed_transaction().metadata())
+            }
             TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(&entrypoint.metadata),
-            TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
 

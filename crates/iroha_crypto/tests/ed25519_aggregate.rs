@@ -5,6 +5,9 @@ use iroha_crypto::{
     ed25519_verify_batch_deterministic,
 };
 
+type ByteBuffers = Vec<Vec<u8>>;
+type Ed25519Batch = (ByteBuffers, ByteBuffers, ByteBuffers);
+
 #[test]
 fn ed25519_verify_aggregate_accepts_valid_signatures() {
     let mut messages = Vec::new();
@@ -120,7 +123,7 @@ fn ed25519_batch_deterministic_matches_single_verification() {
     }
 }
 
-fn sample_ed25519_batch(count: u8) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+fn sample_ed25519_batch(count: u8) -> Ed25519Batch {
     let mut messages = Vec::new();
     let mut signatures = Vec::new();
     let mut public_keys = Vec::new();

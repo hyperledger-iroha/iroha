@@ -2,6 +2,270 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 20k post-cache sampled profile bottlenecks
+
+- Captured a fresh release 4-peer, no-fault, prebuilt `20,000 TPS` / `30s`
+  macOS `sample` profile at
+  `dist/izanami-profile-20k-cachepass-sampled-30s-20260501-152126`. A
+  discarded first wrapper at
+  `dist/izanami-profile-20k-cachepass-sampled-30s-20260501-152043` aborted
+  before peer startup because the shell treated zero `pgrep` matches as fatal
+  under `pipefail`.
+- The valid wrapper exited `0` with `sample_ready=true`. It sampled the runner,
+  two Bash wrappers, stale peer PIDs from the aborted wrapper, and the current
+  peer set; the current peer samples used for classification are
+  `profiles/sample-16852.txt`, `profiles/sample-16853.txt`,
+  `profiles/sample-16854.txt`, and `profiles/sample-16855.txt`.
+- The run offered all `600,000` submissions, built and used all `600,000`
+  prebuilt transactions, accepted `53,626` ingress transactions, and reached
+  final quorum/strict height `2/2` with `4,116/4,116` strict approved
+  transactions. Submit latency p50/p95/p99/max was
+  `3318/6198/7260/9966 ms`; final queue depth was `42,282/600,000` with
+  `tx_queue_saturated=true`. There were no validation rejects, DA-gate view
+  changes, RBC store pressure events, RBC evictions, or pending-RBC drops.
+- Peer diagnostics recorded `6,613` latency-saturated ingress rejects,
+  `68` deferred local `RBC READY` events, `64` deferred `RBC DELIVER` events,
+  `34` targeted RBC payload sends, `33` targeted READY-set sends, `26`
+  targeted BlockBodyResponse companions, `7` inline validation fallback
+  warnings, and `4` slow commit-pipeline warnings. The slow validation windows
+  were `4,583`, `14,452`, `14,580`, and `16,205 ms` (`12,455 ms` average);
+  slow total pipeline time peaked at `16,289 ms`, and oldest queued transaction
+  age reached `33,202 ms`.
+- The largest active consensus stack is now block validation and overlay
+  application:
+  `validate_block_for_voting -> validate_keep_voting_block_inner -> validate_and_record_transactions -> TxOverlay::apply_with_chunk`.
+  This is the commit-progress critical path; one peer sample shows
+  `validate_block_for_voting` holding `7,989` recursive samples,
+  `validate_and_record_transactions` `5,143`, and `TxOverlay::apply_with_chunk`
+  `4,183`.
+- The next active stack is incoming transaction-gossip Norito decode:
+  `TransactionGossip -> GossipTransaction -> SignedTransaction -> TransactionPayload -> InstructionBox -> Transfer`.
+  Current-peer pattern counts include `TransactionGossip=1,602`,
+  `GossipTransaction=1,010`, `decode_field_canonical=20,235`,
+  `write_len_prefixed=22,787`, `TransactionPayload=9,083`,
+  `InstructionBox=7,687`, and `PublicKey/PublicKeyCompact=7,391/3,483`.
+- Remaining signed-transaction length/serialization fallback is still visible
+  inside prepared metadata:
+  `ValidBlock::validate_and_record_transactions -> AcceptedTransaction::prepare_signed_metadata -> AcceptedTransaction::signed_encoded_len -> norito::codec::encode_adaptive_into`.
+  Current-peer pattern counts show `AcceptedTransaction::signed_encoded_len=725`,
+  `AcceptedTransaction::prepare_signed_metadata=30`,
+  `norito::codec::encode_adaptive_into=529`, and
+  `norito::core::to_bytes=985`.
+- Top-leaf samples still show expensive crypto/math and allocation costs even
+  when the commit-progress stack is validation/overlay. Excluding parked/kernel
+  waits across the four current peer samples, active top leaves were led by
+  Ed25519/Curve25519 (`78,409`, `29.44%`), allocation/copy (`51,069`,
+  `19.17%`), runtime/scheduler artifacts (`49,173`, `18.46%`), Norito/gossip
+  decode (`33,813`, `12.69%`), and FASTPQ/Poseidon/ZKP leaves (`11,878`,
+  `4.46%`). Recursive stack attribution puts Norito/gossip decode first
+  (`167,668`, `45.77%`) and Ed25519/Curve25519 at `40,848` (`11.15%`).
+- The intended queue-side fix held: `Queue::encode_gossip_payload=0` in the
+  current peer samples. `PublicKey::normalize=0`, Ed25519 curve math is present
+  as a leaf cost but not the blocking commit-progress stack, and
+  FASTPQ/Poseidon is visible but small in recursive attribution. The remaining
+  limiter is block validation and overlay throughput, fed by incoming gossip
+  decode and the leftover signed length/serialization metadata walk; increasing
+  queue capacity alone will not improve committed throughput.
+
+## 2026-05-01 Block transaction pipeline hardening follow-up
+
+- Transaction gossip now carries canonical `TransactionEntrypoint` payloads
+  instead of downgrading to `SignedTransaction`, so sealed commitments and
+  sealed reveals retain their public entrypoint identity across queue gossip.
+  Queue-side gossip payload caches now store entrypoint Norito bytes.
+- Explorer, contract-source lookup, and Torii pipeline-status reconstruction now
+  pair block entrypoints with aligned transaction results rather than zipping
+  external signed transactions against the first result slice. Sealed reveals
+  are reported and looked up by their entrypoint hash.
+- Torii submission responses and signed receipts now expose
+  `entrypoint_hash`, keep `x-iroha-transaction-hash` as the canonical
+  entrypoint hash, and add `x-iroha-signed-transaction-hash` when an inner
+  signed transaction exists.
+- Sealed transaction commitments now have deterministic non-zero gas/TEU cost
+  based on encoded length, and block execution prunes expired pending sealed
+  commitments from smart-contract state.
+- Follow-up unit coverage now executes a sealed commitment in one block and
+  its reveal in the next block through the real block-builder validation path,
+  checks expiry pruning after the reveal deadline, and verifies Torii resolves
+  pipeline status by the sealed-reveal entrypoint hash stored in Kura/state.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `cargo test -p iroha_core gossip_roundtrip_preserves_sealed_commitment_entrypoint --lib -- --nocapture`
+  - `cargo test -p iroha_core partition_gossip_batch_keeps_sealed_commitments --lib -- --nocapture`
+  - `cargo test -p iroha_core sealed_commitment_cost_is_nonzero_and_size_sensitive --lib -- --nocapture`
+  - `cargo test -p iroha_core queue_generated_gossip_payload_uses_framed_entrypoint_wire --lib -- --nocapture`
+  - `cargo test -p iroha_core queue_accepts_gossip_payload_cache --lib -- --nocapture`
+  - `cargo test -p iroha_data_model submission_receipt_roundtrips_signature --lib -- --nocapture`
+  - `cargo test -p iroha_torii handler_post_transaction_entrypoint_accepts_external_entrypoint --lib -- --nocapture`
+  - `cargo test -p iroha_torii handler_post_transaction_honors_prefer_return_minimal --lib -- --nocapture`
+  - `cargo test -p iroha_core block_pipeline_executes_sealed_reveal_and_records_entrypoint_hash --lib -- --nocapture`
+  - `cargo test -p iroha_core prune_expired_sealed_commitments_removes_pending_state_after_deadline --lib -- --nocapture`
+  - `cargo test -p iroha_torii pipeline_status_handler_returns_applied_for_sealed_reveal_entrypoint_hash --lib -- --nocapture`
+  - `git diff --check`
+
+## 2026-05-01 20k hot-path release gate rerun
+
+- Rebuilt release binaries with
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`,
+  then reran the 4-peer, no-fault, prebuilt `20,000 TPS` / `120s` gate with
+  `2,400,000` prebuilt transactions and `4096` submitters. Artifact:
+  `dist/izanami-prebuilt-20k-hotpath-120s-20260501-142015`.
+- The runner exited `0`, offered all `2,400,000` planned submissions, built
+  and used all `2,400,000` prebuilt transactions, and had no prebuild fallback
+  or build failures. Ingress accepted `53,891` (`449.1 TPS`, `2.25%` of
+  offered). Submit latency p50/p95/p99/max was `3315/4836/5690/8060 ms`;
+  failover/unhealthy endpoint totals were `13/46`.
+- Final quorum/strict height was `9/9` with zero peer height skew and
+  `28,713/28,713` approved transactions. That is `239.3 committed TPS` over
+  the measured window, or `1.20%` of the `2,400,000` committed-transaction
+  gate. Compared with the prior 2026-05-01 120s rerun artifact
+  (`24,590` approved), this is `+4,123` approved transactions (`+16.8%`), but
+  still misses the 20k committed-TPS target by `2,371,287` transactions.
+- Runtime counters still show queue drain / validation throughput as the
+  limiter rather than DA/RBC storage failure: `tx_queue_saturated=true`, final
+  queue depth `25,286/2,400,000`, `pacemaker_backpressure_deferrals_total=74`,
+  `worker_loop_stage="drain_votes"`, no view-change causes, no validation
+  rejects, no DA-gate causes, no RBC store pressure, no RBC evictions, no RBC
+  persist drops, no pending-RBC drops, and no commit-inflight timeouts.
+- Peer diagnostics recorded `23,608` latency-saturated ingress rejects,
+  `28` inline validation fallback warnings, `28` slow commit-pipeline warnings,
+  max block validation `6,060 ms`, and max slow-pipeline total `6,197 ms`.
+  Slow validation warnings covered heights `3` through `10`. RBC authoritative
+  payload delay symptoms remained visible but resolved: `260` deferred local
+  `RBC READY`, `243` deferred `RBC DELIVER`, `101` targeted RBC payload sends,
+  `101` targeted READY-set sends, and `74` targeted BlockBodyResponse
+  companions. Peer stderr logs were empty; one peer again exited with raw
+  `unix_wait_status(3)` during shutdown after the measured window.
+- Reran the same release gate shape again at
+  `dist/izanami-prebuilt-20k-cachepass-120s-20260501-142429` to check variance.
+  This repeat also exited `0`, offered all `2,400,000` submissions, built/used
+  all `2,400,000` prebuilt transactions, and had no prebuild fallback or build
+  failures. Ingress accepted `52,167` (`434.7 TPS`, `2.17%` of offered), with
+  submit latency p50/p95/p99/max `3112/4803/5840/8251 ms`, final
+  quorum/strict height `8/8`, strict approved transactions `24,623`
+  (`205.2 committed TPS`, `1.03%` of target), final queue depth
+  `23,457/2,400,000`, and `tx_queue_saturated=true`.
+- The repeat confirms the failure class rather than a one-off artifact:
+  compared with `dist/izanami-prebuilt-20k-rerun-120s-20260501-103729`,
+  ingress improved by `4,699` accepted transactions (`+9.9%`), but strict
+  approved transactions only improved by `33` (`+0.13%`). Peer diagnostics
+  showed `21,968` latency-saturated ingress rejects, `26` inline validation
+  fallback warnings, `26` slow commit-pipeline warnings, validation times up to
+  `5,907 ms` (`5,116 ms` average among slow warnings), no validation rejects,
+  no DA-gate/view-change causes, no RBC store pressure/evictions, and empty
+  peer stderr logs.
+
+## 2026-05-01 20k hot-path critical-path cache pass
+
+- Implemented the next bottleneck-reduction slice from the 20k profile: accepted
+  transactions can now carry caller-provided canonical signed-transaction bytes,
+  and gossip acceptance reuses those bytes instead of immediately re-encoding
+  the same `SignedTransaction`. The cached bytes feed the prepared transaction
+  metadata path used by size/hash checks.
+- Block validation now prepares external transaction metadata once per block and
+  uses the borrowed external entrypoint slice when the block payload has one.
+  Merkle-root rebuilding reuses prepared entrypoint hashes for external entries
+  while still hashing sealed/non-external wrappers directly, so sealed reveal
+  ordering and block-wire semantics are unchanged.
+- Ed25519 block validation now feeds true batch verification with prepared
+  payload hashes and parsed single-key authorities. The batch-failure path
+  bisects borrowed slices with reusable scratch storage, then reports the first
+  invalid transaction in deterministic block order before falling back to the
+  existing per-transaction validation path.
+- Runtime-only block caches are kept off the canonical wire: the legacy
+  signed-transaction cache and result-side entrypoint cache are skipped by
+  Norito encoding, while canonical external entrypoints remain on the block
+  payload. Focused roundtrip coverage asserts cache contents do not change
+  signed block wire bytes.
+- FASTPQ execution witnesses no longer force block-level `TransitionBatch`
+  materialization inside `StateBlock::capture_exec_witness`. The commit path
+  carries a local-only `FastpqWitnessContext` containing the public-input
+  template, tx-set hash, and entry dataspace overrides into the FASTPQ lane,
+  where transcript-only witnesses are expanded off the consensus critical path.
+  The `ExecWitness` wire shape remains unchanged.
+- Focused validation for this slice:
+  - `CARGO_TARGET_DIR=target/codex-20k cargo test -p iroha_core accept_with_canonical_signed_bytes_reuses_payload_cache --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-20k cargo test -p iroha_core job_context_builds_batches_for_transcript_only_witness --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-20k cargo test -p iroha_core capture_exec_witness --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target/codex-20k cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `cargo test -p iroha_crypto ed25519_batch -- --nocapture`
+  - `cargo test -p iroha_data_model signed_block_wire_skips_runtime_transaction_caches -- --nocapture`
+  - `cargo test -p iroha_data_model versioned_block_roundtrip_preserves_instruction_order -- --nocapture`
+  - `cargo test -p iroha_core --test admission_batching ed25519_batch_bisection_finds_bad_sig -- --nocapture`
+  - `cargo test -p iroha_core --test signature_batch_determinism ed25519_batch_permutation_finds_same_bad_sig -- --nocapture`
+  - `cargo test -p iroha_core queue_generated_gossip_payload_uses_framed_signed_transaction_wire --lib -- --nocapture`
+  - `cargo test -p iroha_core queue_accepts_gossip_payload_cache --lib -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo check -p norito -p iroha_crypto -p iroha_data_model -p iroha_core -p iroha_torii -p irohad`
+- Release Izanami validation for this slice is recorded above in the
+  `20k hot-path release gate rerun` and `20k post-cache sampled profile
+  bottlenecks` entries. The remaining validation work is to locate the new
+  5k/10k knee and then reprofile after the next block-validation/Norito
+  optimization slice.
+
+## 2026-05-01 20k sampled profile rerun bottlenecks
+
+- Captured a fresh 4-peer, no-fault, prebuilt `20,000 TPS` / `30s` macOS
+  `sample` profile at
+  `dist/izanami-profile-20k-rerun-sampled-30s-20260501-104544`. The valid
+  wrapper exited `0`; the sampled PIDs were the Izanami runner, one Bash child
+  to ignore, and all four `iroha3d` peers. A discarded earlier artifact at
+  `dist/izanami-profile-20k-rerun-sampled-30s-20260501-104431` failed after
+  warmup because the wrapper used `mapfile` on the system Bash.
+- The sampled run offered all `600,000` planned submissions and used all
+  `600,000` prebuilt transactions. Ingress accepted `53,697` (`8.95%` of
+  offered), but final quorum/strict progress was only height `2/2` with
+  `17/17` approved transactions. Submit latency p50/p95/p99/max was
+  `3267/6097/7739/9965 ms`; failover/unhealthy endpoint totals were `22/14`.
+- Runtime counters and peer diagnostics still point at block drain,
+  validation, and consensus payload progress rather than DA/RBC store capacity:
+  `tx_queue_saturated=true`, final queue depth `38,701/600,000`,
+  `pacemaker_backpressure_deferrals_total=28`, `worker_loop_stage="tick"`,
+  no validation rejects, no DA-gate view changes, no RBC store pressure, no
+  RBC evictions, and no pending-RBC drops. Peer logs had `6,442` queue
+  age-saturated rejects, `163` deferred local `RBC READY`, `125` deferred
+  `RBC DELIVER`, `14` targeted RBC payload sends, `14` targeted READY-set
+  sends, `8` commit quorums, and `8` commits.
+- The decisive consensus log evidence is validation latency: all peers emitted
+  inline validation fallback warnings, and three peers logged height-`3`
+  `commit pipeline block processing slow` with validation times of
+  `10,901 ms`, `10,923 ms`, and `12,372 ms` (`total_ms` up to `12,908`).
+  During that window queue age saturated and RBC delivery repeatedly waited
+  for authoritative payload availability; one peer also requested seven
+  block-sync range pulls for `idle_missing_qc_reacquire`.
+- Peer CPU attribution, after excluding parked/waiting leaves, is led by:
+  allocation/copy churn at roughly `27.6%` of active top-of-stack samples,
+  Ed25519/Curve25519 math at `26.6%`, Norito encode/decode leaf work at
+  `12.4%`, public-key/account string and multihash work at `4.4%`,
+  FASTPQ/Poseidon hashing at `4.3%`, and hash/CRC work at `2.9%`. Recursive
+  stack attribution still puts Norito and transaction wire work first:
+  `norito::core::write_len_prefixed`, `decode_field_canonical`,
+  `write_len`, transaction payload/entrypoint, `InstructionBox`,
+  `Transfer`, `AccountController`, `AssetId`, `SignedTransaction`, and P2P
+  transaction gossip decode dominate the hot call paths.
+- Normalized hot symbols from the four peers reinforce the bottleneck order:
+  top active leaves include `FieldElement51::pow2k` (`55,767`), dalek field
+  multiply (`21,159`), `_platform_memmove` (`16,884`), `_xzm_free`
+  (`14,026`), `_xzm_xzone_malloc_tiny` (`10,233`), Poseidon `apply_mds`
+  (`9,784`), `RawVec::finish_grow` (`6,085`), string collection/formatting
+  (`5,672`), `Blake2bVarCore::compress` (`4,765`), `write_all` (`4,491`),
+  and Norito `decode_field_canonical` (`3,258`). Recursive hot paths include
+  Norito length/field helpers, transaction payload serialization,
+  `PublicKey::normalize`, multihash formatting, Ed25519 public-key parsing,
+  and block validation batch-verification frames.
+- Critique: this profile confirms the latest 120s 20k failure mode. Torii can
+  accept a short burst, but queue age saturates because block validation and
+  payload/commit progress cannot drain it. The next fix should prioritize
+  removing remaining Norito re-serialization and allocation growth from block
+  validation/proposal paths, reusing canonical payload bytes through RBC/commit
+  validation, and reducing public-key/account string conversions on incoming
+  gossip. Ed25519 batch verification is now true CPU work rather than just
+  parse overhead, so further wins likely need fewer repeated verification
+  inputs or a faster batch-verification backend. FASTPQ/Poseidon is visible
+  but not the top bottleneck; keep it budgeted/yielding if later cache work
+  exposes it.
+
 ## 2026-05-01 20k validation rerun critique
 
 - Rebuilt release binaries with
@@ -179,6 +443,27 @@ Last updated: 2026-05-01
 - The mixed-host Inrou inventory now preserves `IROHA_INROU_LINUX_KVM_*` through
   `sudo`, and the Soracloud docs describe the root overlay, signed asset
   verification, explicit isolated firewall policy, and P2P response cap.
+- Coverage for this slice now also exercises exact-limit Torii proxy responses,
+  invalid proxied header/status restoration, HostedHttp-only response cap
+  selection, duplicate proxied header preservation, gateway-only retry
+  classification, HostedHttp route-timeout selection, reqwest bridge
+  header/body preservation at the cap, no-candidate and all-retryable proxy
+  fallback responses, open-policy firewall rule ordering, empty-allowlist
+  default-drop planning, reusable portable root overlays, oversized base-rootfs
+  budget rejection, allowlist IPv4 de-duplication plus IPv6-only and empty-port
+  fail-closed behavior, host architecture mapping, SHA512SUMS star-prefixed
+  archive entries, missing/mismatched archive checksums, pinned digest
+  mismatches, signature download success/failure paths, GPG verifier failures,
+  disk extraction missing/reuse paths, byte-range extraction EOF handling,
+  GPT root-partition selection and rejection paths, rootfs patch command
+  construction, boot-file selection/dump replacement failures, env export
+  quoting, CLI argument defaults/overrides, host tool and GPG verifier discovery,
+  subprocess wrapper capture flags, Debian keyring absence errors, download
+  replacement/short-circuit behavior, debugfs stdout capture, chunked SHA512
+  hashing, and main-flow orchestration for signed and pinned asset verification.
+- The embedded-feature Torii explorer helper now derives external signed
+  transaction results from `external_entrypoints_cloned()` and `results()`,
+  avoiding a stale `entrypoint_results()` call under the irohad feature set.
 - While validating alongside the local 20k hot-path edits already present in the
   worktree, the AMX admission-failure path now drops its temporary
   `StateTransaction` before recording the abort on the parent `StateBlock`.
@@ -191,7 +476,27 @@ Last updated: 2026-05-01
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad planned_inrou_tap_firewall_rules_keep_isolated_policy_private -- --nocapture`
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad planned_inrou_tap_firewall_rules_place_allowlist_accepts_above_default_drop -- --nocapture`
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --nocapture`
-  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-irohad cargo test -p iroha_torii --lib torii_proxy_snapshot_caps_buffered_response_bodies -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-irohad cargo test -p iroha_torii --lib snapshot_caps_buffered -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-torii-connect cargo test -p iroha_torii --lib broadcast_strategy_ -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-torii-connect cargo test -p iroha_torii --test connect_gating -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-clippy cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-fixes-clippy cargo clippy --workspace --all-targets -- -D warnings` currently stops in unrelated `mochi-core` drift (`FaultPeer`/`FaultConfig` API updates and removed offline data-model symbols), after Torii itself checks.
+  - `python3 -m pytest scripts/tests/prepare_inrou_portable_guest_assets_test.py` now passes 49 asset-prep verifier tests.
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii cargo test -p iroha_torii --lib torii_proxy_snapshot -- --nocapture` passes 6 Torii proxy snapshot tests.
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii cargo test -p iroha_torii --lib torii_proxy_response_body_limit_only_caps_hosted_http -- --nocapture` passes the HostedHttp response-cap selector test.
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii cargo test -p iroha_torii --lib torii_proxy_header_conversion_preserves_duplicates_and_skips_invalid -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii cargo test -p iroha_torii --lib torii_proxy_retry_policy_only_retries_gateway_class_statuses -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii cargo test -p iroha_torii --lib torii_proxy_hosted_http_request_kind_uses_route_timeout -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii cargo test -p iroha_torii --lib execute_torii_proxy_request_across_candidates_returns_route_unavailable_without_candidates -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii-retryable cargo test -p iroha_torii --lib execute_torii_proxy_request_across_candidates_returns_last_retryable_response -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-torii-retryable cargo test -p iroha_torii --lib execute_torii_proxy_request_across_candidates_returns_route_unavailable_after_transport_errors -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad planned_inrou_tap_firewall_rules -- --nocapture` passes 3 firewall-planning tests.
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad ensure_inrou_portable_root_disk -- --nocapture` passes 3 portable root-disk tests.
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad resolve_inrou_allowlist_endpoints_deduplicates_ipv4_entries -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad resolve_inrou_allowlist_endpoints_rejects_ipv6_only_literals -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-irohad-empty cargo test -p irohad --features embedded-soracloud-runtime --bin irohad resolve_inrou_allowlist_endpoints_rejects_empty_port_lists -- --nocapture`
+  - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-inrou-extra-tests-irohad-empty cargo test -p irohad --features embedded-soracloud-runtime --bin irohad planned_inrou_tap_firewall_rules_allowlist_empty_keeps_default_drop -- --nocapture`
+- Live KVM/Firecracker smoke was not run on this macOS host.
 
 ## 2026-05-01 20k hot-path cache push
 

@@ -813,6 +813,8 @@ mod tests {
             .expect("signer index must be in range for test context");
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+            signed_transaction_hash: Some(tx_hash),
             submitted_at_ms: 1,
             submitted_at_height,
             signer: keypair.public_key().clone(),
@@ -841,6 +843,8 @@ mod tests {
             .expect("backup signer key exists");
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+            signed_transaction_hash: Some(tx_hash),
             submitted_at_ms: 1,
             submitted_at_height,
             signer: signer_key.public_key().clone(),
@@ -2072,6 +2076,8 @@ mod tests {
         let outsider = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::from(tx_hash)),
+            signed_transaction_hash: Some(tx_hash),
             submitted_at_ms: 1,
             submitted_at_height: 3,
             signer: outsider.public_key().clone(),

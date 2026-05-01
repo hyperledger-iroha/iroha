@@ -2038,7 +2038,7 @@ mod tests {
             dedupe_cap: 8192,
             relay_enabled: true,
             relay_strategy: "broadcast",
-            p2p_ttl_hops: 0,
+            p2p_ttl_hops: 1,
         };
         let bus = Bus::from_config(&cfg);
         {
@@ -2046,6 +2046,15 @@ mod tests {
             *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
         }
         let sid = [0xB1u8; 32];
+        bus.register_tokens(
+            sid,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register relay tokens");
         let _app_inbox = bus.attach(sid, proto::Role::App).await;
         let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
 
@@ -2086,7 +2095,7 @@ mod tests {
             dedupe_cap: 8192,
             relay_enabled: true,
             relay_strategy: "broadcast",
-            p2p_ttl_hops: 0,
+            p2p_ttl_hops: 1,
         };
         let bus = Bus::from_config(&cfg);
         let sid = [0xB4u8; 32];

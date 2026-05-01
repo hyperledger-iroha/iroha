@@ -597,6 +597,19 @@ pub struct PublicKeyCompact {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
 
+/// Reusable scratch storage for Ed25519 batch verification.
+#[derive(Debug, Default)]
+pub struct Ed25519BatchScratch {
+    public_keys: Vec<signature::ed25519::PublicKey>,
+}
+
+impl Ed25519BatchScratch {
+    /// Clear retained scratch contents while keeping allocated capacity.
+    pub fn clear(&mut self) {
+        self.public_keys.clear();
+    }
+}
+
 impl Ed25519ParsedPublicKey {
     /// Raw canonical Ed25519 public-key bytes.
     #[must_use]
@@ -651,11 +664,40 @@ pub fn ed25519_verify_batch_preparsed_deterministic(
     public_keys: &[Ed25519ParsedPublicKey],
     seed32: [u8; 32],
 ) -> Result<(), Error> {
-    let parsed_public_keys = public_keys.iter().map(|key| key.0).collect::<Vec<_>>();
+    let mut scratch = Ed25519BatchScratch::default();
+    ed25519_verify_batch_preparsed_deterministic_with_scratch(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+        &mut scratch,
+    )
+}
+
+/// Deterministic Ed25519 batch verification wrapper using pre-parsed public keys and caller scratch.
+///
+/// Reusing `scratch` avoids allocating the dalek key slice for every chunk or
+/// deterministic bisection probe in block validation.
+///
+/// # Errors
+/// Returns `Err(Error::BadSignature)` if any tuple fails verification, if signatures have invalid
+/// length, if the input slices have mismatched lengths, or if the input is empty.
+pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch,
+) -> Result<(), Error> {
+    scratch.public_keys.clear();
+    scratch.public_keys.reserve(public_keys.len());
+    scratch
+        .public_keys
+        .extend(public_keys.iter().map(|key| key.0));
     signature::ed25519::Ed25519Sha512::verify_batch_preparsed_deterministic(
         messages,
         signatures,
-        &parsed_public_keys,
+        &scratch.public_keys,
         seed32,
     )
 }
