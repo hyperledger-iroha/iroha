@@ -7824,17 +7824,17 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
                     lane_buffer.clear();
                     for lane in &stats.queues {
                         lane_buffer.push(FastpqMetalQueueLaneSample {
-                            index: lane.index,
-                            dispatch_count: lane.dispatch_count,
-                            max_in_flight: lane.max_in_flight,
+                            index: lane.index as usize,
+                            dispatch_count: u64::from(lane.dispatch_count),
+                            max_in_flight: u64::from(lane.max_in_flight),
                             busy_ms: lane.busy_ms,
                             overlap_ms: lane.overlap_ms,
                         });
                     }
                     let sample = FastpqMetalQueueSample {
-                        limit: stats.limit,
-                        max_in_flight: stats.max_in_flight,
-                        dispatch_count: stats.dispatch_count,
+                        limit: u64::from(stats.limit),
+                        max_in_flight: u64::from(stats.max_in_flight),
+                        dispatch_count: u64::from(stats.dispatch_count),
                         window_ms: stats.window_ms,
                         busy_ms: stats.busy_ms,
                         overlap_ms: stats.overlap_ms,

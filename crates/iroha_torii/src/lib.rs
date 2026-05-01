@@ -249,7 +249,10 @@ use iroha_core::{
         ToriiReadFanoutMergeV1, ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1,
         ToriiRouteHintV1,
     },
-    tx::DecodedVersionedSignedTransaction,
+    tx::{
+        AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
+        SignatureVerificationFail,
+    },
 };
 use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf,
@@ -28668,29 +28671,200 @@ fn decode_transaction_batch_payloads(
         .into_iter()
         .enumerate()
         .map(|(idx, payload)| {
-            DecodedVersionedSignedTransaction::decode_versioned(payload.as_slice()).map_err(
-                |error| Error::AppQueryValidation {
+            DecodedVersionedSignedTransaction::decode_versioned_owned(payload).map_err(|error| {
+                Error::AppQueryValidation {
                     code: "invalid_transaction_batch_payload",
                     message: format!("transaction batch item {idx} could not be decoded: {error}"),
-                },
-            )
+                }
+            })
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct TransactionBatchPrecheck {
+    single_ed25519_prechecked: bool,
+    precheck_rejection: Option<AcceptTransactionFail>,
+}
+
+fn precheck_transaction_batch_ed25519(
+    transactions: &[DecodedVersionedSignedTransaction],
+    batch_cap: usize,
+) -> Vec<TransactionBatchPrecheck> {
+    let mut prechecks = (0..transactions.len())
+        .map(|_| TransactionBatchPrecheck {
+            single_ed25519_prechecked: false,
+            precheck_rejection: None,
+        })
+        .collect::<Vec<_>>();
+    if batch_cap == 0 {
+        return prechecks;
+    }
+
+    #[derive(Clone, Copy)]
+    struct Ed25519BatchItem<'a> {
+        idx: usize,
+        message: &'a [u8],
+        signature: &'a [u8],
+        public_key: iroha_crypto::Ed25519ParsedPublicKey,
+    }
+
+    fn verify_ed25519_batch_slices(
+        messages: &[&[u8]],
+        signatures: &[&[u8]],
+        public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+        scratch: &mut iroha_crypto::Ed25519BatchScratch,
+    ) -> Result<(), iroha_crypto::Error> {
+        iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+            messages,
+            signatures,
+            public_keys,
+            [0; 32],
+            scratch,
+        )
+    }
+
+    fn first_bad_ed25519_slice(
+        messages: &[&[u8]],
+        signatures: &[&[u8]],
+        public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+        scratch: &mut iroha_crypto::Ed25519BatchScratch,
+    ) -> Option<(usize, String)> {
+        if messages.is_empty()
+            || verify_ed25519_batch_slices(messages, signatures, public_keys, scratch).is_ok()
+        {
+            return None;
+        }
+        if messages.len() == 1 {
+            let detail = verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
+                .expect_err("single invalid Ed25519 item must fail")
+                .to_string();
+            return Some((0, detail));
+        }
+
+        let split = messages.len() / 2;
+        let (left_messages, right_messages) = messages.split_at(split);
+        let (left_signatures, right_signatures) = signatures.split_at(split);
+        let (left_public_keys, right_public_keys) = public_keys.split_at(split);
+        first_bad_ed25519_slice(left_messages, left_signatures, left_public_keys, scratch).or_else(
+            || {
+                first_bad_ed25519_slice(
+                    right_messages,
+                    right_signatures,
+                    right_public_keys,
+                    scratch,
+                )
+                .map(|(idx, detail)| (idx + split, detail))
+            },
+        )
+    }
+
+    fn signature_error(
+        tx: &DecodedVersionedSignedTransaction,
+        detail: String,
+    ) -> AcceptTransactionFail {
+        AcceptTransactionFail::SignatureVerification(SignatureVerificationFail::new(
+            tx.signed().signature().clone(),
+            SignatureRejectionCode::InvalidSignature,
+            detail,
+        ))
+    }
+
+    let batch_items = transactions
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, tx)| {
+            let (message, signature, public_key) = tx.single_ed25519_precheck_parts()?;
+            Some(Ed25519BatchItem {
+                idx,
+                message,
+                signature,
+                public_key,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
+    let scratch_cap = batch_cap.min(batch_items.len());
+    let mut messages = Vec::with_capacity(scratch_cap);
+    let mut signatures = Vec::with_capacity(scratch_cap);
+    let mut public_keys = Vec::with_capacity(scratch_cap);
+    for range_start in (0..batch_items.len()).step_by(batch_cap) {
+        let range_end = range_start.saturating_add(batch_cap).min(batch_items.len());
+        let batch = &batch_items[range_start..range_end];
+        let batch_result = {
+            messages.clear();
+            signatures.clear();
+            public_keys.clear();
+            for item in batch {
+                messages.push(item.message);
+                signatures.push(item.signature);
+                public_keys.push(item.public_key);
+            }
+
+            verify_ed25519_batch_slices(&messages, &signatures, &public_keys, &mut scratch).map_err(
+                |err| {
+                    first_bad_ed25519_slice(&messages, &signatures, &public_keys, &mut scratch)
+                        .map_or_else(|| (0, err.to_string()), |bad| bad)
+                },
+            )
+        };
+
+        match batch_result {
+            Ok(()) => {
+                for item in batch {
+                    prechecks[item.idx].single_ed25519_prechecked = true;
+                }
+            }
+            Err((relative_idx, detail)) => {
+                if let Some(item) = batch.get(relative_idx) {
+                    prechecks[item.idx].precheck_rejection =
+                        Some(signature_error(&transactions[item.idx], detail));
+                }
+            }
+        }
+    }
+
+    prechecks
 }
 
 #[cfg(test)]
 mod transaction_ingress_decode_tests {
     use super::*;
-    use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+    use iroha_data_model::{
+        isi::Log,
+        transaction::{TransactionBuilder, signed::TransactionSignature},
+    };
     use iroha_logger::Level;
 
     fn signed_transaction_for_test() -> SignedTransaction {
+        signed_transaction_for_test_with_message("batch decode")
+    }
+
+    fn signed_transaction_for_test_with_message(message: &str) -> SignedTransaction {
         let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "batch decode".into())])
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
             .sign(keypair.private_key())
+    }
+
+    fn versioned_signed_transaction(tx: &SignedTransaction) -> Vec<u8> {
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(tx)
+    }
+
+    fn transaction_with_invalid_signature(message: &str) -> SignedTransaction {
+        let mut tx = signed_transaction_for_test_with_message(message);
+        let mut signature = tx.signature().payload().payload().to_vec();
+        let last = signature
+            .last_mut()
+            .expect("test signature payload is non-empty");
+        *last ^= 0xff;
+        tx.set_signature(TransactionSignature(SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&signature),
+        )));
+        tx
     }
 
     #[test]
@@ -28699,8 +28873,7 @@ mod transaction_ingress_decode_tests {
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
-        let versioned =
-            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+        let versioned = versioned_signed_transaction(&signed);
 
         let decoded =
             decode_transaction_batch_payloads(vec![versioned]).expect("batch transaction decodes");
@@ -28714,8 +28887,7 @@ mod transaction_ingress_decode_tests {
     #[test]
     fn decode_transaction_batch_payloads_rejects_trailing_payload() {
         let signed = signed_transaction_for_test();
-        let mut versioned =
-            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+        let mut versioned = versioned_signed_transaction(&signed);
         versioned.push(0);
 
         match decode_transaction_batch_payloads(vec![versioned]) {
@@ -28724,6 +28896,70 @@ mod transaction_ingress_decode_tests {
             }
             other => panic!("expected invalid batch payload, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_accepts_valid_single_key_batch() {
+        let tx1 = signed_transaction_for_test_with_message("ed25519-precheck-valid-1");
+        let tx2 = signed_transaction_for_test_with_message("ed25519-precheck-valid-2");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&tx1),
+            versioned_signed_transaction(&tx2),
+        ])
+        .expect("valid batch decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(prechecks.iter().all(|precheck| {
+            precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
+        }));
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_identifies_first_invalid_signature() {
+        let valid = signed_transaction_for_test_with_message("ed25519-precheck-valid");
+        let invalid = transaction_with_invalid_signature("ed25519-precheck-invalid");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&valid),
+            versioned_signed_transaction(&invalid),
+        ])
+        .expect("well-formed invalid-signature batch decodes");
+
+        let mut prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(!prechecks[0].single_ed25519_prechecked);
+        assert!(prechecks[0].precheck_rejection.is_none());
+        let rejection = prechecks[1]
+            .precheck_rejection
+            .take()
+            .expect("invalid signature should be marked");
+        match rejection {
+            AcceptTransactionFail::SignatureVerification(fail) => {
+                assert_eq!(fail.code(), SignatureRejectionCode::InvalidSignature);
+            }
+            other => panic!("expected invalid signature rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transaction_batch_non_ed25519_bypasses_ed25519_precheck() {
+        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Secp256k1);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "batch secp".to_owned())])
+            .sign(keypair.private_key());
+        let decoded =
+            decode_transaction_batch_payloads(vec![versioned_signed_transaction(&signed)])
+                .expect("non-Ed25519 signed transaction decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 1);
+        assert!(!prechecks[0].single_ed25519_prechecked);
+        assert!(prechecks[0].precheck_rejection.is_none());
     }
 }
 
@@ -28793,14 +29029,20 @@ async fn handler_post_transactions_batch(
         let app = app.clone();
         tokio::task::spawn_blocking(move || {
             let mut accepted = Vec::with_capacity(transactions.len());
+            let prechecks = precheck_transaction_batch_ed25519(
+                &transactions,
+                app.state.pipeline.signature_batch_max_ed25519,
+            );
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             let mut local_route_cache = Vec::new();
-            for transaction in transactions {
-                let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
+            for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
+                let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
                     app.chain_id.clone(),
                     app.state.clone(),
                     transaction,
                     &app.telemetry,
+                    precheck.single_ed25519_prechecked,
+                    precheck.precheck_rejection,
                 )?;
                 let routing_decision = app
                     .queue
@@ -37203,7 +37445,7 @@ pub(crate) mod tests_runtime_handlers {
             error::TransactionRejectionReason,
             signed::{
                 SealedTransactionReveal, SignedTransaction, TransactionBuilder,
-                TransactionEntrypoint, TransactionResultInner,
+                TransactionEntrypoint, TransactionResultInner, TransactionSignature,
                 compute_sealed_transaction_commitment,
             },
         },
@@ -39069,6 +39311,18 @@ pub(crate) mod tests_runtime_handlers {
         ))
     }
 
+    fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> SignedTransaction {
+        let mut signature = tx.signature().payload().payload().to_vec();
+        let last = signature
+            .last_mut()
+            .expect("test signature payload is non-empty");
+        *last ^= 0xff;
+        tx.set_signature(TransactionSignature(SignatureOf::from_signature(
+            Signature::from_bytes(&signature),
+        )));
+        tx
+    }
+
     #[tokio::test]
     async fn handler_post_transaction_uses_tx_rate_limiter() {
         let mut app = mk_app_state_for_tests();
@@ -39263,6 +39517,53 @@ pub(crate) mod tests_runtime_handlers {
             Some("2")
         );
         assert_eq!(app.queue.active_len(), 2);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_without_partial_push()
+    {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(
+                Level::INFO,
+                "batch-valid-before-invalid".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "batch-invalid-signature".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = transaction_with_invalid_signature_for_test(tx2);
+        let payloads = vec![
+            iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
+            iroha_version::codec::EncodeVersioned::encode_versioned(&tx2),
+        ];
+
+        let err = match super::handler_post_transactions_batch(
+            State(app.clone()),
+            HeaderMap::new(),
+            Norito(payloads),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected invalid signature rejection"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some(SignatureRejectionCode::InvalidSignature.as_str())
+        );
+        assert_eq!(app.queue.active_len(), 0);
     }
 
     #[cfg(feature = "app_api")]

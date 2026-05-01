@@ -2,6 +2,255 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 FASTPQ BN254 Metal Poseidon Batch Path
+
+- Added a `fastpq_prover` BN254 Poseidon word-batch helper and a Metal
+  `bn254_poseidon_hash_words` kernel for FASTPQ transfer transcript digest
+  finalization. The helper self-tests fixed vectors against the scalar
+  `iroha_zkp_halo2` Poseidon word path before use and disables itself on
+  mismatch or runtime failure.
+- Wired `iroha_core` FASTPQ transcript drain/snapshot finalization to batch
+  single-delta transcript digests through the accelerator when the existing
+  FASTPQ execution/poseidon modes permit GPU use and the batch is large enough;
+  CPU mode, unavailable Metal, failed self-test, and small batches keep the
+  existing scalar streaming hasher.
+- Added `iroha_core/fastpq-gpu` feature plumbing and made `irohad/fastpq-gpu`
+  enable both the daemon and core FASTPQ GPU paths. No new dependencies,
+  `Cargo.lock` changes, wire-format changes, or config knobs were added.
+- Focused validation passed:
+  `cargo check -p fastpq_prover`,
+  `cargo test -p iroha_core --lib poseidon_word_packer_matches_little_endian_chunks -- --nocapture`,
+  `cargo check -p fastpq_prover --features fastpq-gpu`,
+  `cargo check -p iroha_core --features fastpq-gpu`,
+  `cargo check -p irohad --features fastpq-gpu`,
+  `cargo test -p fastpq_prover --lib bn254_poseidon -- --nocapture`,
+  `cargo fmt --all`, and `git diff --check`.
+- The local Xcode install is missing the Metal toolchain, so the existing
+  `fastpq_prover` build script warned that it could not execute `xcrun metal`
+  and skipped shader compilation. The Rust feature plumbing is checked, but
+  kernel syntax/parity and performance still need a rerun on a host with
+  `xcodebuild -downloadComponent MetalToolchain` completed.
+
+## 2026-05-01 Release Izanami 20k Gate After FASTPQ Metal Pass
+
+- Rebuilt the scalar release `izanami` and `iroha3d` binaries with
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`,
+  which completed in `6m45s`, then reran the same 4-peer no-fault prebuilt
+  `20,000 TPS` / `120s` Izanami gate. Fresh artifact:
+  `dist/izanami-prebuilt-20k-rerun-release-120s-20260501-224554`; it exited
+  `0`.
+- The gate offered all `2,400,000` submissions, built and used all
+  `2,400,000` prebuilt transactions, had zero prebuild fallback/build
+  failures, and accepted `48,920` ingress transactions. Submit latency
+  p50/p95/p99/max was `3197/4708/5190/6171 ms`.
+- Final quorum/strict height was `11/11` with `36,979/36,979` approved
+  transactions, zero height skew, zero approved-transaction skew, final queue
+  depth `11,960/2,400,000`, and `tx_queue_saturated=true`.
+- Safety signals stayed clean: no validation rejects, view changes,
+  quorum-timeout causes, DA gate pressure, RBC store pressure/evictions,
+  pending-RBC drops, missing-block fetches, or commit-inflight timeouts. The
+  run recorded `7/7` missing-QC reacquire attempts/successes, `7` range-pull
+  escalations, `0` range-pull successes, and `107` pacemaker backpressure
+  deferrals.
+- This was the default scalar release gate. The Metal Poseidon accelerator path
+  still needs a separate `fastpq-gpu` release run on a host with the Apple
+  Metal toolchain installed.
+
+## 2026-05-01 Release Izanami 20k Sampled Profile After FASTPQ Metal Pass
+
+- Captured a fresh scalar release 4-peer no-fault prebuilt `20,000 TPS` /
+  `30s` sampled profile at
+  `dist/izanami-profile-20k-current-sampled2-30s-20260501-225258`.
+  Izanami exited `0`, `sample_ready=true`, `sample_status=0`, and the profiler
+  captured the runner plus all four `iroha3d` peers. The contention snapshots
+  only contain the wrapper's own `rg` probes.
+- The run offered all `600,000` submissions, built and used all `600,000`
+  prebuilt transactions, had zero prebuild fallback/build failures, and
+  accepted `46,458` ingress transactions. Submit latency p50/p95/p99/max was
+  `3123/4569/4957/6102 ms`.
+- Final quorum/strict height was `3/3` with `4,141/4,141` approved
+  transactions, zero height skew, zero approved-transaction skew, final queue
+  depth `35,228/600,000`, and `tx_queue_saturated=true`. Safety counters stayed
+  clean: no validation rejects, view changes, DA/RBC pressure, pending-RBC
+  drops, or commit-inflight timeouts. The run did record `12` missing-block
+  fetches, `2/2` missing-QC reacquire attempts/successes, and `3` range-pull
+  escalations.
+- Active peer leaf samples, excluding wait/parking and generic runtime frames,
+  are now led by Norito/transaction wire work at roughly `31.5%`, followed by
+  low-level syscall/TLS/write overhead at `13.3%`, allocation/copy at `10.0%`,
+  FASTPQ/Poseidon hashing at `9.1%`, Ed25519/Curve25519 math at `8.4%`, Rayon
+  batch/prover scheduling at `5.9%`, hash/multihash work at `2.6%`, ID/public
+  key/string work at `2.3%`, P2P/network crypto at `1.1%`, and Torii/HTTP at
+  `0.7%`.
+- Hot peer leaves include `_tlv_get_addr`, Poseidon `apply_mds`/`sbox`,
+  `curve25519_dalek` `FieldElement51::pow2k`/multiply, `_platform_memmove`,
+  `_xzm_free`, Norito `use_compact_len`, `write_len`,
+  `decode_field_canonical`, `ConstVec` decode/serialize helpers,
+  `Transfer` serialization, SHA-256/Blake2 compression, and account-address
+  `i105` conversion.
+- Recursive peer attribution still points at Norito and transaction material as
+  the largest non-wait corridor: decoded versioned signed transaction handling,
+  instruction-pair/payload decode, valid-block validation, transaction gossip
+  handling, and block validation/prepared transaction paths. Overlay execution
+  wrappers remain visible, but `StateTransaction::record_transfer_transcripts`
+  is now low-count residue; FASTPQ Poseidon work remains visible through
+  digest finalization/prover-side batch work rather than as the dominant
+  transfer-execution stack. Runner-side cost is secondary and mostly
+  request/endpoint-pool/socket overhead.
+
+## 2026-05-01 FASTPQ Poseidon Deferral And Admission Cache Follow-up
+
+- Moved single-delta FASTPQ Poseidon digest work out of the transfer execution
+  hot path. Transfer execution now records runtime-local transcripts without a
+  digest, and the digest is finalized before block transcript drain or
+  execution-witness drain/snapshot exposes the data. Multi-delta transcript
+  digest behavior remains `None`.
+- Added a streaming BN254 Poseidon byte hasher in `iroha_zkp_halo2` and wired
+  FASTPQ digest construction through Norito `encode_to`, avoiding the previous
+  full preimage buffer while preserving the current byte hash path.
+- Reduced Torii/Core admission residue by deriving decoded external
+  entrypoint hashes from the already-decoded versioned signed payload bytes and
+  by reusing Ed25519 batch precheck message/signature/key vectors across
+  chunks.
+- Focused validation passed:
+  `cargo test -p iroha_zkp_halo2 poseidon --lib -- --nocapture`,
+  `cargo test -p iroha_core poseidon_digest_matches_known_vector --lib -- --nocapture`,
+  `cargo test -p iroha_core transfer_transcript --lib -- --nocapture`,
+  `cargo test -p iroha_core decoded_versioned_signed_transaction --lib -- --nocapture`,
+  `cargo test -p iroha_core fastpq_transcripts --lib -- --nocapture`,
+  `cargo test -p iroha_core snapshot_finalizes_single_fastpq_transcript_without_clearing --lib -- --nocapture`,
+  `cargo test -p iroha_torii transaction_batch_ed25519 --lib -- --nocapture`,
+  `cargo test -p iroha_torii transaction_batch_non_ed25519 --lib -- --nocapture`,
+  and
+  `cargo test -p iroha_torii handler_post_transactions_batch_rejects_invalid_ed25519_precheck_without_partial_push --lib -- --nocapture`,
+  plus `cargo check -p iroha_zkp_halo2 -p iroha_core -p iroha_torii`,
+  `cargo fmt --all -- --check`, and `git diff --check`.
+- Later scalar release 20k gate and sampled profile reruns are recorded above.
+  The sampled profile should be used to check whether
+  `StateTransaction::record_transfer_transcripts`,
+  `fastpq::poseidon_preimage_digest`, and
+  `iroha_zkp_halo2::poseidon::{apply_mds,sbox}` moved out of the foreground
+  execution stack.
+
+## 2026-05-01 Direct-Ingress Precheck And Borrowed Overlay Pass
+
+- Added deterministic single-key Ed25519 precheck for Torii
+  `/transactions/batch` admission, reusing the existing
+  `pipeline.signature_batch_max_ed25519` setting. All transactions still pass
+  the existing chain-id, time/TTL, signing-allowed, size, signature-count, NTS,
+  route, and queue-admission checks; multisig, non-Ed25519, sealed/private/time
+  entrypoints stay on the existing validation path.
+- Tightened the built-in overlay executor path so `Executor::Initial`
+  `TxOverlay::apply_with_chunk` calls a crate-private borrowed instruction
+  dispatch helper instead of cloning the whole `InstructionBox` first.
+  `Executor::UserProvided` still uses the owned-instruction fallback, so the
+  public `Execute` trait and custom executor API are unchanged.
+- Focused validation passed:
+  `cargo test -p iroha_core --lib borrowed_overlay_apply_matches_owned_initial_executor_for_register_domain -- --nocapture`,
+  `cargo test -p iroha_core --lib decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept -- --nocapture`,
+  `cargo test -p iroha_core --lib gossip_transaction_hash_from_framed_entrypoint_matches_canonical_hash -- --nocapture`,
+  `cargo test -p iroha_core --lib does_not_materialize_entrypoint -- --nocapture`,
+  `cargo test -p iroha_core --lib queue_accepts_gossip_payload_cache -- --nocapture`,
+  `cargo test -p iroha_core --lib queue_generated_gossip_payload_uses_framed_entrypoint_wire -- --nocapture`,
+  `cargo test -p iroha_torii --lib transaction_batch_ -- --nocapture`,
+  `cargo test -p iroha_torii --lib handler_post_transactions_batch_rejects_invalid_ed25519_precheck_without_partial_push -- --nocapture`,
+  `cargo test -p iroha_torii --lib handler_post_transactions_batch_accepts_multiple_payloads -- --nocapture`,
+  `cargo fmt --all`,
+  `cargo check -p norito -p iroha_crypto -p iroha_data_model -p iroha_core -p iroha_torii -p irohad`,
+  and
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`.
+- Clean final 4-peer no-fault prebuilt `20,000 TPS` / `120s` gate artifact:
+  `dist/izanami-prebuilt-20k-direct-ingress-precheck-final-120s-20260501-212850`.
+  It exited `0`, and `contention-before.txt` / `contention-after.txt` only
+  contain timestamps.
+- The final gate offered all `2,400,000` submissions, built and used all
+  `2,400,000` prebuilt transactions, had zero prebuild fallback/build
+  failures, and accepted `47,566` ingress transactions. Submit latency
+  p50/p95/p99/max was `3196/4554/4993/6118 ms`.
+- Final quorum/strict height was `7/7` with `20,499/20,499` approved
+  transactions, max height skew `1`, approved-transaction skew `8,192`, final
+  queue depth `22,789/2,400,000`, and `tx_queue_saturated=true`.
+- Safety signals remained clean: no validation rejects, quorum-timeout causes,
+  DA gate pressure, RBC store pressure/evictions, pending-RBC drops, or
+  commit-inflight timeouts. The run recorded `2` view-change installs, `28`
+  missing-block fetches, `7/7` missing-QC reacquire attempts/successes, and
+  `7` range-pull escalations with `2` successes.
+- The direct-ingress sampled profile for this pass is
+  `dist/izanami-profile-20k-direct-ingress-precheck-sampled-30s-20260501-210924`.
+  It exited `0` with `sample_status=0`, accepted `43,109` ingress
+  transactions, and reached strict height `3` with `4,125` approved
+  transactions. The samples show the new Torii Ed25519 precheck path active;
+  the remaining peer-side bottlenecks are Ed25519 batch math, Norito
+  signed-transaction/instruction decode and allocation, public-key parsing
+  during decode, residual gossip materialization, and Poseidon/hash work.
+
+## 2026-05-01 Release Izanami 20k gate rerun
+
+- Rebuilt the release `irohad` and `izanami` binaries with
+  `cargo build --release -p irohad -p izanami`, then reran the 4-peer,
+  no-fault, prebuilt `20,000 TPS` / `120s` Izanami gate. Clean-wrapper
+  artifact:
+  `dist/izanami-prebuilt-20k-rerun-release2-120s-20260501-210031`; it exited
+  `0`.
+- The gate offered all `2,400,000` submissions, built and used all
+  `2,400,000` prebuilt transactions, had zero prebuild fallback/build
+  failures, and accepted `52,582` ingress transactions. Submit latency
+  p50/p95/p99/max was `3146/4607/5012/6072 ms`.
+- Final quorum/strict height was `9/9` with `28,755/28,755` approved
+  transactions, zero height skew, zero approved-transaction skew, final queue
+  depth `23,624/2,400,000`, and `tx_queue_saturated=true`.
+- Safety signals stayed clean: no validation rejects, quorum-timeout causes,
+  DA gate pressure, RBC store pressure/evictions, or pending-RBC drops. The run
+  recorded `1` view-change install, `18` missing-block fetches, `8/8`
+  missing-QC reacquire attempts/successes, `8` range-pull escalations, and `1`
+  range-pull success.
+- Treat throughput as contended evidence, not an isolated baseline:
+  `contention-before.txt` showed no other Rust build jobs, but
+  `contention-after.txt` showed a separate debug
+  `cargo check -p norito -p iroha_crypto -p iroha_data_model -p iroha_core -p iroha_torii -p irohad`
+  with active `rustc` processes that started during the gate window.
+- An immediately preceding same-shape artifact at
+  `dist/izanami-prebuilt-20k-rerun-release-120s-20260501-205658` also reached
+  the final Izanami summary, but its wrapper failed after the summary while
+  recording `exit.status` because the zsh wrapper used the read-only variable
+  name `status`.
+
+## 2026-05-01 Release Izanami 20k sampled profile bottlenecks
+
+- Captured a fresh release 4-peer, no-fault, prebuilt `20,000 TPS` / `30s`
+  sampled profile at
+  `dist/izanami-profile-20k-rerun-release-sampled2-30s-20260501-211211`.
+  The fixed sampler targeted the Izanami runner and its direct child peers,
+  recorded `sample_status=0`, and the Izanami run exited `0`.
+- The run offered all `600,000` submissions, accepted `46,709` ingress
+  transactions, and reached quorum/strict height `3/3` with `4,125/4,125`
+  strict approved transactions. Submit latency p50/p95/p99/max was
+  `3065/5833/6648/7556 ms`; final queue depth was `33,949/600,000` with
+  `tx_queue_saturated=true`.
+- Safety signals stayed clean: no validation rejects, view-change causes,
+  commit-inflight timeouts, DA gate pressure, RBC store pressure/evictions, or
+  pending-RBC drops. The status delta only recorded `28` pacemaker backpressure
+  deferrals, `2/2` missing-QC reacquire attempts/successes, and `2`
+  range-pull escalations.
+- The pre-sample contention snapshot was clean. A separate `120s`
+  direct-ingress gate appeared after the sample window and during shutdown, so
+  the peer CPU samples are usable bottleneck evidence while the final timing
+  summary should be treated as lightly contended.
+- Peer samples now put the main CPU weight in
+  `iroha_zkp_halo2::poseidon::{apply_mds,sbox}` and `fastpq_isi::poseidon`,
+  `_platform_memmove`, allocator free/malloc paths, `sha2`/`blake2` hashing,
+  Norito length/decode/encode routines such as `use_compact_len`,
+  `read_len_from_slice`, `write_len`, and `decode_field_canonical`, plus
+  `curve25519_dalek` / `ed25519_dalek` verification math.
+- Direct ingress batch precheck is visible but no longer the dominant leaf, and
+  the earlier overlay/clone targets are low-count residue in this profile:
+  `InstructionDynClone::dyn_box_clone`, `InstructionBox::encoded_len_exact`,
+  and `ValidBlock::validate_and_record_transactions_with_prepared` only appear
+  as small wrapper or leaf costs. The next bottleneck work should prioritize
+  the sustained Poseidon/FASTPQ source, allocation/memmove reduction, Norito
+  decode and compact-length walks, and then signature-verification reuse or
+  batching.
+
 ## 2026-05-01 Sealed reveal adversarial multi-peer coverage
 
 - Broadened `tx_history::sealed_reveal_adversarial_cases_hold_on_multi_peer_network`
@@ -42,7 +291,7 @@ Last updated: 2026-05-01
   bottleneck-pass entries below, including the fixed-runner sampled profile at
   `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200527`
   and the latest 120s gate rerun at
-  `dist/izanami-prebuilt-20k-broader-pass-rerun-120s-20260501-195617`.
+  `dist/izanami-prebuilt-20k-direct-ingress-precheck-final-120s-20260501-212850`.
 
 ## 2026-05-01 Contended conservative-cache release 20k gate rerun
 

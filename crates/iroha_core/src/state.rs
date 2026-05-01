@@ -21800,6 +21800,7 @@ impl<'state> StateBlock<'state> {
     pub fn drain_transfer_transcripts(
         &mut self,
     ) -> BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>> {
+        crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
 
@@ -26533,19 +26534,11 @@ impl StateTransaction<'_, '_> {
             .tx_call_hash
             .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
         let authority_digest = crate::fastpq::authority_digest(authority);
-        let poseidon_digest = if deltas.len() > 1 {
-            None
-        } else {
-            Some(crate::fastpq::poseidon_preimage_digest(
-                &deltas[0],
-                &batch_hash,
-            ))
-        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
             authority_digest,
-            poseidon_preimage_digest: poseidon_digest,
+            poseidon_preimage_digest: None,
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);

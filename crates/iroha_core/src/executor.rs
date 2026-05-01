@@ -2763,13 +2763,14 @@ impl Executor {
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         match self {
-            Self::Initial => self.execute_instruction_with_profile_and_contract_runtime_context(
-                state_transaction,
-                authority,
-                instruction.clone(),
-                InstructionExecutionProfile::Runtime,
-                contract_runtime_context,
-            ),
+            Self::Initial => self
+                .execute_borrowed_instruction_with_profile_and_contract_runtime_context(
+                    state_transaction,
+                    authority,
+                    instruction,
+                    InstructionExecutionProfile::Runtime,
+                    contract_runtime_context,
+                ),
             Self::UserProvided(_) => {
                 iroha_logger::trace!(
                     instr = %instruction.id(),
@@ -2833,7 +2834,7 @@ impl Executor {
                 Self::Initial => Self::execute_initial_instruction(
                     state_transaction,
                     authority,
-                    instruction,
+                    &instruction,
                     profile,
                     contract_runtime_context,
                 ),
@@ -2851,6 +2852,57 @@ impl Executor {
                 instr = %instr_id,
                 ?err,
                 "instruction execution failed"
+            );
+        }
+        result
+    }
+
+    fn execute_borrowed_instruction_with_profile_and_contract_runtime_context(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &InstructionBox,
+        profile: InstructionExecutionProfile,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<(), ValidationFail> {
+        trace!("Running borrowed instruction execution");
+        let instr_id = instruction.id();
+
+        let result = if should_bypass_contract_runtime_asset_transfer_check(
+            contract_runtime_context,
+            instruction,
+        ) {
+            Self::execute_instruction_directly_borrowed(
+                state_transaction,
+                authority,
+                instruction,
+                profile,
+            )
+        } else {
+            match self {
+                Self::Initial => Self::execute_initial_instruction(
+                    state_transaction,
+                    authority,
+                    instruction,
+                    profile,
+                    contract_runtime_context,
+                ),
+                Self::UserProvided(_) => self
+                    .execute_instruction_with_profile_and_contract_runtime_context(
+                        state_transaction,
+                        authority,
+                        instruction.clone(),
+                        profile,
+                        contract_runtime_context,
+                    ),
+            }
+        };
+        if let Err(err) = &result {
+            iroha_logger::error!(
+                ?profile,
+                instr = %instr_id,
+                ?err,
+                "borrowed instruction execution failed"
             );
         }
         result
@@ -2876,6 +2928,31 @@ impl Executor {
                 }
                 ValidationFail::InstructionFailed(err)
             })
+    }
+
+    fn execute_instruction_directly_borrowed(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &InstructionBox,
+        profile: InstructionExecutionProfile,
+    ) -> Result<(), ValidationFail> {
+        let instruction_id = instruction.id();
+        crate::smartcontracts::isi::execute_borrowed_instruction(
+            instruction,
+            authority,
+            state_transaction,
+        )
+        .map_err(|err| {
+            if matches!(profile, InstructionExecutionProfile::Runtime) {
+                iroha_logger::debug!(
+                    ?err,
+                    %instruction_id,
+                    authority = %authority,
+                    "borrowed direct executor application failed"
+                );
+            }
+            ValidationFail::InstructionFailed(err)
+        })
     }
 
     fn multisig_account_from(role_id: &RoleId) -> Result<Option<AccountId>, ValidationFail> {
@@ -2912,7 +2989,7 @@ impl Executor {
     fn execute_initial_instruction(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
@@ -2923,7 +3000,7 @@ impl Executor {
             );
         }
 
-        match MultisigInstructionBox::try_from(&instruction) {
+        match MultisigInstructionBox::try_from(instruction) {
             Ok(multisig) => {
                 return crate::smartcontracts::isi::multisig::execute_multisig_instruction(
                     state_transaction,
@@ -2956,7 +3033,7 @@ impl Executor {
         let is_genesis =
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
 
-        if let Some(register_role) = extract_register_role(&instruction) {
+        if let Some(register_role) = extract_register_role(instruction) {
             if let Some(multisig_account) =
                 Self::multisig_account_from(register_role.object().id())?
             {
@@ -3029,7 +3106,7 @@ impl Executor {
             }
         }
 
-        if let Some(reg_asset_definition) = extract_register_asset_definition(&instruction) {
+        if let Some(reg_asset_definition) = extract_register_asset_definition(instruction) {
             ensure_asset_definition_registration_allowed(
                 state_transaction,
                 authority,
@@ -3037,7 +3114,7 @@ impl Executor {
             )?;
         }
 
-        if let Some(account_id) = extract_account_metadata_target(&instruction) {
+        if let Some(account_id) = extract_account_metadata_target(instruction) {
             if !is_genesis
                 && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
             {
@@ -3132,14 +3209,14 @@ impl Executor {
             }
         }
 
-        if let Some(transfer_domain) = extract_transfer_domain(&instruction)
+        if let Some(transfer_domain) = extract_transfer_domain(instruction)
             && !can_transfer_domain(&state_transaction.world, authority, &transfer_domain)?
         {
             return Err(ValidationFail::NotPermitted(
                 "Can't transfer domain of another account".to_owned(),
             ));
         }
-        if let Some(transfer_asset_definition) = extract_transfer_asset_definition(&instruction)
+        if let Some(transfer_asset_definition) = extract_transfer_asset_definition(instruction)
             && !can_transfer_asset_definition(
                 &state_transaction.world,
                 authority,
@@ -3150,7 +3227,7 @@ impl Executor {
                 "Can't transfer asset definition of another account".to_owned(),
             ));
         }
-        if let Some(transfer_nft) = extract_transfer_nft(&instruction)
+        if let Some(transfer_nft) = extract_transfer_nft(instruction)
             && !can_transfer_nft(&state_transaction.world, authority, &transfer_nft)?
         {
             return Err(ValidationFail::NotPermitted(
@@ -3159,7 +3236,7 @@ impl Executor {
         }
 
         if !is_genesis
-            && let Some(transfer_asset) = extract_transfer_asset(&instruction)
+            && let Some(transfer_asset) = extract_transfer_asset(instruction)
             && !can_transfer_asset(
                 &state_transaction.world,
                 authority,
@@ -3173,19 +3250,22 @@ impl Executor {
         }
 
         let instruction_id = instruction.id();
-        instruction
-            .execute(authority, state_transaction)
-            .map_err(|err| {
-                if matches!(profile, InstructionExecutionProfile::Runtime) {
-                    iroha_logger::debug!(
-                        ?err,
-                        %instruction_id,
-                        authority = %authority,
-                        "initial executor rejected instruction during application"
-                    );
-                }
-                ValidationFail::from(err)
-            })
+        crate::smartcontracts::isi::execute_borrowed_instruction(
+            instruction,
+            authority,
+            state_transaction,
+        )
+        .map_err(|err| {
+            if matches!(profile, InstructionExecutionProfile::Runtime) {
+                iroha_logger::debug!(
+                    ?err,
+                    %instruction_id,
+                    authority = %authority,
+                    "initial executor rejected instruction during application"
+                );
+            }
+            ValidationFail::from(err)
+        })
     }
 
     /// Validate [`QueryRequest`].
@@ -5414,6 +5494,46 @@ mod tests {
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny registering asset definition without permission"
         );
+    }
+
+    #[test]
+    fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_domain() {
+        fn test_state() -> State {
+            let wonderland_domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(wonderland_domain_id).build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let world = World::with([domain], [alice_account], []);
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = query::store::LiveQueryStore::start_test();
+            State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"))
+        }
+
+        let executor = super::Executor::Initial;
+        let domain_id: DomainId =
+            DomainId::try_new("borrowed-overlay", "universal").expect("domain id");
+
+        let owned_state = test_state();
+        let mut owned_block =
+            owned_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut owned_tx = owned_block.transaction();
+        let owned_instruction = Register::domain(Domain::new(domain_id.clone())).into();
+        executor
+            .execute_instruction(&mut owned_tx, &ALICE_ID.clone(), owned_instruction)
+            .expect("owned initial executor applies instruction");
+        assert!(owned_tx.world.domains.get(&domain_id).is_some());
+
+        let overlay_state = test_state();
+        let mut overlay_block =
+            overlay_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut overlay_tx = overlay_block.transaction();
+        let overlay_instruction = Register::domain(Domain::new(domain_id.clone())).into();
+        let overlay =
+            crate::pipeline::overlay::TxOverlay::from_instructions(vec![overlay_instruction]);
+        overlay
+            .apply_with_chunk(&mut overlay_tx, &ALICE_ID.clone(), 1)
+            .expect("borrowed overlay applies instruction");
+        assert!(overlay_tx.world.domains.get(&domain_id).is_some());
     }
 
     #[test]

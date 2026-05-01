@@ -12,6 +12,7 @@ use halo2curves::{
 };
 use once_cell::sync::OnceCell;
 use poseidon_primitives::poseidon::primitives::Spec;
+use std::io::{self, Write};
 
 type PoseidonConstants<const W: usize> = (Vec<[Fr; W]>, [[Fr; W]; W]);
 
@@ -198,6 +199,7 @@ pub fn poseidon2_params_width6() -> Poseidon2Params<6> {
     params_to_bytes(poseidon6_params())
 }
 
+#[cfg(test)]
 fn pack_bytes_to_fr(bytes: &[u8]) -> Vec<Fr> {
     if bytes.is_empty() {
         return Vec::new();
@@ -231,6 +233,104 @@ fn hash_words_internal(words: &[Fr]) -> Fr {
     state[0]
 }
 
+/// Streaming byte hasher matching [`hash_bytes`] without materializing field words.
+#[derive(Debug, Clone)]
+pub struct PoseidonByteHasher {
+    state: [Fr; 3],
+    rate_words: [Fr; 2],
+    rate_len: usize,
+    pending_bytes: [u8; 8],
+    pending_len: usize,
+}
+
+impl Default for PoseidonByteHasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PoseidonByteHasher {
+    /// Create an empty streaming byte hasher.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: [Fr::ZERO; 3],
+            rate_words: [Fr::ZERO; 2],
+            rate_len: 0,
+            pending_bytes: [0; 8],
+            pending_len: 0,
+        }
+    }
+
+    fn absorb_word(&mut self, word: Fr) {
+        self.rate_words[self.rate_len] = word;
+        self.rate_len += 1;
+        if self.rate_len == self.rate_words.len() {
+            for (idx, word) in self.rate_words.iter().enumerate() {
+                self.state[idx] += *word;
+            }
+            poseidon3_permute(&mut self.state);
+            self.rate_words = [Fr::ZERO; 2];
+            self.rate_len = 0;
+        }
+    }
+
+    /// Add bytes to the Poseidon sponge.
+    pub fn update(&mut self, mut bytes: &[u8]) {
+        if self.pending_len > 0 {
+            let needed = self.pending_bytes.len() - self.pending_len;
+            let take = needed.min(bytes.len());
+            self.pending_bytes[self.pending_len..self.pending_len + take]
+                .copy_from_slice(&bytes[..take]);
+            self.pending_len += take;
+            bytes = &bytes[take..];
+            if self.pending_len == self.pending_bytes.len() {
+                self.absorb_word(Fr::from(u64::from_le_bytes(self.pending_bytes)));
+                self.pending_bytes = [0; 8];
+                self.pending_len = 0;
+            }
+        }
+
+        while bytes.len() >= self.pending_bytes.len() {
+            let mut word = [0u8; 8];
+            word.copy_from_slice(&bytes[..8]);
+            self.absorb_word(Fr::from(u64::from_le_bytes(word)));
+            bytes = &bytes[8..];
+        }
+
+        if !bytes.is_empty() {
+            self.pending_bytes[..bytes.len()].copy_from_slice(bytes);
+            self.pending_len = bytes.len();
+        }
+    }
+
+    /// Finish hashing and return canonical BN254 field bytes.
+    #[must_use]
+    pub fn finalize(mut self) -> [u8; 32] {
+        if self.pending_len > 0 {
+            self.absorb_word(Fr::from(u64::from_le_bytes(self.pending_bytes)));
+            self.pending_bytes = [0; 8];
+            self.pending_len = 0;
+        }
+        self.absorb_word(Fr::ONE);
+        while self.rate_len != 0 {
+            self.absorb_word(Fr::ZERO);
+        }
+        field_to_bytes(self.state[0])
+    }
+}
+
+impl Write for PoseidonByteHasher {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Hash an arbitrary list of BN254 field elements using Poseidon2 (rate 2).
 #[must_use]
 pub fn hash_words(words: &[Fr]) -> Fr {
@@ -246,8 +346,9 @@ pub fn hash_words_bytes(words: &[Fr]) -> [u8; 32] {
 /// Hash an arbitrary byte slice using the Poseidon2 sponge.
 #[must_use]
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
-    let words = pack_bytes_to_fr(bytes);
-    hash_words_bytes(&words)
+    let mut hasher = PoseidonByteHasher::new();
+    hasher.update(bytes);
+    hasher.finalize()
 }
 
 fn field_to_bytes(f: Fr) -> [u8; 32] {
@@ -350,6 +451,38 @@ mod tests {
             let digest = hash_bytes(input);
             assert_eq!(digest, *expected, "unexpected digest for input {input:?}");
         }
+    }
+
+    #[test]
+    fn hash_bytes_streaming_matches_word_path() {
+        for len in [
+            0usize, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 96, 127, 128, 129, 255, 256, 257, 511,
+        ] {
+            let input = (0..len)
+                .map(|idx| idx.wrapping_mul(31) as u8)
+                .collect::<Vec<_>>();
+            let words = pack_bytes_to_fr(&input);
+            assert_eq!(hash_bytes(&input), hash_words_bytes(&words), "len {len}");
+        }
+    }
+
+    #[test]
+    fn poseidon_byte_hasher_split_updates_match_one_shot() {
+        let input = (0..97).map(|idx| (idx * 17 + 3) as u8).collect::<Vec<_>>();
+        let one_shot = hash_bytes(&input);
+
+        for split in [0usize, 1, 2, 7, 8, 9, 16, 33, input.len()] {
+            let mut hasher = PoseidonByteHasher::new();
+            hasher.update(&input[..split]);
+            hasher.update(&input[split..]);
+            assert_eq!(hasher.finalize(), one_shot, "split {split}");
+        }
+
+        let mut bytewise = PoseidonByteHasher::new();
+        for byte in &input {
+            bytewise.update(core::slice::from_ref(byte));
+        }
+        assert_eq!(bytewise.finalize(), one_shot, "bytewise updates");
     }
 
     #[test]

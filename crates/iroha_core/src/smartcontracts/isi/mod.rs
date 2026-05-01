@@ -314,30 +314,42 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
 ];
 
+pub(crate) fn execute_borrowed_instruction(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    iroha_logger::debug!(isi=%instruction, "Executing");
+
+    if let Some(result) = INSTRUCTION_HANDLERS
+        .iter()
+        .find_map(|handler| handler(instruction, authority, state_transaction))
+    {
+        return result;
+    }
+
+    // Custom instructions are expected to be handled by a custom executor
+    if instruction
+        .as_any()
+        .downcast_ref::<CustomInstruction>()
+        .is_some()
+    {
+        return Err(Error::from(
+            "Custom instructions require an executor upgrade",
+        ));
+    }
+
+    // If we reach here, the instruction type is unknown or unregistered
+    Err(Error::from("Unknown instruction type"))
+}
+
 impl Execute for InstructionBox {
     fn execute(
         self,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        iroha_logger::debug!(isi=%self, "Executing");
-
-        if let Some(result) = INSTRUCTION_HANDLERS
-            .iter()
-            .find_map(|handler| handler(&self, authority, state_transaction))
-        {
-            return result;
-        }
-
-        // Custom instructions are expected to be handled by a custom executor
-        if self.as_any().downcast_ref::<CustomInstruction>().is_some() {
-            return Err(Error::from(
-                "Custom instructions require an executor upgrade",
-            ));
-        }
-
-        // If we reach here, the instruction type is unknown or unregistered
-        Err(Error::from("Unknown instruction type"))
+        execute_borrowed_instruction(&self, authority, state_transaction)
     }
 }
 

@@ -179,44 +179,83 @@ Completed history lives in `status.md`. This file should only track unfinished w
     `memmove` and Norito compact/decode work, with ZK/BLS math and hashing as
     secondary costs. Queue mechanics and borrowed overlay apply are not primary
     CPU bottlenecks in that sample.
-  - The direct-ingress conservative cache slice is code-complete as of
-    2026-05-01: Torii signed transaction and batch submission now decode
-    versioned signed payloads into a prepared core admission token, reusing
-    signed/entrypoint hashes, payload hash, exact signed length, and parsed
-    single-Ed25519 key metadata without changing transaction wire/hash
-    semantics.
+  - The latest clean rebuilt release 4-peer no-fault prebuilt `20k TPS` /
+    `120s` gate is
+    `dist/izanami-prebuilt-20k-direct-ingress-precheck-final-120s-20260501-212850`;
+    it exited `0`, accepted `47,566` ingress transactions, and reached
+    `20,499` strict approved transactions at strict height `7`. The contention
+    snapshots only contain timestamps. Safety signals stayed clean, but the
+    run still saturated the queue and ended with height skew `1` /
+    approved-transaction skew `8,192`, so the 20k target remains open.
+  - The latest fixed-runner sampled profile at
+    `dist/izanami-profile-20k-rerun-release-sampled2-30s-20260501-211211`
+    completed with `sample_status=0`, accepted `46,709` ingress transactions,
+    and reached `4,125` strict approved transactions at strict height `3`.
+    The current peer CPU stack is led by `iroha_zkp_halo2::poseidon` /
+    `fastpq_isi::poseidon`, `memmove` and allocator paths, `sha2`/`blake2`
+    hashing, Norito compact-length/decode/encode routines, and then
+    `curve25519_dalek` / `ed25519_dalek` verification math. Direct ingress
+    batch precheck remains visible but is not the dominant leaf in this sample;
+    overlay clone and exact-length helpers are low-count residue.
+  - The direct-ingress conservative cache and precheck slice is code-complete
+    as of 2026-05-01: Torii signed transaction and batch submission now decode
+    versioned signed payloads into a prepared core admission token and run
+    deterministic single-Ed25519 batch precheck for eligible batch entries,
+    reusing signed/entrypoint hashes, payload hash, exact signed length, and
+    parsed single-Ed25519 key metadata without changing transaction wire/hash
+    semantics, config knobs, dependencies, or `Cargo.lock`.
   - The exact-length `InstructionBox` cost is reduced without changing Norito
     wire: `encoded_len_exact` now counts the existing `(wire_id,
     framed_payload)` representation without re-framing the dynamic ISI payload.
-  - Add or reuse an Ed25519 parsed-public-key/signature verification cache or a
-    deterministic batch corridor for the Torii/direct-ingress single-key
-    Ed25519 authority path. Gossip-side deterministic Ed25519 batch precheck is
-    now implemented, but the fixed-runner sampled profile still shows the
-    offered-20k direct-ingress path dominated by `ed25519_dalek` /
-    `curve25519_dalek` verification math.
+  - The FASTPQ/Poseidon foreground pass is implemented: single-delta transfer
+    transcript digests are finalized at block/witness drain instead of inside
+    `Transfer::execute`, FASTPQ digest hashing streams bytes without a full
+    preimage buffer, and decoded external entrypoint hashes now reuse the
+    inbound versioned signed payload bytes.
+  - The first FASTPQ BN254 Metal Poseidon batch path is implemented behind the
+    existing `fastpq-gpu` feature and existing FASTPQ execution/poseidon modes.
+    Remaining work is validation on a host with the Apple Metal toolchain
+    installed: compile the metallib, run the Metal parity tests, then compare a
+    30s sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
+    against the latest scalar release artifacts.
+  - The latest scalar release 4-peer no-fault prebuilt `20k TPS` / `120s` gate
+    after the FASTPQ Metal feature-plumbing pass is
+    `dist/izanami-prebuilt-20k-rerun-release-120s-20260501-224554`; it exited
+    `0`, reached strict/quorum height `11`, and approved `36,979`
+    transactions. The matching scalar sampled profile at
+    `dist/izanami-profile-20k-current-sampled2-30s-20260501-225258` shows
+    Norito/transaction wire work as the current top peer bottleneck, followed by
+    syscall/TLS/write overhead, allocation/copy, FASTPQ/Poseidon hashing,
+    Ed25519/Curve25519 math, and Rayon batch/prover scheduling. Use this
+    artifact as the baseline before the next optimization pass.
   - Reduce Norito decode/allocation overhead on the direct and gossip admission
     corridors without changing wire bytes or canonical hashes. The next useful
     targets are repeated compact-length walks, instruction-registry decode
     paths, and allocation/memmove churn around canonical transaction material.
-  - Investigate `iroha_zkp_halo2::poseidon`, `ark_ff`, `ark_bls12_381`, and
-    `w3f_bls` public-key deserialization/subgroup stacks after the direct
-    ingress crypto/decode work, unless a narrower profile shows these are
-    fixture-only startup costs rather than sustained admission costs.
+  - Keep the FASTPQ BN254 Metal path validation separate from scalar profiling:
+    after installing the Apple Metal toolchain, run the Metal parity tests and a
+    `fastpq-gpu` 30s/120s comparison with `--fastpq-poseidon-mode gpu`.
+  - Keep an Ed25519 parsed-public-key/signature verification cache or a
+    deterministic batch corridor for the Torii/direct-ingress single-key
+    Ed25519 authority path as the next crypto follow-up after the
+    Poseidon/source-attribution and Norito allocation work. Gossip-side
+    deterministic Ed25519 batch precheck is already implemented.
   - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate
     the new knee after the conservative cache pass.
-  - Keep clone-heavy `TxOverlay::apply_with_chunk` / overlay-builder API work
-    as a lower-priority overlay follow-up unless a later post-crypto/decode
-    profile again shows `InstructionDynClone::dyn_box_clone`,
-    `Transfer::clone`, or `WorldTransaction::apply` as active costs.
-  - Keep the broader borrowed-instruction execution rewrite separate from the
-    targeted tuning pass because `Execute` currently consumes instructions.
+  - The targeted built-in overlay path now avoids the full `InstructionBox`
+    clone before `Executor::Initial` dispatch; user-provided executors still
+    use the owned fallback. Keep the broader borrowed-instruction execution
+    rewrite separate unless a later post-crypto/decode profile again shows
+    `Transfer::clone`, `WorldTransaction::apply`, or the concrete instruction
+    handler clones as active costs.
   - Treat RBC authoritative-payload delays as symptoms of slow validation and
     materialization unless a later profile shows DA/RBC storage pressure,
     missing `BlockCreated`, or QC payload-missing counters.
-  - Keep FASTPQ worker budgeting, hardware crypto acceleration, and full
-    borrowed-`Execute` executor API rewrites as follow-ups unless the next
-    sampled profile shows they dominate after ingress byte-cache and gossip
-    batch-precheck work.
+  - Move FASTPQ worker budgeting and deterministic hardware-accelerated crypto
+    investigation into the next tuning branch if the post-deferral profile
+    still shows background prover Poseidon work competing with consensus. Keep
+    the full borrowed-`Execute` executor API rewrite separate unless a later
+    profile makes overlay execution dominant again.
 - Turn the proposal-gap / queue-pressure investigation into a reproducible measurement pass.
   - Rerun the 7-peer load that previously advanced slowly or stalled under backlog.
   - Sample `/v1/sumeragi/status`, pending-block / commit-inflight metrics, and queue depths throughout the run.

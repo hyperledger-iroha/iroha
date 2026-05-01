@@ -99,6 +99,7 @@ pub fn start_with_backpressure(
     cfg: &Fastpq,
     backpressure: Option<crate::queue::BackpressureHandle>,
 ) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
+    crate::fastpq::configure_poseidon_digest_acceleration(cfg);
     if let Some(existing) = GLOBAL_SENDER.get() {
         return Some((existing.clone(), tokio::spawn(async {})));
     }

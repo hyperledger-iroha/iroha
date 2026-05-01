@@ -37,6 +37,7 @@ use tracing::{debug, warn};
 
 use crate::{
     backend::GpuBackend,
+    bn254_poseidon::Bn254PoseidonBatchSlice,
     gpu::GpuError,
     metal_config::{self, DeviceHints},
     overrides,
@@ -55,6 +56,7 @@ const LDE_KERNEL: &str = "fastpq_lde_columns";
 const POST_TILE_KERNEL: &str = "fastpq_fft_post_tiling";
 const BN254_FFT_KERNEL: &str = "bn254_fft_columns";
 const BN254_LDE_KERNEL: &str = "bn254_lde_columns";
+const BN254_POSEIDON_HASH_KERNEL: &str = "bn254_poseidon_hash_words";
 const GOLDILOCKS_GENERATOR: u64 = 7;
 const MIN_FFT_COLUMNS_PER_BATCH: u32 = 1;
 const MAX_FFT_COLUMNS_PER_BATCH: u32 = 64;
@@ -82,6 +84,7 @@ const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
 const BN254_LIMBS: usize = 4;
+const BN254_POSEIDON_WIDTH: usize = 3;
 const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
@@ -136,7 +139,7 @@ pub(crate) fn bn254_status() -> MetalResult<()> {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     }
     let ctx = metal_context()?;
-    let _ = (&ctx.bn254_fft, &ctx.bn254_lde);
+    let _ = (&ctx.bn254_fft, &ctx.bn254_lde, &ctx.bn254_poseidon_hash);
     bn254_smoke_test()?;
     Ok(())
 }
@@ -1618,6 +1621,15 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
                 back to device memory so hosts can read column hashes without rerunning the \
                 absorb loop on the CPU.",
     },
+    MetalKernelDescriptor {
+        entry_point: "bn254_poseidon_hash_words",
+        kind: KernelKind::Poseidon,
+        threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
+        tile_stage_cap: None,
+        notes: "Hashes flattened BN254 Poseidon word batches for FASTPQ transcript digests. \
+                Inputs and parameters are staged in canonical limbs, converted to Montgomery \
+                form inside the kernel, and outputs are canonical BN254 field bytes.",
+    },
 ];
 
 /// Returns metadata describing every exported Metal kernel.
@@ -2006,6 +2018,22 @@ struct PoseidonFusedArgs {
     parent_offset: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Bn254PoseidonArgs {
+    batch_count: u32,
+    states_per_lane: u32,
+    round_count: u32,
+    _reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Bn254PoseidonMetalSlice {
+    offset: u32,
+    len: u32,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct QueuePolicy {
     fanout: usize,
@@ -2138,6 +2166,7 @@ struct MetalPipelines {
     post_tile: ComputePipelineState,
     bn254_fft: ComputePipelineState,
     bn254_lde: ComputePipelineState,
+    bn254_poseidon_hash: ComputePipelineState,
     twiddle_cache: Mutex<TwiddleCache>,
     bn254_fft_twiddles: Mutex<HashMap<u32, Buffer>>,
     bn254_lde_twiddles: Mutex<HashMap<(u32, u32), Buffer>>,
@@ -2365,6 +2394,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     // but remain gated behind parity checks before use.
     let bn254_fft = load_pipeline(&device, &library, BN254_FFT_KERNEL)?;
     let bn254_lde = load_pipeline(&device, &library, BN254_LDE_KERNEL)?;
+    let bn254_poseidon_hash = load_pipeline(&device, &library, BN254_POSEIDON_HASH_KERNEL)?;
     let queue_policy = resolve_queue_policy(&device);
     let queues = QueuePool::new(&device, queue_policy);
     let manifest_sha = poseidon_manifest().sha256_hex();
@@ -2402,6 +2432,7 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         post_tile,
         bn254_fft,
         bn254_lde,
+        bn254_poseidon_hash,
         twiddle_cache: Mutex::new(TwiddleCache::new()),
         bn254_fft_twiddles: Mutex::new(bn254_fft_twiddles),
         bn254_lde_twiddles: Mutex::new(bn254_lde_twiddles),
@@ -3355,6 +3386,107 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     Ok(result)
 }
 
+pub fn bn254_poseidon_hash_words(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> MetalResult<Vec<[u8; 32]>> {
+    if slices.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let context = metal_context()?;
+    let batch_count = u32::try_from(slices.len())
+        .map_err(|_| GpuError::InvalidInput("BN254 Poseidon batch exceeds u32::MAX inputs"))?;
+    let mut metal_slices = Vec::with_capacity(slices.len());
+    for slice in slices {
+        let end = slice
+            .offset()
+            .checked_add(slice.len())
+            .ok_or(GpuError::InvalidInput(
+                "BN254 Poseidon slice range overflows",
+            ))?;
+        if end > words.len() {
+            return Err(GpuError::InvalidInput(
+                "BN254 Poseidon slice exceeds flattened word buffer",
+            ));
+        }
+        metal_slices.push(Bn254PoseidonMetalSlice {
+            offset: u32::try_from(slice.offset()).map_err(|_| {
+                GpuError::InvalidInput("BN254 Poseidon word offset exceeds u32::MAX")
+            })?,
+            len: u32::try_from(slice.len()).map_err(|_| {
+                GpuError::InvalidInput("BN254 Poseidon word length exceeds u32::MAX")
+            })?,
+        });
+    }
+
+    let params = bn254_poseidon_width3_params();
+    let staged_words = if words.is_empty() { &[0u64][..] } else { words };
+    let mut word_chunk = PooledBuffer::from_slice(staged_words);
+    let word_buffer = shared_buffer(&context.device, word_chunk.as_mut_slice());
+    let mut slice_chunk = metal_slices;
+    let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+    let mut round_constants = PooledBuffer::from_slice(&params.round_constants);
+    let round_buffer = shared_buffer(&context.device, round_constants.as_mut_slice());
+    let mut mds = PooledBuffer::from_slice(&params.mds);
+    let mds_buffer = shared_buffer(&context.device, mds.as_mut_slice());
+    let output_len = slices
+        .len()
+        .checked_mul(BN254_LIMBS)
+        .ok_or(GpuError::InvalidInput(
+            "BN254 Poseidon output length overflows",
+        ))?;
+    let mut output = PooledBuffer::zeroed(output_len);
+    let output_buffer = shared_buffer(&context.device, output.as_mut_slice());
+
+    let limits = pipeline_limits(&context.bn254_poseidon_hash);
+    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let (threadgroups, threadgroup, logical_threads, states_per_lane) =
+        poseidon_dispatch_geometry(batch_count, tuning, &limits);
+    let args = Bn254PoseidonArgs {
+        batch_count,
+        states_per_lane,
+        round_count: params.round_count,
+        _reserved: 0,
+    };
+    let profile = KernelProfileParams {
+        kind: KernelKind::Poseidon,
+        bytes: bn254_poseidon_hash_bytes(words.len(), slices.len(), params),
+        elements: u64::from(batch_count)
+            .saturating_mul(u64::try_from(BN254_POSEIDON_WIDTH).unwrap_or(u64::MAX)),
+        columns: batch_count,
+    };
+    let (queue, queue_index) = context.queues.select(batch_count, 0);
+    let ticket = submit_compute_with_geometry(
+        queue,
+        queue_index,
+        &context.bn254_poseidon_hash,
+        Some((threadgroups, threadgroup, logical_threads)),
+        logical_threads,
+        Some(profile),
+        false,
+        |encoder: &ComputeCommandEncoderRef| {
+            encoder.set_buffer(0, Some(&word_buffer), 0);
+            encoder.set_buffer(1, Some(&slice_buffer), 0);
+            encoder.set_buffer(2, Some(&output_buffer), 0);
+            encoder.set_buffer(3, Some(&round_buffer), 0);
+            encoder.set_buffer(4, Some(&mds_buffer), 0);
+            encoder.set_bytes(
+                5,
+                mem::size_of::<Bn254PoseidonArgs>() as u64,
+                ptr::from_ref(&args).cast(),
+            );
+        },
+    )?;
+    wait_for_ticket(ticket)?;
+
+    Ok(output
+        .as_slice()
+        .chunks_exact(BN254_LIMBS)
+        .map(bn254_limbs_to_bytes)
+        .collect())
+}
+
 pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
     if batch.is_empty() {
         return Ok(Vec::new());
@@ -3595,6 +3727,95 @@ fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
         .saturating_add(state)
         .saturating_add(descriptor_total);
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(states)))
+}
+
+struct Bn254PoseidonWidth3Params {
+    round_constants: Box<[u64]>,
+    mds: Box<[u64]>,
+    round_count: u32,
+}
+
+fn bn254_poseidon_width3_params() -> &'static Bn254PoseidonWidth3Params {
+    static PARAMS: OnceLock<Bn254PoseidonWidth3Params> = OnceLock::new();
+    PARAMS.get_or_init(|| {
+        let params = iroha_zkp_halo2::poseidon::poseidon2_params_width3();
+        let mut round_constants = Vec::with_capacity(
+            params
+                .round_constants
+                .len()
+                .saturating_mul(BN254_POSEIDON_WIDTH)
+                .saturating_mul(BN254_LIMBS),
+        );
+        for round in &params.round_constants {
+            for word in round {
+                round_constants.extend_from_slice(&bn254_bytes_to_limbs(word));
+            }
+        }
+        let mut mds = Vec::with_capacity(BN254_POSEIDON_WIDTH * BN254_POSEIDON_WIDTH * BN254_LIMBS);
+        for row in &params.mds {
+            for coeff in row {
+                mds.extend_from_slice(&bn254_bytes_to_limbs(coeff));
+            }
+        }
+        Bn254PoseidonWidth3Params {
+            round_constants: round_constants.into_boxed_slice(),
+            mds: mds.into_boxed_slice(),
+            round_count: u32::try_from(params.round_constants.len())
+                .expect("Poseidon round count must fit into u32"),
+        }
+    })
+}
+
+fn bn254_bytes_to_limbs(bytes: &[u8; 32]) -> [u64; BN254_LIMBS] {
+    let mut limbs = [0u64; BN254_LIMBS];
+    for (index, limb) in limbs.iter_mut().enumerate() {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&bytes[index * 8..(index + 1) * 8]);
+        *limb = u64::from_le_bytes(buf);
+    }
+    limbs
+}
+
+fn bn254_limbs_to_bytes(limbs: &[u64]) -> [u8; 32] {
+    debug_assert_eq!(limbs.len(), BN254_LIMBS);
+    let mut out = [0u8; 32];
+    for (index, limb) in limbs.iter().enumerate() {
+        out[index * 8..(index + 1) * 8].copy_from_slice(&limb.to_le_bytes());
+    }
+    out
+}
+
+fn bn254_poseidon_hash_bytes(
+    word_count: usize,
+    slice_count: usize,
+    params: &Bn254PoseidonWidth3Params,
+) -> u64 {
+    let element_bytes = u128::from(u64::try_from(mem::size_of::<u64>()).unwrap_or(u64::MAX));
+    let input = u128::try_from(word_count)
+        .unwrap_or(u128::MAX)
+        .saturating_mul(element_bytes);
+    let output = u128::try_from(slice_count.saturating_mul(BN254_LIMBS))
+        .unwrap_or(u128::MAX)
+        .saturating_mul(element_bytes);
+    let descriptors = u128::try_from(slice_count)
+        .unwrap_or(u128::MAX)
+        .saturating_mul(u128::from(
+            u64::try_from(mem::size_of::<Bn254PoseidonMetalSlice>()).unwrap_or(u64::MAX),
+        ));
+    let constants = u128::try_from(
+        params
+            .round_constants
+            .len()
+            .saturating_add(params.mds.len()),
+    )
+    .unwrap_or(u128::MAX)
+    .saturating_mul(element_bytes);
+    clamp_u128_to_u64(
+        input
+            .saturating_add(output)
+            .saturating_add(descriptors)
+            .saturating_add(constants),
+    )
 }
 
 fn clamp_u128_to_u64(value: u128) -> u64 {

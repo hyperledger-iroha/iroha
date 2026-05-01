@@ -15,11 +15,16 @@ use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
     collections::BTreeSet,
+    io::{self, Write},
     sync::{Arc, LazyLock, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use blake2::{
+    Blake2bVar,
+    digest::{Update as _, VariableOutput as _},
+};
 use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
@@ -88,6 +93,33 @@ pub(crate) fn entrypoint_hash_from_framed_bytes(
     Ok(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
         view.as_bytes(),
     )))
+}
+
+struct Blake2HashWriter(Blake2bVar);
+
+impl Blake2HashWriter {
+    fn new() -> Self {
+        Self(Blake2bVar::new(iroha_crypto::Hash::LENGTH).expect("valid Blake2b output length"))
+    }
+
+    fn finalize(self) -> iroha_crypto::Hash {
+        let mut hash = [0; iroha_crypto::Hash::LENGTH];
+        self.0
+            .finalize_variable(&mut hash)
+            .expect("Blake2b finalization writes the configured output length");
+        iroha_crypto::Hash::prehashed(hash)
+    }
+}
+
+impl Write for Blake2HashWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Stateful admission facts that must be committed only if transaction execution succeeds.
@@ -713,8 +745,22 @@ impl DecodedVersionedSignedTransaction {
             AcceptedTransaction::signed_encoded_len(&tx),
             "versioned signed transaction payload length must match canonical framed length",
         );
+        let signed_payload = input
+            .get(1..)
+            .expect("successful versioned decode includes version byte");
+        let entrypoint_hash =
+            AcceptedTransaction::external_entrypoint_hash_from_signed_payload(signed_payload);
+        debug_assert_eq!(
+            entrypoint_hash,
+            tx.hash_as_entrypoint(),
+            "payload-derived external entrypoint hash must match canonical hash",
+        );
         let prepared =
-            AcceptedTransaction::prepare_signed_metadata_with_encoded_len(&tx, encoded_len);
+            AcceptedTransaction::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+                &tx,
+                entrypoint_hash,
+                encoded_len,
+            );
         Ok(Self { tx, prepared })
     }
 
@@ -1142,6 +1188,23 @@ impl<'tx> AcceptedTransaction<'tx> {
         HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
     }
 
+    fn external_entrypoint_hash_from_signed_payload(
+        signed_payload: &[u8],
+    ) -> HashOf<TransactionEntrypoint> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let mut writer = Blake2HashWriter::new();
+        norito::core::NoritoSerialize::serialize(&0u32, &mut writer)
+            .expect("u32 discriminant serialization cannot fail");
+        let payload_len = u64::try_from(signed_payload.len())
+            .expect("signed transaction payload length fits u64");
+        norito::core::write_len(&mut writer, payload_len)
+            .expect("hash writer accepts length prefix");
+        writer
+            .write_all(signed_payload)
+            .expect("hash writer accepts signed transaction payload");
+        HashOf::from_untyped_unchecked(writer.finalize())
+    }
+
     fn framed_padding_for<T>() -> usize {
         let align = core::mem::align_of::<norito::core::Archived<T>>();
         if align <= 1 {
@@ -1236,6 +1299,18 @@ impl<'tx> AcceptedTransaction<'tx> {
         encoded_len: usize,
     ) -> PreparedTransactionMetadata {
         let entrypoint_hash = tx.hash_as_entrypoint();
+        Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+            tx,
+            entrypoint_hash,
+            encoded_len,
+        )
+    }
+
+    fn prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+        tx: &SignedTransaction,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        encoded_len: usize,
+    ) -> PreparedTransactionMetadata {
         let signed_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash));
         PreparedTransactionMetadata {
             signed_hash,
@@ -6510,6 +6585,44 @@ pub mod tests {
         assert_eq!(accepted.encoded_len(), expected_len);
         assert_eq!(accepted.payload_hash(), Some(HashOf::new(signed.payload())));
         assert!(accepted.single_ed25519_key().is_some());
+    }
+
+    #[test]
+    fn decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept() {
+        let chain: ChainId = "decoded-versioned-owned-precheck-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain.clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "versioned-owned-precheck".into())])
+            .sign(keypair.private_key());
+        let expected_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+        let versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+
+        let decoded = DecodedVersionedSignedTransaction::decode_versioned_owned(versioned)
+            .expect("owned versioned signed transaction decodes");
+        let (message, signature, _public_key) = decoded
+            .single_ed25519_precheck_parts()
+            .expect("single Ed25519 transaction exposes precheck parts");
+
+        assert_eq!(message, HashOf::new(signed.payload()).as_ref().as_slice());
+        assert_eq!(signature, signed.signature().payload().payload());
+        assert_eq!(decoded.encoded_len(), expected_len);
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = decoded
+            .into_accepted_after_single_ed25519_precheck(
+                &chain,
+                Duration::ZERO,
+                limits,
+                &crypto_cfg,
+            )
+            .expect("prechecked decoded transaction accepts");
+
+        assert_eq!(accepted.hash(), signed.hash());
+        assert_eq!(accepted.encoded_len(), expected_len);
     }
 
     #[test]

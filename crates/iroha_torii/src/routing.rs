@@ -10395,6 +10395,20 @@ pub fn accept_decoded_signed_transaction_for_ingress(
     tx: DecodedVersionedSignedTransaction,
     telemetry: &MaybeTelemetry,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    accept_decoded_signed_transaction_for_ingress_with_precheck(
+        chain_id, state, tx, telemetry, false, None,
+    )
+}
+
+/// Validate an already decoded signed transaction at Torii ingress after Ed25519 precheck.
+pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
+    chain_id: Arc<ChainId>,
+    state: Arc<CoreState>,
+    tx: DecodedVersionedSignedTransaction,
+    telemetry: &MaybeTelemetry,
+    single_ed25519_prechecked: bool,
+    precheck_rejection: Option<AcceptTransactionFail>,
+) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
     #[cfg(feature = "telemetry")]
@@ -10453,7 +10467,20 @@ pub fn accept_decoded_signed_transaction_for_ingress(
     };
 
     let crypto_cfg = state.crypto();
-    match tx.into_accepted(&chain_id, max_clock_drift, tx_limits, crypto_cfg.as_ref()) {
+    let accepted = if let Some(err) = precheck_rejection {
+        Err(err)
+    } else if single_ed25519_prechecked {
+        tx.into_accepted_after_single_ed25519_precheck(
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+    } else {
+        tx.into_accepted(&chain_id, max_clock_drift, tx_limits, crypto_cfg.as_ref())
+    };
+
+    match accepted {
         Ok(tx) => {
             #[cfg(feature = "telemetry")]
             observe_route_stage_latency(
