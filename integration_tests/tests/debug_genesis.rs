@@ -10,7 +10,7 @@ use iroha_data_model::{
     transaction::Executable,
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use norito::codec::encode_adaptive;
+use norito::codec::{encode_adaptive, encode_with_header_flags};
 
 #[test]
 fn genesis_roundtrip_inspection() {
@@ -39,10 +39,9 @@ fn genesis_roundtrip_inspection() {
         if let Executable::Instructions(step) = tx.instructions() {
             eprintln!("tx#{tx_idx} instruction_count={}", step.len());
             for (inst_idx, inst) in step.iter().enumerate() {
-                let bytes = encode_adaptive(inst);
-                let _ = norito::codec::take_last_encode_flags();
+                let (bytes, flags) = encode_with_header_flags(inst);
                 eprintln!(
-                    "tx#{tx_idx} inst#{inst_idx} len={} debug={:?}",
+                    "tx#{tx_idx} inst#{inst_idx} len={} flags=0x{flags:02x} debug={:?}",
                     bytes.len(),
                     inst
                 );
@@ -52,9 +51,8 @@ fn genesis_roundtrip_inspection() {
         }
     }
 
-    let _probe_payload = encode_adaptive(&genesis.0);
-    let stored_flags = norito::codec::take_last_encode_flags();
-    eprintln!("stored_flags before frame: {stored_flags:#?}");
+    let (_probe_payload, probe_flags) = encode_with_header_flags(&genesis.0);
+    eprintln!("explicit flags before frame: 0x{probe_flags:02x}");
     let payload_1 = encode_adaptive(&genesis.0);
     let mut versioned_1 = Vec::with_capacity(1 + payload_1.len());
     versioned_1.push(1);

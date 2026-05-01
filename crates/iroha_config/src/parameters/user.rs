@@ -4166,48 +4166,12 @@ impl Default for Banner {
 
 /// Norito codec configuration (user view).
 ///
-/// Runtime overrides are ignored by the codec; these values exist to surface
-/// the canonical profile in configuration files. Nodes that require different
-/// heuristics must rebuild Norito with a custom profile.
+/// The Norito wire layout and compression thresholds are canonical for this
+/// release and are not configurable at runtime. This section only contains
+/// operational limits and hardware-offload gates that affect local execution.
 /// User-level configuration container for `Norito`.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Norito {
-    /// Minimum payload size (bytes) to attempt CPU zstd.
-    #[config(
-        env = "NORITO_MIN_COMPRESS_BYTES_CPU",
-        default = "defaults::norito::MIN_COMPRESS_BYTES_CPU"
-    )]
-    pub min_compress_bytes_cpu: usize,
-    /// Minimum payload size (bytes) to attempt GPU zstd when available.
-    #[config(
-        env = "NORITO_MIN_COMPRESS_BYTES_GPU",
-        default = "defaults::norito::MIN_COMPRESS_BYTES_GPU"
-    )]
-    pub min_compress_bytes_gpu: usize,
-    /// zstd level for medium-size payloads.
-    #[config(
-        env = "NORITO_ZSTD_LEVEL_SMALL",
-        default = "defaults::norito::ZSTD_LEVEL_SMALL"
-    )]
-    pub zstd_level_small: i32,
-    /// zstd level for large payloads.
-    #[config(
-        env = "NORITO_ZSTD_LEVEL_LARGE",
-        default = "defaults::norito::ZSTD_LEVEL_LARGE"
-    )]
-    pub zstd_level_large: i32,
-    /// GPU zstd level.
-    #[config(
-        env = "NORITO_ZSTD_LEVEL_GPU",
-        default = "defaults::norito::ZSTD_LEVEL_GPU"
-    )]
-    pub zstd_level_gpu: i32,
-    /// Size threshold distinguishing small vs large for CPU zstd level.
-    #[config(
-        env = "NORITO_LARGE_THRESHOLD",
-        default = "defaults::norito::LARGE_THRESHOLD"
-    )]
-    pub large_threshold: usize,
     /// Allow GPU compression offload when compiled and available.
     #[config(
         env = "NORITO_ALLOW_GPU_COMPRESSION",
@@ -4220,26 +4184,13 @@ pub struct Norito {
         default = "defaults::norito::MAX_ARCHIVE_LEN"
     )]
     pub max_archive_len: u64,
-    /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
-    #[config(
-        env = "NORITO_AOS_NCB_SMALL_N",
-        default = "defaults::norito::AOS_NCB_SMALL_N"
-    )]
-    pub aos_ncb_small_n: usize,
 }
 
 impl Norito {
     fn parse(self) -> actual::Norito {
         actual::Norito {
-            min_compress_bytes_cpu: self.min_compress_bytes_cpu,
-            min_compress_bytes_gpu: self.min_compress_bytes_gpu,
-            zstd_level_small: self.zstd_level_small,
-            zstd_level_large: self.zstd_level_large,
-            zstd_level_gpu: self.zstd_level_gpu,
-            large_threshold: self.large_threshold,
             allow_gpu_compression: self.allow_gpu_compression,
             max_archive_len: self.max_archive_len,
-            aos_ncb_small_n: self.aos_ncb_small_n,
         }
     }
 }
@@ -16180,6 +16131,8 @@ pub struct ToriiOfflineIssuer {
     /// Private key for the privileged Offline V2 issuer account.
     #[config(env = "TORII_OFFLINE_ISSUER_PRIVATE_KEY")]
     pub private_key: Option<ExposedPrivateKey>,
+    /// Public key for the trusted middleware that verifies platform attestations.
+    pub attestation_verifier_public_key: Option<PublicKey>,
     /// Maximum authorized offline balance per lineage.
     #[config(default = "defaults::torii::offline_issuer::max_balance()")]
     pub max_balance: String,
@@ -16227,11 +16180,23 @@ impl ToriiOfflineIssuer {
             });
         let key_pair = KeyPair::from_private_key(private_key.0.clone())
             .unwrap_or_else(|err| panic!("invalid torii.offline_issuer.private_key: {err}"));
-        if matches!(
+        if !matches!(
             key_pair.public_key().algorithm(),
-            Algorithm::BlsNormal | Algorithm::BlsSmall
+            Algorithm::Ed25519 | Algorithm::Secp256k1
         ) {
-            panic!("torii.offline_issuer.private_key must not use BLS; use ed25519 or secp256k1");
+            panic!("torii.offline_issuer.private_key must use ed25519 or secp256k1");
+        }
+        let attestation_verifier_public_key =
+            self.attestation_verifier_public_key.unwrap_or_else(|| {
+                panic!("torii.offline_issuer.attestation_verifier_public_key is required")
+            });
+        if !matches!(
+            attestation_verifier_public_key.algorithm(),
+            Algorithm::Ed25519 | Algorithm::Secp256k1
+        ) {
+            panic!(
+                "torii.offline_issuer.attestation_verifier_public_key must use ed25519 or secp256k1"
+            );
         }
         let max_balance =
             Self::parse_positive_amount("torii.offline_issuer.max_balance", &self.max_balance);
@@ -16240,6 +16205,7 @@ impl ToriiOfflineIssuer {
         Some(actual::ToriiOfflineIssuer {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
+            attestation_verifier_public_key,
             max_balance,
             max_tx_value,
             certificate_ttl: self.certificate_ttl_ms.get().max(MIN_TIMER_INTERVAL),
@@ -16255,6 +16221,75 @@ impl ToriiOfflineIssuer {
             panic!("{field} must be greater than zero");
         }
         amount
+    }
+}
+
+#[cfg(test)]
+mod torii_offline_issuer_tests {
+    use super::*;
+
+    fn seeded_key_pair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::from_seed(vec![seed; 32], algorithm)
+    }
+
+    fn sample_offline_issuer(issuer_algorithm: Algorithm) -> ToriiOfflineIssuer {
+        let issuer_key_pair = seeded_key_pair(0x41, issuer_algorithm);
+        let verifier_key_pair = seeded_key_pair(0x42, Algorithm::Ed25519);
+        ToriiOfflineIssuer {
+            enabled: true,
+            private_key: Some(ExposedPrivateKey(issuer_key_pair.private_key().clone())),
+            attestation_verifier_public_key: Some(verifier_key_pair.public_key().clone()),
+            max_balance: "100".to_string(),
+            max_tx_value: "25".to_string(),
+            certificate_ttl_ms: DurationMs(Duration::from_millis(
+                defaults::torii::offline_issuer::CERTIFICATE_TTL_MS,
+            )),
+            authorization_refresh_ms: DurationMs(Duration::from_millis(
+                defaults::torii::offline_issuer::AUTHORIZATION_REFRESH_MS,
+            )),
+            authorization_ttl_ms: DurationMs(Duration::from_millis(
+                defaults::torii::offline_issuer::AUTHORIZATION_TTL_MS,
+            )),
+        }
+    }
+
+    #[test]
+    fn torii_offline_issuer_accepts_supported_key_algorithms() {
+        for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
+            let parsed = sample_offline_issuer(algorithm)
+                .parse()
+                .expect("offline issuer");
+            assert_eq!(parsed.key_pair.public_key().algorithm(), algorithm);
+            assert_eq!(
+                parsed.attestation_verifier_public_key.algorithm(),
+                Algorithm::Ed25519
+            );
+        }
+    }
+
+    #[test]
+    fn torii_offline_issuer_rejects_unsupported_private_key_algorithm() {
+        let panic = std::panic::catch_unwind(|| sample_offline_issuer(Algorithm::MlDsa).parse());
+        assert!(panic.is_err(), "expected ML-DSA issuer key to panic");
+    }
+
+    #[test]
+    fn torii_offline_issuer_requires_attestation_verifier_key() {
+        let mut issuer = sample_offline_issuer(Algorithm::Ed25519);
+        issuer.attestation_verifier_public_key = None;
+
+        let panic = std::panic::catch_unwind(|| issuer.parse());
+        assert!(panic.is_err(), "expected missing verifier key to panic");
+    }
+
+    #[test]
+    fn torii_offline_issuer_rejects_unsupported_verifier_key_algorithm() {
+        let mut issuer = sample_offline_issuer(Algorithm::Ed25519);
+        issuer.attestation_verifier_public_key =
+            Some(seeded_key_pair(0x43, Algorithm::MlDsa).public_key().clone());
+
+        let panic = std::panic::catch_unwind(|| issuer.parse());
+        assert!(panic.is_err(), "expected ML-DSA verifier key to panic");
     }
 }
 

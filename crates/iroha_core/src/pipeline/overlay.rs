@@ -818,14 +818,15 @@ impl TxOverlay {
                 }
                 if let Some(execution_contexts) = self.execution_contexts.as_ref() {
                     let execution_context = &execution_contexts[instruction_index];
-                    executor.execute_instruction_with_contract_runtime_context(
+                    executor.execute_borrowed_overlay_instruction(
                         state_tx,
                         &execution_context.authority,
-                        instr.clone(),
+                        instr,
                         execution_context.contract_runtime_context.as_ref(),
                     )?;
                 } else {
-                    executor.execute_instruction(state_tx, authority, instr.clone())?;
+                    executor
+                        .execute_borrowed_overlay_instruction(state_tx, authority, instr, None)?;
                 }
                 instruction_index = instruction_index.saturating_add(1);
             }
@@ -875,14 +876,15 @@ impl TxOverlay {
                 }
                 if let Some(execution_contexts) = self.execution_contexts.as_ref() {
                     let execution_context = &execution_contexts[instruction_index];
-                    executor.execute_instruction_with_contract_runtime_context(
+                    executor.execute_borrowed_overlay_instruction(
                         state_tx,
                         &execution_context.authority,
-                        instr.clone(),
+                        instr,
                         execution_context.contract_runtime_context.as_ref(),
                     )?;
                 } else {
-                    executor.execute_instruction(state_tx, authority, instr.clone())?;
+                    executor
+                        .execute_borrowed_overlay_instruction(state_tx, authority, instr, None)?;
                 }
                 instruction_index = instruction_index.saturating_add(1);
             }

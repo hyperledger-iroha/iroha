@@ -2387,7 +2387,7 @@ impl Actor {
         if let Err(err) = assembly_result {
             tx_guards.clear();
             for (tx, routing) in original_for_requeue {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2397,7 +2397,7 @@ impl Actor {
                 );
             }
             for (tx, routing) in std::mem::take(&mut overflow_transactions) {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2407,7 +2407,7 @@ impl Actor {
                 );
             }
             for (tx, routing) in removed_for_chunk_cap {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2417,7 +2417,7 @@ impl Actor {
                 );
             }
             for (tx, routing) in removed_for_frame_cap {
-                if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+                if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
                 self.requeue_accepted_transaction(
@@ -2430,7 +2430,7 @@ impl Actor {
         }
         tx_guards.clear();
         for (tx, routing) in std::mem::take(&mut overflow_transactions) {
-            if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+            if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                 continue;
             }
             self.requeue_accepted_transaction(
@@ -2440,7 +2440,7 @@ impl Actor {
             );
         }
         for (tx, routing) in removed_for_chunk_cap {
-            if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+            if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                 continue;
             }
             self.requeue_accepted_transaction(
@@ -2450,7 +2450,7 @@ impl Actor {
             );
         }
         for (tx, routing) in removed_for_frame_cap {
-            if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
+            if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                 continue;
             }
             self.requeue_accepted_transaction(

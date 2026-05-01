@@ -413,6 +413,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
             onboarding: None,
             faucet: None,
+            offline_issuer: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
@@ -1073,17 +1074,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             },
         },
         norito: iroha_config::parameters::actual::Norito {
-            min_compress_bytes_cpu:
-                iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_CPU,
-            min_compress_bytes_gpu:
-                iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_GPU,
-            zstd_level_small: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_SMALL,
-            zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
-            zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
-            large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
             allow_gpu_compression:
                 iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
-            aos_ncb_small_n: iroha_config::parameters::defaults::norito::AOS_NCB_SMALL_N,
             max_archive_len: iroha_config::parameters::defaults::norito::MAX_ARCHIVE_LEN,
         },
         hijiri: A::Hijiri::new(None),

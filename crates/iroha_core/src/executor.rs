@@ -2750,6 +2750,42 @@ impl Executor {
         )
     }
 
+    /// Execute a borrowed overlay instruction using the runtime profile.
+    ///
+    /// The public executor API remains owned-instruction based. Overlay apply
+    /// calls this crate-private adapter so built-in executor borrowing can be
+    /// extended without changing custom executor or wire/API behaviour.
+    pub(crate) fn execute_borrowed_overlay_instruction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &InstructionBox,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<(), ValidationFail> {
+        match self {
+            Self::Initial => self.execute_instruction_with_profile_and_contract_runtime_context(
+                state_transaction,
+                authority,
+                instruction.clone(),
+                InstructionExecutionProfile::Runtime,
+                contract_runtime_context,
+            ),
+            Self::UserProvided(_) => {
+                iroha_logger::trace!(
+                    instr = %instruction.id(),
+                    "using owned overlay instruction fallback for user-provided executor"
+                );
+                self.execute_instruction_with_profile_and_contract_runtime_context(
+                    state_transaction,
+                    authority,
+                    instruction.clone(),
+                    InstructionExecutionProfile::Runtime,
+                    contract_runtime_context,
+                )
+            }
+        }
+    }
+
     /// Execute [`InstructionBox`] using a specific execution profile.
     ///
     /// `InstructionExecutionProfile::Runtime` mirrors production behaviour.

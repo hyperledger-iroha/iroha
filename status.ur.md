@@ -253,7 +253,7 @@ Last update: 2026-02-07
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-test cargo test -p norito` (ok; warnings about unused `padded` in `norito`).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace cargo test --workspace` (timed out after 20m during compile; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, dead-code fields in `izanami`).
 - Localnet 1 Hz (fast_gas_limit_per_block=1_000_000, pacing governor clamped to 1.0x): 4-peer NPoS localnet (block/commit 1000ms) on `/private/tmp/iroha-localnet-npos-1hz-fastgas-clamped-20260131T185723Z` with `/v1/sumeragi/status` sampling in `sumeragi_status_1hz_fastgas_clamped_20260131T185723Z.jsonl` and pings in `ping_1hz_fastgas_clamped_20260131T185723Z.log`; `commit_qc.height` 1->48 (+47) over 179s (~0.263 blocks/s, ~3.81s/block), `view_change_install_total` +2, `missing_block_fetch.total` +17, `pending_rbc.bytes` max 5563, effective block/commit time 1000/750 with `pacing_factor_bps=10000` (still above 1s target).
-- GPU zstd: enforce the GPU cutoff inside `gpu_zstd::encode_all` so direct callers respect the `min_compress_bytes_gpu` threshold, and added a unit test for the CPU fallback on small payloads.
+- GPU zstd: enforce the GPU cutoff inside `gpu_zstd::encode_all` so direct callers respect the Norito compiled GPU cutoff, and added a unit test for the CPU fallback on small payloads.
 - Docs: noted the GPU cutoff enforcement in the acceleration and Metal pipeline docs.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-gpuzstd-test cargo test -p gpuzstd_metal` (ok).
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).

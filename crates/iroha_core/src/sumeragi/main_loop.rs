@@ -8812,7 +8812,10 @@ impl Actor {
     }
 
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
-        match tx.as_ref().instructions() {
+        let Some(signed) = tx.external() else {
+            return false;
+        };
+        match signed.instructions() {
             Executable::Instructions(batch) => batch.iter().any(is_peer_admin_instruction),
             _ => false,
         }

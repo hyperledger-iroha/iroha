@@ -1352,15 +1352,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             pipeline_agenda_sla_blocks: defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
         },
         norito: A::Norito {
-            min_compress_bytes_cpu: defaults::norito::MIN_COMPRESS_BYTES_CPU,
-            min_compress_bytes_gpu: defaults::norito::MIN_COMPRESS_BYTES_GPU,
-            zstd_level_small: defaults::norito::ZSTD_LEVEL_SMALL,
-            zstd_level_large: defaults::norito::ZSTD_LEVEL_LARGE,
-            zstd_level_gpu: defaults::norito::ZSTD_LEVEL_GPU,
-            large_threshold: defaults::norito::LARGE_THRESHOLD,
             allow_gpu_compression: defaults::norito::ALLOW_GPU_COMPRESSION,
             max_archive_len: defaults::norito::MAX_ARCHIVE_LEN,
-            aos_ncb_small_n: defaults::norito::AOS_NCB_SMALL_N,
         },
         nts: A::Nts {
             sample_interval: defaults::time::NTS_SAMPLE_INTERVAL,

@@ -44,8 +44,8 @@
   plus baseline RLE block decoding with explicit end-of-block validation.
 - Columnar helpers: NCB/AoS layouts for `(u64, String, boolean)`, `(u64, bytes)`
   (including optional bytes), and `(u64, enum(Name|Code), boolean)` rows.
-- Schema hashing: FNV-1a 64-bit hashed canonical string, duplicated to 16 bytes, plus
-  structural schema hashing via Norito's native JSON canonicalisation.
+- Schema hashing: first 16 bytes of domain-separated SHA-256 over the canonical
+  type name or structural schema JSON.
 - CLI utility: `NoritoDump` prints header fields for inspection.
 - Tests: standalone harness under `src/test/java` covering header roundtrips,
   encode/decode for primitives, sequences, options, results, struct adapters,

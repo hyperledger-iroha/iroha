@@ -171,12 +171,8 @@ IVM/Crypto მიზანმიმართული იქნება ამ 
 
 | ველი | ნაგულისხმევი | დანიშნულება |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` ბაიტი | ამის ქვემოთ, ტვირთამწეობა მთლიანად გამოტოვებს zstd-ს ზედნადების თავიდან ასაცილებლად. |
-| `min_compress_bytes_gpu` | `1_048_576` ბაიტი (1MiB) | ტვირთამწეობა ამ ლიმიტზე ან ზემოთ გადადის GPU zstd-ზე, როდესაც `norito::core::hw::has_gpu_compression()` არის true. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU-ის შეკუმშვის დონეები <32 KiB და ≥32 KiB დატვირთვისთვის შესაბამისად. |
-| `zstd_level_gpu` | `1` | კონსერვატიული GPU დონე ბრძანების რიგების შევსებისას ლატენტურობის შესანარჩუნებლად. |
-| `large_threshold` | `32_768` ბაიტი | ზომის საზღვარი "პატარა" და "დიდი" CPU zstd დონეებს შორის. |
-| `aos_ncb_small_n` | `64` რიგები | ამ მწკრივის დათვლის ქვემოთ ადაპტური ენკოდერები იკვლევენ როგორც AoS, ასევე NCB განლაგებას, რათა აირჩიონ ყველაზე მცირე დატვირთვა. |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` რიგები | ხელს უშლის u32/id დელტა კოდირების ჩართვას, როდესაც 1–2 მწკრივი შეიცავს ცარიელ უჯრედებს. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | დელტაები მხოლოდ ერთხელ იჭრება, სულ მცირე, ორი რიგი. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | ყველა დელტა ტრანსფორმაცია ჩართულია ნაგულისხმევად კარგად მოვლილი შეყვანებისთვის. |
@@ -189,7 +185,7 @@ IVM/Crypto მიზანმიმართული იქნება ამ 
 არასოდეს იღებს გადაწყვეტილებას, რომელიც შეცვლის მავთულის ფორმატს და ზღვრები ფიქსირდება
 თითო გამოშვებაზე. როდესაც პროფილირებით გამოვლენილია უკეთესი წყვეტის წერტილები, Norito განაახლებს
 კანონიკური `Heuristics::canonical` განხორციელება და `docs/source/benchmarks.md` plus
-`status.md` ჩაწერეთ ცვლილება ვერსიულ მტკიცებულებასთან ერთად.GPU zstd დამხმარე ახორციელებს იგივე `min_compress_bytes_gpu` შეწყვეტას მაშინაც კი, როდესაც
+`status.md` ჩაწერეთ ცვლილება ვერსიულ მტკიცებულებასთან ერთად.GPU zstd დამხმარე ახორციელებს იგივე compiled GPU cutoff შეწყვეტას მაშინაც კი, როდესაც
 პირდაპირ დარეკვა (მაგალითად, `norito::core::gpu_zstd::encode_all`-ის საშუალებით), ასე მცირე
 ტვირთამწეობა ყოველთვის რჩება CPU გზაზე, GPU ხელმისაწვდომობის მიუხედავად.
 

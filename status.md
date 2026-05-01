@@ -2,6 +2,296 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Contended conservative-cache release 20k gate rerun
+
+- Reran the 4-peer, no-fault, prebuilt `20,000 TPS` / `120s` Izanami gate from
+  the existing release binaries. Corrected artifact:
+  `dist/izanami-prebuilt-20k-conservative-cache-rerun2-120s-20260501-144548`.
+  It exited `0`. A preceding same-shape artifact at
+  `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-144204`
+  completed and wrote a summary, but its wrapper failed only while recording the
+  exit status.
+- This is a contended performance data point: active debug
+  `cargo test`/`rustc` jobs were running during the gate, including the
+  integration `core_api` network test build. The artifact records that
+  contention in `contention.txt`; do not compare it as a clean throughput
+  baseline against the earlier isolated gate.
+- The corrected run offered all `2,400,000` submissions, built and used all
+  `2,400,000` prebuilt transactions, had no prebuild fallback/build failures,
+  and accepted `52,070` ingress transactions. Submit latency p50/p95/p99/max
+  was `3208/4708/5311/6960 ms`.
+- Final quorum/strict height was `5/5` with `12,329/12,329` strict approved
+  transactions, zero peer height skew, zero approved-transaction skew, final
+  queue depth `39,344/2,400,000`, and `tx_queue_saturated=true`.
+- Safety remained intact: no validation rejects, no quorum-timeout cause, no DA
+  gate pressure, no RBC store pressure/evictions, and no pending-RBC drops. The
+  contended run did record `4` view-change installs, `22` missing-block fetches,
+  `6/6` missing-QC reacquire attempts/successes, and `5` range-pull escalations
+  with `2` range-pull successes.
+
+## 2026-05-01 Contended conservative-cache 20k sampled profile bottlenecks
+
+- Captured the latest requested release 4-peer, no-fault, prebuilt
+  `20,000 TPS` / `30s` sampled profile at
+  `dist/izanami-profile-20k-conservative-cache-rerun2-sampled-30s-20260501-145104`.
+  The Izanami run exited `0`; `sample_ready=1`, and `sample_status=1` was
+  caused by the sampler also targeting the bash wrapper plus one transient PID.
+  Valid `sample` outputs were captured for the load driver and all four peers.
+- This profile was contended by active debug `cargo test`/`rustc` jobs, so it is
+  bottleneck evidence rather than an isolated timing baseline. The run offered
+  all `600,000` submissions, built/used all `600,000` prebuilt transactions,
+  accepted `52,817` ingress transactions, and reached quorum/strict height
+  `3/3` with `4,137/4,137` strict approved transactions.
+- Submit latency p50/p95/p99/max was `3385/6290/8296/11882 ms`; final queue
+  depth was `40,839/600,000` with `tx_queue_saturated=true`. Safety signals
+  stayed clean: no validation rejects, view changes, RBC store pressure,
+  evictions, pending-RBC drops, prebuild fallback, or transaction build
+  failures.
+- The prior cache-pass removals remain absent from the peer samples:
+  `Queue::encode_gossip_payload=0`, `TxOverlay::byte_size=0`, and
+  `external_entrypoints_cloned=0`. `prepare_signed_metadata` appears only as
+  residue and is not the dominant sampled path.
+- The current bottleneck stack is now transaction admission crypto/public-key
+  work, allocation/memmove churn, residual Norito dynamic instruction framing
+  inside exact-length and canonical-byte construction, gossip transaction
+  materialization/decode during admission, and block validation overlay
+  execution. Representative leaves include `curve25519_dalek` field ops,
+  `PublicKeyFull::from_bytes`, `AcceptedTransaction::from_external_with_hot_cache`,
+  `AcceptedTransaction::signed_encoded_len`,
+  `iroha_data_model::isi::encoded_instruction_pair`,
+  `GossipTransaction::try_deserialize`,
+  `decode_gossip_transaction_payload`, `TxOverlay::apply_with_chunk`,
+  `InstructionDynClone::dyn_box_clone`, and `WorldTransaction::apply`.
+- Next tuning should carry already validated inbound canonical signed/entrypoint
+  bytes into `AcceptedTransaction`, reduce `InstructionBox` exact-length sizing
+  without re-encoding framed payloads, extend parsed Ed25519 key/signature reuse
+  on the Torii/direct-ingress path, and only then tackle the clone-heavy
+  `TxOverlay::apply_with_chunk` API if overlay samples remain active.
+
+## 2026-05-01 Norito first-release codec cleanup
+
+- Tightened the v1 Norito header contract across Rust, Java, Kotlin, Python,
+  and Swift: decoders now reject reserved layout bits, `FIELD_BITSET` is only
+  valid with `PACKED_STRUCT | COMPACT_LEN`, and public encoders reject
+  unsupported layout flags instead of emitting frames that downstream decoders
+  would have to guess.
+- Replaced the duplicated FNV-1a schema hash with a domain-separated SHA-256
+  digest truncated to 16 bytes for both type-name and structural schema hashes.
+  Shared fixtures, SDK tests, and the Norito binding parity script now pin the
+  new values.
+- Removed public last-encode-flag side channels from Rust, Java, Kotlin, and
+  Python. Callers that need explicit layout metadata now use the explicit
+  `encode_with_header_flags` surface.
+- Removed first-release compatibility fallbacks from the core codec: typed
+  decoders no longer special-case legacy schema length mismatches, and `Vec<u8>`
+  no longer accepts the old per-element length-prefixed representation.
+- Removed ignored runtime Norito heuristic knobs from configuration and daemon
+  startup reporting. Runtime config now exposes only the active GPU-compression
+  permission and archive-size guard; the remaining codec layout heuristics are
+  compiled release defaults documented under the acceleration guide.
+- Fixed the structural-schema build gap by adding explicit float metadata to
+  `iroha_schema`, schema JSON support for float metadata, and manual structural
+  schema descriptions for streaming named-variant payloads and bundled codec
+  helper state.
+- Validation:
+  - `python3 scripts/check_norito_bindings_sync.py` passed.
+  - `python3 -m pytest python/norito_py/tests/test_header_padding.py` passed.
+  - `swift test --filter NoritoTests` passed from `IrohaSwift`.
+  - Focused Rust checks passed for Norito header validation, schema hashes,
+    stream iterator reserved flags, explicit bare-header flags, `Vec<u8>`
+    rejection of legacy element framing, `norito_derive` self-delimiting
+    classification, `iroha_config` fixture snapshots, cross-language hashes,
+    and the `iroha_crypto` public-key Norito golden archive.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-fixes cargo test -p
+    iroha_schema --test floats -- --nocapture` passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-fixes cargo test -p norito
+    --features schema-structural --test schema_hash -- --nocapture` passed.
+
+## 2026-05-01 Broader 20k bottleneck pass
+
+- Implemented lazy transaction-gossip materialization in
+  `crates/iroha_core/src/gossiper.rs`: decoded gossip entries now keep the
+  canonical framed `TransactionEntrypoint` bytes plus the precomputed
+  entrypoint-compatible transaction hash, and semantic entrypoint decode is
+  deferred until queue admission reaches a route-valid, locally unknown
+  candidate. Outbound gossip serialization continues to write the cached framed
+  bytes.
+- Added gossip-side deterministic single-key Ed25519 batch precheck using the
+  existing `pipeline.signature_batch_max_ed25519` setting and
+  `iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch`.
+  Multisig, non-Ed25519, sealed commitment/reveal, private Kaigi, and time
+  entrypoints stay on the existing per-entrypoint validation path.
+- Added a crate-private accepted-gossip constructor in
+  `crates/iroha_core/src/tx.rs` that accepts prepared metadata plus a
+  single-Ed25519-prechecked marker, while still running chain id, time/TTL,
+  signing policy, size, signature-count, heartbeat, and NTS health checks.
+- Routed `TxOverlay` application through a crate-private borrowed overlay
+  executor adapter. The public `Execute` trait and custom executor API remain
+  owned-instruction based; user-provided executor paths still explicitly fall
+  back to owned `InstructionBox` execution.
+- Added focused unit coverage for lazy gossip decode/cache behavior,
+  route-invalid and known-duplicate drops without materialization, accepted
+  cached gossip payload reuse, and valid/invalid gossip Ed25519 batch precheck
+  behavior.
+- Profile classification after this pass: the prior 30s profile at
+  `dist/izanami-profile-20k-postcache-tuned-bottleneck-30s-20260501-171955`
+  should be considered pre-broader-pass. The latest completed 120s gate remains
+  `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-175213`;
+  no fresh 30s sampled profile or 120s release gate was rerun in this coding
+  pass.
+- Validation:
+  - `cargo fmt --all` passed.
+  - `git diff --check` passed.
+  - `cargo check -p iroha_core` without overrides failed before reaching this
+    code because `crates/norito/build.rs` ran the binding parity script against
+    then-stale SDK fixtures. The Norito first-release cleanup recorded above
+    has since refreshed the binding parity corridor.
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo check -p iroha_core` passed.
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    check -p iroha_core` passed.
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib
+    gossip_transaction -- --nocapture` did not run tests because the
+    `iroha_core` lib-test build hit then-stale test-only Norito config fields.
+    The Norito first-release cleanup recorded above has since removed those
+    ignored fields from config construction.
+
+## 2026-05-01 Conservative cache release 20k gate rerun
+
+- Rebuilt release binaries with
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+  and reran the 4-peer, no-fault, prebuilt `20,000 TPS` / `120s` Izanami
+  gate. Canonical artifact:
+  `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-175213`.
+  It exited `0`; a preceding same-shape artifact completed and wrote a summary,
+  but its wrapper tripped only during post-run exit bookkeeping, so it is not the
+  recorded gate result.
+- The clean run offered `2,399,905` submissions, built `2,400,000` prebuilt
+  transactions, used `2,399,905`, and had no prebuild fallback or build
+  failures. Ingress accepted `54,574` transactions. Submit latency
+  p50/p95/p99/max was `3114/4804/5744/7116 ms`.
+- Final quorum/strict height was `9/9` with `28,710/28,710` strict approved
+  transactions, final peer height skew `1`, final approved-transaction skew
+  `4096`, final queue depth `25,839/2,400,000`, and
+  `tx_queue_saturated=true`.
+- The result is materially consistent with the previous post-cache tuned gates
+  (`28,790` then `28,694` strict approved transactions). The conservative cache
+  pass did not regress safety signals, but the 20k committed-throughput target is
+  still missed; the next useful step remains a fresh 30s sampled profile focused
+  on validation/execution recording, gossip decode, and any remaining Norito
+  encoded-length fallback.
+- The gate recorded no validation rejects, view changes, RBC store pressure, RBC
+  evictions, pending-RBC drops, prebuild fallback, or transaction build failures.
+  `sumeragi_status_delta` reported `81` pacemaker backpressure deferrals,
+  `8/8` missing-QC reacquire attempts/successes, `8` range-pull escalations,
+  and no range-pull successes or failures.
+
+## 2026-05-01 Conservative cache 20k sampled profile bottlenecks
+
+- Captured a fresh release 4-peer, no-fault, prebuilt `20,000 TPS` / `30s`
+  macOS `sample` profile at
+  `dist/izanami-profile-20k-conservative-cache-parallel-sampled-30s-20260501-181025`.
+  The wrapper exited `0` with `sample_ready=1`, `sample_status=0`, and sampled
+  the load driver plus all four peer processes. A concurrent
+  `cargo test -p iroha_core --lib gossip_transaction -- --nocapture` compile
+  was active on the same host, so this is useful bottleneck evidence but not an
+  isolated latency baseline.
+- The run offered all `600,000` submissions, built/used all `600,000` prebuilt
+  transactions, accepted `52,080` ingress transactions, and reached
+  quorum/strict height `2/2` with `147/147` strict approved transactions.
+  Submit latency p50/p95/p99/max was `3511/7212/8964/11842 ms`; final queue
+  depth was `41,996/600,000` with `tx_queue_saturated=true`.
+- Safety signals stayed clean: no validation rejects, view changes, RBC store
+  pressure, RBC evictions, pending-RBC drops, prebuild fallback, or transaction
+  build failures. The status delta showed `45` pacemaker backpressure deferrals,
+  `3/3` missing-QC reacquire attempts/successes, and `3` range-pull
+  escalations.
+- The intended cache-pass removals remain absent in the sampled peers:
+  `Queue::encode_gossip_payload=0`, `TxOverlay::byte_size=0`, and
+  `external_entrypoints_cloned=0`. `prepare_signed_metadata` is no longer a
+  visible recursive-stack bottleneck in the aggregate peer summary.
+- The dominant non-idle peer leaves are now transaction admission crypto and
+  canonical-byte work. The Torii ingress path
+  `accept_transaction_for_ingress -> AcceptedTransaction::accept_entrypoint ->
+  validate_with_now_and_signature_check -> verify_signature_for_check` spends
+  visible time in Ed25519 verification and public-key parsing
+  (`curve25519_dalek`, `ed25519_dalek`, `PublicKeyFull::from_bytes`). After a
+  transaction is accepted, `from_external_with_hot_cache` still constructs
+  canonical signed bytes with `norito::to_bytes(&tx)` for each external
+  transaction, which shows up with `SignedTransaction`/`TransactionPayload`
+  serialization and Blake2 hashing.
+- The signed-length fallback is reduced but not free. The hot
+  `AcceptedTransaction::signed_encoded_len` stacks now mostly go through
+  `SignedTransaction::encoded_len_exact`, but `InstructionBox::encoded_len_exact`
+  still calls `encoded_instruction_pair`, which dynamically encodes and frames
+  the instruction payload (`Instruction::dyn_encode`, `frame_instruction_payload`)
+  before measuring the `(wire_id, payload)` pair. That is why
+  `norito::codec::encode_adaptive`, `write_len_prefixed`, CRC/schema-hash, and
+  instruction serialization remain visible even on the exact-length path.
+- Gossip decode caching is working at the wrapper layer, but downstream gossip
+  admission still materializes entrypoints when validation needs semantics. The
+  sampled stacks include `TransactionGossip`/`GossipTransaction` decode into
+  `SignedTransaction -> TransactionPayload -> InstructionBox -> Transfer`, plus
+  `PublicKey`/`PublicKeyCompact` decode.
+- Block validation and overlay execution are still present, but this contended
+  sample is more ingress/gossip dominated than the earlier cachepass sample.
+  The remaining overlay cost is clone-heavy: `validate_and_record_transactions`
+  reaches `build_overlay_for_transaction_with_accounts_zk`,
+  `InstructionDynClone::dyn_box_clone`, `Transfer::clone`, and
+  `WorldTransaction::apply`.
+
+## 2026-05-01 Further 20k conservative cache pass
+
+- Reused prepared signed-transaction metadata across block static validation and
+  the later validation/execution recording phase. The all-external block path
+  now borrows `external_entrypoints_slice()` and only allocates cloned
+  entrypoints for legacy/non-external fallback execution.
+- Reduced signed transaction encoded-length fallback by extending exact Norito
+  sizing through tuple fields, `Option::Some`, `NonZeroU*`, `PublicKey`,
+  `InstructionBox`, and the signed/external entrypoint paths used by
+  `AcceptedTransaction`. Cached canonical signed bytes are preferred when
+  available for size checks.
+- Routed `GossipTransaction::try_deserialize` through the same cached
+  entrypoint-payload decode helper used by slice decoding, preserving exact byte
+  comparison for cache collision safety and leaving `TransactionGossip` wire
+  bytes unchanged.
+- No executor API rewrite, borrowed-instruction execution rewrite, config
+  default change, canonical transaction/block wire change, or consensus behavior
+  change was made in this pass. No fresh Izanami sampled profile or Criterion
+  benchmark was run yet after these focused validations; the 120s release gate
+  rerun is recorded above.
+- Focused validation for this slice:
+  - `cargo test -p norito --test encoded_len_exact -- --nocapture`
+  - `cargo test -p iroha_crypto public_key_encoded_len_exact --lib -- --nocapture`
+  - `cargo test -p iroha_data_model instruction_box_encoded_len_exact --lib -- --nocapture`
+  - `cargo test -p iroha_core signed_encoded_len --lib -- --nocapture`
+  - `cargo test -p iroha_core gossip_transaction --lib -- --nocapture`
+  - `cargo test -p iroha_core validate_and_record_transactions --lib -- --nocapture`
+  - `cargo test -p iroha_core stateless_cache --lib -- --nocapture`
+  - `cargo test -p iroha_core entrypoint_hash --lib -- --nocapture`
+  - `cargo test -p iroha_data_model signed_block_wire_skips_runtime_transaction_caches -- --nocapture`
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+
+## 2026-05-01 Torii Offline V2 issuer hardening
+
+- Torii Offline V2 issuer certificate minting now requires a signed middleware
+  attestation receipt before certifying hardware one-use keys. Certificate JSON
+  echoes canonical base64 key bytes from the verified receipt instead of
+  client-supplied hex/base64 spellings.
+- Offline V2 note issuance now derives balances from Torii-signed lineage
+  state, treats client `local_balance` / `local_revision` as consistency
+  checks, preserves trusted balance during existing-lineage key refills, and
+  returns the same chain note commitment that is submitted on-chain.
+- `torii.offline_issuer` configuration now requires an attestation verifier
+  public key and explicitly accepts only Ed25519 or Secp256k1 issuer/verifier
+  keys.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_config -p iroha_torii --features app_api`
+  - `cargo test -p iroha_torii offline_v2_issuer`
+  - `cargo test -p iroha_config torii_offline_issuer`
+
 ## 2026-05-01 20k post-cache tuned release gate rerun
 
 - Reran the release 4-peer, no-fault, prebuilt `20,000 TPS` / `120s` gate
@@ -966,28 +1256,43 @@ Last updated: 2026-05-01
   eventually clear. Payload recovery, quorum retransmit, future-slot reanchor,
   and promoted second-slot behavior now have focused follow-through
   properties.
+- Added late post-GST future-evidence arrival, future-evidence preservation,
+  and promotion-freshness checks so a second-slot quorum cannot be silently
+  dropped or promoted with stale active progress flags.
 - Made Apalache bounds explicit in `scripts/formal/sumeragi_apalache.sh` for
   every mode, kept existing modes backward-compatible, added payload-recovery,
-  retransmit-follow-through, and future-promotion bug modes, and promoted
-  `frontier-wide` plus all expected-failure mutations into normal formal CI.
+  retransmit-follow-through, future-promotion, future-reanchor-clear,
+  future-evidence-drop, promotion-reset, and future-stale-owner bug modes, and
+  promoted `frontier-wide`, a small TLC cross-check, and all expected-failure
+  mutations into normal formal CI. A scheduled/manual GitHub Actions workflow
+  now runs the longer `frontier-nightly` bound.
 - Updated the English Sumeragi formal README with the two-slot proof scope,
   runner modes, CI behavior, and model-to-implementation assumption map.
   Translated `docs/formal/sumeragi/README.*.md` bodies were intentionally not
   refreshed in this slice, so they may remain source-current stale until a
   separate translation refresh.
+- Added focused Rust bridge regressions for future new-view reanchor while the
+  vote queue is backlogged and while the old frontier recovery owner is stale.
+- Improved the surrounding process so nightly formal CI runs the normal formal
+  gate before the longer bound, and PR/nightly docs jobs upload JSON metadata
+  reports for the deliberately stale translated formal READMEs.
 - No runtime consensus code changed in this hardening pass.
 - Validation completed with local Apalache `0.52.2`:
-  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh`
+  - `cargo fmt --all`
   - `bash scripts/formal/sumeragi_apalache.sh frontier-fast`
   - `bash scripts/formal/sumeragi_apalache.sh frontier-deep`
   - `bash scripts/formal/sumeragi_apalache.sh frontier-wide`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-nightly`
   - `bash ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash scripts/formal/sumeragi_tlc.sh frontier-small`
   - `bash ci/check_sumeragi_formal.sh`
-  - `cargo test -p iroha_core reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
-  - `cargo test -p iroha_core reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
-  - `cargo test -p iroha_core reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
-  - `cargo test -p iroha_core pacemaker_reanchors_frontier_when_future_new_view_quorum_exists -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
+  - `cargo test -p iroha_core pacemaker_reanchors -- --nocapture`
   - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json`
 
 ## 2026-04-30 Sumeragi frontier recovery formal model
 

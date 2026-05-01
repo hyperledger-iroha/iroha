@@ -888,6 +888,12 @@ pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
     marker && empty_instructions && no_attachments
 }
 
+/// Returns `true` if an accepted entrypoint wraps a Sumeragi heartbeat transaction.
+#[must_use]
+pub(crate) fn is_heartbeat_accepted_transaction(tx: &AcceptedTransaction<'_>) -> bool {
+    tx.external().is_some_and(is_heartbeat_transaction)
+}
+
 /// Build a Sumeragi heartbeat transaction using the provided time source.
 pub(crate) fn build_heartbeat_transaction_with_time_source(
     chain_id: ChainId,
@@ -2583,20 +2589,104 @@ impl AcceptedTransaction<'static> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        let now = current_unix_time();
-        Self::validate_entrypoint_with_now(
-            &tx,
+        Self::accept_gossip_entrypoint_with_payload_and_prepared_metadata(
+            tx,
+            entrypoint_bytes,
+            entrypoint_hash,
             expected_chain_id,
             max_clock_drift,
             limits,
             crypto,
-            now,
-        )?;
-        Ok(Self::from_entrypoint_with_cached_entrypoint_bytes(
+            None,
+            false,
+        )
+    }
+
+    /// Accept an already-decoded gossip entrypoint using caller-prepared metadata.
+    ///
+    /// This path lets gossip admission reuse deterministic single-Ed25519 batch
+    /// verification while still running every non-signature admission check.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn accept_gossip_entrypoint_with_payload_and_prepared_metadata(
+        tx: TransactionEntrypoint,
+        entrypoint_bytes: Arc<Vec<u8>>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        prepared: Option<&PreparedTransactionMetadata>,
+        single_ed25519_prechecked: bool,
+    ) -> Result<Self, AcceptTransactionFail> {
+        let now = current_unix_time();
+        match &tx {
+            TransactionEntrypoint::External(signed) => {
+                if let Some(prepared) = prepared {
+                    if single_ed25519_prechecked {
+                        Self::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+                            signed,
+                            expected_chain_id,
+                            max_clock_drift,
+                            limits,
+                            crypto,
+                            now,
+                            prepared,
+                        )?;
+                    } else {
+                        Self::validate_with_now_and_prepared_metadata(
+                            signed,
+                            expected_chain_id,
+                            max_clock_drift,
+                            limits,
+                            crypto,
+                            now,
+                            prepared,
+                        )?;
+                    }
+                    enforce_nts_health_for_time_sensitive(signed)?;
+                } else {
+                    Self::validate_entrypoint_with_now(
+                        &tx,
+                        expected_chain_id,
+                        max_clock_drift,
+                        limits,
+                        crypto,
+                        now,
+                    )?;
+                }
+            }
+            _ => {
+                Self::validate_entrypoint_with_now(
+                    &tx,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
+            }
+        }
+
+        let accepted = Self::from_entrypoint_with_cached_entrypoint_bytes(
             tx,
             entrypoint_bytes,
             entrypoint_hash,
-        ))
+        );
+        if let Some(prepared) = prepared {
+            let _ = accepted.encoded_len.set(prepared.encoded_len);
+            let _ = accepted.payload_hash.set(Some(prepared.payload_hash));
+            let _ = accepted.single_ed25519_key.set(prepared.single_ed25519_key);
+            if let Some(signed_bytes) = prepared.signed_bytes.as_ref() {
+                let _ = accepted.signed_bytes.set(Some(Arc::clone(signed_bytes)));
+            }
+            let _ = accepted.signed_hash.set(prepared.signed_hash);
+            let _ = accepted.entrypoint_hash.set(prepared.entrypoint_hash);
+        }
+        Ok(accepted)
     }
 }
 
@@ -8196,6 +8286,65 @@ pub mod tests {
             result.is_ok(),
             "heartbeat should validate via heartbeat path"
         );
+    }
+
+    #[test]
+    fn accepted_heartbeat_detection_skips_non_signed_entrypoints() {
+        use std::time::Duration;
+
+        let chain: ChainId = "accepted-heartbeat-chain".parse().unwrap();
+        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(signer.public_key().clone());
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let tx_params = TransactionParameters::default();
+        let heartbeat = build_heartbeat_transaction_with_time_source(
+            chain.clone(),
+            &signer,
+            &tx_params,
+            1,
+            &time_source,
+        );
+        let accepted_heartbeat = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
+        assert!(is_heartbeat_accepted_transaction(&accepted_heartbeat));
+
+        let sealed_inner = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "sealed-inner".to_owned())])
+            .sign(signer.private_key());
+        let sealed_commitment =
+            compute_sealed_transaction_commitment(&chain, &sealed_inner, [0x55; 32], 4);
+        let sealed_payload = SealedTransactionCommitmentPayload::new(
+            chain.clone(),
+            authority.clone(),
+            sealed_commitment,
+            2,
+            4,
+            None,
+        );
+        let accepted_sealed_commitment = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
+                sealed_payload,
+                signer.private_key(),
+            )),
+        ));
+        assert!(!is_heartbeat_accepted_transaction(
+            &accepted_sealed_commitment
+        ));
+
+        let time_entrypoint = TimeTriggerEntrypoint {
+            id: "accepted-heartbeat-trigger".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
+            authority,
+        };
+        let accepted_time = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::Time(time_entrypoint),
+        ));
+        assert!(!is_heartbeat_accepted_transaction(&accepted_time));
+
+        let private_entrypoint = sample_private_kaigi_transaction(chain);
+        let accepted_private = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::PrivateKaigi(private_entrypoint),
+        ));
+        assert!(!is_heartbeat_accepted_transaction(&accepted_private));
     }
 
     #[test]

@@ -51,6 +51,43 @@ fn header_flags_outside_supported_mask_are_rejected() {
 }
 
 #[test]
+fn reserved_header_flags_are_rejected() {
+    for reserved in [
+        header_flags::VARINT_OFFSETS,
+        header_flags::COMPACT_SEQ_LEN,
+        header_flags::VARINT_OFFSETS | header_flags::COMPACT_SEQ_LEN,
+    ] {
+        let bytes = frame_payload::<()>(VERSION_MINOR, reserved, &[]);
+        let err = decode_from_bytes::<()>(&bytes).expect_err("reserved flags must be rejected");
+        assert!(matches!(err, Error::UnsupportedFeature("layout flag")));
+    }
+}
+
+#[test]
+fn field_bitset_requires_packed_struct_and_compact_len() {
+    for flags in [
+        header_flags::FIELD_BITSET,
+        header_flags::FIELD_BITSET | header_flags::COMPACT_LEN,
+        header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT,
+    ] {
+        let bytes = frame_payload::<()>(VERSION_MINOR, flags, &[]);
+        let err =
+            decode_from_bytes::<()>(&bytes).expect_err("invalid field bitset flags must fail");
+        assert!(matches!(
+            err,
+            Error::UnsupportedFeature("layout flag combination")
+        ));
+    }
+
+    let bytes = frame_payload::<()>(
+        VERSION_MINOR,
+        header_flags::FIELD_BITSET | header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN,
+        &[],
+    );
+    decode_from_bytes::<()>(&bytes).expect("complete field bitset combination must be accepted");
+}
+
+#[test]
 fn header_checksum_mismatch_is_rejected() {
     let value = vec![11u32, 22, 33];
     let mut bytes = norito::to_bytes(&value).expect("serialize vector");

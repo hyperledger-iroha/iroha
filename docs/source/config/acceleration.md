@@ -177,9 +177,8 @@ comparing CPU-only vs. accel-on runs.
 ### Norito heuristics (compile-time defaults)
 
 Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
-and are compiled into every binary. They are not configurable at runtime, but exposing
-the inputs helps SDK and operator teams predict how Norito will behave once GPU
-compression kernels are enabled.
+and are compiled into every binary. They are not configurable at runtime; SDK and
+operator teams should treat the Norito profile as part of the release.
 The workspace now builds Norito with the `gpu-compression` feature enabled by default,
 so GPU zstd backends are compiled in; runtime availability still depends on hardware,
 the helper backend and the `allow_gpu_compression` config flag. On Apple Silicon
@@ -198,12 +197,8 @@ with a CPU zstd fallback for unsupported frames.
 
 | Field | Default | Purpose |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bytes | Below this, payloads skip zstd entirely to avoid overhead. |
-| `min_compress_bytes_gpu` | `1_048_576` bytes (1 MiB) | Payloads at or above this limit switch to GPU zstd when `norito::core::hw::has_gpu_compression()` is true. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU compression levels for <32 KiB and ≥32 KiB payloads respectively. |
-| `zstd_level_gpu` | `1` | Conservative GPU level to keep latency consistent while filling command queues. |
-| `large_threshold` | `32_768` bytes | Size boundary between the “small” and “large” CPU zstd levels. |
-| `aos_ncb_small_n` | `64` rows | Below this row count adaptive encoders probe both AoS and NCB layouts to pick the smallest payload. |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` rows | Prevents enabling u32/id delta encodings when 1–2 rows contain empty cells. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltas kick in only once there are at least two rows. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | All delta transforms are enabled by default for well-behaved inputs. |
@@ -212,15 +207,16 @@ with a CPU zstd fallback for unsupported frames.
 | `combo_dict_avg_len_min` | `8.0` | Require average string length ≥8 before building dictionaries (short aliases stay inline). |
 | `combo_dict_max_entries` | `1024` | Hard cap on dictionary entries to guarantee bounded memory usage. |
 
-These heuristics keep GPU-enabled hosts aligned with CPU-only peers: the selector
-never makes a decision that would change the wire format, and the thresholds are fixed
-per release. When profiling uncovers better break-even points, Norito updates the
-canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md` plus
-`status.md` record the change alongside the versioned evidence.
+These canonical heuristics keep GPU-enabled hosts aligned with CPU-only peers: the
+selector never makes a decision that would change the wire format, and the thresholds
+are fixed per release. When profiling uncovers better break-even points, Norito
+updates the canonical `Heuristics::canonical` implementation and
+`docs/source/benchmarks.md` plus `status.md` record the change alongside the
+versioned evidence.
 
-The GPU zstd helper enforces the same `min_compress_bytes_gpu` cutoff even when
-called directly (for example via `norito::core::gpu_zstd::encode_all`), so small
-payloads always stay on the CPU path regardless of GPU availability.
+The GPU zstd helper enforces Norito's compiled GPU cutoff even when called directly
+(for example via `norito::core::gpu_zstd::encode_all`), so small payloads always stay
+on the CPU path regardless of GPU availability.
 
 ### Troubleshooting and parity checklist
 

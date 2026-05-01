@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Mapping, Sequence
 
-FNV64_OFFSET = 0xCBF29CE484222325
-FNV64_PRIME = 0x100000001B3
+TYPE_NAME_SCHEMA_HASH_DOMAIN = b"norito:v1:type-name\x00"
+STRUCTURAL_SCHEMA_HASH_DOMAIN = b"norito:v1:structural-schema\x00"
 
 
 @dataclass(frozen=True)
@@ -48,21 +49,21 @@ class SchemaDescriptor:
 
         if self.structural_schema is not None:
             payload = _canonical_json(self.structural_schema).encode("utf-8")
+            domain = STRUCTURAL_SCHEMA_HASH_DOMAIN
         else:
             assert self.canonical_path is not None
             payload = self.canonical_path.encode("utf-8")
-        value = fnv1a_64(payload)
-        return value.to_bytes(8, "little") * 2
+            domain = TYPE_NAME_SCHEMA_HASH_DOMAIN
+        return schema_hash16(domain, payload)
 
 
-def fnv1a_64(data: bytes) -> int:
-    """Compute the FNV-1a 64-bit hash for *data*."""
+def schema_hash16(domain: bytes, data: bytes) -> bytes:
+    """Compute a 16-byte domain-separated SHA-256 schema hash."""
 
-    hash_value = FNV64_OFFSET
-    for byte in data:
-        hash_value ^= byte
-        hash_value = (hash_value * FNV64_PRIME) & 0xFFFFFFFFFFFFFFFF
-    return hash_value
+    digest = hashlib.sha256()
+    digest.update(domain)
+    digest.update(data)
+    return digest.digest()[:16]
 
 
 def _canonical_json(value: Any) -> str:
@@ -160,4 +161,9 @@ def _encode_json_string(value: str) -> str:
     return "".join(out)
 
 
-__all__ = ["SchemaDescriptor", "fnv1a_64"]
+__all__ = [
+    "SchemaDescriptor",
+    "TYPE_NAME_SCHEMA_HASH_DOMAIN",
+    "STRUCTURAL_SCHEMA_HASH_DOMAIN",
+    "schema_hash16",
+]

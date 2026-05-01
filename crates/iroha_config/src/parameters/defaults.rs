@@ -2599,18 +2599,6 @@ pub mod concurrency {
 
 /// Norito codec defaults.
 pub mod norito {
-    /// Minimum payload size (bytes) to attempt CPU zstd.
-    pub const MIN_COMPRESS_BYTES_CPU: usize = 256;
-    /// Minimum payload size (bytes) to attempt GPU zstd when available.
-    pub const MIN_COMPRESS_BYTES_GPU: usize = 1024 * 1024;
-    /// zstd level for medium-size payloads.
-    pub const ZSTD_LEVEL_SMALL: i32 = 1;
-    /// zstd level for large payloads.
-    pub const ZSTD_LEVEL_LARGE: i32 = 3;
-    /// GPU zstd level (kept conservative to reduce latency).
-    pub const ZSTD_LEVEL_GPU: i32 = 1;
-    /// Size threshold distinguishing small vs large for CPU zstd level.
-    pub const LARGE_THRESHOLD: usize = 32 * 1024;
     /// Allow GPU compression offload when compiled and available.
     pub const ALLOW_GPU_COMPRESSION: bool = true;
     /// Hard upper bound on Norito archive length after decompression (bytes).
@@ -2620,9 +2608,6 @@ pub mod norito {
     /// aligns with the RBC store cap to avoid rejecting persisted consensus
     /// payloads.
     pub const MAX_ARCHIVE_LEN: u64 = super::sumeragi::RBC_STORE_MAX_BYTES as u64; // 1 GiB
-    /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
-    /// Inputs with `n <= AOS_NCB_SMALL_N` are encoded with a two-pass probe (AoS vs NCB, pick smaller).
-    pub const AOS_NCB_SMALL_N: usize = 64;
 }
 
 /// Hardware acceleration defaults (Metal/CUDA usage in IVM and helpers).

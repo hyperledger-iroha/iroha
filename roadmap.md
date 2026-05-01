@@ -23,6 +23,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
     corridor when validation budget allows.
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
+  - The Torii Offline V2 issuer hardening focused corridor is green as of
+    2026-05-01. Fold it into the next broader `cargo test -p iroha_torii`,
+    SDK, workspace test, and workspace clippy corridor when validation budget
+    allows.
 - Carry native asset escrow through the remaining Aitai application corridor.
   - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and proof-carrying anonymous escrow helper surfaces, then subscribe through the numeric and anonymous escrow query/event APIs.
   - Add app-facing lifecycle events for transparent and shielded offer state changes, and keep any remaining Kotodama wrapper work scoped to app calls that still need contract compatibility.
@@ -104,20 +108,78 @@ Completed history lives in `status.md`. This file should only track unfinished w
     `dist/izanami-profile-20k-postcache-tuned-sampled-30s-20260501-165811`
     confirms `Queue::encode_gossip_payload`, `TxOverlay::byte_size`, and
     `external_entrypoints_cloned` are absent from current peer samples.
+  - The further conservative cache pass is focused-validation green as of
+    2026-05-01: prepared transaction metadata is reused through block
+    validation/execution recording, all-external block validation keeps
+    borrowing the entrypoint slice, signed/external entrypoint encoded-length
+    coverage avoids the residual Norito fallback for representative shapes, and
+    gossip transaction decode now uses the shared cached payload helper.
+  - The clean release 4-peer no-fault prebuilt `20k TPS` / `120s` rerun at
+    `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-175213`
+    exited `0`, accepted `54,574` ingress transactions, and reached `28,710`
+    strict approved transactions at strict height `9`. This is consistent with
+    the prior tuned gates and still misses the committed 20k target, with no
+    validation rejects, view changes, or RBC pressure.
+  - A later requested same-shape rerun at
+    `dist/izanami-prebuilt-20k-conservative-cache-rerun2-120s-20260501-144548`
+    exited `0` but ran under active debug `cargo test`/`rustc` contention. It
+    accepted `52,070` ingress transactions and reached only `12,329` strict
+    approved transactions at strict height `5`, with safety intact but `4`
+    view-change installs and missing-block recovery activity. Treat this as
+    contended evidence only, not a replacement for the clean baseline.
+  - The matching requested contended sampled profile at
+    `dist/izanami-profile-20k-conservative-cache-rerun2-sampled-30s-20260501-145104`
+    exited `0` with valid samples for the load driver and all four peers;
+    `sample_status=1` only because the sampler also targeted the bash wrapper
+    and one transient process. It accepted `52,817` ingress transactions and
+    reached `4,137` strict approved transactions at strict height `3`. The
+    bottleneck shape matches the previous conservative-cache profiles: Torii
+    admission crypto/public-key parsing, canonical signed-byte construction,
+    residual dynamic `InstructionBox` framing, gossip materialization/decode,
+    and overlay execution/cloning. Treat it as contended bottleneck evidence,
+    not a clean latency baseline.
+  - The earlier conservative-cache sampled 20k profile at
+    `dist/izanami-profile-20k-conservative-cache-parallel-sampled-30s-20260501-181025`
+    confirms the previous removals are still absent
+    (`Queue::encode_gossip_payload=0`, `TxOverlay::byte_size=0`,
+    `external_entrypoints_cloned=0`) and moves the next bottleneck set to
+    Torii ingress signature/public-key work, canonical signed-byte construction
+    in `AcceptedTransaction::from_external_with_hot_cache`, exact-length
+    `InstructionBox` payload framing, gossip materialization during admission,
+    and remaining overlay instruction clones.
+  - Next conservative slice: carry inbound canonical signed/entrypoint bytes
+    through Torii acceptance so external transactions can seed
+    `AcceptedTransaction::from_external_with_cached_bytes` without re-running
+    `norito::to_bytes(&tx)` after validation; keep transaction wire/hash
+    semantics unchanged and prove cached bytes match canonical Norito bytes.
+  - Add or reuse an Ed25519 parsed-public-key/signature verification cache for
+    the Torii/direct-ingress single-key Ed25519 authority path. Gossip-side
+    deterministic Ed25519 batch precheck is now implemented, but sampled ingress
+    stacks were still dominated by `verify_signature_for_check`,
+    `PublicKeyFull::from_bytes`, `ed25519_dalek`, and `curve25519_dalek`.
+  - Reduce the exact-length `InstructionBox` cost without changing Norito wire:
+    avoid repeated dynamic ISI payload framing during size checks by caching or
+    threading framed instruction payload lengths where the canonical bytes are
+    already available.
+  - Rerun an isolated 30s sampled 20k Izanami profile after the next ingress
+    byte-cache or `InstructionBox` sizing slice; use it to separate real
+    remaining overlay/gossip work from the contention visible in the latest
+    requested runs.
   - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate
-    the new knee after the targeted tuning pass.
-  - Reduce the remaining signed length/serialization metadata walk, incoming
-    transaction-gossip Norito decode/materialization, and state overlay
-    execution cost before tuning queue capacity.
+    the new knee after the conservative cache pass.
+  - Keep clone-heavy `TxOverlay::apply_with_chunk` / overlay-builder API work as
+    the next overlay follow-up if the post-broader-pass profile still shows
+    `InstructionDynClone::dyn_box_clone`, `Transfer::clone`, or
+    `WorldTransaction::apply` as active costs.
   - Keep the broader borrowed-instruction execution rewrite separate from the
     targeted tuning pass because `Execute` currently consumes instructions.
   - Treat RBC authoritative-payload delays as symptoms of slow validation and
     materialization unless a later profile shows DA/RBC storage pressure,
     missing `BlockCreated`, or QC payload-missing counters.
-  - Keep Ed25519 and FASTPQ/Poseidon budgeted but secondary for this pass:
-    Ed25519 curve math is the largest active leaf class but not the blocking
-    commit-progress stack, while FASTPQ/Poseidon remains small in recursive
-    attribution.
+  - Keep FASTPQ worker budgeting, hardware crypto acceleration, and full
+    borrowed-`Execute` executor API rewrites as follow-ups unless the next
+    sampled profile shows they dominate after ingress byte-cache and gossip
+    batch-precheck work.
 - Turn the proposal-gap / queue-pressure investigation into a reproducible measurement pass.
   - Rerun the 7-peer load that previously advanced slowly or stalled under backlog.
   - Sample `/v1/sumeragi/status`, pending-block / commit-inflight metrics, and queue depths throughout the run.
@@ -140,6 +202,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
     English-only frontier formal update so `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
     can be restored for formal docs.
+  - The Sumeragi frontier model, mutation suite, TLC cross-check, and longer
+    nightly bound are wired, and CI now publishes a JSON metadata report for
+    the stale translated formal READMEs; the remaining formal-doc task is
+    translation refresh only.
   - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Add a recorded capture gate for the default `sora-temple` petal styles.

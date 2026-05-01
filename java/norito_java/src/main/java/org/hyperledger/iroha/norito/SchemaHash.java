@@ -3,46 +3,47 @@
 
 package org.hyperledger.iroha.norito;
 
-import java.nio.ByteBuffer;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.Locale;
 
-/** Computes FNV-1a 64-bit schema hashes matching the Rust implementation. */
+/** Computes domain-separated SHA-256 schema hashes matching the Rust implementation. */
 public final class SchemaHash {
-  private static final long OFFSET_BASIS = 0xCBF29CE484222325L;
-  private static final long FNV_PRIME = 0x100000001B3L;
+  private static final byte[] TYPE_NAME_DOMAIN =
+      "norito:v1:type-name\0".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] STRUCTURAL_DOMAIN =
+      "norito:v1:structural-schema\0".getBytes(StandardCharsets.UTF_8);
 
   private SchemaHash() {}
 
   public static byte[] hash16(String canonicalPath) {
-    byte[] input = canonicalPath.getBytes(StandardCharsets.UTF_8);
-    long hash = OFFSET_BASIS;
-    for (byte b : input) {
-      hash ^= (b & 0xFFL);
-      hash = (hash * FNV_PRIME) & 0xFFFFFFFFFFFFFFFFL;
-    }
-    ByteBuffer buffer = ByteBuffer.allocate(16);
-    buffer.putLong(Long.reverseBytes(hash));
-    buffer.putLong(Long.reverseBytes(hash));
-    return buffer.array();
+    return hash16(TYPE_NAME_DOMAIN, canonicalPath.getBytes(StandardCharsets.UTF_8));
   }
 
   public static byte[] hash16FromStructural(Object schema) {
     Objects.requireNonNull(schema, "schema");
     String canonical = encodeCanonicalJson(schema);
-    byte[] input = canonical.getBytes(StandardCharsets.UTF_8);
-    long hash = OFFSET_BASIS;
-    for (byte b : input) {
-      hash ^= (b & 0xFFL);
-      hash = (hash * FNV_PRIME) & 0xFFFFFFFFFFFFFFFFL;
+    return hash16(STRUCTURAL_DOMAIN, canonical.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static byte[] hash16(byte[] domain, byte[] input) {
+    MessageDigest digest = sha256();
+    digest.update(domain);
+    digest.update(input);
+    return Arrays.copyOf(digest.digest(), 16);
+  }
+
+  private static MessageDigest sha256() {
+    try {
+      return MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 digest is unavailable", ex);
     }
-    ByteBuffer buffer = ByteBuffer.allocate(16);
-    buffer.putLong(Long.reverseBytes(hash));
-    buffer.putLong(Long.reverseBytes(hash));
-    return buffer.array();
   }
 
   private static String encodeCanonicalJson(Object value) {

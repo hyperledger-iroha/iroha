@@ -2972,7 +2972,8 @@ mod tests {
                 .expect("public key");
         let expected = norito::core::to_bytes(&pk)
             .expect("encode public key")
-            .len();
+            .len()
+            - norito::core::Header::SIZE;
 
         assert_eq!(
             norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
@@ -3011,7 +3012,7 @@ mod tests {
                 .expect("public key");
         let framed = norito::core::to_bytes(&pk).expect("encode public key");
         let actual_hex = hex::encode(&framed);
-        let expected_hex = "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d24004a00000000000000ff3888681ae90906022100000000000000010001ed01f601d701b5012c0170013201d0013a01ec0169016f0120016801bd015301100115012801f301c701b60108011b01ff010501a10166012d017f01c20145";
+        let expected_hex = "4e5254300000b6b01d0a3d2b9cfe06ff97af6ba0f622004a00000000000000ff3888681ae90906022100000000000000010001ed01f601d701b5012c0170013201d0013a01ec0169016f0120016801bd015301100115012801f301c701b60108011b01ff010501a10166012d017f01c20145";
         assert_eq!(
             actual_hex, expected_hex,
             "public key Norito archive changed"

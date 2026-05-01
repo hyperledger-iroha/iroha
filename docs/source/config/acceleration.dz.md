@@ -221,32 +221,8 @@ incoder (ཧཕ་མེན་/ཨེཕ་ཨེསི་ཨི་ + གཞི�
 
 | ཕིལཌ་ | སྔོན་སྒྲིག་ | དམིགས་ཡུལ། |
 |---------|--------------|------------|
-| `min_compress_bytes_cpu` | `256` བཱའིཊི་ | འདི་གི་འོག་ལུ་ མགུ་ཏོག་གུ་ལས་ འཛེགས་ནི་ zstd འདི་ ཡོངས་རྫོགས་སྦེ་ བཀག་ཐབས་འབདཝ་ཨིན། |
-| `min_compress_bytes_gpu` | `1_048_576` བཱའིཊི་ (༡ཨེམ་ཨའི་བི་) | `norito::core::hw::has_gpu_compression()` འདི་བདེན་པ་ཡོད་པའི་སྐབས་ ཚད་འཛིན་འདི་ ཇི་པི་ཡུ་ zstd ལུ་སྤྲོད་ལེན་འབདཝ་ཨིན། |
-| `zstd_level_small` / `zstd_level_large` | ```
-$ cargo xtask acceleration-state
-Acceleration Configuration
---------------------------
-enable_simd: yes
-enable_metal: yes
-enable_cuda: no
-max_gpus: 1
-merkle_min_leaves_gpu: 8192
-merkle_min_leaves_metal: 8192
-merkle_min_leaves_cuda: auto
-prefer_cpu_sha2_max_leaves_aarch64: auto
-prefer_cpu_sha2_max_leaves_x86: auto
-
-Backend Status
---------------
-Backend Supported  Configured  Available  ParityOK  Last error
-SIMD    yes        yes         yes        yes       -
-Metal   yes        yes         yes        yes       -
-CUDA    no         no          no         no        policy disabled (no CUDA libraries present)
-``` / `3` | <32KiB དང་ ≥32KiB པེ་ལོཌི་ཚུ་གི་དོན་ལུ་ སི་པི་ཡུ་བསྡམ་བཞག་པའི་གནས་ཚད། |
-| Norito `1` | བརྡ་བཀོད་གྲལ་ཐིག་ཚུ་བཀང་པའི་སྐབས་ འཕྲོ་མཐུད་རྒྱུན་རིམ་སྦེ་བཞག་ནི་ལུ་ ཀོན་སར་ཝེ་ཊིབ་ཇི་པི་ཡུ་གནས་རིམ། |
-| `large_threshold` | `32_768` བཱའིཊི་ | “ཆུང་ཆུང་” དང་ “ཆེ་བ་” སི་པི་ཡུ་ zstd གནས་རིམ་གྱི་བར་ན་ ཚད་ཀྱི་མཚམས་ཚད། |
-| `aos_ncb_small_n` | `64` གྱལ་རིམ་ | འདི་གི་འོག་ལུ་ རྩིས་རྐྱབ་སྟེ་ མཐུན་སྒྲིག་ཅན་གྱི་ཨེན་ཀོ་ཌར་ཚུ་གིས་ AoS དང་ NCB བཀོད་སྒྲིག་གཉིས་ཆ་ར་ ཞིབ་དཔྱད་འབདཝ་ཨིན། |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` གྱལ་རིམ་ | གྲལ་ཐིག་༡–༢ ནང་ ནང་ཐིག་སྟོངམ་ཡོད་པའི་སྐབས་ u32/id delta encodings ལྕོགས་ཅན་བཟོ་ནི་འདི་ སྔོན་བཀག་འབདཝ་ཨིན། |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | ཌེལ་ཊས་ཀྱིས་ ཉུང་ཤོས་རང་ གྱལ་རིམ་གཉིས་ཡོདཔ་ཨིན། |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | ཌེལ་ཊ་བསྒྱུར་བཅོས་ཚུ་ཆ་མཉམ་རང་ སྤྱོད་ལམ་ལེགས་ཤོམ་ཡོད་པའི་ ཨིན་པུཊི་ཚུ་གི་དོན་ལུ་ སྔོན་སྒྲིག་གིས་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན། |
@@ -259,7 +235,7 @@ CUDA    no         no          no         no        policy disabled (no CUDA lib
 ཐགཔ་གི་རྩ་སྒྲིག་འདི་བསྒྱུར་བཅོས་འབད་ནི་གི་ཐག་བཅད་འདི་ ནམ་ཡང་མི་བཟོ།
 གློད་གྲོལ། གསལ་སྡུད་འབད་བའི་སྐབས་ བརྡབ་འགྱོ་བའི་སྐུགས་ཚུ་ཡང་ ལེགས་ཤོམ་སྦེ་གསལ་སྟོན་འབད་བའི་སྐབས་ Norito གིས་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན།
 ཚད་ལྡན་ `Heuristics::canonical` ལག་བསྟར་དང་ Norito དང་།
-`status.md` ཐོན་རིམ་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་ཀྱི་མཉམ་དུ་འགྱུར་བ་འདི་ཐོ་བཀོད་འབད།GPU zstd གྲོགས་རམ་པ་གིས་ `min_compress_bytes_gpu` གི་བཏོག་བཏོགཔ་ཨིན།
+`status.md` ཐོན་རིམ་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་ཀྱི་མཉམ་དུ་འགྱུར་བ་འདི་ཐོ་བཀོད་འབད།GPU zstd གྲོགས་རམ་པ་གིས་ compiled GPU cutoff གི་བཏོག་བཏོགཔ་ཨིན།
 ཐད་ཀར་ (དཔེར་ན་ `norito::core::gpu_zstd::encode_all` བརྒྱུད་དེ་) དེ་འདྲའི་ཆུང་བ།
 པེ་ལོཌི་ཚུ་ ཇི་པི་ཡུ་ཐོབ་ཐངས་ལུ་མ་ལྟོས་པར་ སི་པི་ཡུ་འགྲུལ་ལམ་གུ་ ཨ་རྟག་ར་སྡོད་དོ་ཡོདཔ་ཨིན།
 

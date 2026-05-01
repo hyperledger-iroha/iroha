@@ -21,7 +21,6 @@ object NoritoCodec {
     private val ACTIVE_DECODE_CONTEXTS: ThreadLocal<Deque<ContextFlags>> =
         ThreadLocal.withInitial { ArrayDeque() }
 
-    private val LAST_ENCODE_FLAGS: ThreadLocal<Int?> = ThreadLocal()
     private val DECODE_ROOT_PAYLOAD: ThreadLocal<ByteArray?> = ThreadLocal()
 
     private fun applyAdaptiveFlags(flags: Int, payloadLen: Int): Int = flags
@@ -67,7 +66,6 @@ object NoritoCodec {
         val out = ByteArray(headerBytes.size + payloadBytes.size)
         System.arraycopy(headerBytes, 0, out, 0, headerBytes.size)
         System.arraycopy(payloadBytes, 0, out, headerBytes.size, payloadBytes.size)
-        LAST_ENCODE_FLAGS.set(flags and 0xFF)
         return out
     }
 
@@ -86,20 +84,12 @@ object NoritoCodec {
             adapter.encode(encoder, value)
             payload = encoder.toByteArray()
         }
-        LAST_ENCODE_FLAGS.set(finalFlags and 0xFF)
         return AdaptiveEncoding(payload, finalFlags and 0xFF)
     }
 
     @JvmStatic
     fun <T> encodeWithHeaderFlags(value: T, adapter: TypeAdapter<T>): AdaptiveEncoding =
         encodeAdaptive(value, adapter, DEFAULT_FLAGS)
-
-    @JvmStatic
-    fun takeLastEncodeFlags(): Int? {
-        val current = LAST_ENCODE_FLAGS.get()
-        LAST_ENCODE_FLAGS.remove()
-        return current
-    }
 
     private fun combineFlags(flags: Int, hint: Int): Int = flags and 0xFF
 
@@ -125,7 +115,6 @@ object NoritoCodec {
         DECODE_FLAGS_STACK.get().clear()
         DECODE_FLAGS_HINT_STACK.get().clear()
         ACTIVE_DECODE_CONTEXTS.get().clear()
-        LAST_ENCODE_FLAGS.remove()
         DECODE_ROOT_PAYLOAD.remove()
     }
 

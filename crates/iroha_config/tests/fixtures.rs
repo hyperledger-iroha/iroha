@@ -553,6 +553,9 @@ fn minimal_config_snapshot() {
                     10,
                 ),
                 soracloud_public_max_inflight: 32,
+                soracloud_public_max_response_bytes: Bytes(
+                    67108864,
+                ),
                 soracloud_mutation_rate_per_account_origin_per_sec: Some(
                     8,
                 ),
@@ -1047,6 +1050,7 @@ fn minimal_config_snapshot() {
                 },
                 onboarding: None,
                 faucet: None,
+                offline_issuer: None,
                 ram_lfe: None,
                 tx_history: None,
                 app_api: AppApi {
@@ -1948,15 +1952,8 @@ fn minimal_config_snapshot() {
                 },
             },
             norito: Norito {
-                min_compress_bytes_cpu: 256,
-                min_compress_bytes_gpu: 1048576,
-                zstd_level_small: 1,
-                zstd_level_large: 3,
-                zstd_level_gpu: 1,
-                large_threshold: 32768,
                 allow_gpu_compression: true,
                 max_archive_len: 2147483648,
-                aos_ncb_small_n: 64,
             },
             hijiri: Hijiri {
                 fee_policy: None,

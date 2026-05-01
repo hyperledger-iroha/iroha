@@ -70011,6 +70011,7 @@ pub async fn handle_schema() -> impl IntoResponse {
     let mut tuples = 0u64;
     let mut enums = 0u64;
     let mut ints = 0u64;
+    let mut floats = 0u64;
     let mut strings = 0u64;
     let mut bools = 0u64;
     let mut fixed_points = 0u64;
@@ -70029,6 +70030,7 @@ pub async fn handle_schema() -> impl IntoResponse {
             Metadata::Tuple(_) => tuples += 1,
             Metadata::Enum(_) => enums += 1,
             Metadata::Int(_) => ints += 1,
+            Metadata::Float(_) => floats += 1,
             Metadata::String => strings += 1,
             Metadata::Bool => bools += 1,
             Metadata::FixedPoint(_) => fixed_points += 1,
@@ -70051,6 +70053,7 @@ pub async fn handle_schema() -> impl IntoResponse {
     m.insert("tuples".into(), norito::json::Value::from(tuples));
     m.insert("enums".into(), norito::json::Value::from(enums));
     m.insert("ints".into(), norito::json::Value::from(ints));
+    m.insert("floats".into(), norito::json::Value::from(floats));
     m.insert("strings".into(), norito::json::Value::from(strings));
     m.insert("bools".into(), norito::json::Value::from(bools));
     m.insert(

@@ -171,12 +171,8 @@ GPU blokining dekodlanishi simli ulanmaguncha, qo'llab-quvvatlanmaydigan freymla
 
 | Maydon | Standart | Maqsad |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` bayt | Buning ostida, yuklamalar qo'shimcha xarajatlardan qochish uchun zstd to'liq o'tkazib yuboriladi. |
-| `min_compress_bytes_gpu` | `1_048_576` bayt (1MiB) | `norito::core::hw::has_gpu_compression()` rost boʻlsa, bu chegaradagi yoki undan yuqori yuklar GPU zstd ga oʻtadi. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | <32KiB va ≥32KiB foydali yuklar uchun mos ravishda CPU siqish darajalari. |
-| `zstd_level_gpu` | `1` | Buyruqlar navbatlarini to'ldirishda kechikishni barqaror saqlash uchun konservativ GPU darajasi. |
-| `large_threshold` | `32_768` bayt | "Kichik" va "katta" CPU zstd darajalari orasidagi o'lcham chegarasi. |
-| `aos_ncb_small_n` | `64` qatorlar | Ushbu qatordan pastda moslashtirilgan enkoderlar eng kichik yukni tanlash uchun AoS va NCB sxemalarini tekshiradi. |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` qatorlar | 1–2 qatorda boʻsh katakchalar boʻlsa, u32/id delta kodlashlarini yoqishni oldini oladi. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Deltalar kamida ikkita qator mavjud bo'lganda faqat bir marta tepiladi. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | Barcha delta konvertatsiyalari yaxshi ishlaydigan kirishlar uchun sukut bo'yicha yoqilgan. |
@@ -189,7 +185,7 @@ Bu evristikalar GPU bilan ishlaydigan xostlarni faqat protsessorli tengdoshlar b
 hech qachon sim formatini o'zgartiradigan qaror qabul qilmaydi va chegaralar belgilanadi
 chiqarish uchun. Profillash yaxshiroq zarar nuqtalarini ochganda, Norito yangilanadi
 kanonik `Heuristics::canonical` ilovasi va `docs/source/benchmarks.md` plus
-`status.md` versiyadagi dalillar bilan birga o'zgarishlarni yozib oling.GPU zstd yordamchisi hatto bir xil `min_compress_bytes_gpu` uzilishini amalga oshiradi.
+`status.md` versiyadagi dalillar bilan birga o'zgarishlarni yozib oling.GPU zstd yordamchisi hatto bir xil compiled GPU cutoff uzilishini amalga oshiradi.
 to'g'ridan-to'g'ri chaqirilgan (masalan, `norito::core::gpu_zstd::encode_all` orqali), juda kichik
 foydali yuklar GPU mavjudligidan qat'iy nazar har doim CPU yo'lida qoladi.
 

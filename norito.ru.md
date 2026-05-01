@@ -26,7 +26,7 @@ Iroha рабочая область. Он определяет заголово�
 | Магия | 4 | ASCII `NRT0` |
 | Майор | 1 | `VERSION_MAJOR = 0` |
 | Незначительный | 1 | `VERSION_MINOR = 0x00` |
-| Хэш схемы | 16 | Хэш FNV-1a полного имени типа (v1) |
+| Хэш схемы | 16 | First 16 bytes of a domain-separated SHA-256 schema digest |
 | Сжатие | 1 | `0 = None`, `1 = Zstd` |
 | Длина полезной нагрузки | 8 | Длина несжатых полезных данных (u64, прямой порядок байтов) |
 | CRC64 | 8 | CRC64-XZ (полином ECMA, отраженный, инициализация/исключение или все единицы) по полезной нагрузке |
@@ -174,13 +174,12 @@ Norito использует префиксы длины в нескольких 
 
 ## Подробности хеша схемы
 
-16-байтовый хэш схемы вычисляется как:
+The 16-byte schema hash is computed as the first 16 bytes of SHA-256 over a domain prefix followed by canonical schema bytes:
 
-— По умолчанию: 64-битный хэш FNV-1a полного имени типа (Rust
-  `core::any::type_name::<T>()`), дублируется и занимает 16 байт.
-- С `schema-structural`: каноническая схема JSON, созданная
-  `iroha_schema::IntoSchema`, сериализовано с помощью средства записи JSON Norito и хешировано
-  с той же программой FNV-1a.
+- Default: `SHA-256("norito:v1:type-name\0" || fully-qualified type name)`.
+  Rust uses `core::any::type_name::<T>()` for the type-name bytes.
+- With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" || canonical JSON schema)`, where the schema is produced by
+  `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
 
 Типизированные декодеры должны отклонять полезные данные, хэш схемы заголовка которых не соответствует
 ожидаемый тип. `ArchiveView::decode` обеспечивает эту проверку; `decode_unchecked`

@@ -298,7 +298,7 @@ def run_python_parity_checks() -> None:
         "bool": "bool",
         "u64": {"Int": "FixedWidth"},
     }
-    expected_hash = bytes.fromhex("0107fec5fc24ac0d0107fec5fc24ac0d")
+    expected_hash = bytes.fromhex("3ae1591741f666462fb7665720ddde6c")
     actual_hash = SchemaDescriptor.structural(structural).hash_bytes()
     if actual_hash != expected_hash:
         raise CheckError("Python structural schema hash mismatch")

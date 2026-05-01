@@ -6152,6 +6152,8 @@ pub struct ToriiOfflineIssuer {
     pub authority: AccountId,
     /// Key pair used to sign certificates and submit `IssueOfflineNoteV2`.
     pub key_pair: KeyPair,
+    /// Public key used to verify middleware attestation receipts.
+    pub attestation_verifier_public_key: PublicKey,
     /// Maximum authorized offline balance per lineage.
     pub max_balance: Numeric,
     /// Maximum authorized value for one offline transaction.
@@ -8642,31 +8644,15 @@ impl Default for Banner {
 
 /// Norito codec configuration (actual layer).
 ///
-/// These knobs describe the canonical serialization layout and compression
-/// thresholds baked into the Norito codec. Runtime overrides are ignored in
-/// favour of the compiled profile; configuration values should match the
-/// defaults unless the node ships a custom Norito build.
+/// Norito serialization layout and adaptive thresholds are canonical for this
+/// release. Actual configuration contains only operational controls that are
+/// read by the daemon at startup.
 #[derive(Debug, Clone, Copy)]
 pub struct Norito {
-    /// Minimum payload size in bytes before attempting CPU Zstd compression.
-    pub min_compress_bytes_cpu: usize,
-    /// Minimum payload size in bytes before attempting GPU Zstd compression
-    /// when a GPU backend is compiled and available.
-    pub min_compress_bytes_gpu: usize,
-    /// Zstd compression level for small/medium payloads.
-    pub zstd_level_small: i32,
-    /// Zstd compression level for large payloads.
-    pub zstd_level_large: i32,
-    /// Zstd compression level for GPU offload.
-    pub zstd_level_gpu: i32,
-    /// Size threshold that separates small and large CPU payloads for level selection.
-    pub large_threshold: usize,
     /// Allow GPU compression offload when compiled and available.
     pub allow_gpu_compression: bool,
     /// Maximum allowed Norito archive length in bytes (0 = unlimited).
     pub max_archive_len: u64,
-    /// Small-N threshold for AoS vs NCB adaptive selection in Norito columnar helpers.
-    pub aos_ncb_small_n: usize,
 }
 
 /// Hijiri configuration (actual layer).

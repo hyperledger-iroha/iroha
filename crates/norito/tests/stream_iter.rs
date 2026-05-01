@@ -25,6 +25,13 @@ fn overflow_varint() -> Vec<u8> {
     bytes
 }
 
+fn frame_with_unchecked_flags<T: NoritoSerialize>(payload: &[u8], flags: u8) -> Vec<u8> {
+    let mut bytes =
+        norito_core::frame_bare_with_header_flags::<T>(payload, 0).expect("frame payload");
+    bytes[norito_core::Header::SIZE - 1] = flags;
+    bytes
+}
+
 #[test]
 fn stream_seq_iter_half_then_finish() {
     // Build a reasonably large Vec<u32>
@@ -232,8 +239,7 @@ fn stream_seq_iter_rejects_short_seq_header() {
 fn stream_seq_iter_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
     let payload = vec![0u8; 8];
-    let bytes =
-        norito_core::frame_bare_with_header_flags::<Vec<u32>>(&payload, flags).expect("frame");
+    let bytes = frame_with_unchecked_flags::<Vec<u32>>(&payload, flags);
     let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
         .err()
         .expect("iter");
@@ -258,8 +264,7 @@ fn stream_map_iter_rejects_short_entry_count_header() {
 fn stream_map_iter_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
     let payload = vec![0u8; 8];
-    let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
-        .expect("frame");
+    let bytes = frame_with_unchecked_flags::<HashMap<u8, u8>>(&payload, flags);
     let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
         .err()
         .expect("iter");
@@ -271,8 +276,7 @@ fn stream_map_iter_rejects_reserved_flags() {
 fn stream_map_collect_rejects_reserved_flags() {
     let flags = header_flags::COMPACT_SEQ_LEN;
     let payload = vec![0u8; 8];
-    let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
-        .expect("frame");
+    let bytes = frame_with_unchecked_flags::<HashMap<u8, u8>>(&payload, flags);
     let err =
         stream_hashmap_collect_from_reader::<_, u8, u8>(Cursor::new(bytes)).expect_err("collect");
     assert!(matches!(err, Error::UnsupportedFeature(_)));

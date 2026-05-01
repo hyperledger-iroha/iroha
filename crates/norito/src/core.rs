@@ -29,6 +29,7 @@ use std::{
 pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 #[cfg(feature = "derive")]
 pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
+use sha2::{Digest, Sha256};
 
 #[cfg(feature = "schema-structural")]
 use crate::json;
@@ -238,10 +239,9 @@ pub(crate) fn payload_without_leading_padding_exact(
     Ok(&slice[padding..])
 }
 
-/// Initial value for the FNV-1a hash used in [`compute_schema_hash`].
-const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-/// Multiplication prime for the FNV-1a hash.
-const FNV_PRIME: u64 = 0x100000001b3;
+const TYPE_NAME_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:type-name\0";
+#[cfg(feature = "schema-structural")]
+const STRUCTURAL_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:structural-schema\0";
 
 /// CRC64 polynomial used to compute integrity checks.
 /// Header flags stored in the final padding byte.
@@ -264,37 +264,32 @@ pub mod header_flags {
     pub const FIELD_BITSET: u8 = 0x20;
 }
 
-/// Compute the 64-bit FNV-1a hash of `bytes`.
-fn fnv1a_bytes(bytes: &[u8]) -> u64 {
-    let mut hash = FNV_OFFSET;
-    let mut i = 0;
-    while i < bytes.len() {
-        hash ^= bytes[i] as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-        i += 1;
-    }
-    hash
-}
-
-fn schema_hash_from_hash(hash: u64) -> [u8; 16] {
-    let part = hash.to_le_bytes();
+fn schema_hash_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 16] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(bytes);
+    let digest = hasher.finalize();
     let mut out = [0u8; 16];
-    out[..8].copy_from_slice(&part);
-    out[8..].copy_from_slice(&part);
+    out.copy_from_slice(&digest[..16]);
     out
 }
 
-fn schema_hash_from_bytes(bytes: &[u8]) -> [u8; 16] {
-    schema_hash_from_hash(fnv1a_bytes(bytes))
+fn type_name_schema_hash_from_bytes(bytes: &[u8]) -> [u8; 16] {
+    schema_hash_with_domain(TYPE_NAME_SCHEMA_HASH_DOMAIN, bytes)
+}
+
+#[cfg(feature = "schema-structural")]
+fn structural_schema_hash_from_bytes(bytes: &[u8]) -> [u8; 16] {
+    schema_hash_with_domain(STRUCTURAL_SCHEMA_HASH_DOMAIN, bytes)
 }
 
 /// Generate a 16-byte schema hash for type `T`.
 ///
-/// The hash is derived from the fully qualified type name using FNV-1a.
-/// It is duplicated to fill 16 bytes for convenience.
+/// The hash is derived from the domain-prefixed SHA-256 digest of the fully
+/// qualified type name, truncated to 16 bytes.
 pub(crate) fn compute_schema_hash<T>() -> [u8; 16] {
     let name = core::any::type_name::<T>();
-    schema_hash_from_bytes(name.as_bytes())
+    type_name_schema_hash_from_bytes(name.as_bytes())
 }
 
 /// Public helper to compute type-name based schema hash (fallback when structural schema is not used).
@@ -304,7 +299,7 @@ pub fn type_name_schema_hash<T>() -> [u8; 16] {
 
 /// Compute a type-name-based schema hash for an arbitrary type name string.
 pub fn schema_hash_for_name(name: &str) -> [u8; 16] {
-    schema_hash_from_bytes(name.as_bytes())
+    type_name_schema_hash_from_bytes(name.as_bytes())
 }
 
 #[cfg(feature = "schema-structural")]
@@ -321,7 +316,7 @@ where
 {
     let mut out = String::new();
     json::JsonSerialize::json_serialize(value, &mut out);
-    schema_hash_from_bytes(out.as_bytes())
+    structural_schema_hash_from_bytes(out.as_bytes())
 }
 
 #[cfg(feature = "schema-structural")]
@@ -613,7 +608,7 @@ pub(crate) fn record_last_header_flags(flags: u8) {
     LAST_HEADER_FLAGS.with(|cell| cell.set(Some(sanitized)));
 }
 
-fn take_last_header_flags() -> Option<u8> {
+pub(crate) fn take_last_header_flags() -> Option<u8> {
     LAST_HEADER_FLAGS.with(|cell| cell.replace(None))
 }
 
@@ -1900,9 +1895,6 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, mut offset) = read_seq_len_slice(bytes)?;
         // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
-        // For compatibility we still accept the legacy per-element length-prefixed
-        // representation (and the packed-seq offsets layout) when the raw form
-        // doesn't match the input.
         if core::any::type_name::<T>() == "u8"
             && let Some(end) = offset.checked_add(len)
             && end == bytes.len()
@@ -1914,6 +1906,9 @@ where
                 std::mem::transmute::<Vec<u8>, Vec<T>>(vec)
             };
             return Ok((out, end));
+        }
+        if core::any::type_name::<T>() == "u8" {
+            return Err(Error::LengthMismatch);
         }
         let remaining = bytes.len().saturating_sub(offset);
         if use_packed_seq() {
@@ -3144,6 +3139,7 @@ impl Header {
 
     /// Write the header to the given writer.
     fn write(&self, mut w: impl Write) -> Result<(), Error> {
+        validate_header_flags(self.flags)?;
         w.write_all(&self.magic)?;
         w.write_u8(self.major)?;
         w.write_u8(self.minor)?;
@@ -5673,13 +5669,11 @@ pub fn frame_bare_with_header_flags<T: NoritoSerialize>(
     Ok(out)
 }
 
-pub fn frame_bare_with_default_header<T: NoritoSerialize>(
+#[cfg(test)]
+pub(crate) fn frame_bare_with_default_header<T: NoritoSerialize>(
     payload: &[u8],
 ) -> Result<Vec<u8>, Error> {
     if let Some(flags) = take_last_header_flags() {
-        return frame_bare_with_header_flags::<T>(payload, flags);
-    }
-    if let Some(flags) = crate::codec::take_last_encode_flags() {
         return frame_bare_with_header_flags::<T>(payload, flags);
     }
     if let Some(flags) = current_decode_flags_effective() {
@@ -6292,12 +6286,6 @@ pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
-    #[inline]
-    fn allow_legacy_len_mismatch<T>(recomputed: usize, payload_len: usize) -> bool {
-        recomputed != payload_len
-            && core::any::type_name::<T>().contains("iroha_data_model::isi::InstructionBox")
-    }
-
     if bytes.is_empty() {
         if core::mem::size_of::<Archived<T>>() == 0 {
             let _guard = PayloadCtxGuard::enter(&[]);
@@ -6367,19 +6355,15 @@ where
                 } else {
                     let recomputed = recompute_canonical_len(&value)?;
                     if recomputed != bytes_len {
-                        if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
-                            Ok(bytes_len)
-                        } else {
-                            if crate::debug_trace_enabled() {
-                                eprintln!(
-                                    "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={} (max_access={used})",
-                                    core::any::type_name::<T>(),
-                                    recomputed,
-                                    bytes_len
-                                );
-                            }
-                            Err(Error::LengthMismatch)
+                        if crate::debug_trace_enabled() {
+                            eprintln!(
+                                "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={} (max_access={used})",
+                                core::any::type_name::<T>(),
+                                recomputed,
+                                bytes_len
+                            );
                         }
+                        Err(Error::LengthMismatch)
                     } else {
                         Ok(recomputed)
                     }
@@ -6388,19 +6372,15 @@ where
             _ => {
                 let recomputed = recompute_canonical_len(&value)?;
                 if recomputed != bytes_len {
-                    if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
-                        Ok(bytes_len)
-                    } else {
-                        if crate::debug_trace_enabled() {
-                            eprintln!(
-                                "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={}",
-                                core::any::type_name::<T>(),
-                                recomputed,
-                                bytes_len
-                            );
-                        }
-                        Err(Error::LengthMismatch)
+                    if crate::debug_trace_enabled() {
+                        eprintln!(
+                            "decode_field_canonical::<{}>: recomputed_len={} mismatches payload_len={}",
+                            core::any::type_name::<T>(),
+                            recomputed,
+                            bytes_len
+                        );
                     }
+                    Err(Error::LengthMismatch)
                 } else {
                     Ok(recomputed)
                 }
@@ -6469,30 +6449,6 @@ where
                 } else {
                     let recomputed = recompute_canonical_len(&value)?;
                     if recomputed != bytes_len {
-                        if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
-                            Ok(bytes_len)
-                        } else {
-                            if crate::debug_trace_enabled() {
-                                eprintln!(
-                                    "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
-                                    core::any::type_name::<T>(),
-                                    recomputed,
-                                    bytes_len
-                                );
-                            }
-                            Err(Error::LengthMismatch)
-                        }
-                    } else {
-                        Ok(recomputed)
-                    }
-                }
-            }
-            _ => {
-                let recomputed = recompute_canonical_len(&value)?;
-                if recomputed != bytes_len {
-                    if allow_legacy_len_mismatch::<T>(recomputed, bytes_len) {
-                        Ok(bytes_len)
-                    } else {
                         if crate::debug_trace_enabled() {
                             eprintln!(
                                 "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
@@ -6502,7 +6458,23 @@ where
                             );
                         }
                         Err(Error::LengthMismatch)
+                    } else {
+                        Ok(recomputed)
                     }
+                }
+            }
+            _ => {
+                let recomputed = recompute_canonical_len(&value)?;
+                if recomputed != bytes_len {
+                    if crate::debug_trace_enabled() {
+                        eprintln!(
+                            "decode_field_canonical::<{}>: misaligned recomputed_len={} mismatches payload_len={}",
+                            core::any::type_name::<T>(),
+                            recomputed,
+                            bytes_len
+                        );
+                    }
+                    Err(Error::LengthMismatch)
                 } else {
                     Ok(recomputed)
                 }
@@ -6527,20 +6499,6 @@ where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
     #[inline]
-    fn allow_legacy_prefix_len_mismatch<T>(recomputed: usize, used: usize) -> bool {
-        if recomputed >= used {
-            return false;
-        }
-
-        let type_name = core::any::type_name::<T>();
-        type_name.contains("iroha_data_model::isi::InstructionBox")
-            || type_name.contains("iroha_data_model::transaction::signed::model::SignedTransaction")
-            || type_name
-                .contains("iroha_data_model::transaction::signed::model::TransactionEntrypoint")
-            || type_name.contains("iroha_data_model::block::payload::model::BlockResult")
-    }
-
-    #[inline]
     fn resolve_prefix_used<T>(
         value: &T,
         payload_len: usize,
@@ -6556,9 +6514,6 @@ where
                 }
                 let recomputed = recompute_canonical_len(value)?;
                 if recomputed > payload_len || used > recomputed {
-                    if allow_legacy_prefix_len_mismatch::<T>(recomputed, used) {
-                        return Ok(used);
-                    }
                     return Err(Error::LengthMismatch);
                 }
                 Ok(recomputed)
@@ -7218,8 +7173,7 @@ mod tests {
         let value = AlignSensitive {
             data: vec![11_u128, 22, 33, 44],
         };
-        let payload = encode_adaptive(&value);
-        let flags = codec::take_last_encode_flags().expect("encode flags captured");
+        let (payload, flags) = encode_with_header_flags(&value);
 
         let mut storage = Vec::with_capacity(payload.len() + 1);
         storage.push(0u8);
@@ -7562,7 +7516,6 @@ mod tests {
     fn frame_bare_with_default_header_requires_layout_metadata() {
         reset_decode_state();
         let _ = take_last_header_flags();
-        let _ = crate::codec::take_last_encode_flags();
         let payload = vec![0u8; 4];
         let err = frame_bare_with_default_header::<Vec<u8>>(&payload)
             .expect_err("missing flags should surface an error");
@@ -7584,8 +7537,8 @@ mod tests {
         reset_decode_state();
         let value = vec![5u64, 6, 7];
         let (bare, flags) = crate::codec::encode_with_header_flags(&value);
-        let framed =
-            frame_bare_with_default_header::<Vec<u64>>(&bare).expect("frame payload with metadata");
+        let framed = frame_bare_with_header_flags::<Vec<u64>>(&bare, flags)
+            .expect("frame payload with explicit flags");
         let mut cursor = std::io::Cursor::new(&framed);
         let header = Header::read(&mut cursor).expect("read header");
         assert_eq!(header.flags, flags);
@@ -8239,21 +8192,19 @@ mod tests {
     }
 
     #[test]
-    fn vec_u8_decode_accepts_legacy_len_prefixed_elements() {
+    fn vec_u8_decode_rejects_len_prefixed_elements() {
         reset_decode_state();
         let guard = DecodeFlagsGuard::enter_with_hint(0, 0);
         let value: Vec<u8> = vec![1, 2, 3, 4];
-        let mut legacy = Vec::new();
-        legacy.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(value.len() as u64).to_le_bytes());
         for byte in &value {
-            legacy.extend_from_slice(&1u64.to_le_bytes());
-            legacy.push(*byte);
+            payload.extend_from_slice(&1u64.to_le_bytes());
+            payload.push(*byte);
         }
 
-        let (decoded, used) =
-            <Vec<u8> as DecodeFromSlice>::decode_from_slice(&legacy).expect("decode legacy vec");
-        assert_eq!(used, legacy.len());
-        assert_eq!(decoded, value);
+        let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&payload);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
         drop(guard);
         reset_decode_state();
     }

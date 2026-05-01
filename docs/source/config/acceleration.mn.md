@@ -171,12 +171,8 @@ GPU блокийн кодыг тайлах утастай болтол дэмж�
 
 | Талбай | Өгөгдмөл | Зорилго |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` байт | Үүний доор ачааллын ачааллаас зайлсхийхийн тулд zstd-г бүхэлд нь алгасдаг. |
-| `min_compress_bytes_gpu` | `1_048_576` байт (1МиБ) | `norito::core::hw::has_gpu_compression()` үнэн үед энэ хязгаараас дээш хэмжээтэй ачаалал GPU zstd руу шилжинэ. |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | <32KiB ба ≥32KiB ачааллын хувьд CPU шахалтын түвшин. |
-| `zstd_level_gpu` | `1` | Командын дарааллыг бөглөх явцад хоцролтыг тогтвортой байлгахын тулд GPU-ийн консерватив түвшин. |
-| `large_threshold` | `32_768` байт | "Жижиг" ба "том" CPU zstd түвшний хоорондох хэмжээсийн хил хязгаар. |
-| `aos_ncb_small_n` | `64` мөр | Энэ эгнээний доор дасан зохицох кодлогч нь хамгийн бага ачааллыг сонгохын тулд AoS болон NCB байршлыг хоёуланг нь шалгадаг. |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` мөр | 1–2 мөрөнд хоосон нүд байх үед u32/id дельта кодчиллыг идэвхжүүлэхээс сэргийлнэ. |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Дельта нь дор хаяж хоёр эгнээ байх үед л нэг удаа өшиглөнө. |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | Бүх дельта хувиргалтыг сайн ажиллагаатай оролтын хувьд анхдагчаар идэвхжүүлдэг. |
@@ -189,7 +185,7 @@ GPU блокийн кодыг тайлах утастай болтол дэмж�
 Утасны форматыг өөрчлөх шийдвэр хэзээ ч гаргадаггүй бөгөөд босго нь тогтмол байдаг
 хувилбар бүрт. Профайл нь илүү сайн эвдэх цэгүүдийг илрүүлэх үед Norito
 каноник `Heuristics::canonical` хэрэгжилт ба `docs/source/benchmarks.md` plus
-`status.md` өөрчлөлтийг хувилбартай нотлох баримтын хамт тэмдэглэнэ.GPU zstd туслагч нь ижил `min_compress_bytes_gpu` таслалтыг хэрэгжүүлдэг.
+`status.md` өөрчлөлтийг хувилбартай нотлох баримтын хамт тэмдэглэнэ.GPU zstd туслагч нь ижил compiled GPU cutoff таслалтыг хэрэгжүүлдэг.
 шууд дуудагдсан (жишээ нь `norito::core::gpu_zstd::encode_all`-ээр), маш жижиг
 Ачаалал нь GPU-ийн боломжоос үл хамааран CPU-ийн зам дээр үргэлж үлддэг.
 

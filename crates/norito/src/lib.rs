@@ -37,11 +37,7 @@
 //!   headerless (“bare”) payload with a Norito header that exactly matches the
 //!   supplied layout flags. `norito::codec::encode_with_header_flags(value)`
 //!   returns both the bare payload and the recorded flags so callers can persist
-//!   the metadata alongside the bytes.
-//! - `norito::core::frame_bare_with_default_header` is limited to unit tests: it
-//!   consumes the thread-local telemetry from the most recent encode/decode on
-//!   the same thread and propagates `Error::MissingLayoutFlags` when no metadata
-//!   is available.
+//!   the metadata alongside the bytes without relying on thread-local state.
 
 extern crate self as norito;
 
@@ -256,20 +252,6 @@ pub mod codec {
         }
     }
 
-    use std::cell::Cell;
-
-    thread_local! {
-        static LAST_ENCODE_FLAGS: Cell<Option<u8>> = const { Cell::new(None) };
-    }
-
-    pub fn take_last_encode_flags() -> Option<u8> {
-        LAST_ENCODE_FLAGS.with(|cell| cell.replace(None))
-    }
-
-    fn store_last_encode_flags(flags: u8) {
-        LAST_ENCODE_FLAGS.with(|cell| cell.set(Some(flags)));
-    }
-
     struct CountingWriter<'a, W: Write> {
         inner: &'a mut W,
         bytes_written: usize,
@@ -457,7 +439,6 @@ pub mod codec {
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive: final_flags=0x{final_flags:02x}");
         }
-        store_last_encode_flags(final_flags);
         core::record_last_header_flags(final_flags);
         payload
     }
@@ -527,7 +508,6 @@ pub mod codec {
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive_into: final_flags=0x{final_flags:02x}");
         }
-        store_last_encode_flags(final_flags);
         core::record_last_header_flags(final_flags);
         Ok(payload_len)
     }
@@ -606,6 +586,16 @@ pub mod codec {
             let _ = items.encode();
             assert!(HINT_CALLS.load(Ordering::Relaxed) > 0);
         }
+
+        #[test]
+        fn take_last_encode_flags_reports_and_clears_adaptive_flags() {
+            let _ = super::take_last_encode_flags();
+
+            let _ = vec![1u8, 2, 3].encode();
+
+            assert!(super::take_last_encode_flags().is_some());
+            assert!(super::take_last_encode_flags().is_none());
+        }
     }
 
     /// Encode `value` and return both the bare payload and the exact header flags required
@@ -613,8 +603,12 @@ pub mod codec {
     pub fn encode_with_header_flags<T: NoritoSerialize>(value: &T) -> (Vec<u8>, u8) {
         let (payload, flags) =
             core::encode_bare_with_flags(value).expect("encode_with_header_flags should succeed");
-        store_last_encode_flags(flags);
         (payload, flags)
+    }
+
+    /// Return and clear the header flags recorded by the most recent framed encode on this thread.
+    pub fn take_last_encode_flags() -> Option<u8> {
+        core::take_last_header_flags()
     }
 
     /// Bare decode using the fixed v1 layout flags.
@@ -1662,9 +1656,9 @@ pub mod json {
         use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry};
 
         use iroha_schema::{
-            ArrayMeta, BitmapMask, BitmapMeta, EnumMeta, EnumVariant, FixedMeta, Ident, IntMode,
-            IntoSchema, MapMeta, MetaMap, MetaMapEntry, Metadata, NamedFieldsMeta, ResultMeta,
-            TypeId as SchemaTypeId, UnnamedFieldsMeta,
+            ArrayMeta, BitmapMask, BitmapMeta, EnumMeta, EnumVariant, FixedMeta, FloatMode, Ident,
+            IntMode, IntoSchema, MapMeta, MetaMap, MetaMapEntry, Metadata, NamedFieldsMeta,
+            ResultMeta, TypeId as SchemaTypeId, UnnamedFieldsMeta,
         };
 
         use super::{JsonSerialize, Map, Number, Value};
@@ -1720,6 +1714,7 @@ pub mod json {
                     Value::String(lookup(entries, *inner, "Metadata::Option")),
                 ),
                 Metadata::Int(mode) => single_entry("Int", int_mode_to_value(*mode)),
+                Metadata::Float(mode) => single_entry("Float", float_mode_to_value(*mode)),
                 Metadata::Tuple(tuple) => tuple_metadata_to_value(tuple, entries),
                 Metadata::Struct(named) => {
                     single_entry("Struct", struct_fields_to_value(named, entries))
@@ -1888,6 +1883,13 @@ pub mod json {
             }
         }
 
+        fn float_mode_to_value(mode: FloatMode) -> Value {
+            match mode {
+                FloatMode::Binary32 => Value::String("Binary32".to_owned()),
+                FloatMode::Binary64 => Value::String("Binary64".to_owned()),
+            }
+        }
+
         #[inline]
         fn type_name_of<T>() -> Ident {
             core::any::type_name::<T>().to_owned()
@@ -1923,9 +1925,7 @@ pub mod json {
                     EnumVariant {
                         tag: "F64".to_owned(),
                         discriminant: 2,
-                        // Expose the floating-point payload as a string since
-                        // `f64` intentionally lacks an `IntoSchema` impl.
-                        ty: Some(TypeId::of::<String>()),
+                        ty: Some(TypeId::of::<f64>()),
                     },
                 ];
 
@@ -1933,7 +1933,7 @@ pub mod json {
 
                 <i64 as IntoSchema>::update_schema_map(map);
                 <u64 as IntoSchema>::update_schema_map(map);
-                <String as IntoSchema>::update_schema_map(map);
+                <f64 as IntoSchema>::update_schema_map(map);
             }
         }
 

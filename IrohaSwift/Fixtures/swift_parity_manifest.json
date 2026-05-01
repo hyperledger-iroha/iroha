@@ -47,7 +47,7 @@
   "schema": {
     "payload": "iroha.android.transaction.Payload.v1",
     "signed": "iroha.transaction.SignedTransaction.v1",
-    "signed_schema_hash_hex": "7ad1ae306dffd89a7ad1ae306dffd89a"
+    "signed_schema_hash_hex": "7ab5ff9c572efb316deac478f19209c5"
   },
   "signing_key": {
     "algorithm": "ed25519",

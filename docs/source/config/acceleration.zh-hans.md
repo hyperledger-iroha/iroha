@@ -171,12 +171,8 @@ IVM/Crypto 将在下一次加速扫描中针对这两个内核。基准预算：
 
 |领域 |默认 |目的|
 |--------|---------|---------|
-| `min_compress_bytes_cpu` | `256` 字节 |在此之下，有效负载完全跳过 zstd 以避免开销。 |
-| `min_compress_bytes_gpu` | `1_048_576` 字节 (1MiB) |当 `norito::core::hw::has_gpu_compression()` 为 true 时，等于或高于此限制的有效负载会切换到 GPU zstd。 |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` |分别针对 <32KiB 和 ≥32KiB 有效负载的 CPU 压缩级别。 |
-| `zstd_level_gpu` | `1` |保守的 GPU 级别可在填充命令队列时保持延迟一致。 |
-| `large_threshold` | `32_768` 字节 | “小”和“大”CPU zstd 级别之间的大小边界。 |
-| `aos_ncb_small_n` | `64` 行 |在此行数下方，自适应编码器探测 AoS 和 NCB 布局以选择最小的有效负载。 |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` 行 |当 1-2 行包含空单元格时，防止启用 u32/id 增量编码。 |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` |仅当至少有两行时，增量才会生效。 |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` |默认情况下，对于行为良好的输入启用所有增量变换。 |
@@ -189,7 +185,7 @@ IVM/Crypto 将在下一次加速扫描中针对这两个内核。基准预算：
 从不做出改变线路格式的决定，并且阈值是固定的
 每个版本。当分析发现更好的收支平衡点时，Norito 会更新
 规范 `Heuristics::canonical` 实现和 `docs/source/benchmarks.md` plus
-`status.md` 将更改与版本证据一起记录。GPU zstd 帮助程序强制执行相同的 `min_compress_bytes_gpu` 截止，即使
+`status.md` 将更改与版本证据一起记录。GPU zstd 帮助程序强制执行Norito's compiled GPU cutoff，即使
 直接调用（例如通过 `norito::core::gpu_zstd::encode_all`），所以很小
 无论 GPU 可用性如何，有效负载始终保留在 CPU 路径上。
 

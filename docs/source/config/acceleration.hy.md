@@ -171,12 +171,8 @@ IVM/Crypto-ն թիրախավորելու է այս երկու միջուկներ
 
 | Դաշտային | Կանխադրված | Նպատակը |
 |-------|---------|---------|
-| `min_compress_bytes_cpu` | `256` բայթ | Սրանից ներքև, օգտակար բեռներն ամբողջությամբ բաց են թողնում zstd-ը՝ գերավճարներից խուսափելու համար: |
-| `min_compress_bytes_gpu` | `1_048_576` բայթ (1ՄիԲ) | Այս սահմանաչափով կամ ավելի բարձր բեռները անցնում են GPU zstd-ի, երբ `norito::core::hw::has_gpu_compression()` ճիշտ է: |
-| `zstd_level_small` / `zstd_level_large` | `1` / `3` | CPU-ի սեղմման մակարդակները համապատասխանաբար <32KiB և ≥32KiB օգտակար բեռների համար: |
-| `zstd_level_gpu` | `1` | Պահպանողական GPU մակարդակ՝ հրամանների հերթերը լրացնելիս հետաձգումը հետևողական պահելու համար: |
-| `large_threshold` | `32_768` բայթ | Չափի սահմանը «փոքր» և «մեծ» CPU zstd մակարդակների միջև: |
-| `aos_ncb_small_n` | `64` տողեր | Այս տողերի քանակի ներքևում հարմարվողական կոդավորիչներն ուսումնասիրում են ինչպես AoS, այնպես էլ NCB դասավորությունները՝ ընտրելու ամենափոքր բեռնվածությունը: |
+| `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |
+| `max_archive_len` | `sumeragi.rbc.store_max_bytes` | Rejects Norito archives whose declared decompressed length exceeds the configured bound before allocation. The daemon raises this at startup if RBC or network frame limits require a larger value. |
 | `combo_no_delta_small_n_if_empty` | `2` տողեր | Կանխում է u32/id դելտա կոդավորումների միացումը, երբ 1–2 տողերը պարունակում են դատարկ բջիջներ: |
 | `combo_id_delta_min_rows` / `combo_u32_delta_min_rows` | `2` | Դելտաները ներխուժում են միայն մեկ անգամ, որտեղ կա առնվազն երկու շարք: |
 | `combo_enable_id_delta` / `combo_enable_u32_delta_names` / `combo_enable_u32_delta_bytes` | `true` | Բոլոր դելտա փոխակերպումները լռելյայն միացված են լավ վարքագծի մուտքագրման համար: |
@@ -189,7 +185,7 @@ IVM/Crypto-ն թիրախավորելու է այս երկու միջուկներ
 երբեք որոշում չի կայացնում, որը կփոխի մետաղալարերի ձևաչափը, և շեմերը ֆիքսված են
 մեկ թողարկման համար: Երբ պրոֆիլավորումը բացահայտում է ավելի լավ անկման կետեր, Norito-ը թարմացնում է
 կանոնական `Heuristics::canonical` իրականացում և `docs/source/benchmarks.md` plus
-`status.md` արձանագրել փոփոխությունը տարբերակված ապացույցների հետ մեկտեղ:GPU zstd օգնականը պարտադրում է նույն `min_compress_bytes_gpu` անջատումը, նույնիսկ երբ
+`status.md` արձանագրել փոփոխությունը տարբերակված ապացույցների հետ մեկտեղ:GPU zstd օգնականը պարտադրում է նույն compiled GPU cutoff անջատումը, նույնիսկ երբ
 ուղղակիորեն կանչված (օրինակ՝ `norito::core::gpu_zstd::encode_all`-ի միջոցով), այնքան փոքր
 օգտակար բեռները միշտ մնում են պրոցեսորի ուղու վրա՝ անկախ GPU-ի առկայությունից:
 

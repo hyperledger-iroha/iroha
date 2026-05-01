@@ -25,7 +25,7 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 | Magic | 4 | ASCII `NRT0` |
 | Major | 1 | `VERSION_MAJOR = 0` |
 | Minor | 1 | `VERSION_MINOR = 0x00` |
-| Schema hash | 16 | FNV-1a hash of fully qualified type name (v1) |
+| Schema hash | 16 | First 16 bytes of a domain-separated SHA-256 schema digest |
 | Compression | 1 | `0 = None`, `1 = Zstd` |
 | Payload length | 8 | Uncompressed payload length (u64, little-endian) |
 | CRC64 | 8 | CRC64-XZ (ECMA polynomial, reflected, init/xor all ones) over the payload |
@@ -177,13 +177,12 @@ chosen algorithm is recorded in the header; there is no on-wire negotiation.
 
 ## Schema Hash Details
 
-The 16-byte schema hash is computed as:
+The 16-byte schema hash is computed as the first 16 bytes of SHA-256 over a domain prefix followed by canonical schema bytes:
 
-- Default: FNV-1a 64-bit hash of the fully qualified type name (Rust
-  `core::any::type_name::<T>()`), duplicated to fill 16 bytes.
-- With `schema-structural`: canonical JSON schema produced by
-  `iroha_schema::IntoSchema`, serialized with Norito’s JSON writer and hashed
-  with the same FNV-1a routine.
+- Default: `SHA-256("norito:v1:type-name\0" || fully-qualified type name)`.
+  Rust uses `core::any::type_name::<T>()` for the type-name bytes.
+- With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" || canonical JSON schema)`, where the schema is produced by
+  `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
 
 Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`

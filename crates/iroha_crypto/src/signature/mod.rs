@@ -357,9 +357,16 @@ impl<T> norito::core::NoritoSerialize for SignatureOf<T> {
 
 impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        let as_sig: &norito::core::Archived<Signature> = archived.cast();
-        let sig = <Signature as norito::core::NoritoDeserialize>::deserialize(as_sig);
-        SignatureOf(sig, PhantomData)
+        Self::try_deserialize(archived).expect("SignatureOf decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let bytes = norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
+        let (sig, used) = <Signature as DecodeFromSlice>::decode_from_slice(bytes)?;
+        norito::core::note_payload_access(bytes, used);
+        Ok(SignatureOf(sig, PhantomData))
     }
 }
 

@@ -336,7 +336,7 @@ class _MockState:
             self.node_capabilities = {
                 "abi_version": 1,
                 "data_model_version": 1,
-                "signed_transaction_schema_hash_hex": "7ad1ae306dffd89a7ad1ae306dffd89a",
+                "signed_transaction_schema_hash_hex": "7ab5ff9c572efb316deac478f19209c5",
             }
             self.sccp_capabilities = {
                 "local_domain": 0,

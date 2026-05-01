@@ -139,7 +139,7 @@ fn validate_schema(map: &MetaMap) {
                     bitmap_meta.repr,
                 );
             }
-            Metadata::Int(_) | Metadata::String | Metadata::Bool => {}
+            Metadata::Int(_) | Metadata::Float(_) | Metadata::String | Metadata::Bool => {}
         }
     }
 }

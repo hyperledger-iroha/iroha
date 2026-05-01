@@ -130,6 +130,29 @@ async fn submit_entrypoint(
     entrypoint: TransactionEntrypoint,
     timeout: Duration,
 ) -> Result<HashOf<TransactionEntrypoint>> {
+    match submit_entrypoint_maybe_rejected(http, client, entrypoint, timeout).await? {
+        EntrypointSubmitOutcome::Accepted(hash) => Ok(hash),
+        EntrypointSubmitOutcome::Rejected { status, body } => {
+            bail!("entrypoint submit failed with {status}: {body}")
+        }
+    }
+}
+
+#[derive(Debug)]
+enum EntrypointSubmitOutcome {
+    Accepted(HashOf<TransactionEntrypoint>),
+    Rejected {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+}
+
+async fn submit_entrypoint_maybe_rejected(
+    http: &reqwest::Client,
+    client: &Client,
+    entrypoint: TransactionEntrypoint,
+    timeout: Duration,
+) -> Result<EntrypointSubmitOutcome> {
     let entrypoint_hash = entrypoint.hash();
     let body = encode_versioned_entrypoint(&entrypoint);
     let deadline = Instant::now() + timeout;
@@ -153,7 +176,7 @@ async fn submit_entrypoint(
                 Some(entrypoint_hash.to_string().as_str()),
                 "Torii should return the submitted entrypoint hash"
             );
-            return Ok(entrypoint_hash);
+            return Ok(EntrypointSubmitOutcome::Accepted(entrypoint_hash));
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS
             && is_retryable_queue_pressure(&response_body)
@@ -162,10 +185,10 @@ async fn submit_entrypoint(
             sleep(Duration::from_secs(1)).await;
             continue;
         }
-        ensure!(
-            status == reqwest::StatusCode::ACCEPTED,
-            "entrypoint submit failed with {status}: {response_body}"
-        );
+        return Ok(EntrypointSubmitOutcome::Rejected {
+            status,
+            body: response_body,
+        });
     }
 }
 
@@ -173,7 +196,7 @@ async fn wait_for_entrypoint_applied(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<Option<u64>> {
     let hash = entrypoint_status_hash(entrypoint_hash);
     let deadline = Instant::now() + timeout;
     let mut last_status = None;
@@ -185,7 +208,7 @@ async fn wait_for_entrypoint_applied(
         if let Some(status) = status {
             let kind = status.status.kind.clone();
             if kind == "Applied" {
-                return Ok(());
+                return Ok(status.status.block_height);
             }
             if kind == "Rejected" {
                 bail!("entrypoint {entrypoint_hash} was rejected: {status:?}");
@@ -196,6 +219,44 @@ async fn wait_for_entrypoint_applied(
     }
     Err(eyre!(
         "timed out waiting for entrypoint {entrypoint_hash} to apply; last status={last_status:?}"
+    ))
+}
+
+async fn wait_for_entrypoint_rejected(
+    client: &Client,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    timeout: Duration,
+    reason_fragment: &str,
+) -> Result<Option<u64>> {
+    let hash = entrypoint_status_hash(entrypoint_hash);
+    let deadline = Instant::now() + timeout;
+    let mut last_status = None;
+    while Instant::now() < deadline {
+        let poll_client = client.clone();
+        let status =
+            tokio::task::spawn_blocking(move || poll_client.get_transaction_status_response(hash))
+                .await??;
+        if let Some(status) = status {
+            let kind = status.status.kind.clone();
+            if kind == "Rejected" {
+                let reason = status
+                    .status
+                    .rejection_reason
+                    .as_ref()
+                    .map(|reason| format!("{reason:?}"))
+                    .unwrap_or_default();
+                ensure!(
+                    reason.contains(reason_fragment),
+                    "entrypoint {entrypoint_hash} rejection reason {reason:?} did not contain {reason_fragment:?}"
+                );
+                return Ok(status.status.block_height);
+            }
+            last_status = Some(kind);
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    Err(eyre!(
+        "timed out waiting for entrypoint {entrypoint_hash} to reject; last status={last_status:?}"
     ))
 }
 
@@ -236,6 +297,59 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
         }
         sleep(Duration::from_secs(1)).await;
     }
+}
+
+fn sealed_entrypoints_for_instructions(
+    client: &Client,
+    instructions: Vec<InstructionBox>,
+    salt: [u8; 32],
+    reveal_after_height: u64,
+    reveal_deadline_height: u64,
+) -> (Hash, TransactionEntrypoint, TransactionEntrypoint) {
+    let inner_tx = TransactionBuilder::new(client.chain.clone(), client.account.clone())
+        .with_instructions(instructions)
+        .sign(client.key_pair.private_key());
+    let commitment_hash = compute_sealed_transaction_commitment(
+        &client.chain,
+        &inner_tx,
+        salt,
+        reveal_deadline_height,
+    );
+    let commitment_payload = SealedTransactionCommitmentPayload::new(
+        client.chain.clone(),
+        client.account.clone(),
+        commitment_hash,
+        reveal_after_height,
+        reveal_deadline_height,
+        None,
+    );
+    let commitment =
+        SignedSealedTransactionCommitment::sign(commitment_payload, client.key_pair.private_key());
+    let reveal = SealedTransactionReveal::new(commitment_hash, inner_tx, salt);
+    (
+        commitment_hash,
+        TransactionEntrypoint::SealedCommitment(commitment),
+        TransactionEntrypoint::SealedReveal(reveal),
+    )
+}
+
+fn account_has_metadata(client: &Client, key: &Name) -> Result<bool> {
+    let account = client
+        .query(FindAccounts)
+        .execute_all()?
+        .into_iter()
+        .find(|account| account.id() == &client.account)
+        .ok_or_else(|| eyre!("test account {} was not found", client.account))?;
+    Ok(account.metadata().contains(key))
+}
+
+fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
+    Ok(client
+        .query_single(FindAssetById {
+            id: asset_id.clone(),
+        })?
+        .value()
+        .clone())
 }
 
 #[tokio::test]
@@ -328,6 +442,176 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     assert_eq!(
         payload.get("status").and_then(norito::json::Value::as_str),
         Some("Committed")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<()> {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        NetworkBuilder::new()
+            .with_min_peers(4)
+            .with_pipeline_time(Duration::from_secs(5))
+            .with_sync_timeout(Duration::from_secs(180)),
+        stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    let client = network.client();
+    let http = reqwest::Client::new();
+
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "sealeddupmint".parse()?,
+    );
+    let asset_id = AssetId::new(asset_definition_id.clone(), client.account.clone());
+    client.submit_blocking(Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    ))?;
+
+    let starting_height = client.get_status()?.blocks;
+    let reveal_after_height = starting_height + 3;
+    let reveal_deadline_height = starting_height + 30;
+    let timeout = network.sync_timeout();
+    let status_timeout = timeout.max(Duration::from_secs(90));
+    let mut commitment_entrypoints = Vec::new();
+    let mut reveal_entrypoints = Vec::new();
+    let mut marker_keys = Vec::new();
+
+    for idx in 0..4_u8 {
+        let marker = format!("sealed_batch_marker_{idx}").parse::<Name>()?;
+        let (_, commitment, reveal) = sealed_entrypoints_for_instructions(
+            &client,
+            vec![
+                SetKeyValue::account(
+                    client.account.clone(),
+                    marker.clone(),
+                    Json::new(format!("batch-{idx}")),
+                )
+                .into(),
+            ],
+            [0x80 + idx; 32],
+            reveal_after_height,
+            reveal_deadline_height,
+        );
+        commitment_entrypoints.push(commitment);
+        reveal_entrypoints.push(reveal);
+        marker_keys.push(marker);
+    }
+
+    let mint_amount = numeric!(7);
+    let (_, mint_commitment, mint_reveal) = sealed_entrypoints_for_instructions(
+        &client,
+        vec![Mint::asset_numeric(mint_amount.clone(), asset_id.clone()).into()],
+        [0xA5; 32],
+        reveal_after_height,
+        reveal_deadline_height,
+    );
+    commitment_entrypoints.push(mint_commitment);
+    reveal_entrypoints.push(mint_reveal.clone());
+
+    let mut commitment_hashes = Vec::new();
+    for commitment in commitment_entrypoints {
+        commitment_hashes.push(submit_entrypoint(&http, &client, commitment, timeout).await?);
+    }
+    for hash in commitment_hashes {
+        wait_for_entrypoint_applied(&client, hash, status_timeout).await?;
+    }
+
+    advance_to_height(&network, reveal_after_height).await?;
+
+    let mut reveal_hashes = Vec::new();
+    for reveal in reveal_entrypoints.iter().cloned() {
+        reveal_hashes.push(submit_entrypoint(&http, &client, reveal, timeout).await?);
+    }
+
+    let mut reveal_heights = Vec::new();
+    for hash in &reveal_hashes {
+        let height = wait_for_entrypoint_applied(&client, *hash, status_timeout)
+            .await?
+            .ok_or_else(|| eyre!("applied reveal {hash} did not report a block height"))?;
+        reveal_heights.push(height);
+    }
+    ensure!(
+        reveal_heights
+            .iter()
+            .all(|height| *height == reveal_heights[0]),
+        "sealed reveals should be batched into one block; observed heights={reveal_heights:?}"
+    );
+
+    for marker in &marker_keys {
+        ensure!(
+            account_has_metadata(&client, marker)?,
+            "batched sealed reveal did not apply metadata marker {marker}"
+        );
+    }
+    assert_eq!(numeric_asset_value(&client, &asset_id)?, mint_amount);
+
+    match submit_entrypoint_maybe_rejected(&http, &client, mint_reveal, timeout).await? {
+        EntrypointSubmitOutcome::Accepted(hash) => {
+            assert_eq!(
+                hash,
+                *reveal_hashes
+                    .last()
+                    .expect("mint reveal hash should be recorded")
+            );
+        }
+        EntrypointSubmitOutcome::Rejected { status, body } => {
+            ensure!(
+                status.is_client_error(),
+                "duplicate reveal should be rejected with a client error or accepted for no-op processing, got {status}: {body}"
+            );
+        }
+    }
+    advance_to_height(&network, client.get_status()?.blocks + 2).await?;
+    assert_eq!(
+        numeric_asset_value(&client, &asset_id)?,
+        mint_amount,
+        "duplicate reveal must not execute the sealed inner transaction twice"
+    );
+
+    let expired_marker = "sealed_expired_marker".parse::<Name>()?;
+    let expired_base_height = client.get_status()?.blocks;
+    let expired_reveal_height = expired_base_height + 1;
+    let expired_deadline_height = expired_reveal_height;
+    let (_, expired_commitment, expired_reveal) = sealed_entrypoints_for_instructions(
+        &client,
+        vec![
+            SetKeyValue::account(
+                client.account.clone(),
+                expired_marker.clone(),
+                Json::new("expired"),
+            )
+            .into(),
+        ],
+        [0xE1; 32],
+        expired_reveal_height,
+        expired_deadline_height,
+    );
+    let expired_commitment_hash =
+        submit_entrypoint(&http, &client, expired_commitment, timeout).await?;
+    wait_for_entrypoint_applied(&client, expired_commitment_hash, status_timeout).await?;
+    advance_to_height(&network, expired_deadline_height + 1).await?;
+
+    match submit_entrypoint_maybe_rejected(&http, &client, expired_reveal, timeout).await? {
+        EntrypointSubmitOutcome::Accepted(hash) => {
+            wait_for_entrypoint_rejected(&client, hash, status_timeout, "sealed transaction")
+                .await?;
+        }
+        EntrypointSubmitOutcome::Rejected { status, body } => {
+            ensure!(
+                status.is_client_error(),
+                "expired reveal should be rejected immediately or by the pipeline, got {status}: {body}"
+            );
+        }
+    }
+    ensure!(
+        !account_has_metadata(&client, &expired_marker)?,
+        "expired delayed reveal must not execute its inner transaction"
     );
 
     Ok(())

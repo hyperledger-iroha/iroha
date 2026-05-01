@@ -99,7 +99,7 @@ fn structural_schema_hash_matches_bindings() {
         "u64": {"Int": "FixedWidth"}
     }
     "#;
-    let expected = hex_to_bytes("0107fec5fc24ac0d0107fec5fc24ac0d");
+    let expected = hex_to_bytes("3ae1591741f666462fb7665720ddde6c");
     let actual = norito::core::schema_hash_structural_from_json_str(json)
         .expect("parse structural descriptor");
     assert_eq!(actual.as_slice(), expected.as_slice());

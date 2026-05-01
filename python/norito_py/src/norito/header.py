@@ -47,14 +47,25 @@ SUPPORTED_FLAGS = {
     PACKED_SEQ,
     COMPACT_LEN,
     PACKED_STRUCT,
-    VARINT_OFFSETS,
-    COMPACT_SEQ_LEN,
     FIELD_BITSET,
 }
 
 _SUPPORTED_FLAGS_MASK = 0
 for _flag in SUPPORTED_FLAGS:
     _SUPPORTED_FLAGS_MASK |= _flag
+
+
+def validate_flags(flags: int) -> None:
+    """Validate Norito v1 layout flags."""
+
+    normalized = flags & 0xFF
+    unsupported = normalized & ~_SUPPORTED_FLAGS_MASK
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+    if normalized & FIELD_BITSET:
+        required = PACKED_STRUCT | COMPACT_LEN
+        if (normalized & required) != required:
+            raise UnsupportedFeatureError(normalized)
 
 
 @dataclass
@@ -76,8 +87,11 @@ class NoritoHeader:
 
         if len(self.schema_hash) != 16:
             raise ValueError("schema_hash must be 16 bytes long")
+        if self.payload_length < 0:
+            raise ValueError("payload_length must be non-negative")
         if self.compression not in (COMPRESSION_NONE, COMPRESSION_ZSTD):
             raise UnsupportedCompressionError(self.compression)
+        validate_flags(self.flags)
         header = bytearray(self._HEADER_LEN)
         header[0:4] = MAGIC
         header[4] = self.major
@@ -129,9 +143,7 @@ class NoritoHeader:
                 flags.to_bytes(1, "little"),
             )
 
-        unsupported = flags & ~_SUPPORTED_FLAGS_MASK
-        if unsupported:
-            raise UnsupportedFeatureError(unsupported)
+        validate_flags(flags)
 
         if compression == COMPRESSION_NONE:
             min_end = cls._HEADER_LEN + payload_length
@@ -187,4 +199,5 @@ __all__ = [
     "FIELD_BITSET",
     "COMPRESSION_NONE",
     "COMPRESSION_ZSTD",
+    "validate_flags",
 ]

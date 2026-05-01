@@ -1744,18 +1744,9 @@ mod tests {
                 },
             },
             norito: iroha_config::parameters::actual::Norito {
-                min_compress_bytes_cpu:
-                    iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_CPU,
-                min_compress_bytes_gpu:
-                    iroha_config::parameters::defaults::norito::MIN_COMPRESS_BYTES_GPU,
-                zstd_level_small: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_SMALL,
-                zstd_level_large: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_LARGE,
-                zstd_level_gpu: iroha_config::parameters::defaults::norito::ZSTD_LEVEL_GPU,
-                large_threshold: iroha_config::parameters::defaults::norito::LARGE_THRESHOLD,
                 allow_gpu_compression:
                     iroha_config::parameters::defaults::norito::ALLOW_GPU_COMPRESSION,
                 max_archive_len: iroha_config::parameters::defaults::norito::MAX_ARCHIVE_LEN,
-                aos_ncb_small_n: iroha_config::parameters::defaults::norito::AOS_NCB_SMALL_N,
             },
             hijiri: Hijiri::new(None),
             fraud_monitoring: FraudMonitoring::new(

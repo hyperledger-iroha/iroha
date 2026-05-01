@@ -5659,7 +5659,7 @@ public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
     public static let expectedDataModelVersion = 1
     /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
-    public static let expectedSignedTransactionSchemaHashHex = "7ad1ae306dffd89a7ad1ae306dffd89a"
+    public static let expectedSignedTransactionSchemaHashHex = "7ab5ff9c572efb316deac478f19209c5"
     public let abiVersion: Int
     public let dataModelVersion: Int?
     public let signedTransactionSchemaHashHex: String?

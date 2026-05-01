@@ -1259,8 +1259,7 @@ mod tests {
     #[test]
     fn const_vec_roundtrip_records_default_flags() {
         let value = ConstVec::from(vec![1_u8, 2, 3, 4, 5, 6]);
-        let encoded = value.encode();
-        let flags = codec::take_last_encode_flags().expect("encode flags");
+        let (encoded, flags) = codec::encode_with_header_flags(&value);
         assert_eq!(
             flags,
             ncore::default_encode_flags(),
@@ -1691,8 +1690,7 @@ mod tests {
     fn corrupted_header_is_rejected() {
         let elements = vec![vec![1_u8, 2, 3], vec![4_u8, 5, 6, 7, 8]];
         let const_vec = ConstVec::from(elements.clone());
-        let mut payload = const_vec.encode();
-        let flags = codec::take_last_encode_flags().expect("encode flags captured");
+        let (mut payload, flags) = codec::encode_with_header_flags(&const_vec);
         {
             let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
             let (_, hdr) = ncore::read_seq_len_slice(&payload).expect("sequence header");

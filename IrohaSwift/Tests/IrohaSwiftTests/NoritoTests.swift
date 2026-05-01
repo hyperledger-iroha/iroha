@@ -5,6 +5,10 @@ final class NoritoTests: XCTestCase {
     func testSchemaHash() {
         let h = noritoSchemaHash(forTypeName: "test.Type")
         XCTAssertEqual(h.count, 16)
+        XCTAssertEqual(h, [
+            0xB9, 0x17, 0xB1, 0x16, 0x24, 0x7C, 0xC1, 0x0E,
+            0xF7, 0x1C, 0xEA, 0xBD, 0xFC, 0xEC, 0x9C, 0x8A,
+        ])
     }
 
     func testCRC64Known() {
@@ -30,6 +34,30 @@ final class NoritoTests: XCTestCase {
         XCTAssertEqual(frame.paddingLength, padding.count)
         XCTAssertEqual(frame.header.flags, 0x04)
         XCTAssertEqual(frame.header.schema, noritoSchemaHash(forTypeName: typeName))
+    }
+
+    func testNoritoDecodeFrameRejectsReservedFlags() {
+        let payload = Data([0x01])
+        for flags in [
+            NoritoHeader.varintOffsets,
+            NoritoHeader.compactSeqLen,
+            NoritoHeader.varintOffsets | NoritoHeader.compactSeqLen,
+        ] {
+            let framed = noritoEncodeUnchecked(typeName: "test.ReservedFlags", payload: payload, flags: flags)
+            XCTAssertNil(noritoDecodeFrame(framed), "reserved flags should be rejected: \(flags)")
+        }
+    }
+
+    func testNoritoDecodeFrameRejectsInvalidFieldBitsetFlags() {
+        let payload = Data([0x01])
+        for flags in [
+            NoritoHeader.fieldBitset,
+            NoritoHeader.fieldBitset | NoritoHeader.compactLen,
+            NoritoHeader.fieldBitset | NoritoHeader.packedStruct,
+        ] {
+            let framed = noritoEncodeUnchecked(typeName: "test.FieldBitset", payload: payload, flags: flags)
+            XCTAssertNil(noritoDecodeFrame(framed), "invalid FIELD_BITSET flags should be rejected: \(flags)")
+        }
     }
 
     func testUInt128FromDecimalStringMaxValue() {
@@ -76,8 +104,7 @@ final class NoritoTests: XCTestCase {
                 throw XCTSkip("\(fileName): CRC64 mismatch; fixture drift")
             }
             XCTAssertEqual(header.flags, expectedFlags, "\(fileName): unexpected encode flags")
-            XCTAssertEqual(Array(header.schema.prefix(8)), Array(header.schema.suffix(8)),
-                           "\(fileName): schema hash halves should match")
+            XCTAssertEqual(header.schema.count, 16, "\(fileName): schema hash length mismatch")
         }
     }
 
@@ -93,6 +120,21 @@ final class NoritoTests: XCTestCase {
         return try decoder.decode(NoritoInstructionFixture.self, from: data)
     }
 
+}
+
+private func noritoEncodeUnchecked(typeName: String, payload: Data, flags: UInt8) -> Data {
+    let schema = noritoSchemaHash(forTypeName: typeName)
+    let checksum = crc64ECMA(payload)
+    var out = Data()
+    out.append(NoritoHeader.magic)
+    out.append(contentsOf: [NoritoHeader.versionMajor, NoritoHeader.versionMinor])
+    out.append(contentsOf: schema)
+    out.append(NoritoCompression.none.rawValue)
+    out.append(contentsOf: withUnsafeBytes(of: UInt64(payload.count).littleEndian, Array.init))
+    out.append(contentsOf: withUnsafeBytes(of: checksum.littleEndian, Array.init))
+    out.append(flags)
+    out.append(payload)
+    return out
 }
 
 private struct NoritoInstructionFixture: Decodable {
