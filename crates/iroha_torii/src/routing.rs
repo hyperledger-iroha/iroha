@@ -39793,6 +39793,110 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
+    async fn account_assets_routes_return_dataspace_scoped_asset_holder_without_account_record() {
+        let _guard = app_query_limits_guard();
+        use iroha_crypto::KeyPair;
+        let authority_kp = KeyPair::random();
+        let holder_kp = KeyPair::random();
+        let authority_id: AccountId = AccountId::new(authority_kp.public_key().clone());
+        let holder_id: AccountId = AccountId::new(holder_kp.public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let kina_def = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
+        let dataspace_scope = iroha_data_model::asset::AssetBalanceScope::Dataspace(
+            iroha_data_model::nexus::DataSpaceId::new(10),
+        );
+        let assets = vec![Asset::new(
+            AssetId::with_scope(kina_def.clone(), holder_id.clone(), dataspace_scope),
+            Numeric::from(81_u32),
+        )];
+        let state = state_with_assets(
+            domain_id,
+            authority_id,
+            Vec::new(),
+            vec![kina_def.clone()],
+            assets,
+        );
+
+        use axum::routing::get;
+        let app = Router::new()
+            .route(
+                "/v1/accounts/{account_id}/assets",
+                get({
+                    let state = state.clone();
+                    move |axum::extract::Path(account_id): axum::extract::Path<String>,
+                          crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>| async move {
+                        handle_v1_account_assets(
+                            state,
+                            axum::extract::Path(account_id),
+                            crate::NoritoQuery(p),
+                            crate::routing::MaybeTelemetry::disabled(),
+                        )
+                        .await
+                    }
+                }),
+            )
+            .route(
+                "/v1/accounts/{account_id}/assets/query",
+                post({
+                    let state = state.clone();
+                    move |axum::extract::Path(account_id): axum::extract::Path<String>,
+                          crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<QueryEnvelope>| async move {
+                        handle_v1_account_assets_query(
+                            state,
+                            axum::extract::Path(account_id),
+                            crate::utils::extractors::NoritoJson(env),
+                            crate::routing::MaybeTelemetry::disabled(),
+                        )
+                        .await
+                    }
+                }),
+            );
+
+        let holder_literal = holder_id.to_string();
+        let asset_literal = kina_def.to_string();
+        let get_req = http::Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/v1/accounts/{holder_literal}/assets?scope=dataspace:10"
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let get_resp = app.clone().oneshot(get_req).await.unwrap();
+        assert_eq!(get_resp.status(), http::StatusCode::OK);
+        let get_bytes = get_resp.into_body().collect().await.unwrap().to_bytes();
+        let get_json: norito::json::Value = norito::json::from_slice(&get_bytes).unwrap();
+        assert_eq!(get_json["total"].as_u64(), Some(1));
+        let get_items = get_json["items"].as_array().unwrap();
+        assert_eq!(
+            get_items[0]["account_id"].as_str(),
+            Some(holder_literal.as_str())
+        );
+        assert_eq!(get_items[0]["asset"].as_str(), Some(asset_literal.as_str()));
+        assert_eq!(get_items[0]["scope"].as_str(), Some("dataspace:10"));
+        assert_eq!(get_items[0]["quantity"].as_str(), Some("81"));
+
+        let query_body = json_string(obj(vec![
+            ("filter", Value::Null),
+            ("pagination", obj(vec![("limit", val(&10u64))])),
+        ]));
+        let query_req = http::Request::builder()
+            .method("POST")
+            .uri(format!("/v1/accounts/{holder_literal}/assets/query"))
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(query_body))
+            .unwrap();
+        let query_resp = app.oneshot(query_req).await.unwrap();
+        assert_eq!(query_resp.status(), http::StatusCode::OK);
+        let query_bytes = query_resp.into_body().collect().await.unwrap().to_bytes();
+        let query_json: norito::json::Value = norito::json::from_slice(&query_bytes).unwrap();
+        assert_eq!(query_json["total"].as_u64(), Some(1));
+        assert_eq!(
+            query_json["items"][0]["account_id"].as_str(),
+            Some(holder_literal.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn account_assets_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
@@ -52825,39 +52929,43 @@ pub async fn handle_v1_account_assets_with_policy(
     let primary_alias = primary_alias_projection_for_account_id(state.as_ref(), &acct);
 
     let mut projected_assets = Vec::new();
-    for account_id in &scoped_accounts {
-        for asset in world.assets_in_account_iter(account_id) {
-            if let Some(expected) = asset_filter.as_ref()
-                && asset.id().definition() != expected
-            {
-                continue;
-            }
-            if let Some(expected_scope) = scope_filter.as_ref()
-                && asset.id().scope() != expected_scope
-            {
-                continue;
-            }
-            let definition_id = asset.id().definition().clone();
-            let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
-                Ok(definition) => (
-                    definition.name().clone(),
-                    definition
-                        .alias()
-                        .as_ref()
-                        .map(|alias| alias.as_ref().to_owned()),
-                ),
-                Err(_) => (definition_id.to_string(), None),
-            };
-            projected_assets.push(AccountAssetListItem {
-                asset: definition_id.to_string(),
-                account_id: account_id.to_string(),
-                scope: asset_balance_scope_literal(asset.id().scope()),
-                asset_name,
-                asset_alias,
-                quantity: asset.value().clone().into_inner(),
-                primary_alias: primary_alias.clone(),
-            });
+    for asset in world.assets_iter() {
+        if !scoped_accounts
+            .iter()
+            .any(|account_id| asset.id().account() == account_id)
+        {
+            continue;
         }
+        if let Some(expected) = asset_filter.as_ref()
+            && asset.id().definition() != expected
+        {
+            continue;
+        }
+        if let Some(expected_scope) = scope_filter.as_ref()
+            && asset.id().scope() != expected_scope
+        {
+            continue;
+        }
+        let definition_id = asset.id().definition().clone();
+        let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
+            Ok(definition) => (
+                definition.name().clone(),
+                definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.as_ref().to_owned()),
+            ),
+            Err(_) => (definition_id.to_string(), None),
+        };
+        projected_assets.push(AccountAssetListItem {
+            asset: definition_id.to_string(),
+            account_id: asset.id().account().to_string(),
+            scope: asset_balance_scope_literal(asset.id().scope()),
+            asset_name,
+            asset_alias,
+            quantity: asset.value().clone().into_inner(),
+            primary_alias: primary_alias.clone(),
+        });
     }
 
     let (items, total) = collect_page_streaming(
@@ -67317,29 +67425,33 @@ pub async fn handle_v1_account_assets_query_with_policy(
     let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
     let primary_alias = primary_alias_projection_for_account_id(state.as_ref(), &acct);
     let mut projected_assets = Vec::new();
-    for account_id in &scoped_accounts {
-        for asset in world.assets_in_account_iter(account_id) {
-            let definition_id = asset.id().definition().clone();
-            let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
-                Ok(definition) => (
-                    definition.name().clone(),
-                    definition
-                        .alias()
-                        .as_ref()
-                        .map(|alias| alias.as_ref().to_owned()),
-                ),
-                Err(_) => (definition_id.to_string(), None),
-            };
-            projected_assets.push(AccountAssetListItem {
-                asset: definition_id.to_string(),
-                account_id: account_id.to_string(),
-                scope: asset_balance_scope_literal(asset.id().scope()),
-                asset_name,
-                asset_alias,
-                quantity: asset.value().clone().into_inner(),
-                primary_alias: primary_alias.clone(),
-            });
+    for asset in world.assets_iter() {
+        if !scoped_accounts
+            .iter()
+            .any(|account_id| asset.id().account() == account_id)
+        {
+            continue;
         }
+        let definition_id = asset.id().definition().clone();
+        let (asset_name, asset_alias) = match world.asset_definition(&definition_id) {
+            Ok(definition) => (
+                definition.name().clone(),
+                definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.as_ref().to_owned()),
+            ),
+            Err(_) => (definition_id.to_string(), None),
+        };
+        projected_assets.push(AccountAssetListItem {
+            asset: definition_id.to_string(),
+            account_id: asset.id().account().to_string(),
+            scope: asset_balance_scope_literal(asset.id().scope()),
+            asset_name,
+            asset_alias,
+            quantity: asset.value().clone().into_inner(),
+            primary_alias: primary_alias.clone(),
+        });
     }
     drop(world);
     let crate::filter::QueryEnvelope {
