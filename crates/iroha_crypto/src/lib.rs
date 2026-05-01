@@ -593,8 +593,30 @@ pub struct PublicKeyCompact {
     // payload: ConstVec<u8>,
 }
 
+/// Parsed Ed25519 public key for hot-path verification reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
+
+impl Ed25519ParsedPublicKey {
+    /// Raw canonical Ed25519 public-key bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+}
+
 // Batch verification helpers (deterministic), exposed for admission-time grouping
 // across transaction signatures.
+
+/// Parse an Ed25519 public key once for reuse in batch verification.
+///
+/// # Errors
+/// Returns [`Error::Parse`] if the key payload is not a canonical, non-weak Ed25519 public key.
+pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey, Error> {
+    signature::ed25519::Ed25519Sha512::parse_public_key(payload)
+        .map(Ed25519ParsedPublicKey)
+        .map_err(Error::from)
+}
 
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// The `seed32` parameter is reserved for API compatibility and is ignored.
@@ -611,6 +633,29 @@ pub fn ed25519_verify_batch_deterministic(
         messages,
         signatures,
         public_keys,
+        seed32,
+    )
+}
+
+/// Deterministic Ed25519 batch verification wrapper using pre-parsed public keys.
+///
+/// Under the `ecc-batch` feature this uses dalek's deterministic batch verifier.
+/// Otherwise it retains ordered per-signature fallback behavior.
+///
+/// # Errors
+/// Returns `Err(Error::BadSignature)` if any tuple fails verification, if signatures have invalid
+/// length, if the input slices have mismatched lengths, or if the input is empty.
+pub fn ed25519_verify_batch_preparsed_deterministic(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+) -> Result<(), Error> {
+    let parsed_public_keys = public_keys.iter().map(|key| key.0).collect::<Vec<_>>();
+    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_deterministic(
+        messages,
+        signatures,
+        &parsed_public_keys,
         seed32,
     )
 }
@@ -1356,15 +1401,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
     ) -> Result<Self, norito::core::Error> {
         let archived_bytes = archived.cast::<ConstVec<u8>>();
         let payload = ConstVec::<u8>::try_deserialize(archived_bytes)?;
-        #[cfg(debug_assertions)]
-        {
-            let preview_len = core::cmp::min(payload.len(), 16);
-            eprintln!(
-                "PublicKeyCompact::try_deserialize payload_len={} preview={:?}",
-                payload.len(),
-                &payload[..preview_len]
-            );
-        }
         if payload.is_empty() {
             return Err(norito::core::Error::length_mismatch_detail(
                 "PublicKeyCompact::try_deserialize",
@@ -1530,12 +1566,8 @@ impl Ord for PublicKey {
 // `norito::core::DecodeFromSlice` without re-implementing deep decoders.
 impl<'a> norito::core::DecodeFromSlice<'a> for PublicKey {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (normalized, used) =
-            <String as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        let key = normalized
-            .parse::<Self>()
-            .map_err(|err: ParseError| norito::core::Error::Message(err.to_string()))?;
-        Ok((key, used))
+        <PublicKeyCompact as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
+            .map(|(compact, used)| (Self(compact), used))
     }
 }
 
@@ -1615,8 +1647,7 @@ impl FromStr for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let normalized = self.normalize();
-        norito::core::NoritoSerialize::serialize(&normalized, writer)
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
 }
 
@@ -1629,13 +1660,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        #[allow(unsafe_code)]
-        let archived_str =
-            unsafe { &*core::ptr::from_ref(archived).cast::<norito::core::Archived<String>>() };
-        let normalized = String::try_deserialize(archived_str)?;
-        normalized
-            .parse::<Self>()
-            .map_err(|err: ParseError| norito::core::Error::Message(err.to_string()))
+        let archived_compact = archived.cast::<PublicKeyCompact>();
+        PublicKeyCompact::try_deserialize(archived_compact).map(Self)
     }
 }
 
@@ -2918,7 +2944,7 @@ mod tests {
                 .expect("public key");
         let framed = norito::core::to_bytes(&pk).expect("encode public key");
         let actual_hex = hex::encode(&framed);
-        let expected_hex = "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d240047000000000000003baa0fd04f6ed097024665643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435";
+        let expected_hex = "4e5254300000308ea40f1c2e0d24308ea40f1c2e0d24004a00000000000000ff3888681ae90906022100000000000000010001ed01f601d701b5012c0170013201d0013a01ec0169016f0120016801bd015301100115012801f301c701b60108011b01ff010501a10166012d017f01c20145";
         assert_eq!(
             actual_hex, expected_hex,
             "public key Norito archive changed"
@@ -2928,7 +2954,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_try_deserialize_rejects_invalid_payload() {
-        let bogus = String::from("not-a-public-key");
+        let bogus = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let (payload, flags) = norito::codec::encode_with_header_flags(&bogus);
         let framed = norito::core::frame_bare_with_header_flags::<PublicKey>(&payload, flags)
             .expect("frame");

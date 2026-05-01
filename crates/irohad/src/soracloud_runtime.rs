@@ -3828,9 +3828,9 @@ impl SoracloudRuntimeManager {
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
         {
             Some(root_volume) => (
-                ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)
+                ensure_inrou_portable_root_disk(&qemu_img, &base_rootfs_image_path, root_volume)
                     .wrap_err("prepare Inrou mutable PortableVm root disk")?,
-                "raw",
+                "qcow2",
             ),
             None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
         };
@@ -11547,6 +11547,7 @@ fn resolve_inrou_bundle_member_path(
     Ok(canonical)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ensure_inrou_root_disk(
     base_rootfs_image_path: &Path,
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
@@ -12385,6 +12386,34 @@ fn planned_inrou_tap_firewall_rules(
             context: "install Inrou egress masquerade rule",
         });
     }
+    rules.push(InrouTapFirewallRuleSpec {
+        args: vec![
+            "-I".to_owned(),
+            "INPUT".to_owned(),
+            "1".to_owned(),
+            "-i".to_owned(),
+            tap_name.to_owned(),
+            "-m".to_owned(),
+            "conntrack".to_owned(),
+            "--ctstate".to_owned(),
+            "RELATED,ESTABLISHED".to_owned(),
+            "-j".to_owned(),
+            "ACCEPT".to_owned(),
+        ],
+        context: "install Inrou established host-input rule",
+    });
+    rules.push(InrouTapFirewallRuleSpec {
+        args: vec![
+            "-I".to_owned(),
+            "INPUT".to_owned(),
+            "3".to_owned(),
+            "-i".to_owned(),
+            tap_name.to_owned(),
+            "-j".to_owned(),
+            "DROP".to_owned(),
+        ],
+        context: "install Inrou host-input default-drop rule",
+    });
     if firewall_plan.installs_return_rule() {
         rules.push(InrouTapFirewallRuleSpec {
             args: vec![
@@ -12416,7 +12445,18 @@ fn planned_inrou_tap_firewall_rules(
             ],
             context: "install Inrou forward-out rule",
         }),
-        InrouTapFirewallPlan::Isolated => {}
+        InrouTapFirewallPlan::Isolated => rules.push(InrouTapFirewallRuleSpec {
+            args: vec![
+                "-I".to_owned(),
+                "FORWARD".to_owned(),
+                "1".to_owned(),
+                "-i".to_owned(),
+                tap_name.to_owned(),
+                "-j".to_owned(),
+                "DROP".to_owned(),
+            ],
+            context: "install Inrou isolated forward-drop rule",
+        }),
         InrouTapFirewallPlan::Allowlist(endpoints) => {
             rules.push(InrouTapFirewallRuleSpec {
                 args: vec![
@@ -21323,23 +21363,31 @@ mod tests {
                 },
             ]),
         );
-        assert_eq!(rules.len(), 6);
+        assert_eq!(rules.len(), 8);
         assert_eq!(
             rules[0].context,
             "install Inrou shared-storage ingress rule"
         );
         assert_eq!(rules[1].context, "install Inrou egress masquerade rule");
-        assert_eq!(rules[2].context, "install Inrou return-traffic rule");
+        assert_eq!(
+            rules[2].context,
+            "install Inrou established host-input rule"
+        );
         assert_eq!(
             rules[3].context,
+            "install Inrou host-input default-drop rule"
+        );
+        assert_eq!(rules[4].context, "install Inrou return-traffic rule");
+        assert_eq!(
+            rules[5].context,
             "install Inrou allowlist default-drop rule"
         );
-        assert_eq!(rules[4].context, "install Inrou allowlist forward rule");
-        assert_eq!(rules[5].context, "install Inrou allowlist forward rule");
-        assert_eq!(rules[4].args[8], "127.0.0.1");
-        assert_eq!(rules[4].args[10], "443");
-        assert_eq!(rules[5].args[8], "127.0.0.2");
-        assert_eq!(rules[5].args[10], "8443");
+        assert_eq!(rules[6].context, "install Inrou allowlist forward rule");
+        assert_eq!(rules[7].context, "install Inrou allowlist forward rule");
+        assert_eq!(rules[6].args[8], "127.0.0.1");
+        assert_eq!(rules[6].args[10], "443");
+        assert_eq!(rules[7].args[8], "127.0.0.2");
+        assert_eq!(rules[7].args[10], "8443");
     }
 
     #[test]
@@ -21349,13 +21397,29 @@ mod tests {
             "172.31.10.2/32",
             &InrouTapFirewallPlan::Isolated,
         );
-        assert_eq!(rules.len(), 1);
+        assert_eq!(rules.len(), 4);
         assert_eq!(
             rules[0].context,
             "install Inrou shared-storage ingress rule"
         );
         assert_eq!(rules[0].args[1], "INPUT");
-        assert_eq!(rules[0].args[7], "2049");
+        assert_eq!(rules[0].args[8], "2049");
+        assert_eq!(
+            rules[1].context,
+            "install Inrou established host-input rule"
+        );
+        assert_eq!(rules[1].args[1], "INPUT");
+        assert_eq!(
+            rules[2].context,
+            "install Inrou host-input default-drop rule"
+        );
+        assert_eq!(rules[2].args[1], "INPUT");
+        assert_eq!(
+            rules[3].context,
+            "install Inrou isolated forward-drop rule"
+        );
+        assert_eq!(rules[3].args[1], "FORWARD");
+        assert_eq!(rules[3].args[6], "DROP");
     }
 
     #[test]

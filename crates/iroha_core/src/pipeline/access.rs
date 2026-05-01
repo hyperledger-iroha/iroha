@@ -355,7 +355,8 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     match tx.instructions() {
-        Executable::Instructions(batch) => (
+        Executable::Instructions(batch) => with_stateful_admission_keys(
+            tx,
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
@@ -371,7 +372,7 @@ where
                     view.pipeline().access_set_cache_enabled,
                     Some(call.entrypoint.as_str()),
                 ) {
-                    return (set, Some(source));
+                    return with_stateful_admission_keys(tx, set, Some(source));
                 }
 
                 if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
@@ -398,16 +399,18 @@ where
                     } else {
                         AccessSetSource::PrepassMerge
                     };
-                    return (set, Some(source));
+                    return with_stateful_admission_keys(tx, set, Some(source));
                 }
             }
 
-            (
+            with_stateful_admission_keys(
+                tx,
                 AccessSet::global(),
                 Some(AccessSetSource::ConservativeFallback),
             )
         }
-        Executable::IvmProved(proved) => (
+        Executable::IvmProved(proved) => with_stateful_admission_keys(
+            tx,
             derive_from_isi_batch_with_state(proved.overlay.as_ref(), state_ro),
             None,
         ),
@@ -426,7 +429,7 @@ where
                             view.pipeline().access_set_cache_enabled,
                             requested_entrypoint.as_deref(),
                         ) {
-                            return (set, Some(source));
+                            return with_stateful_admission_keys(tx, set, Some(source));
                         }
                     }
                 }
@@ -440,13 +443,13 @@ where
                             false,
                             requested_entrypoint.as_deref(),
                         ) {
-                            return (set, Some(source));
+                            return with_stateful_admission_keys(tx, set, Some(source));
                         }
                     }
                 }
             }
             // 2) Otherwise, use dynamic prepass if enabled with view, else conservative
-            match (ivm_strategy, state_ro) {
+            let (set, source) = match (ivm_strategy, state_ro) {
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
                     let set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
@@ -473,9 +476,24 @@ where
                     AccessSet::global(),
                     Some(AccessSetSource::ConservativeFallback),
                 ),
-            }
+            };
+            with_stateful_admission_keys(tx, set, source)
         }
     }
+}
+
+fn key_tx_sequence(account: &AccountId) -> AccessKey {
+    format!("tx.sequence:{account}")
+}
+
+fn with_stateful_admission_keys(
+    tx: &SignedTransaction,
+    mut set: AccessSet,
+    source: Option<AccessSetSource>,
+) -> (AccessSet, Option<AccessSetSource>) {
+    set.add_read(key_account(tx.authority()));
+    set.add_write(key_tx_sequence(tx.authority()));
+    (set, source)
 }
 
 fn entrypoint_access_set_if_safe(
@@ -1705,9 +1723,10 @@ mod tests {
     #[test]
     fn log_instruction_has_no_access_keys() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
-        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice)
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
             .with_instructions([Log::new(Level::INFO, "hello".to_owned())])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        let authority = tx.authority().clone();
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
@@ -1715,8 +1734,8 @@ mod tests {
             IvmStrategy::Conservative,
         );
 
-        assert!(set.read_keys.is_empty());
-        assert!(set.write_keys.is_empty());
+        assert_eq!(set.read_keys, [format!("account:{authority}")].into());
+        assert_eq!(set.write_keys, [format!("tx.sequence:{authority}")].into());
     }
 
     #[test]
@@ -1925,6 +1944,7 @@ mod tests {
         let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
             .sign(kp.private_key());
+        let authority = tx.authority().clone();
 
         let (set, source) = derive_for_transaction_with_source(
             &tx,
@@ -1932,7 +1952,11 @@ mod tests {
             IvmStrategy::DynamicThenConservative,
         );
         assert!(set.write_keys.contains("*"));
-        assert!(set.read_keys.is_empty());
+        assert!(set.read_keys.contains(&format!("account:{authority}")));
+        assert!(
+            set.write_keys.contains(&format!("tx.sequence:{authority}")),
+            "stateful admission sequence key must serialize same-authority transactions"
+        );
         assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 

@@ -18,7 +18,7 @@ IROHA_INROU_PORTABLE_INITRD_IMAGE = "/var/lib/inrou/initrd.img"
 [firecracker_host]
 ssh_target = "validator@linux-kvm-host.example"
 repo_path = "/srv/iroha"
-command = "sudo cargo xtask soracloud-inrou-smoke firecracker"
+command = "sudo --preserve-env=IROHA_INROU_LINUX_KVM_KERNEL_IMAGE,IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE,IROHA_INROU_LINUX_KVM_INITRD_IMAGE cargo xtask soracloud-inrou-smoke firecracker"
 
 [firecracker_host.env]
 IROHA_INROU_LINUX_KVM_KERNEL_IMAGE = "/var/lib/inrou/vmlinux"

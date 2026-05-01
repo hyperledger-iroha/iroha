@@ -1439,6 +1439,7 @@ struct AppState {
     soracloud_public_rate_limiter: limits::RateLimiter,
     soracloud_mutation_rate_limiter: limits::RateLimiter,
     soracloud_mutation_inflight: Arc<tokio::sync::Semaphore>,
+    soracloud_public_max_response_bytes: usize,
     soracloud_mutation_max_body_bytes: usize,
     soracloud_upload_max_body_bytes: usize,
     content_request_limiter: limits::RateLimiter,
@@ -17522,15 +17523,21 @@ mod torii_routed_read_tests {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-async fn response_to_torii_proxy_snapshot(response: Response) -> ToriiProxyHttpResponseV1 {
+async fn response_to_torii_proxy_snapshot(
+    response: Response,
+    max_body_bytes: usize,
+) -> ToriiProxyHttpResponseV1 {
     let (parts, body) = response.into_parts();
-    let body = match axum::body::to_bytes(body, usize::MAX).await {
+    let body = match axum::body::to_bytes(body, max_body_bytes).await {
         Ok(body) => body.to_vec(),
         Err(error) => {
             return ToriiProxyHttpResponseV1 {
-                status_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                status_code: StatusCode::BAD_GATEWAY.as_u16(),
                 headers: Vec::new(),
-                body: format!("failed to read proxied response body: {error}").into_bytes(),
+                body: format!(
+                    "proxied response body exceeds configured limit of {max_body_bytes} bytes: {error}"
+                )
+                .into_bytes(),
             };
         }
     };
@@ -17640,6 +17647,15 @@ fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKindV1) -> usize {
+    if matches!(request, ToriiProxyRequestKindV1::HostedHttp(_)) {
+        app.soracloud_public_max_response_bytes.max(1)
+    } else {
+        usize::MAX
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, String> {
     let base = reqwest::Url::parse(torii_url)
         .map_err(|error| format!("invalid authoritative Torii URL `{torii_url}`: {error}"))?;
@@ -17653,7 +17669,8 @@ fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, Strin
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn reqwest_response_to_torii_proxy_snapshot(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
+    max_body_bytes: usize,
 ) -> Result<ToriiProxyHttpResponseV1, String> {
     let status_code = response.status().as_u16();
     let headers = response
@@ -17666,13 +17683,17 @@ async fn reqwest_response_to_torii_proxy_snapshot(
             },
         )
         .collect::<Vec<_>>();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| {
-            format!("failed to read authoritative HTTP bridge response body: {error}")
-        })?
-        .to_vec();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        format!("failed to read authoritative HTTP bridge response body: {error}")
+    })? {
+        if body.len().saturating_add(chunk.len()) > max_body_bytes {
+            return Err(format!(
+                "proxied response body exceeds configured limit of {max_body_bytes} bytes"
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
     Ok(ToriiProxyHttpResponseV1 {
         status_code,
         headers,
@@ -17748,6 +17769,7 @@ async fn execute_torii_proxy_request_via_http_bridge(
 ) -> Result<ToriiProxyHttpResponseV1, String> {
     let request_kind_name = torii_proxy_request_kind_name(&request.request);
     let attempt_timeout = torii_proxy_attempt_timeout(&request.request);
+    let response_body_limit = torii_proxy_response_body_limit(app.as_ref(), &request.request);
     let body = norito::to_bytes(&request).map_err(|error| {
         format!(
             "failed to encode Torii proxy request `{}` for authoritative HTTP bridge to peer `{target_peer_id}`: {error}",
@@ -17800,7 +17822,7 @@ async fn execute_torii_proxy_request_via_http_bridge(
             )
         })?;
 
-    reqwest_response_to_torii_proxy_snapshot(response).await
+    reqwest_response_to_torii_proxy_snapshot(response, response_body_limit).await
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -20559,6 +20581,7 @@ async fn process_incoming_torii_proxy_request(
 ) {
     let request_id = proxy_request.request_id.clone();
     let sender_peer_id = peer.id().clone();
+    let response_body_limit = torii_proxy_response_body_limit(app.as_ref(), &proxy_request.request);
     iroha_logger::debug!(
         request_id = %request_id,
         peer_id = %sender_peer_id,
@@ -20576,7 +20599,7 @@ async fn process_incoming_torii_proxy_request(
         data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
             schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
             request_id,
-            response: response_to_torii_proxy_snapshot(response).await,
+            response: response_to_torii_proxy_snapshot(response, response_body_limit).await,
         })),
     });
 }
@@ -31480,6 +31503,7 @@ pub struct Torii {
     #[allow(dead_code)]
     soracloud_public_burst_per_ip: Option<std::num::NonZeroU32>,
     soracloud_public_max_inflight: usize,
+    soracloud_public_max_response_bytes: usize,
     #[allow(dead_code)]
     soracloud_mutation_rate_per_account_origin_per_sec: Option<std::num::NonZeroU32>,
     #[allow(dead_code)]
@@ -34299,6 +34323,10 @@ impl Torii {
             soracloud_public_rate_per_ip_per_sec: config.soracloud_public_rate_per_ip_per_sec,
             soracloud_public_burst_per_ip: config.soracloud_public_burst_per_ip,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
+            soracloud_public_max_response_bytes: usize::try_from(
+                config.soracloud_public_max_response_bytes.get(),
+            )
+            .unwrap_or(usize::MAX),
             soracloud_mutation_rate_per_account_origin_per_sec: config
                 .soracloud_mutation_rate_per_account_origin_per_sec,
             soracloud_mutation_burst_per_account_origin: config
@@ -34598,6 +34626,7 @@ impl Torii {
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
             soracloud_mutation_rate_limiter: self.soracloud_mutation_rate_limiter.clone(),
             soracloud_mutation_inflight,
+            soracloud_public_max_response_bytes: self.soracloud_public_max_response_bytes,
             soracloud_mutation_max_body_bytes: self.soracloud_mutation_max_body_bytes,
             soracloud_upload_max_body_bytes: self.soracloud_upload_max_body_bytes,
             content_request_limiter: self.content_request_limiter.clone(),
@@ -38348,6 +38377,10 @@ pub(crate) mod tests_runtime_handlers {
             soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
             soracloud_mutation_rate_limiter: limits::RateLimiter::new(None, None),
             soracloud_mutation_inflight,
+            soracloud_public_max_response_bytes: usize::try_from(
+                defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES.get(),
+            )
+            .unwrap_or(usize::MAX),
             soracloud_mutation_max_body_bytes: usize::try_from(
                 defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES.get(),
             )
@@ -40535,7 +40568,7 @@ pub(crate) mod tests_runtime_handlers {
             HeaderValue::from_static("proxy"),
         );
 
-        let snapshot = super::response_to_torii_proxy_snapshot(response).await;
+        let snapshot = super::response_to_torii_proxy_snapshot(response, usize::MAX).await;
         let restored = super::torii_proxy_snapshot_to_response(snapshot);
         let headers = restored.headers().clone();
         assert_eq!(restored.status(), StatusCode::ACCEPTED);
@@ -40555,6 +40588,53 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("body bytes");
         assert_eq!(body.as_ref(), b"proxied-body");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_snapshot_caps_buffered_response_bodies() {
+        let response = Response::new(Body::from("proxied-body"));
+
+        let snapshot = super::response_to_torii_proxy_snapshot(response, 4).await;
+
+        assert_eq!(snapshot.status_code, StatusCode::BAD_GATEWAY.as_u16());
+        let body = String::from_utf8(snapshot.body).expect("error body is utf8");
+        assert!(
+            body.contains("configured limit of 4 bytes"),
+            "unexpected cap error body: {body}"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
+        let upstream = axum::Router::new().route(
+            "/oversized",
+            axum::routing::get(|| async { Response::new(Body::from("proxied-body")) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream listener");
+        let addr = listener.local_addr().expect("upstream addr");
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream.into_make_service())
+                .await
+                .expect("serve upstream");
+        });
+
+        let response = reqwest::get(format!("http://{addr}/oversized"))
+            .await
+            .expect("fetch upstream response");
+        let error = match super::reqwest_response_to_torii_proxy_snapshot(response, 4).await {
+            Ok(_) => panic!("expected capped response error"),
+            Err(error) => error,
+        };
+        upstream_task.abort();
+
+        assert!(
+            error.contains("configured limit of 4 bytes"),
+            "unexpected cap error: {error}"
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]

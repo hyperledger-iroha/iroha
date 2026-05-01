@@ -1,12 +1,15 @@
 //! Pending-block state, local validation, and DA availability helpers.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, SignedBlock};
 use iroha_logger::prelude::*;
 
-use super::kura::KuraRetryDecision;
+use super::{kura::KuraRetryDecision, proposals::block_payload_bytes};
 use crate::{
     sumeragi::{consensus::Evidence, da, status},
     tx::AcceptedTransaction,
@@ -71,6 +74,7 @@ struct CommitEvidenceReplayState {
 pub(super) struct PendingBlock {
     pub(super) block: SignedBlock,
     pub(super) payload_hash: Hash,
+    payload_bytes: OnceLock<Vec<u8>>,
     pub(super) height: u64,
     pub(super) view: u64,
     /// Execution roots captured during pre-vote validation (Commit phase only).
@@ -105,6 +109,7 @@ impl PendingBlock {
         Self {
             block,
             payload_hash,
+            payload_bytes: OnceLock::new(),
             height,
             view,
             parent_state_root: None,
@@ -149,6 +154,17 @@ impl PendingBlock {
         self.tx_batch.take()
     }
 
+    pub(super) fn payload_bytes(&self) -> &[u8] {
+        self.payload_bytes
+            .get_or_init(|| block_payload_bytes(&self.block))
+            .as_slice()
+    }
+
+    pub(super) fn set_block(&mut self, block: SignedBlock) {
+        self.block = block;
+        self.payload_bytes = OnceLock::new();
+    }
+
     pub(super) fn replace_block(
         &mut self,
         block: SignedBlock,
@@ -158,7 +174,7 @@ impl PendingBlock {
     ) {
         let replacing_same_subject =
             self.payload_hash == payload_hash && self.height == height && self.view == view;
-        self.block = block;
+        self.set_block(block);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -190,7 +206,7 @@ impl PendingBlock {
         height: u64,
         view: u64,
     ) {
-        self.block = block;
+        self.set_block(block);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -355,7 +371,7 @@ impl PendingBlock {
         height: u64,
         view: u64,
     ) {
-        self.block = block;
+        self.set_block(block);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -617,6 +633,26 @@ mod tests {
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
         assert!(pending.validated_commit_artifact.is_none());
+    }
+
+    #[test]
+    fn pending_block_payload_bytes_match_canonical_encoding_and_reset_on_replace() {
+        let first_block = sample_block(1);
+        let first_bytes = block_payload_bytes(&first_block);
+        let first_hash = Hash::new(&first_bytes);
+        let mut pending = PendingBlock::new(first_block, first_hash, 1, 0);
+
+        assert_eq!(pending.payload_bytes(), first_bytes.as_slice());
+        assert_eq!(Hash::new(pending.payload_bytes()), first_hash);
+
+        let second_block = sample_block(2);
+        let second_bytes = block_payload_bytes(&second_block);
+        let second_hash = Hash::new(&second_bytes);
+        pending.replace_block(second_block, second_hash, 2, 0);
+
+        assert_eq!(pending.payload_bytes(), second_bytes.as_slice());
+        assert_eq!(Hash::new(pending.payload_bytes()), second_hash);
+        assert_ne!(first_bytes, second_bytes);
     }
 
     #[test]

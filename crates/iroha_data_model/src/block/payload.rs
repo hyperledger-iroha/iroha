@@ -35,7 +35,12 @@ mod model {
     pub(crate) struct BlockPayload {
         /// Essential metadata for a block in the chain.
         pub header: BlockHeader,
-        /// External transactions as source of the state, forming the first half of the transaction entrypoints.
+        /// Legacy in-memory cache of signed external transactions.
+        ///
+        /// New V1 wire stores external transaction entrypoints once in
+        /// [`Self::external_entrypoints`]; this vector is kept for constructors
+        /// and older in-process call sites only.
+        #[norito(skip)]
         pub transactions: Vec<SignedTransaction>,
         /// External transaction entrypoints in consensus order.
         ///
@@ -69,11 +74,10 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct BlockResult {
-        /// External transaction entrypoints in execution order.
+        /// Legacy in-memory copy of external transaction entrypoints.
         ///
-        /// Older blocks leave this empty and reconstruct the order from the legacy
-        /// signed-transaction payload vector.
-        #[norito(default)]
+        /// New V1 wire stores these on [`BlockPayload`] only.
+        #[norito(skip)]
         pub external_entrypoints: Vec<TransactionEntrypoint>,
         /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.
         pub time_triggers: Vec<TimeTriggerEntrypoint>,
@@ -242,9 +246,8 @@ impl SignedBlock {
         self.payload.external_entrypoints.clone_from(&entrypoints);
         self.payload.header.merkle_root = merkle.root();
         if let Some(result) = self.result.as_mut() {
-            result.external_entrypoints = entrypoints;
-            result.merkle = result
-                .external_entrypoints
+            result.external_entrypoints.clear();
+            result.merkle = entrypoints
                 .iter()
                 .map(TransactionEntrypoint::hash)
                 .chain(

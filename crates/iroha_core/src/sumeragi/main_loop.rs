@@ -591,7 +591,7 @@ fn handle_commit_failure_with_qc_quorum(
     );
     let (new_locked, new_highest) =
         realign_qcs_after_failed_commit(locked_qc, highest_qc, block_hash, latest_committed);
-    pending.block = failed_block;
+    pending.set_block(failed_block);
     pending.mark_aborted();
 
     QcCommitFailureOutcome {
@@ -14994,11 +14994,10 @@ impl Actor {
             if matches!(pending.validation_status, ValidationStatus::Invalid) {
                 return None;
             }
-            let payload_bytes = self::proposals::block_payload_bytes(&pending.block);
             return Some(use_payload(
                 pending.height,
                 pending.view,
-                &payload_bytes,
+                pending.payload_bytes(),
                 pending.payload_hash,
             ));
         }
@@ -15011,11 +15010,10 @@ impl Actor {
             ) {
                 return None;
             }
-            let payload_bytes = self::proposals::block_payload_bytes(&inflight.pending.block);
             return Some(use_payload(
                 inflight.pending.height,
                 inflight.pending.view,
-                &payload_bytes,
+                inflight.pending.payload_bytes(),
                 inflight.pending.payload_hash,
             ));
         }
@@ -15052,11 +15050,10 @@ impl Actor {
             {
                 return None;
             }
-            let payload_bytes = self::proposals::block_payload_bytes(&pending.block);
             return Some(use_payload(
                 pending.height,
                 pending.view,
-                &payload_bytes,
+                pending.payload_bytes(),
                 pending.payload_hash,
             ));
         }
@@ -15071,11 +15068,10 @@ impl Actor {
             {
                 return None;
             }
-            let payload_bytes = self::proposals::block_payload_bytes(&inflight.pending.block);
             return Some(use_payload(
                 inflight.pending.height,
                 inflight.pending.view,
-                &payload_bytes,
+                inflight.pending.payload_bytes(),
                 inflight.pending.payload_hash,
             ));
         }

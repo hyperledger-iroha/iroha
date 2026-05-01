@@ -1419,6 +1419,8 @@ pub mod torii {
     pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(10);
     /// Default maximum number of concurrent public Soracloud local-read executions.
     pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
+    pub const SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
     /// Default signed Soracloud mutation rate per account+origin every second.
     pub const SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC: Option<u32> = Some(8);
     /// Default signed Soracloud mutation burst per account+origin.
@@ -3622,6 +3624,10 @@ mod tests {
         assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(5));
         assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(10));
         assert_eq!(torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get(), 32);
+        assert_eq!(
+            torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES.get(),
+            64 * 1024 * 1024
+        );
         assert_eq!(
             torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC,
             Some(8)

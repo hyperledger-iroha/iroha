@@ -141,7 +141,7 @@ impl BlockBuilder {
             previous_roster_evidence,
         };
         let result = BlockResult {
-            external_entrypoints: self.external_entrypoints,
+            external_entrypoints: Vec::new(),
             time_triggers: self.time_triggers,
             merkle: self.entry_merkle,
             result_merkle: self.result_merkle,

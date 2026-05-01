@@ -315,15 +315,18 @@ orchestrator:
 
 ```bash
 cargo xtask soracloud-inrou-smoke portable
-sudo cargo xtask soracloud-inrou-smoke firecracker
+sudo --preserve-env=IROHA_INROU_LINUX_KVM_KERNEL_IMAGE,IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE,IROHA_INROU_LINUX_KVM_INITRD_IMAGE \
+  cargo xtask soracloud-inrou-smoke firecracker
 cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
 ```
 
 PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
 and `tar`. Shared non-root lease volumes are attached as persistent block
-devices that the guest formats and mounts on first boot. The Firecracker/KVM
+devices that the guest formats and mounts on first boot; the mutable root disk
+is a `qcow2` overlay over the verified base root image. The Firecracker/KVM
 path keeps the Linux host prerequisites for tap networking and the NFS
-transport adapter:
+transport adapter, and installs tap-scoped host-input and forward rules so
+`Isolated` policy fails closed even on permissive hosts:
 
 - host OS is Linux
 - the caller is root
@@ -347,10 +350,17 @@ eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
 cargo xtask soracloud-inrou-smoke portable
 ```
 
-The helper verifies Debian `SHA512SUMS`, extracts the root ext4 partition,
-relabels it for the native PortableVm guest profile, removes cloud-image fstab
-entries for unattached partitions, and exports the matching kernel/initrd paths.
-Use `--force` to refresh an existing cache.
+The helper downloads the pinned Debian Bookworm genericcloud build, verifies
+signed `SHA512SUMS` with GPG and a Debian archive/cloud-image keyring when a
+detached signature is published, extracts the root ext4 partition, relabels it
+for the native PortableVm guest profile, removes cloud-image fstab entries for
+unattached partitions, and exports the matching kernel/initrd paths. The current
+official pinned cloud directory does not publish `SHA512SUMS.sign`, so the
+helper falls back only to the hard-pinned SHA512 digest for the exact
+`20260413-2447` `amd64` or `arm64` archive. Use `--debian-keyring` or
+`DEBIAN_ARCHIVE_KEYRING` when the keyring is not installed in a standard path,
+`--image-base-url` for an operator mirror, and `--force` to refresh an existing
+cache. Unsigned archives without a pinned digest still fail closed.
 
 The mixed-host inventory's proxy-only host gate should run the focused
 `proxy_only_inrou_host` runtime tests, proving the host advertises zero hosted
@@ -376,6 +386,15 @@ Firecracker smoke expects:
 - `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`
 - `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE`
 - optional `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`
+
+The example mixed-host inventory preserves those `IROHA_INROU_LINUX_KVM_*`
+variables through `sudo`, since the Firecracker smoke must run as root but still
+needs the operator-selected kernel, rootfs, and optional initrd paths.
+
+Hosted HTTP proxy responses carried over the P2P Torii proxy path are buffered
+up to `torii.soracloud_public_max_response_bytes` before being wrapped for the
+caller. The default is 64 MiB; larger hosted responses fail closed with a
+`502 Bad Gateway` snapshot instead of allocating unbounded memory.
 
 Focused validation now covers both shared-storage transports:
 

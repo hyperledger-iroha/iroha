@@ -749,6 +749,9 @@ impl Queue {
     }
 
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
+        if let Some(encoded) = tx.signed_bytes() {
+            return encoded;
+        }
         let signed = tx
             .external()
             .expect("queue gossip only supports external signed transactions");
@@ -2181,7 +2184,16 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
-        let gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
+        let provided_gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
+        let canonical_gossip_payload = checked.as_accepted().signed_bytes();
+        let gossip_payload = match (provided_gossip_payload, canonical_gossip_payload) {
+            (Some(provided), Some(canonical)) if provided.as_slice() == canonical.as_slice() => {
+                Some(provided)
+            }
+            (_, Some(canonical)) => Some(canonical),
+            (Some(provided), None) => Some(provided),
+            (None, None) => None,
+        };
         let encoded_len = gossip_payload
             .as_ref()
             .map(|payload| payload.len())
@@ -6070,6 +6082,9 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
+        let cached_payload = tx
+            .signed_bytes()
+            .expect("accepted external tx caches signed bytes");
         let expected_payload = ncore::to_bytes(tx.as_ref()).expect("encode signed transaction");
 
         queue.push(tx, state.view()).expect("push tx");
@@ -6077,6 +6092,10 @@ pub mod tests {
         let batch = queue.gossip_batch(1, &state.view());
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].payload.as_slice(), expected_payload.as_slice());
+        assert!(
+            Arc::ptr_eq(&batch[0].payload, &cached_payload),
+            "queue gossip should reuse accepted transaction signed bytes"
+        );
     }
 
     #[test]
@@ -8601,6 +8620,55 @@ pub mod tests {
         assert!(queue.queued_tx_enqueued_at_ms.contains_key(&second_hash));
         assert_eq!(queue.pressure_snapshot().queued_tx_count, 1);
         queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[tokio::test]
+    async fn queue_pressure_counters_stay_consistent_under_sustained_backlog() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(
+            Config {
+                capacity: nonzero!(64_usize),
+                ..config_factory()
+            },
+            &time_source,
+        ));
+        let target_backlog = 8usize;
+
+        for _ in 0..target_backlog {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("prefill push succeeds");
+            time_handle.advance(Duration::from_millis(1));
+        }
+        queue.assert_pressure_counters_consistent_for_tests();
+        assert_eq!(queue.pressure_snapshot().queued_tx_count, target_backlog);
+
+        for _ in 0..32 {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("sustained push succeeds");
+            queue.assert_pressure_counters_consistent_for_tests();
+
+            let mut guards = Vec::new();
+            queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+            assert_eq!(guards.len(), 1, "one transaction should leave the queue");
+
+            let inflight = queue.pressure_snapshot();
+            assert_eq!(inflight.tracked_tx_count, target_backlog + 1);
+            assert_eq!(inflight.queued_tx_count, target_backlog);
+            queue.assert_pressure_counters_consistent_for_tests();
+
+            drop(guards);
+            let after_drop = queue.pressure_snapshot();
+            assert_eq!(after_drop.tracked_tx_count, target_backlog);
+            assert_eq!(after_drop.queued_tx_count, target_backlog);
+            queue.assert_pressure_counters_consistent_for_tests();
+
+            time_handle.advance(Duration::from_millis(1));
+        }
     }
 
     #[tokio::test]

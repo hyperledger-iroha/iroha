@@ -808,6 +808,8 @@ mod tests {
                         .and_then(std::num::NonZeroU32::new),
                 soracloud_public_max_inflight:
                     iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+                soracloud_public_max_response_bytes:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES,
                 soracloud_mutation_rate_per_account_origin_per_sec:
                     iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
                         .and_then(std::num::NonZeroU32::new),

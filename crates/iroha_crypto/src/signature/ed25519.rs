@@ -14,9 +14,89 @@ use crate::{Error, KeyGenOption, ParseError};
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
 
-use std::{cell::RefCell, collections::HashSet, format, string::ToString as _, vec::Vec};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    format,
+    string::ToString as _,
+    vec::Vec,
+};
 
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
+const PUBLIC_KEY_PARSE_CACHE_LIMIT: usize = 4096;
+
+struct PublicKeyParseCache {
+    map: HashMap<[u8; 32], PublicKey>,
+    #[cfg(test)]
+    hits: usize,
+    #[cfg(test)]
+    misses: usize,
+    #[cfg(test)]
+    inserts: usize,
+}
+
+impl PublicKeyParseCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            #[cfg(test)]
+            hits: 0,
+            #[cfg(test)]
+            misses: 0,
+            #[cfg(test)]
+            inserts: 0,
+        }
+    }
+
+    fn get(&mut self, bytes: &[u8; 32]) -> Option<PublicKey> {
+        let key = self.map.get(bytes).copied();
+        #[cfg(test)]
+        {
+            if key.is_some() {
+                self.hits = self.hits.saturating_add(1);
+            } else {
+                self.misses = self.misses.saturating_add(1);
+            }
+        }
+        key
+    }
+
+    fn insert(&mut self, bytes: [u8; 32], key: PublicKey) {
+        if self.map.len() >= PUBLIC_KEY_PARSE_CACHE_LIMIT {
+            self.map.clear();
+        }
+        self.map.insert(bytes, key);
+        #[cfg(test)]
+        {
+            self.inserts = self.inserts.saturating_add(1);
+        }
+    }
+
+    #[cfg(test)]
+    fn reset(&mut self) {
+        self.map.clear();
+        self.hits = 0;
+        self.misses = 0;
+        self.inserts = 0;
+    }
+
+    #[cfg(test)]
+    fn stats(&self) -> PublicKeyParseCacheStats {
+        PublicKeyParseCacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            inserts: self.inserts,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PublicKeyParseCacheStats {
+    hits: usize,
+    misses: usize,
+    inserts: usize,
+}
 
 struct VerifyOkCache {
     map: HashSet<[u8; 32]>,
@@ -43,7 +123,18 @@ impl VerifyOkCache {
 }
 
 thread_local! {
+    static PUBLIC_KEY_PARSE_CACHE: RefCell<PublicKeyParseCache> = RefCell::new(PublicKeyParseCache::new());
     static VERIFY_OK_CACHE: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
+}
+
+#[cfg(test)]
+fn reset_public_key_parse_cache_for_tests() {
+    PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().reset());
+}
+
+#[cfg(test)]
+fn public_key_parse_cache_stats_for_tests() -> PublicKeyParseCacheStats {
+    PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow().stats())
 }
 
 fn verify_ok_cache_key(pk: &PublicKey, message: &[u8], signature: &[u8]) -> [u8; 32] {
@@ -114,33 +205,47 @@ impl Ed25519Sha512 {
     }
 
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-        parse_fixed_size(payload, |bytes| {
-            let compressed = CompressedEdwardsY(*bytes);
-            let point = compressed
-                .decompress()
-                .ok_or_else(|| ParseError("invalid ed25519 public key encoding".to_string()))?;
-            let canonical = point.compress();
+        let bytes: [u8; 32] = payload.try_into().map_err(|_| {
+            ParseError(format!(
+                "the payload size is incorrect: expected {}, but got {}",
+                32,
+                payload.len()
+            ))
+        })?;
 
-            // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
-            // byte representation to keep deterministic I105/in-memory forms in sync).
-            if canonical.as_bytes() != bytes {
-                return Err(ParseError(
-                    "non-canonical ed25519 public key encoding".to_string(),
-                ));
-            }
+        if let Some(key) = PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().get(&bytes)) {
+            return Ok(key);
+        }
 
-            let key = PublicKey::from(point);
+        let key = Self::parse_public_key_uncached(&bytes)?;
+        PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().insert(bytes, key));
+        Ok(key)
+    }
 
-            // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
-            // byte representation to keep deterministic I105/in-memory forms in sync).
-            if key.is_weak() {
-                return Err(ParseError(
-                    "ed25519 public key is small-order (weak); rejected".to_string(),
-                ));
-            }
+    fn parse_public_key_uncached(bytes: &[u8; 32]) -> Result<PublicKey, ParseError> {
+        let compressed = CompressedEdwardsY(*bytes);
+        let point = compressed
+            .decompress()
+            .ok_or_else(|| ParseError("invalid ed25519 public key encoding".to_string()))?;
+        let canonical = point.compress();
 
-            Ok(key)
-        })
+        // Reject non-canonical encodings (ZIP-215 allows them, but our ABI requires canonical
+        // byte representation to keep deterministic I105/in-memory forms in sync).
+        if canonical.as_bytes() != bytes {
+            return Err(ParseError(
+                "non-canonical ed25519 public key encoding".to_string(),
+            ));
+        }
+
+        let key = PublicKey::from(point);
+
+        if key.is_weak() {
+            return Err(ParseError(
+                "ed25519 public key is small-order (weak); rejected".to_string(),
+            ));
+        }
+
+        Ok(key)
     }
 
     pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
@@ -190,9 +295,63 @@ impl Ed25519Sha512 {
             .map_err(|_| Error::BadSignature)
     }
 
+    /// Deterministic batch verification helper using already parsed public keys.
+    ///
+    /// Under `ecc-batch`, this calls dalek's transcript-derived deterministic batch verifier.
+    /// Without `ecc-batch`, it verifies each tuple independently in input order.
+    /// The `seed32` parameter is reserved for API compatibility and is ignored.
+    pub fn verify_batch_preparsed_deterministic(
+        messages: &[&[u8]],
+        signatures: &[&[u8]],
+        public_keys: &[PublicKey],
+        seed32: [u8; 32],
+    ) -> Result<(), Error> {
+        if messages.is_empty()
+            || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+        {
+            return Err(Error::BadSignature);
+        }
+        let _ = seed32;
+
+        #[cfg(feature = "ecc-batch")]
+        {
+            let parsed_signatures = signatures
+                .iter()
+                .map(|signature| Signature::try_from(*signature).map_err(|_| Error::BadSignature))
+                .collect::<Result<Vec<_>, _>>()?;
+            ed25519_dalek::verify_batch(messages, &parsed_signatures, public_keys)
+                .map_err(|_| Error::BadSignature)?;
+            for ((message, signature), public_key) in messages
+                .iter()
+                .zip(signatures.iter())
+                .zip(public_keys.iter())
+            {
+                if signature.len() == ed25519_dalek::SIGNATURE_LENGTH {
+                    let key = verify_ok_cache_key(public_key, message, signature);
+                    VERIFY_OK_CACHE.with(|cache| cache.borrow_mut().insert(key));
+                }
+            }
+            Ok(())
+        }
+
+        #[cfg(not(feature = "ecc-batch"))]
+        {
+            for ((message, signature), public_key) in messages
+                .iter()
+                .zip(signatures.iter())
+                .zip(public_keys.iter())
+            {
+                Self::verify(message, signature, public_key)?;
+            }
+            Ok(())
+        }
+    }
+
     /// Deterministic batch verification helper.
     ///
-    /// Verifies each (message, signature, `public_key`) triple independently in order.
+    /// Parses public keys once, then delegates to [`Self::verify_batch_preparsed_deterministic`].
+    /// Under `ecc-batch`, this uses dalek's true deterministic batch verifier.
+    /// Without `ecc-batch`, this retains the ordered per-signature fallback.
     /// The `seed32` parameter is reserved for API compatibility and is ignored.
     /// Returns `Err(Error::BadSignature)` when input is empty or lengths mismatch.
     pub fn verify_batch_deterministic(
@@ -206,20 +365,16 @@ impl Ed25519Sha512 {
         {
             return Err(Error::BadSignature);
         }
-        let _ = seed32;
-        for ((m, s), pk_bytes) in messages
+        let parsed_public_keys = public_keys
             .iter()
-            .zip(signatures.iter())
-            .zip(public_keys.iter())
-        {
-            let pk = match Self::parse_public_key(pk_bytes) {
-                Ok(v) => v,
-                Err(_) => return Err(Error::BadSignature),
-            };
-            // Reuse single-verify to keep semantics identical.
-            Self::verify(m, s, &pk)?;
-        }
-        Ok(())
+            .map(|public_key| Self::parse_public_key(public_key).map_err(|_| Error::BadSignature))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::verify_batch_preparsed_deterministic(
+            messages,
+            signatures,
+            &parsed_public_keys,
+            seed32,
+        )
     }
 }
 
@@ -338,6 +493,55 @@ mod test {
 
         // Exercise cached hit path.
         Ed25519Sha512::verify(msg1, &sig1, &pk).expect("cached signature 1");
+    }
+
+    #[test]
+    fn parse_public_key_uses_thread_local_cache_for_valid_keys() {
+        reset_public_key_parse_cache_for_tests();
+        let (pk, _) = Ed25519Sha512::keypair(KeyGenOption::Random);
+        let bytes = pk.to_bytes();
+
+        let first = Ed25519Sha512::parse_public_key(&bytes).expect("first parse succeeds");
+        assert_eq!(first.to_bytes(), bytes);
+        assert_eq!(
+            public_key_parse_cache_stats_for_tests(),
+            PublicKeyParseCacheStats {
+                hits: 0,
+                misses: 1,
+                inserts: 1,
+            }
+        );
+
+        let second = Ed25519Sha512::parse_public_key(&bytes).expect("cached parse succeeds");
+        assert_eq!(second.to_bytes(), bytes);
+        assert_eq!(
+            public_key_parse_cache_stats_for_tests(),
+            PublicKeyParseCacheStats {
+                hits: 1,
+                misses: 1,
+                inserts: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_public_key_cache_does_not_store_rejections() {
+        reset_public_key_parse_cache_for_tests();
+
+        for _ in 0..2 {
+            let err = Ed25519Sha512::parse_public_key(&ED25519_NON_CANONICAL_IDENTITY)
+                .expect_err("non-canonical public key must be rejected");
+            assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+        }
+
+        assert_eq!(
+            public_key_parse_cache_stats_for_tests(),
+            PublicKeyParseCacheStats {
+                hits: 0,
+                misses: 2,
+                inserts: 0,
+            }
+        );
     }
 
     #[cfg(feature = "ecc-batch")]
@@ -532,6 +736,168 @@ mod test {
         let pks_r_arr: [&[u8]; 2] = [pk2.as_bytes(), pk1.as_bytes()];
         Ed25519Sha512::verify_batch_deterministic(&msgs_r, &sigs_r, &pks_r_arr, seed)
             .expect("batch verify ok rev");
+    }
+
+    fn ed25519_batch_fixture() -> Vec<(Vec<u8>, Vec<u8>, PublicKey)> {
+        (0u8..5)
+            .map(|idx| {
+                let seed = [idx.saturating_add(1); 32];
+                let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed.to_vec()));
+                let message = format!("ed25519-batch-message-{idx}").into_bytes();
+                let signature = Ed25519Sha512::sign(&message, &sk);
+                (message, signature, pk)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ed25519_batch_preparsed_valid_and_reordered_inputs_pass() {
+        let triples = ed25519_batch_fixture();
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| public_key.clone())
+            .collect::<Vec<_>>();
+        Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+            [0x33; 32],
+        )
+        .expect("valid preparsed batch");
+
+        let reordered = triples.into_iter().rev().collect::<Vec<_>>();
+        let messages = reordered
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = reordered
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = reordered
+            .iter()
+            .map(|(_, _, public_key)| public_key.clone())
+            .collect::<Vec<_>>();
+        Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+            [0x44; 32],
+        )
+        .expect("reordered valid preparsed batch");
+    }
+
+    #[test]
+    fn ed25519_batch_preparsed_invalid_signature_rejected() {
+        let mut triples = ed25519_batch_fixture();
+        triples[2].1[0] ^= 0x80;
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| public_key.clone())
+            .collect::<Vec<_>>();
+
+        let err = Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+            [0x55; 32],
+        )
+        .expect_err("tampered signature must fail");
+        assert_eq!(err, Error::BadSignature);
+    }
+
+    #[test]
+    fn ed25519_batch_rejects_empty_and_mismatched_inputs() {
+        let empty_messages: [&[u8]; 0] = [];
+        let empty_signatures: [&[u8]; 0] = [];
+        let empty_public_keys: [PublicKey; 0] = [];
+        assert_eq!(
+            Ed25519Sha512::verify_batch_preparsed_deterministic(
+                &empty_messages,
+                &empty_signatures,
+                &empty_public_keys,
+                [0; 32],
+            )
+            .expect_err("empty batch must fail"),
+            Error::BadSignature
+        );
+
+        let triples = ed25519_batch_fixture();
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = triples
+            .iter()
+            .take(1)
+            .map(|(_, _, public_key)| public_key.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            Ed25519Sha512::verify_batch_preparsed_deterministic(
+                &messages,
+                &signatures,
+                &public_keys,
+                [0; 32],
+            )
+            .expect_err("mismatched batch must fail"),
+            Error::BadSignature
+        );
+    }
+
+    #[test]
+    fn ed25519_batch_public_preparsed_api_matches_raw_api() {
+        let triples = ed25519_batch_fixture();
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let raw_public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| public_key.as_bytes().as_slice())
+            .collect::<Vec<_>>();
+        let parsed_public_keys = raw_public_keys
+            .iter()
+            .map(|public_key| crate::ed25519_parse_public_key(public_key).expect("parse key"))
+            .collect::<Vec<_>>();
+
+        crate::ed25519_verify_batch_deterministic(
+            &messages,
+            &signatures,
+            &raw_public_keys,
+            [0x66; 32],
+        )
+        .expect("raw batch API");
+        crate::ed25519_verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &parsed_public_keys,
+            [0x66; 32],
+        )
+        .expect("preparsed batch API");
     }
 
     #[test]

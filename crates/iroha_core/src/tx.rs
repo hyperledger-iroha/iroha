@@ -15,7 +15,7 @@ use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
     collections::BTreeSet,
-    sync::{LazyLock, OnceLock},
+    sync::{Arc, LazyLock, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
 
@@ -69,6 +69,19 @@ type StateTelemetry = crate::telemetry::StateTelemetry;
 type StateTelemetry = ();
 type NexusDataSpaceId = iroha_data_model::nexus::DataSpaceId;
 type NexusLaneId = iroha_data_model::nexus::LaneId;
+
+/// Stateful admission facts that must be committed only if transaction execution succeeds.
+#[derive(Debug, Clone)]
+pub(crate) struct StatefulAdmission {
+    /// Transaction authority.
+    pub(crate) authority: AccountId,
+    /// Whether the transaction is the Sumeragi heartbeat.
+    pub(crate) is_heartbeat: bool,
+    /// Whether this transaction may run before its authority account is materialized.
+    pub(crate) allow_unregistered_authority: bool,
+    /// Monotonic sequence value to store after successful execution.
+    pub(crate) sequence_to_commit: Option<u64>,
+}
 
 static FRAUD_ASSESSMENT_BAND_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("fraud_assessment_band")
@@ -149,6 +162,10 @@ pub struct AcceptedTransaction<'tx> {
     entrypoint_hash: OnceLock<HashOf<TransactionEntrypoint>>,
     signed_hash: OnceLock<HashOf<SignedTransaction>>,
     encoded_len: OnceLock<usize>,
+    signed_bytes: OnceLock<Option<Arc<Vec<u8>>>>,
+    payload_hash:
+        OnceLock<Option<HashOf<iroha_data_model::transaction::signed::TransactionPayload>>>,
+    single_ed25519_key: OnceLock<Option<iroha_crypto::Ed25519ParsedPublicKey>>,
 }
 
 impl Clone for AcceptedTransaction<'_> {
@@ -158,6 +175,9 @@ impl Clone for AcceptedTransaction<'_> {
             entrypoint_hash: clone_once_lock(&self.entrypoint_hash),
             signed_hash: clone_once_lock(&self.signed_hash),
             encoded_len: clone_once_lock(&self.encoded_len),
+            signed_bytes: clone_once_lock(&self.signed_bytes),
+            payload_hash: clone_once_lock(&self.payload_hash),
+            single_ed25519_key: clone_once_lock(&self.single_ed25519_key),
         }
     }
 }
@@ -196,6 +216,21 @@ impl fmt::Display for TransactionAlreadyCommitted {
 }
 
 impl std::error::Error for TransactionAlreadyCommitted {}
+
+/// Reusable stateless transaction metadata derived once for block validation.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedTransactionMetadata {
+    /// Canonical signed transaction hash.
+    pub(crate) signed_hash: HashOf<SignedTransaction>,
+    /// Canonical entrypoint hash used by block Merkle roots.
+    pub(crate) entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Hash of the signed payload, used as the Ed25519 verification message.
+    pub(crate) payload_hash: HashOf<iroha_data_model::transaction::signed::TransactionPayload>,
+    /// Exact framed Norito length of the signed transaction.
+    pub(crate) encoded_len: usize,
+    /// Parsed Ed25519 key when the transaction has a single Ed25519 authority.
+    pub(crate) single_ed25519_key: Option<iroha_crypto::Ed25519ParsedPublicKey>,
+}
 
 impl<'tx> CheckedTransaction<'tx> {
     /// Attempt to construct a [`CheckedTransaction`] by verifying the transaction hash against the provided state.
@@ -764,7 +799,29 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint_hash: OnceLock::new(),
             signed_hash: OnceLock::new(),
             encoded_len: OnceLock::new(),
+            signed_bytes: OnceLock::new(),
+            payload_hash: OnceLock::new(),
+            single_ed25519_key: OnceLock::new(),
         }
+    }
+
+    fn from_external_with_hot_cache(tx: SignedTransaction) -> Self {
+        let signed_bytes =
+            Arc::new(norito::to_bytes(&tx).expect("encode accepted signed transaction"));
+        let encoded_len = signed_bytes.len();
+        let payload_hash = HashOf::new(tx.payload());
+        let single_ed25519_key = Self::parsed_single_ed25519_key(&tx);
+        let entrypoint = TransactionEntrypoint::External(tx);
+        let entrypoint_hash = entrypoint.hash();
+        let signed_hash = Self::compat_signed_hash(entrypoint_hash);
+        let accepted = Self::from_entrypoint(Cow::Owned(entrypoint));
+        let _ = accepted.signed_bytes.set(Some(signed_bytes));
+        let _ = accepted.encoded_len.set(encoded_len);
+        let _ = accepted.payload_hash.set(Some(payload_hash));
+        let _ = accepted.single_ed25519_key.set(single_ed25519_key);
+        let _ = accepted.entrypoint_hash.set(entrypoint_hash);
+        let _ = accepted.signed_hash.set(signed_hash);
+        accepted
     }
 
     fn compat_signed_hash(
@@ -791,14 +848,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                     .saturating_add(payload_len)
             })
             .unwrap_or_else(|| {
-                norito::to_bytes(value).map_or_else(
-                    |_| {
-                        norito::core::Header::SIZE
-                            .saturating_add(Self::framed_padding_for::<T>())
-                            .saturating_add(value.encoded_len())
-                    },
-                    |bytes| bytes.len(),
-                )
+                norito::core::Header::SIZE
+                    .saturating_add(Self::framed_padding_for::<T>())
+                    .saturating_add(norito::codec::Encode::encoded_len(value))
             })
     }
 
@@ -816,6 +868,47 @@ impl<'tx> AcceptedTransaction<'tx> {
 
     fn signed_encoded_len_for_limit(tx: &SignedTransaction) -> u64 {
         u64::try_from(Self::signed_encoded_len(tx)).unwrap_or(u64::MAX)
+    }
+
+    fn signed_encoded_len_for_limit_with_prepared(
+        tx: &SignedTransaction,
+        prepared: Option<&PreparedTransactionMetadata>,
+    ) -> u64 {
+        prepared.map_or_else(
+            || Self::signed_encoded_len_for_limit(tx),
+            |metadata| u64::try_from(metadata.encoded_len).unwrap_or(u64::MAX),
+        )
+    }
+
+    fn parsed_single_ed25519_key(
+        tx: &SignedTransaction,
+    ) -> Option<iroha_crypto::Ed25519ParsedPublicKey> {
+        let iroha_data_model::account::AccountController::Single(signatory) =
+            tx.authority().controller()
+        else {
+            return None;
+        };
+        if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519
+            || tx.signature().payload().payload().len() != ED25519_SIGNATURE_LENGTH
+        {
+            return None;
+        }
+        let (_algorithm, public_key) = signatory.to_bytes();
+        iroha_crypto::ed25519_parse_public_key(public_key).ok()
+    }
+
+    /// Build reusable stateless metadata for a signed transaction.
+    #[must_use]
+    pub(crate) fn prepare_signed_metadata(tx: &SignedTransaction) -> PreparedTransactionMetadata {
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let signed_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash));
+        PreparedTransactionMetadata {
+            signed_hash,
+            entrypoint_hash,
+            payload_hash: HashOf::new(tx.payload()),
+            encoded_len: Self::signed_encoded_len(tx),
+            single_ed25519_key: Self::parsed_single_ed25519_key(tx),
+        }
     }
 
     fn validate_common(
@@ -1372,17 +1465,51 @@ impl<'tx> AcceptedTransaction<'tx> {
             crypto,
             now,
             SignatureCheck::Verify,
+            None,
         )
     }
 
+    /// Validate a transaction with metadata prepared once by the caller.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_with_now_after_single_ed25519_precheck(
+    pub(crate) fn validate_with_now_and_prepared_metadata(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
+        prepared: &PreparedTransactionMetadata,
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_with_now_and_signature_check(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            SignatureCheck::Verify,
+            Some(prepared),
+        )
+    }
+
+    /// Validate a transaction after a successful single-Ed25519 precheck with prepared metadata.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_with_now_and_signature_check(
             tx,
@@ -1392,6 +1519,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             crypto,
             now,
             SignatureCheck::PrecheckedSingleEd25519,
+            Some(prepared),
         )
     }
 
@@ -1404,6 +1532,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
         signature_check: SignatureCheck,
+        prepared: Option<&PreparedTransactionMetadata>,
     ) -> Result<(), AcceptTransactionFail> {
         let heartbeat_marker =
             heartbeat_marker_value(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
@@ -1416,6 +1545,7 @@ impl<'tx> AcceptedTransaction<'tx> {
                 crypto,
                 now,
                 signature_check,
+                prepared,
             );
         }
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
@@ -1437,7 +1567,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
 
-        let tx_encoded_len = Self::signed_encoded_len_for_limit(tx);
+        let tx_encoded_len = Self::signed_encoded_len_for_limit_with_prepared(tx, prepared);
         let max_tx_bytes = limits.max_tx_bytes().get();
         if tx_encoded_len > max_tx_bytes {
             return Err(AcceptTransactionFail::TransactionLimit(
@@ -1703,6 +1833,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     pub(crate) fn validate_heartbeat_with_now(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
@@ -1719,17 +1850,24 @@ impl<'tx> AcceptedTransaction<'tx> {
             crypto,
             now,
             SignatureCheck::Verify,
+            None,
         )
     }
 
+    /// Validate a heartbeat transaction after a successful single-Ed25519 precheck with prepared metadata.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn validate_heartbeat_with_now_after_single_ed25519_precheck(
+    pub(crate) fn validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
+        prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_heartbeat_with_now_and_signature_check(
             tx,
@@ -1739,6 +1877,34 @@ impl<'tx> AcceptedTransaction<'tx> {
             crypto,
             now,
             SignatureCheck::PrecheckedSingleEd25519,
+            Some(prepared),
+        )
+    }
+
+    /// Validate a heartbeat transaction with metadata prepared once by the caller.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_heartbeat_with_now_and_prepared_metadata(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        prepared: &PreparedTransactionMetadata,
+    ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_heartbeat_with_now_and_signature_check(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            SignatureCheck::Verify,
+            Some(prepared),
         )
     }
 
@@ -1751,6 +1917,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
         signature_check: SignatureCheck,
+        prepared: Option<&PreparedTransactionMetadata>,
     ) -> Result<(), AcceptTransactionFail> {
         let _ = crypto;
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
@@ -1786,7 +1953,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
 
-        let tx_encoded_len = Self::signed_encoded_len_for_limit(tx);
+        let tx_encoded_len = Self::signed_encoded_len_for_limit_with_prepared(tx, prepared);
         let max_tx_bytes = limits.max_tx_bytes().get();
         if tx_encoded_len > max_tx_bytes {
             return Err(AcceptTransactionFail::TransactionLimit(
@@ -1967,6 +2134,60 @@ impl<'tx> AcceptedTransaction<'tx> {
             .get_or_init(|| Self::entrypoint_encoded_len(self.entrypoint()))
     }
 
+    /// Return cached canonical signed-transaction bytes for queue gossip when this is external.
+    #[must_use]
+    pub(crate) fn signed_bytes(&self) -> Option<Arc<Vec<u8>>> {
+        self.signed_bytes
+            .get_or_init(|| {
+                self.external().map(|signed| {
+                    Arc::new(norito::to_bytes(signed).expect("encode signed transaction"))
+                })
+            })
+            .as_ref()
+            .map(Arc::clone)
+    }
+
+    /// Return cached payload hash when this is an external transaction.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn payload_hash(
+        &self,
+    ) -> Option<HashOf<iroha_data_model::transaction::signed::TransactionPayload>> {
+        *self
+            .payload_hash
+            .get_or_init(|| self.external().map(|signed| HashOf::new(signed.payload())))
+    }
+
+    /// Return cached parsed Ed25519 key for single-key Ed25519 authorities.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn single_ed25519_key(&self) -> Option<iroha_crypto::Ed25519ParsedPublicKey> {
+        *self
+            .single_ed25519_key
+            .get_or_init(|| self.external().and_then(Self::parsed_single_ed25519_key))
+    }
+
+    /// Return prepared metadata for an external transaction.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn prepared_metadata(&self) -> Option<PreparedTransactionMetadata> {
+        self.external()?;
+        let payload_hash = *self
+            .payload_hash
+            .get_or_init(|| self.external().map(|signed| HashOf::new(signed.payload())))
+            .as_ref()?;
+        let single_ed25519_key = *self
+            .single_ed25519_key
+            .get_or_init(|| self.external().and_then(Self::parsed_single_ed25519_key));
+        Some(PreparedTransactionMetadata {
+            signed_hash: self.hash(),
+            entrypoint_hash: self.hash_as_entrypoint(),
+            payload_hash,
+            encoded_len: self.encoded_len(),
+            single_ed25519_key,
+        })
+    }
+
     /// Borrow the transaction authority account identifier when present.
     #[must_use]
     pub fn authority_opt(&self) -> Option<&AccountId> {
@@ -2022,7 +2243,7 @@ impl AcceptedTransaction<'static> {
             genesis_account,
             crypto,
         )
-        .map(|()| Self::from_entrypoint(Cow::Owned(TransactionEntrypoint::External(tx))))
+        .map(|()| Self::from_external_with_hot_cache(tx))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -2038,7 +2259,7 @@ impl AcceptedTransaction<'static> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
         Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
-            .map(|()| Self::from_entrypoint(Cow::Owned(TransactionEntrypoint::External(tx))))
+            .map(|()| Self::from_external_with_hot_cache(tx))
     }
 
     /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
@@ -2057,9 +2278,7 @@ impl AcceptedTransaction<'static> {
         let now = time_source.get_unix_time();
         Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
         enforce_nts_health_for_time_sensitive(&tx)?;
-        Ok(Self::from_entrypoint(Cow::Owned(
-            TransactionEntrypoint::External(tx),
-        )))
+        Ok(Self::from_external_with_hot_cache(tx))
     }
 
     /// Accept any directly submitted transaction entrypoint.
@@ -2104,7 +2323,10 @@ impl AcceptedTransaction<'static> {
                 ));
             }
         }
-        Ok(Self::from_entrypoint(Cow::Owned(tx)))
+        Ok(match tx {
+            TransactionEntrypoint::External(signed) => Self::from_external_with_hot_cache(signed),
+            other => Self::from_entrypoint(Cow::Owned(other)),
+        })
     }
 }
 
@@ -2136,6 +2358,200 @@ impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
 }
 
 impl StateBlock<'_> {
+    /// Validate stateful admission rules that must hold before transaction execution.
+    ///
+    /// This helper intentionally does not execute instructions or apply state. Callers must only
+    /// commit the returned sequence after the transaction itself succeeds.
+    pub(crate) fn validate_stateful_admission(
+        tx: &SignedTransaction,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        routing_decision: Option<crate::queue::RoutingDecision>,
+    ) -> Result<StatefulAdmission, TransactionRejectionReason> {
+        let authority = tx.authority().clone();
+        let is_heartbeat = is_heartbeat_transaction(tx);
+        let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
+        let allow_unregistered_authority = !is_heartbeat
+            && !authority_exists
+            && allows_unregistered_authority(tx.instructions(), &authority);
+
+        // Heartbeat transactions may be signed by ephemeral identities.
+        // Multisig propose/approve envelopes are also allowed from unregistered authorities,
+        // because authorization is derived from multisig membership rather than account storage.
+        // All other transactions must originate from an existing account.
+        if !authority_exists && !is_heartbeat && !allow_unregistered_authority {
+            return Err(TransactionRejectionReason::AccountDoesNotExist(
+                FindError::Account(authority.clone()),
+            ));
+        }
+
+        if !is_heartbeat
+            && let Executable::Instructions(instructions) = tx.instructions()
+            && instructions.is_empty()
+        {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "Transaction must contain at least one instruction".to_owned(),
+                ),
+            ));
+        }
+
+        let (require_height_ttl, require_sequence) = {
+            let params = state_transaction.world.parameters();
+            (
+                params.transaction.require_height_ttl,
+                params.transaction.require_sequence,
+            )
+        };
+
+        let expires_at_height = tx.expires_at_height().map_err(|err| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "Transaction metadata `expires_at_height` must be an unsigned integer: {err}"
+            )))
+        })?;
+
+        let tx_sequence_value = tx.tx_sequence().map_err(|err| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "Transaction metadata `tx_sequence` must be an unsigned integer: {err}"
+            )))
+        })?;
+
+        if require_height_ttl {
+            let expiry = expires_at_height.ok_or_else(|| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "Transaction metadata `expires_at_height` is required by configuration".into(),
+                ))
+            })?;
+            let current_height = state_transaction.block_height();
+            if current_height >= expiry {
+                return Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(format!(
+                        "Transaction expired at height {expiry}; current height is {current_height}"
+                    )),
+                ));
+            }
+        }
+
+        let mut sequence_to_commit = None;
+        if let Some(seq) = tx_sequence_value {
+            let previous = state_transaction
+                .world
+                .tx_sequences
+                .get(&authority)
+                .copied();
+            if let Some(prev) = previous {
+                if seq <= prev {
+                    if require_sequence {
+                        return Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(format!(
+                                "Transaction sequence {seq} for {authority} must exceed previous {prev}"
+                            )),
+                        ));
+                    }
+                } else {
+                    sequence_to_commit = Some(seq);
+                }
+            } else {
+                sequence_to_commit = Some(seq);
+            }
+        } else if require_sequence {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "Transaction metadata `tx_sequence` is required by configuration".into(),
+                ),
+            ));
+        }
+
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle: Option<&StateTelemetry> = Some(state_transaction.telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        let telemetry_handle: Option<&StateTelemetry> = None;
+
+        if let Ok(account) = state_transaction.world.account(&authority) {
+            let has_multisig_state = state_transaction
+                .world
+                .smart_contract_state
+                .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(&authority))
+                .is_some();
+            let has_multisig_metadata = account
+                .metadata()
+                .get(&crate::smartcontracts::isi::multisig::spec_key())
+                .is_some();
+            let has_multisig_controller = authority.multisig_policy().is_some();
+            let has_multisig_role = state_transaction
+                .world
+                .account_roles_iter(&authority)
+                .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
+            let allows_multisig_envelope_authority = match tx.instructions() {
+                Executable::Instructions(instructions) => {
+                    instructions_allow_multisig_envelope_authority(instructions)
+                }
+                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
+                    false
+                }
+            };
+            if (has_multisig_role
+                || has_multisig_state
+                || has_multisig_metadata
+                || has_multisig_controller)
+                && !allows_multisig_envelope_authority
+            {
+                warn!(
+                    authority = %authority,
+                    "multisig accounts cannot sign transactions directly"
+                );
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = telemetry_handle {
+                    crate::telemetry::record_social_rejection(telemetry, "multisig_direct_sign");
+                }
+                return Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(MULTISIG_DIRECT_SIGN_REJECTION.into()),
+                ));
+            }
+        }
+
+        let routing_decision = match routing_decision {
+            Some(decision) => decision,
+            None => {
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
+                evaluate_policy_with_catalog_and_world(
+                    &state_transaction.nexus.routing_policy,
+                    &state_transaction.nexus.lane_catalog,
+                    &state_transaction.nexus.dataspace_catalog,
+                    &accepted,
+                    &state_transaction.world,
+                )
+                .map_err(|err| {
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                        "transaction routing could not be resolved: {err}"
+                    )))
+                })?
+            }
+        };
+        let lane_assignment = LaneAssignment {
+            lane_id: routing_decision.lane_id,
+            dataspace_id: routing_decision.dataspace_id,
+            dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
+        };
+
+        enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
+
+        if !is_heartbeat {
+            enforce_fraud_policy(
+                &state_transaction.fraud_monitoring,
+                tx.metadata(),
+                telemetry_handle,
+                &lane_assignment,
+            )?;
+        }
+
+        Ok(StatefulAdmission {
+            authority,
+            is_heartbeat,
+            allow_unregistered_authority,
+            sequence_to_commit,
+        })
+    }
+
     /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
     ///
     /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
@@ -2219,178 +2635,10 @@ impl StateBlock<'_> {
             ));
         }
 
-        let authority = tx.as_ref().authority().clone();
-        let is_heartbeat = is_heartbeat_transaction(tx.as_ref());
-        let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
-        let allow_unregistered_authority = !is_heartbeat
-            && !authority_exists
-            && allows_unregistered_authority(tx.as_ref().instructions(), &authority);
-
-        // Heartbeat transactions may be signed by ephemeral identities.
-        // Multisig propose/approve envelopes are also allowed from unregistered authorities,
-        // because authorization is derived from multisig membership rather than account storage.
-        // All other transactions must originate from an existing account.
-        if !authority_exists && !is_heartbeat && !allow_unregistered_authority {
-            return Err(TransactionRejectionReason::AccountDoesNotExist(
-                FindError::Account(authority.clone()),
-            ));
-        }
-
-        if !is_heartbeat {
-            if let Executable::Instructions(instructions) = tx.as_ref().instructions()
-                && instructions.is_empty()
-            {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted(
-                        "Transaction must contain at least one instruction".to_owned(),
-                    ),
-                ));
-            }
-        }
-
-        let (require_height_ttl, require_sequence) = {
-            let params = state_transaction.world.parameters();
-            (
-                params.transaction.require_height_ttl,
-                params.transaction.require_sequence,
-            )
-        };
-
-        let expires_at_height = tx.as_ref().expires_at_height().map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "Transaction metadata `expires_at_height` must be an unsigned integer: {err}"
-            )))
-        })?;
-
-        let tx_sequence_value = tx.as_ref().tx_sequence().map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "Transaction metadata `tx_sequence` must be an unsigned integer: {err}"
-            )))
-        })?;
-
-        let mut sequence_to_commit: Option<u64> = None;
-
-        if require_height_ttl {
-            let expiry = expires_at_height.ok_or_else(|| {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                    "Transaction metadata `expires_at_height` is required by configuration".into(),
-                ))
-            })?;
-            let current_height = state_transaction.block_height();
-            if current_height >= expiry {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted(format!(
-                        "Transaction expired at height {expiry}; current height is {current_height}"
-                    )),
-                ));
-            }
-        }
-
-        if let Some(seq) = tx_sequence_value {
-            let previous = state_transaction
-                .world
-                .tx_sequences
-                .get(&authority)
-                .copied();
-            if let Some(prev) = previous {
-                if seq <= prev {
-                    if require_sequence {
-                        return Err(TransactionRejectionReason::Validation(
-                            ValidationFail::NotPermitted(format!(
-                                "Transaction sequence {seq} for {authority} must exceed previous {prev}"
-                            )),
-                        ));
-                    }
-                } else {
-                    sequence_to_commit = Some(seq);
-                }
-            } else {
-                sequence_to_commit = Some(seq);
-            }
-        } else if require_sequence {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "Transaction metadata `tx_sequence` is required by configuration".into(),
-                ),
-            ));
-        }
-
-        #[cfg(feature = "telemetry")]
-        let telemetry_handle: Option<&StateTelemetry> = Some(state_transaction.telemetry);
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry_handle: Option<&StateTelemetry> = None;
-
-        if let Ok(account) = state_transaction.world.account(&authority) {
-            let has_multisig_state = state_transaction
-                .world
-                .smart_contract_state
-                .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(&authority))
-                .is_some();
-            let has_multisig_metadata = account
-                .metadata()
-                .get(&crate::smartcontracts::isi::multisig::spec_key())
-                .is_some();
-            let has_multisig_controller = authority.multisig_policy().is_some();
-            let has_multisig_role = state_transaction
-                .world
-                .account_roles_iter(&authority)
-                .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
-            let allows_multisig_envelope_authority = match tx.as_ref().instructions() {
-                Executable::Instructions(instructions) => {
-                    instructions_allow_multisig_envelope_authority(instructions)
-                }
-                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
-                    false
-                }
-            };
-            if (has_multisig_role
-                || has_multisig_state
-                || has_multisig_metadata
-                || has_multisig_controller)
-                && !allows_multisig_envelope_authority
-            {
-                warn!(
-                    authority = %authority,
-                    "multisig accounts cannot sign transactions directly"
-                );
-                #[cfg(feature = "telemetry")]
-                if let Some(telemetry) = telemetry_handle {
-                    crate::telemetry::record_social_rejection(telemetry, "multisig_direct_sign");
-                }
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted(MULTISIG_DIRECT_SIGN_REJECTION.into()),
-                ));
-            }
-        }
-
-        let routing_decision = evaluate_policy_with_catalog_and_world(
-            &state_transaction.nexus.routing_policy,
-            &state_transaction.nexus.lane_catalog,
-            &state_transaction.nexus.dataspace_catalog,
-            &tx,
-            &state_transaction.world,
-        )
-        .map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "transaction routing could not be resolved: {err}"
-            )))
-        })?;
-        let lane_assignment = LaneAssignment {
-            lane_id: routing_decision.lane_id,
-            dataspace_id: routing_decision.dataspace_id,
-            dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
-        };
-
-        enforce_lane_policies(tx.as_ref(), state_transaction, &lane_assignment)?;
-
-        if !is_heartbeat {
-            enforce_fraud_policy(
-                &state_transaction.fraud_monitoring,
-                tx.as_ref().metadata(),
-                telemetry_handle,
-                &lane_assignment,
-            )?;
-        }
+        let admission = Self::validate_stateful_admission(tx.as_ref(), state_transaction, None)?;
+        let authority = admission.authority;
+        let is_heartbeat = admission.is_heartbeat;
+        let allow_unregistered_authority = admission.allow_unregistered_authority;
 
         let manifest_metadata = tx
             .as_ref()
@@ -2485,7 +2733,7 @@ impl StateBlock<'_> {
             }
         };
 
-        if let Some(seq) = sequence_to_commit {
+        if let Some(seq) = admission.sequence_to_commit {
             state_transaction
                 .world
                 .tx_sequences
@@ -4342,7 +4590,7 @@ pub mod tests {
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
-        num::{NonZeroU16, NonZeroU64},
+        num::{NonZeroU16, NonZeroU32, NonZeroU64},
         path::PathBuf,
         str::FromStr,
         sync::Arc,
@@ -4387,7 +4635,7 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
-    use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
+    use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Numeric, time::TimeSource};
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
@@ -5474,7 +5722,139 @@ pub mod tests {
         assert_eq!(accepted.hash(), signed.hash());
         assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(accepted.encoded_len(), expected_len);
+        let signed_bytes = accepted
+            .signed_bytes()
+            .expect("external transaction should cache signed bytes");
+        assert_eq!(signed_bytes.as_slice(), norito::to_bytes(&signed).unwrap());
+        assert_eq!(accepted.payload_hash(), Some(HashOf::new(signed.payload())));
+        assert!(accepted.single_ed25519_key().is_some());
+        let prepared = accepted
+            .prepared_metadata()
+            .expect("external transaction has prepared metadata");
+        assert_eq!(prepared.signed_hash, signed.hash());
+        assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
+        assert_eq!(prepared.encoded_len, expected_len);
         assert_eq!(accepted.clone().encoded_len(), expected_len);
+        let cloned_bytes = accepted
+            .clone()
+            .signed_bytes()
+            .expect("clone should preserve signed bytes");
+        assert!(Arc::ptr_eq(&signed_bytes, &cloned_bytes));
+    }
+
+    #[test]
+    fn accepted_transaction_entrypoint_encoded_lengths_match_norito_frames() {
+        let chain: ChainId = "accepted-entrypoint-len-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "entrypoint-len".into())])
+            .sign(keypair.private_key());
+        let signed_expected_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+
+        assert_eq!(
+            AcceptedTransaction::framed_encoded_len(&signed),
+            signed_expected_len
+        );
+        assert_eq!(
+            AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone())).encoded_len(),
+            signed_expected_len
+        );
+        assert_eq!(
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+                TransactionEntrypoint::External(signed)
+            ))
+            .encoded_len(),
+            signed_expected_len
+        );
+
+        let time_entrypoint = TimeTriggerEntrypoint {
+            id: "accepted-entrypoint-len-trigger".parse().unwrap(),
+            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
+            authority,
+        };
+        let time_expected_len = norito::to_bytes(&time_entrypoint)
+            .expect("time entrypoint encodes")
+            .len();
+
+        assert_eq!(
+            AcceptedTransaction::framed_encoded_len(&time_entrypoint),
+            time_expected_len
+        );
+        assert_eq!(
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(TransactionEntrypoint::Time(
+                time_entrypoint
+            )))
+            .encoded_len(),
+            time_expected_len
+        );
+
+        let private_entrypoint = sample_private_kaigi_transaction(chain);
+        let private_expected_len = norito::to_bytes(&private_entrypoint)
+            .expect("private Kaigi entrypoint encodes")
+            .len();
+
+        assert_eq!(
+            AcceptedTransaction::framed_encoded_len(&private_entrypoint),
+            private_expected_len
+        );
+        assert_eq!(
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+                TransactionEntrypoint::PrivateKaigi(private_entrypoint)
+            ))
+            .encoded_len(),
+            private_expected_len
+        );
+    }
+
+    fn sample_private_kaigi_transaction(chain: ChainId) -> PrivateKaigiTransaction {
+        PrivateKaigiTransaction {
+            chain,
+            creation_time_ms: 42,
+            nonce: Some(NonZeroU32::new(7).expect("nonce")),
+            metadata: Metadata::default(),
+            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
+                call: PrivateKaigiTemplate {
+                    id: KaigiId::new(
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
+                        Name::from_str("private-room").expect("call"),
+                    ),
+                    title: Some("Private".to_owned()),
+                    description: None,
+                    max_participants: Some(2),
+                    gas_rate_per_minute: 5,
+                    metadata: Metadata::default(),
+                    scheduled_start_ms: None,
+                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                    room_policy: KaigiRoomPolicy::Authenticated,
+                    relay_manifest: None,
+                },
+            }),
+            artifacts: PrivateKaigiArtifacts {
+                commitment: KaigiParticipantCommitment {
+                    commitment: Hash::new(b"host-commitment"),
+                    alias_tag: Some("host".to_owned()),
+                },
+                nullifier: KaigiParticipantNullifier {
+                    digest: Hash::new(b"private-kaigi-nullifier"),
+                    issued_at_ms: 42,
+                },
+                roster_root: Hash::new(b"roster-root"),
+                proof: vec![0xAA, 0xBB, 0xCC],
+            },
+            fee_spend: PrivateKaigiFeeSpend {
+                asset_definition_id: AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    Name::from_str("xor").expect("name"),
+                ),
+                anchor_root: Hash::new(b"anchor-root"),
+                nullifiers: vec![[0x11; 32]],
+                output_commitments: vec![[0x22; 32]],
+                encrypted_change_payloads: vec![vec![0x33, 0x44]],
+                proof: vec![0x55, 0x66],
+            },
+        }
     }
 
     #[test]

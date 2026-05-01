@@ -78,6 +78,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Rerun the stepped single-host sweep.
   - Repeat permissioned and NPoS passes on the same hardware envelope and compare against the archived `25-50 TPS` / `75-100 TPS` baselines.
   - Record the new knee points and any regressions in `status.md`.
+- Validate the 20k hot-path cache push under the release Izanami profile.
+  - Rebuild release `izanami` and `iroha3d` after the cache changes.
+  - Rerun 4-peer no-fault prebuilt `5k`, `10k`, and `20k TPS` rows as needed to locate the new knee.
+  - Capture a sampled 20k run and record the remaining top stacks before tuning block validation or consensus worker budgets again.
+  - Investigate the latest 20k rerun's height-9 RBC payload/materialization gap and commit-QC-before-validation deferral before treating queue capacity or Torii ingress as the primary remaining limiter.
 - Turn the proposal-gap / queue-pressure investigation into a reproducible measurement pass.
   - Rerun the 7-peer load that previously advanced slowly or stalled under backlog.
   - Sample `/v1/sumeragi/status`, pending-block / commit-inflight metrics, and queue depths throughout the run.

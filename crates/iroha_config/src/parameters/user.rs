@@ -14731,6 +14731,9 @@ pub struct Torii {
     /// Maximum concurrent public Soracloud local-read executions.
     #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT")]
     pub soracloud_public_max_inflight: NonZeroUsize,
+    /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
+    #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_RESPONSE_BYTES")]
+    pub soracloud_public_max_response_bytes: Bytes<u64>,
     /// Signed Soracloud mutation rate per account+origin (tokens/sec). None disables.
     pub soracloud_mutation_rate_per_account_origin_per_sec: Option<u32>,
     /// Signed Soracloud mutation burst per account+origin (tokens). None disables.
@@ -15332,6 +15335,7 @@ impl Torii {
                 .or(super::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP)
                 .and_then(std::num::NonZeroU32::new),
             soracloud_public_max_inflight: self.soracloud_public_max_inflight,
+            soracloud_public_max_response_bytes: self.soracloud_public_max_response_bytes,
             soracloud_mutation_rate_per_account_origin_per_sec: self
                 .soracloud_mutation_rate_per_account_origin_per_sec
                 .or(super::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC)

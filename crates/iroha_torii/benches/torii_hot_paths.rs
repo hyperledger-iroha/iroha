@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
     kura::Kura,
@@ -188,6 +188,99 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
     });
 }
 
+fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
+    let chain_id: Arc<ChainId> = Arc::new(
+        "torii_hot_path_sustained_enqueue_bench_chain"
+            .parse()
+            .expect("valid chain id"),
+    );
+    let tx_state = Arc::new(State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    let tx_key_pair = KeyPair::random();
+    let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
+    let telemetry = direct_metrics_telemetry();
+    let counter = AtomicUsize::new(0);
+    let queue_capacity = NonZeroUsize::new(1_000_000).expect("non-zero queue capacity");
+    let queue_cfg = iroha_config::parameters::actual::Queue {
+        capacity: queue_capacity,
+        capacity_per_user: queue_capacity,
+        transaction_time_to_live: Duration::from_secs(600),
+        ..Default::default()
+    };
+
+    let make_tx = |index: usize| {
+        let instruction = Log::new(
+            Level::INFO,
+            format!("torii-hot-path-sustained-enqueue-bench-{index}"),
+        );
+        TransactionBuilder::new(chain_id.as_ref().clone(), tx_authority.clone())
+            .with_instructions([InstructionBox::from(instruction)])
+            .sign(tx_key_pair.private_key())
+    };
+
+    let mut group = c.benchmark_group("torii_transaction_enqueue_sustained_pressure");
+    for backlog in [1_000usize, 10_000, 20_000] {
+        let (events, _) = tokio::sync::broadcast::channel(queue_capacity.get());
+        let queue = Arc::new(Queue::from_config(queue_cfg, events));
+
+        for _ in 0..backlog {
+            let index = counter.fetch_add(1, Ordering::Relaxed);
+            let tx = make_tx(index);
+            let accepted = accept_transaction_for_ingress_for_bench(
+                Arc::clone(&chain_id),
+                Arc::clone(&tx_state),
+                tx,
+                &telemetry,
+            )
+            .expect("prefill transaction admission succeeds");
+            queue
+                .push(accepted, tx_state.view())
+                .expect("prefill enqueue succeeds");
+        }
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(backlog),
+            &backlog,
+            |b, _backlog| {
+                b.iter_batched(
+                    || {
+                        let index = counter.fetch_add(1, Ordering::Relaxed);
+                        make_tx(index)
+                    },
+                    |tx| {
+                        let accepted = accept_transaction_for_ingress_for_bench(
+                            Arc::clone(&chain_id),
+                            Arc::clone(&tx_state),
+                            tx,
+                            &telemetry,
+                        )
+                        .expect("transaction admission succeeds");
+                        let decision = queue
+                            .push(accepted, tx_state.view())
+                            .expect("sustained enqueue succeeds");
+
+                        let mut guards = Vec::new();
+                        queue.get_transactions_for_block(
+                            &tx_state.view(),
+                            NonZeroUsize::new(1).expect("non-zero block limit"),
+                            &mut guards,
+                        );
+
+                        std::hint::black_box(decision);
+                        std::hint::black_box(queue.pressure_snapshot());
+                        drop(guards);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_rate_limiter(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let distinct_limiter = BenchRateLimiter::new(Some(1_000_000), Some(1_000_000));
@@ -238,6 +331,7 @@ fn main() {
     bench_query_find_parameters(&mut c);
     bench_transaction_admission(&mut c);
     bench_transaction_handle_enqueue(&mut c);
+    bench_transaction_enqueue_sustained_pressure(&mut c);
     bench_rate_limiter(&mut c);
     c.final_summary();
 }

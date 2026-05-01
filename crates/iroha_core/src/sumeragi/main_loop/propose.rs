@@ -1595,6 +1595,8 @@ impl Actor {
         tx_sizes = filtered_sizes;
 
         if transactions.len() > 1 {
+            // Lane interleaving is a budget-selection policy only. The default block builder
+            // still canonicalizes normal-lane payload order by entrypoint hash for consensus.
             let order = interleave_lane_indices(&routing_decisions);
 
             if order.iter().enumerate().any(|(idx, &value)| idx != value) {
@@ -1625,7 +1627,7 @@ impl Actor {
             if !work.has_work() {
                 if allow_recovery_heartbeat {
                     let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
-                    let encoded_len = heartbeat.as_ref().encode().len();
+                    let encoded_len = heartbeat.encoded_len();
                     transactions.push(heartbeat);
                     routing_decisions.push(RoutingDecision::default());
                     tx_sizes.push(encoded_len);
@@ -1786,7 +1788,7 @@ impl Actor {
         let assembly_result: Result<()> = (|| {
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
-                    tx_sizes.push(tx.as_ref().encode().len());
+                    tx_sizes.push(tx.encoded_len());
                 }
             }
             let (

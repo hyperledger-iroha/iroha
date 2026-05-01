@@ -2338,11 +2338,12 @@ fn decode_gossip_transaction_payload(
 impl GossipTransaction {
     /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
     pub fn new(tx: AcceptedTransaction<'static>) -> Self {
+        let encoded = tx.signed_bytes();
         let signed: SignedTransaction = tx.into();
         let tx_hash = signed.hash();
         Self {
             signed: Arc::new(signed),
-            encoded: None,
+            encoded,
             tx_hash,
         }
     }
@@ -2350,14 +2351,14 @@ impl GossipTransaction {
     /// Wrap an already-signed transaction with cached default full-frame bytes.
     pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
         let tx_hash = signed.hash();
-        let canonical = Arc::new(encode_signed_transaction(&signed));
+        debug_assert_eq!(
+            encoded.as_slice(),
+            encode_signed_transaction(&signed).as_slice(),
+            "gossip transaction payload cache must contain canonical Norito bytes",
+        );
         Self {
             signed: Arc::new(signed),
-            encoded: Some(if encoded.as_slice() == canonical.as_slice() {
-                encoded
-            } else {
-                canonical
-            }),
+            encoded: Some(encoded),
             tx_hash,
         }
     }

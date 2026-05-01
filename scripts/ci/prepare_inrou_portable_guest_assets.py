@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -21,9 +22,43 @@ from pathlib import Path
 
 DEBIAN_CODENAME = "bookworm"
 DEBIAN_RELEASE = "12"
+DEBIAN_IMAGE_BUILD = "20260413-2447"
 DEBIAN_VARIANT = "genericcloud"
 EFI_SYSTEM_PARTITION = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 SECTOR_SIZE = 512
+PINNED_ARCHIVE_SHA512 = {
+    f"debian-{DEBIAN_RELEASE}-{DEBIAN_VARIANT}-amd64-{DEBIAN_IMAGE_BUILD}.tar.xz": (
+        "1995b19708ba5a7eec0ffb98ddd58dfa0dab09afee96e57bf243b2540688c5b6"
+        "f3d7ec7a3fa7b233beb61e9c2ef4afd1f2164a2b8e19f480e2c7d512d2b1450c"
+    ),
+    f"debian-{DEBIAN_RELEASE}-{DEBIAN_VARIANT}-arm64-{DEBIAN_IMAGE_BUILD}.tar.xz": (
+        "25dc6eb7173b92e6d8243745488405c223d656c974fa4b458cf1b65250b08e"
+        "1ec66a4ba92864ca84ed6e06d96d3592008ef49d3e438c4b63b70f86f5681c09c7"
+    ),
+}
+DEBIAN_KEYRING_ENV = "DEBIAN_ARCHIVE_KEYRING"
+DEBIAN_KEYRING_CANDIDATES = (
+    "/usr/share/keyrings/debian-archive-keyring.gpg",
+    "/usr/share/keyrings/debian-cloud-images-archive-keyring.gpg",
+    "/usr/share/keyrings/debian-cloud-images-keyring.gpg",
+    "/usr/share/keyrings/debian-role-keys.gpg",
+    "/etc/apt/trusted.gpg.d/debian-archive-bookworm-stable.gpg",
+    "/etc/apt/trusted.gpg.d/debian-archive-bookworm-security-automatic.gpg",
+    "/etc/apt/trusted.gpg.d/debian-archive-bookworm-automatic.gpg",
+    "/opt/homebrew/share/keyrings/debian-archive-keyring.gpg",
+    "/usr/local/share/keyrings/debian-archive-keyring.gpg",
+)
+
+
+def default_image_base_url() -> str:
+    return (
+        f"https://cloud.debian.org/images/cloud/"
+        f"{DEBIAN_CODENAME}/{DEBIAN_IMAGE_BUILD}"
+    )
+
+
+def debian_archive_name(deb_arch: str) -> str:
+    return f"debian-{DEBIAN_RELEASE}-{DEBIAN_VARIANT}-{deb_arch}-{DEBIAN_IMAGE_BUILD}.tar.xz"
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,6 +88,22 @@ def parse_args() -> argparse.Namespace:
         "--print-env",
         action="store_true",
         help="print shell exports for the prepared IROHA_INROU_PORTABLE_* paths",
+    )
+    parser.add_argument(
+        "--image-base-url",
+        default=default_image_base_url(),
+        help=(
+            "base URL for Debian cloud image assets; defaults to the pinned "
+            f"{DEBIAN_CODENAME} build {DEBIAN_IMAGE_BUILD}"
+        ),
+    )
+    parser.add_argument(
+        "--debian-keyring",
+        type=Path,
+        help=(
+            "GPG keyring used to verify SHA512SUMS.sign; defaults to "
+            f"${DEBIAN_KEYRING_ENV} or common Debian archive keyring paths"
+        ),
     )
     return parser.parse_args()
 
@@ -86,6 +137,16 @@ def find_tool(name: str) -> str:
     )
 
 
+def find_gpg_tool() -> str:
+    for name in ("gpgv", "gpg"):
+        if resolved := shutil.which(name):
+            return resolved
+    raise SystemExit(
+        "required GPG verifier `gpgv` or `gpg` was not found; install GnuPG "
+        "before preparing Inrou PortableVm guest assets"
+    )
+
+
 def run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, check=check, text=True, capture_output=True)
 
@@ -98,6 +159,16 @@ def download(url: str, destination: Path) -> None:
     with urllib.request.urlopen(url) as response, temporary.open("wb") as out:
         shutil.copyfileobj(response, out, length=1024 * 1024)
     temporary.replace(destination)
+
+
+def download_optional_signature(url: str, destination: Path) -> bool:
+    try:
+        download(url, destination)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+    return True
 
 
 def sha512(path: Path) -> str:
@@ -124,6 +195,98 @@ def verify_archive(archive: Path, sums_path: Path) -> None:
     actual = sha512(archive)
     if actual.lower() != expected.lower():
         raise SystemExit(f"SHA512 mismatch for {archive}: expected {expected}, got {actual}")
+
+
+def verify_pinned_archive(archive: Path) -> None:
+    expected = PINNED_ARCHIVE_SHA512.get(archive.name)
+    if expected is None:
+        raise SystemExit(
+            f"{archive.name} has no pinned SHA512 digest and SHA512SUMS was not GPG verified; "
+            "refusing to use unsigned Debian guest assets"
+        )
+    actual = sha512(archive)
+    if actual.lower() != expected.lower():
+        raise SystemExit(
+            f"pinned SHA512 mismatch for {archive}: expected {expected}, got {actual}"
+        )
+
+
+def resolve_debian_keyrings(configured: Path | None = None) -> list[Path]:
+    if configured is not None:
+        keyring = configured.expanduser().resolve()
+        if not keyring.is_file():
+            raise SystemExit(f"--debian-keyring does not exist or is not a file: {keyring}")
+        return [keyring]
+
+    candidates: list[Path] = []
+    if env_value := os.environ.get(DEBIAN_KEYRING_ENV):
+        candidates.extend(Path(value).expanduser() for value in env_value.split(os.pathsep))
+    candidates.extend(Path(value) for value in DEBIAN_KEYRING_CANDIDATES)
+
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if not str(candidate):
+            continue
+        path = candidate.expanduser().resolve()
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        resolved.append(path)
+    if resolved:
+        return resolved
+
+    raise SystemExit(
+        "Debian SHA512SUMS signature verification requires a Debian archive "
+        "or cloud-image GPG keyring. Install `debian-archive-keyring`, set "
+        f"${DEBIAN_KEYRING_ENV}, or pass --debian-keyring."
+    )
+
+
+def verify_signed_sums(
+    sums_path: Path,
+    signature_path: Path,
+    keyrings: list[Path],
+    gpg_tool: str,
+) -> None:
+    keyring_args = [
+        value
+        for keyring in keyrings
+        for value in ("--keyring", str(keyring))
+    ]
+    if Path(gpg_tool).name == "gpgv":
+        command = [gpg_tool, *keyring_args, str(signature_path), str(sums_path)]
+    else:
+        command = [
+            gpg_tool,
+            "--batch",
+            "--no-default-keyring",
+            *keyring_args,
+            "--verify",
+            str(signature_path),
+            str(sums_path),
+        ]
+    try:
+        run(command)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or str(error)).strip()
+        raise SystemExit(
+            f"failed to verify Debian SHA512SUMS signature with {gpg_tool}: {detail}"
+        ) from error
+
+
+def verify_debian_sums_signature_if_available(
+    base_url: str,
+    sums_path: Path,
+    signature_path: Path,
+    configured_keyring: Path | None,
+) -> bool:
+    if not download_optional_signature(f"{base_url}/SHA512SUMS.sign", signature_path):
+        return False
+    gpg_tool = find_gpg_tool()
+    debian_keyrings = resolve_debian_keyrings(configured_keyring)
+    verify_signed_sums(sums_path, signature_path, debian_keyrings, gpg_tool)
+    return True
 
 
 def extract_disk(archive: Path, disk: Path, force: bool) -> None:
@@ -247,10 +410,11 @@ def main() -> None:
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    base_url = f"https://cloud.debian.org/images/cloud/{DEBIAN_CODENAME}/latest"
-    archive_name = f"debian-{DEBIAN_RELEASE}-{DEBIAN_VARIANT}-{deb_arch}.tar.xz"
+    base_url = args.image_base_url.rstrip("/")
+    archive_name = debian_archive_name(deb_arch)
     archive = output_dir / archive_name
     sums = output_dir / "SHA512SUMS"
+    sums_signature = output_dir / "SHA512SUMS.sign"
     disk = output_dir / "disk.raw"
     rootfs = output_dir / f"rootfs-{guest_arch}.ext4"
     kernel = output_dir / f"vmlinux-{guest_arch}"
@@ -260,8 +424,14 @@ def main() -> None:
     tune2fs = find_tool("tune2fs")
 
     download(f"{base_url}/SHA512SUMS", sums)
+    sums_verified = verify_debian_sums_signature_if_available(
+        base_url, sums, sums_signature, args.debian_keyring
+    )
     download(f"{base_url}/{archive_name}", archive)
-    verify_archive(archive, sums)
+    if sums_verified:
+        verify_archive(archive, sums)
+    else:
+        verify_pinned_archive(archive)
     extract_disk(archive, disk, args.force)
     offset, length = root_partition_range(disk)
     copy_range(disk, rootfs, offset, length, args.force)

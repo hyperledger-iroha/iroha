@@ -2296,7 +2296,7 @@ impl Actor {
             }
             return Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key));
         }
-        let (block, payload_hash) = {
+        let (block, payload_hash, payload_bytes) = {
             let Some(pending) = self.pending.pending_blocks.get(&key.0) else {
                 return Ok(false);
             };
@@ -2309,10 +2309,13 @@ impl Actor {
             ) {
                 return Ok(false);
             }
-            (pending.block.clone(), pending.payload_hash)
+            (
+                pending.block.clone(),
+                pending.payload_hash,
+                pending.payload_bytes().to_vec(),
+            )
         };
         if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-            let payload_bytes = block_payload_bytes(&block);
             let payload_len = payload_bytes.len();
             let work = RbcSeedWork {
                 key,

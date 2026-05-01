@@ -1583,7 +1583,7 @@ impl Actor {
                     }
                 } else {
                     pending.mark_kura_persisted();
-                    pending.block = committed_block.into();
+                    pending.set_block(committed_block.into());
                     self.pending.pending_blocks.insert(block_hash, pending);
                 }
             }
@@ -1676,7 +1676,7 @@ impl Actor {
                             availability_timeout_ms = availability_timeout.as_millis(),
                             "deferring quorum reschedule while awaiting local payload"
                         );
-                        pending.block = failed_block;
+                        pending.set_block(failed_block);
                         self.pending.pending_blocks.insert(block_hash, pending);
                     } else if self.rbc_availability_unresolved_for_reschedule(
                         (block_hash, pending_height, pending_view),
@@ -1692,7 +1692,7 @@ impl Actor {
                             quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                             "deferring quorum reschedule while RBC availability is unresolved"
                         );
-                        pending.block = failed_block;
+                        pending.set_block(failed_block);
                         self.pending.pending_blocks.insert(block_hash, pending);
                     } else {
                         let queue_depths = super::status::worker_queue_depth_snapshot();
@@ -1707,7 +1707,7 @@ impl Actor {
                                 vote_rx_depth = queue_depths.vote_rx,
                                 "deferring quorum reschedule while vote queue is backlogged"
                             );
-                            pending.block = failed_block;
+                            pending.set_block(failed_block);
                             self.pending.pending_blocks.insert(block_hash, pending);
                         } else if pending.reschedule_due(now, reschedule_backoff) {
                             reschedule_quorum = Some((
@@ -1719,7 +1719,7 @@ impl Actor {
                                 quorum_timeout,
                             ));
                         } else {
-                            pending.block = failed_block;
+                            pending.set_block(failed_block);
                             self.pending.pending_blocks.insert(block_hash, pending);
                         }
                     }
@@ -1873,7 +1873,7 @@ impl Actor {
                             ?error,
                             "Failed to commit block; keeping it pending for retry"
                         );
-                        pending.block = failed_block;
+                        pending.set_block(failed_block);
                         self.pending.pending_blocks.insert(block_hash, pending);
                     }
                 }

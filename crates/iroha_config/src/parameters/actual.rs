@@ -5404,6 +5404,8 @@ pub struct Torii {
     pub soracloud_public_burst_per_ip: Option<NonZeroU32>,
     /// Maximum concurrent public Soracloud local-read executions.
     pub soracloud_public_max_inflight: NonZeroUsize,
+    /// Maximum hosted Soracloud response body buffered for P2P proxy forwarding.
+    pub soracloud_public_max_response_bytes: Bytes<u64>,
     /// Optional signed Soracloud mutation rate per account+origin (tokens/sec).
     pub soracloud_mutation_rate_per_account_origin_per_sec: Option<NonZeroU32>,
     /// Optional signed Soracloud mutation burst per account+origin (tokens).

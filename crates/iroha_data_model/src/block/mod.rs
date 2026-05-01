@@ -109,12 +109,17 @@ impl SignedBlock {
         header: BlockHeader,
         transactions: Vec<SignedTransaction>,
     ) -> SignedBlock {
+        let external_entrypoints = transactions
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
                 transactions,
-                external_entrypoints: Vec::new(),
+                external_entrypoints,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -135,12 +140,17 @@ impl SignedBlock {
         transactions: Vec<SignedTransaction>,
         da_commitments: Option<DaCommitmentBundle>,
     ) -> SignedBlock {
+        let external_entrypoints = transactions
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
         SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload: BlockPayload {
                 header,
                 transactions,
-                external_entrypoints: Vec::new(),
+                external_entrypoints,
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -217,7 +227,7 @@ impl SignedBlock {
         let axt_policy_snapshot =
             axt_policy_snapshot.map(crate::nexus::AxtPolicySnapshot::with_computed_version);
         self.result = Some(BlockResult {
-            external_entrypoints,
+            external_entrypoints: Vec::new(),
             time_triggers,
             merkle,
             result_merkle,
@@ -472,7 +482,7 @@ impl SignedBlock {
         };
 
         let result = BlockResult {
-            external_entrypoints,
+            external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             merkle: entry_merkle,
             result_merkle,
