@@ -3932,6 +3932,12 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
     public let p2pRebroadcastSkippedTotal: UInt64
     public let p2pAuthFailuresTotal: UInt64
     public let p2pTtlDropsTotal: UInt64
+    public let p2pUnknownSessionDropsTotal: UInt64
+    public let p2pSessionClaimsInTotal: UInt64
+    public let p2pSessionClaimsInstalledTotal: UInt64
+    public let p2pSessionClaimConflictsTotal: UInt64
+    public let p2pRoleConsumedTotal: UInt64
+    public let p2pSessionTerminatedTotal: UInt64
     public let raw: [String: ToriiJSONValue]
 
     public init(raw: [String: ToriiJSONValue]) throws {
@@ -3956,6 +3962,12 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
         p2pRebroadcastSkippedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_rebroadcast_skipped_total", field: "p2p_rebroadcast_skipped_total")
         p2pAuthFailuresTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_auth_failures_total", field: "p2p_auth_failures_total")
         p2pTtlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_ttl_drops_total", field: "p2p_ttl_drops_total")
+        p2pUnknownSessionDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_unknown_session_drops_total", field: "p2p_unknown_session_drops_total")
+        p2pSessionClaimsInTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_claims_in_total", field: "p2p_session_claims_in_total")
+        p2pSessionClaimsInstalledTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_claims_installed_total", field: "p2p_session_claims_installed_total")
+        p2pSessionClaimConflictsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_claim_conflicts_total", field: "p2p_session_claim_conflicts_total")
+        p2pRoleConsumedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_role_consumed_total", field: "p2p_role_consumed_total")
+        p2pSessionTerminatedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_terminated_total", field: "p2p_session_terminated_total")
         let perIpRaw = try ToriiConnectJSON.objectsArray(raw,
                                                          key: "per_ip_sessions",
                                                          field: "per_ip_sessions")

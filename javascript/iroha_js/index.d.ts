@@ -2701,6 +2701,12 @@ export interface ConnectStatusSnapshot {
   p2pRebroadcastSkippedTotal: number;
   p2pAuthFailuresTotal: number;
   p2pTtlDropsTotal: number;
+  p2pUnknownSessionDropsTotal: number;
+  p2pSessionClaimsInTotal: number;
+  p2pSessionClaimsInstalledTotal: number;
+  p2pSessionClaimConflictsTotal: number;
+  p2pRoleConsumedTotal: number;
+  p2pSessionTerminatedTotal: number;
 }
 
 export interface ConnectSessionResponse {
