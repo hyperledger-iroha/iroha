@@ -5031,7 +5031,7 @@ fn address_convert_json_rejects_domain_suffix() {
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
-    let literal = format!("{i105}@nexus");
+    let literal = format!("{i105}@universal");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
