@@ -32,7 +32,7 @@ Iroha Torii нь WalletConnect загварын нэмэлт WebSocket төгс�
 - `CONNECT_DEDUPE_CAP` (ашиглах; анхдагч: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; анхдагч: `true`)
 - `CONNECT_RELAY_STRATEGY` (мөр; анхдагч: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; анхдагч: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; анхдагч: `8`)
 
 Тэмдэглэл:
 

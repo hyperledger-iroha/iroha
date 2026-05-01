@@ -2,6 +2,26 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Iroha Connect default relay TTL restored
+
+- Changed the default Connect P2P relay TTL from `0` to `8` hops so the
+  default `broadcast` relay strategy actually rebroadcasts over an attached
+  Iroha P2P handle. Operators can still set `CONNECT_P2P_TTL_HOPS=0` to
+  disable cross-node Connect rebroadcast explicitly.
+- Tightened Connect status so zero-TTL broadcast configuration reports an
+  effective `local_only` strategy while preserving the normalized configured
+  strategy.
+- Updated Connect configuration docs, translated default-value references, and
+  the config default fixture.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_torii --test connect_gating --features ws_integration_tests connect_ws_broadcast -- --nocapture`
+  - `cargo test -p iroha_torii --lib broadcast_strategy_with_zero_ttl_reports_local_only_when_p2p_attached -- --nocapture`
+  - `cargo test -p iroha_config minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_torii --test connect_gating --features ws_integration_tests -- --nocapture`
+
 ## 2026-05-01 Iroha Connect P2P rendezvous claims
 
 - Added versioned Connect P2P control messages for relay envelopes, session
@@ -48,27 +68,38 @@ Last updated: 2026-05-01
   eventually clear. Payload recovery, quorum retransmit, future-slot reanchor,
   and promoted second-slot behavior now have focused follow-through
   properties.
+- Added late post-GST future-evidence arrival, future-evidence preservation,
+  and promotion-freshness checks so a second-slot quorum cannot be silently
+  dropped or promoted with stale active progress flags.
 - Made Apalache bounds explicit in `scripts/formal/sumeragi_apalache.sh` for
   every mode, kept existing modes backward-compatible, added payload-recovery,
-  retransmit-follow-through, and future-promotion bug modes, and promoted
-  `frontier-wide` plus all expected-failure mutations into normal formal CI.
+  retransmit-follow-through, future-promotion, future-reanchor-clear,
+  future-evidence-drop, promotion-reset, and future-stale-owner bug modes, and
+  promoted `frontier-wide`, a small TLC cross-check, and all expected-failure
+  mutations into normal formal CI. A scheduled/manual GitHub Actions workflow
+  now runs the longer `frontier-nightly` bound.
 - Updated the English Sumeragi formal README with the two-slot proof scope,
   runner modes, CI behavior, and model-to-implementation assumption map.
   Translated `docs/formal/sumeragi/README.*.md` bodies were intentionally not
   refreshed in this slice, so they may remain source-current stale until a
   separate translation refresh.
+- Added focused Rust bridge regressions for future new-view reanchor while the
+  vote queue is backlogged and while the old frontier recovery owner is stale.
 - No runtime consensus code changed in this hardening pass.
 - Validation completed with local Apalache `0.52.2`:
-  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh`
+  - `cargo fmt --all`
   - `bash scripts/formal/sumeragi_apalache.sh frontier-fast`
   - `bash scripts/formal/sumeragi_apalache.sh frontier-deep`
   - `bash scripts/formal/sumeragi_apalache.sh frontier-wide`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-nightly`
   - `bash ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash scripts/formal/sumeragi_tlc.sh frontier-small`
   - `bash ci/check_sumeragi_formal.sh`
-  - `cargo test -p iroha_core reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
-  - `cargo test -p iroha_core reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
-  - `cargo test -p iroha_core reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
-  - `cargo test -p iroha_core pacemaker_reanchors_frontier_when_future_new_view_quorum_exists -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
+  - `cargo test -p iroha_core pacemaker_reanchors -- --nocapture`
   - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal`
 
 ## 2026-04-30 Sumeragi frontier recovery formal model

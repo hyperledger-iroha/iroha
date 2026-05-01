@@ -16672,7 +16672,7 @@ pub struct Connect {
         default = "defaults::connect::RELAY_STRATEGY.to_string()"
     )]
     pub relay_strategy: String,
-    /// Optional hop TTL for relay (0 disables; not enforced in v0 flood).
+    /// Hop TTL for Connect relay envelopes (0 disables cross-node rebroadcast).
     #[config(
         env = "CONNECT_P2P_TTL_HOPS",
         default = "defaults::connect::P2P_TTL_HOPS"

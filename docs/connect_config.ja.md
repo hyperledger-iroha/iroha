@@ -29,7 +29,7 @@ Iroha Torii は、`connect` Cargo フィーチャ（デフォルトで有効）�
 - `CONNECT_DEDUPE_CAP`（usize、既定値: `8192`）
 - `CONNECT_RELAY_ENABLED`（bool、既定値: `true`）
 - `CONNECT_RELAY_STRATEGY`（文字列、既定値: `"broadcast"`）
-- `CONNECT_P2P_TTL_HOPS`（u8、既定値: `0`）
+- `CONNECT_P2P_TTL_HOPS`（u8、既定値: `8`）
 
 補足:
 

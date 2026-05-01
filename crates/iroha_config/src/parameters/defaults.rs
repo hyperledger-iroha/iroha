@@ -2389,8 +2389,8 @@ pub mod connect {
     pub const RELAY_ENABLED: bool = true;
     /// Relay strategy string: "broadcast" or "local_only".
     pub const RELAY_STRATEGY: &str = "broadcast";
-    /// Optional hop TTL for relay (0 disables, not enforced in v0 flood).
-    pub const P2P_TTL_HOPS: u8 = 0;
+    /// Default hop TTL for Connect relay envelopes (0 disables cross-node rebroadcast).
+    pub const P2P_TTL_HOPS: u8 = 8;
 }
 
 /// External fraud-risk monitoring defaults.

@@ -102,6 +102,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
     English-only frontier formal update so `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
     can be restored for formal docs.
+  - The Sumeragi frontier model, mutation suite, TLC cross-check, and longer
+    nightly bound are wired; the remaining formal-doc task is translation
+    refresh only.
   - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Add a recorded capture gate for the default `sora-temple` petal styles.

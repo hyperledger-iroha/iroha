@@ -36,7 +36,7 @@ WalletConnect и минимальный встроенный relay, когда f
 - `CONNECT_DEDUPE_CAP` (`usize`; по умолчанию `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; по умолчанию `true`)
 - `CONNECT_RELAY_STRATEGY` (string; по умолчанию `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (`u8`; по умолчанию `0`)
+- `CONNECT_P2P_TTL_HOPS` (`u8`; по умолчанию `8`)
 
 Примечания:
 
