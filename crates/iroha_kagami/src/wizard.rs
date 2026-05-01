@@ -143,9 +143,10 @@ impl ProfileDefaults {
                 p2p_port: 1337,
                 torii_port: 8080,
                 host: "nexus.mof2.sora.org",
-                trusted_peers: &[
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@nexus.mof2.sora.org:1337",
-                ],
+                trusted_peers: &[concat!(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@",
+                    "nexus.mof2.sora.org:1337"
+                )],
                 config_template: Some("configs/soranexus/nexus/config.toml"),
                 genesis_template: "configs/soranexus/nexus/genesis.json",
             },

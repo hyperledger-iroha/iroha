@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **מחקו סשנים ב-staging.** מחקו תמיד סשני preview כדי שהתרעות עומק התור יישארו משמעותיות:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    בריצות Swift בלבד, קראו לאותו endpoint דרך helper של Rust/CLI.
 2. **נקו יומנים.** מחקו כל יומן תור שנשמר (`ApplicationSupport/ConnectQueue/<sid>.to`, מאגרי IndexedDB וכו') כדי שהריצה הבאה תתחיל נקיה. תעדו את hash הקובץ לפני מחיקה אם צריך לאבחן בעיית replay.

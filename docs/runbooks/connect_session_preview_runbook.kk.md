@@ -120,7 +120,7 @@ SDK жол карталарында уәде етілген кезек/теле�
 1. **Кезеңдік сеанстарды жою.** Кезең тереңдігі үшін алдын ала қарау сеанстарын әрқашан жойыңыз.
    дабыл мәнді болып қалады:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Тек Swift сынақтары үшін Rust/CLI көмекшісі арқылы бірдей соңғы нүктеге қоңырау шалыңыз.
 2. **Журналдарды тазалау.** Кез келген тұрақты кезек журналдарын алып тастаңыз

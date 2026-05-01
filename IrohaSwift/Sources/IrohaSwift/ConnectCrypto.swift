@@ -1,10 +1,12 @@
 import Foundation
+import CryptoKit
 
 public enum ConnectCryptoError: Error, LocalizedError, Sendable {
     case bridgeUnavailable
     case invalidPrivateKeyLength(expected: Int, actual: Int)
     case invalidPublicKeyLength(expected: Int, actual: Int)
     case invalidSessionIdentifierLength(expected: Int, actual: Int)
+    case invalidRelayToken
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +20,8 @@ public enum ConnectCryptoError: Error, LocalizedError, Sendable {
             return "Connect public keys must be \(expected) bytes (got \(actual))."
         case let .invalidSessionIdentifierLength(expected, actual):
             return "Connect session identifiers must be \(expected) bytes (got \(actual))."
+        case .invalidRelayToken:
+            return "Connect relay tokens must not be empty."
         }
     }
 }
@@ -77,6 +81,7 @@ public struct ConnectDirectionKeys: Sendable {
 
 public enum ConnectCrypto {
     private static let keyLength = 32
+    private static let relayAuthDomain = Data("iroha-connect|relay-auth|v1".utf8)
 
     private static func ensureBridgeAvailable() throws {
         if !NoritoNativeBridge.shared.isConnectCryptoAvailable {
@@ -123,5 +128,18 @@ public enum ConnectCrypto {
             throw ConnectCryptoError.bridgeUnavailable
         }
         return ConnectDirectionKeys(appToWallet: derived.appKey, walletToApp: derived.walletKey)
+    }
+
+    public static func relayAuthHash(sessionID: Data, relayToken: String) throws -> Data {
+        guard sessionID.count == keyLength else {
+            throw ConnectCryptoError.invalidSessionIdentifierLength(expected: keyLength, actual: sessionID.count)
+        }
+        guard !relayToken.isEmpty else {
+            throw ConnectCryptoError.invalidRelayToken
+        }
+        var payload = relayAuthDomain
+        payload.append(sessionID)
+        payload.append(contentsOf: relayToken.utf8)
+        return Data(SHA256.hash(data: payload))
     }
 }

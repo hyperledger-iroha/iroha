@@ -120,7 +120,7 @@ SDK yol xəritələrində vəd edilən növbə/temetriya qarmaqlarını tətbiq 
 1. **Mərhələli sessiyaları silin.** Həmişə önizləmə seanslarını silin ki, növbə dərinliyi olsun
    həyəcan siqnalları mənalı olaraq qalır:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Yalnız Swift testləri üçün Rust/CLI köməkçisi vasitəsilə eyni son nöqtəyə zəng edin.
 2. **Jurnalları təmizləyin.** Davamlı növbə jurnallarını silin

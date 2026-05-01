@@ -78,9 +78,9 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --features "${FEATURES}" \
     --bins
 
-RUN <<EOF
+RUN --mount=type=cache,target=/app/target <<EOF
   set -ex
-  mkdir ./bins
+  mkdir -p ./bins
   target_triple="$(xx-cargo --print-target-triple)"
   bins="${BINARIES}"
   if [ -z "${bins}" ]; then
@@ -96,6 +96,10 @@ RUN <<EOF
     mv "${bin_path}" ./bins/
   done
 EOF
+
+FROM scratch AS bins
+
+COPY --from=xx-build /app/bins/ /
 
 FROM alpine
 

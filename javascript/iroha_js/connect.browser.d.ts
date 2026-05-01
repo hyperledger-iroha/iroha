@@ -45,12 +45,19 @@ export interface BrowserConnectSessionResponse {
   app_uri: string;
   token_app: string;
   token_wallet: string;
+  token_management: string;
+  token_relay: string;
   extra?: Record<string, unknown>;
   raw?: Record<string, unknown>;
 }
 
 export interface BrowserConnectFetchOptions {
   fetchImpl?: typeof fetch;
+}
+
+export interface BrowserConnectManagementOptions extends BrowserConnectFetchOptions {
+  tokenManagement?: string;
+  token_management?: string;
 }
 
 export interface BrowserConnectRegisterOptions extends BrowserConnectFetchOptions {
@@ -60,6 +67,7 @@ export interface BrowserConnectRegisterOptions extends BrowserConnectFetchOption
 export interface BrowserConnectSocketOptions {
   webSocketImpl?: typeof WebSocket;
   protocols?: string | ReadonlyArray<string>;
+  allowInsecure?: boolean;
 }
 
 export interface BrowserConnectPermissions {
@@ -78,12 +86,13 @@ export interface BrowserConnectAppMeta {
 export interface BrowserConnectApproval {
   accountId: string;
   walletPublicKey: Uint8Array;
+  signature: Uint8Array;
 }
 
 export interface BrowserConnectAppSessionOptions extends BrowserConnectSocketOptions {
   baseUrl: string;
   preview: BrowserConnectSessionPreview;
-  session: Pick<BrowserConnectSessionResponse, "sid" | "token_app">;
+  session: Pick<BrowserConnectSessionResponse, "sid" | "token_app" | "token_relay">;
   permissions?: BrowserConnectPermissions | null;
   appMeta?: BrowserConnectAppMeta | null;
 }
@@ -131,7 +140,7 @@ export function registerConnectSession(
 export function deleteConnectSession(
   baseUrl: string,
   sid: string,
-  options?: BrowserConnectFetchOptions,
+  options: BrowserConnectManagementOptions,
 ): Promise<void>;
 export function buildConnectTokenProtocol(token: string): string;
 export function resolveConnectLaunchUri(
@@ -153,6 +162,12 @@ export function openConnectWebSocket(
   role?: "app" | "wallet",
   options?: BrowserConnectSocketOptions,
 ): WebSocket;
+export function openConnectWebSocket(options: BrowserConnectSocketOptions & {
+  baseUrl: string;
+  sid: string;
+  token: string;
+  role?: "app" | "wallet";
+}): WebSocket;
 export function createConnectAppSession(
   options: BrowserConnectAppSessionOptions,
 ): BrowserConnectAppSession;

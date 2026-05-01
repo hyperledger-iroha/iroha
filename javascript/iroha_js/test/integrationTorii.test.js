@@ -3796,6 +3796,7 @@ test(
       Object.keys(sanitizedSessionOptions).length === 0 ? undefined : sanitizedSessionOptions;
 
     let createdSid = null;
+    let createdManagementToken = null;
     try {
       const result = await bootstrapConnectPreviewSession(client, {
         chainId,
@@ -3804,6 +3805,7 @@ test(
         sessionOptions,
       });
       createdSid = result.preview.sidBase64Url;
+      createdManagementToken = result.session?.token_management ?? null;
       assert.ok(
         typeof result.preview.walletUri === "string" &&
           result.preview.walletUri.startsWith("iroha://connect"),
@@ -3826,6 +3828,16 @@ test(
         result.session.token_app,
         "app token helper output should match session payload",
       );
+      assert.equal(
+        result.tokens.management,
+        result.session.token_management,
+        "management token helper output should match session payload",
+      );
+      assert.equal(
+        result.tokens.relay,
+        result.session.token_relay,
+        "relay token helper output should match session payload",
+      );
       assert.ok(
         typeof result.session.wallet_uri === "string" &&
           result.session.wallet_uri.startsWith("iroha://connect"),
@@ -3840,9 +3852,12 @@ test(
         `bootstrapConnectPreviewSession registered sid=${result.preview.sidBase64Url}`,
       );
     } finally {
-      if (createdSid) {
+      if (createdSid && createdManagementToken) {
         try {
-          await client.deleteConnectSession(createdSid);
+          await client.deleteConnectSession({
+            sid: createdSid,
+            tokenManagement: createdManagementToken,
+          });
         } catch (error) {
           t.diagnostic(
             `failed to delete connect session ${createdSid}: ${error instanceof Error ? error.message : String(error)}`,
