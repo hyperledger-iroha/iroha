@@ -34,6 +34,11 @@ Notes:
   unintended relay behavior. Torii does not use centralized relay servers. P2P relay frames are
   authenticated with the session `token_relay`; frames with invalid MACs are dropped before dedupe or
   sequence state is updated.
+- When broadcast relay is active and a session is created, Torii gossips a P2P
+  session claim containing token authentication hashes and the relay MAC key to
+  authenticated peers. This lets an app and wallet attach through different
+  Torii nodes for the same session without putting raw app, wallet, or
+  management tokens on the P2P wire.
 - WebSocket ingress validates role→direction mapping (`app` must send `AppToWallet`, `wallet` must
   send `WalletToApp`). Mismatches terminate the session with `connect_role_direction_mismatch` and
   increment `connect.role_direction_mismatch_total`.
@@ -45,7 +50,11 @@ Notes:
 - Public `/v1/connect/status` is redacted and does not expose per-IP session details. Add
   `?sid=<sid>` plus `Authorization: Bearer <token_management>` for token-gated per-session status.
 - `/v1/connect/status` reports top-level P2P counters including `p2p_rebroadcasts_total`,
-  `p2p_rebroadcast_skipped_total`, `p2p_auth_failures_total`, and `p2p_ttl_drops_total`.
+  `p2p_rebroadcast_skipped_total`, `p2p_auth_failures_total`,
+  `p2p_ttl_drops_total`, `p2p_unknown_session_drops_total`,
+  `p2p_session_claims_in_total`, `p2p_session_claims_installed_total`,
+  `p2p_session_claim_conflicts_total`, `p2p_role_consumed_total`, and
+  `p2p_session_terminated_total`.
 - `/v1/connect/status.policy` includes both configured and effective relay mode:
   `relay_strategy` (normalized config), `relay_effective_strategy` (runtime behavior), and
   `relay_p2p_attached` (whether Torii currently has a P2P relay handle). This allows operators to

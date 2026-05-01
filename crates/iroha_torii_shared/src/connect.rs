@@ -340,6 +340,66 @@ pub struct ConnectRelayEnvelopeV1 {
     pub mac: [u8; 32],
 }
 
+/// Session metadata gossiped between Torii peers for Connect rendezvous.
+///
+/// The claim intentionally carries token authentication hashes, not raw role
+/// or management tokens. The relay MAC key is shared with authenticated Iroha
+/// P2P peers so they can verify and forward relay envelopes for this session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectSessionClaimV1 {
+    /// Connect session identifier.
+    pub sid: [u8; 32],
+    /// Hash authorizing the application role's one-time token.
+    pub token_app_hash: [u8; 32],
+    /// Hash authorizing the wallet role's one-time token.
+    pub token_wallet_hash: [u8; 32],
+    /// Hash authorizing the stable management token.
+    pub token_management_hash: [u8; 32],
+    /// Relay MAC key used to authenticate P2P relay envelopes.
+    pub relay_mac_key: [u8; 32],
+    /// Wall-clock expiry timestamp in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
+/// Notification that a one-time Connect role token was consumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectSessionRoleConsumedV1 {
+    /// Connect session identifier.
+    pub sid: [u8; 32],
+    /// Role whose one-time token was consumed.
+    pub role: Role,
+}
+
+/// Notification that a Connect session was terminated on a Torii peer.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectSessionTerminatedV1 {
+    /// Connect session identifier.
+    pub sid: [u8; 32],
+    /// Stable machine-readable termination reason.
+    pub reason: String,
+}
+
+/// Versioned Connect control-plane message carried over Iroha P2P.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref, clippy::large_enum_variant)]
+pub enum ConnectP2pMessageV1 {
+    /// Authenticated frame relay envelope.
+    RelayEnvelope(ConnectRelayEnvelopeV1),
+    /// Session claim enabling multi-Torii rendezvous.
+    SessionClaim(ConnectSessionClaimV1),
+    /// Consumed one-time role token notification.
+    RoleConsumed(ConnectSessionRoleConsumedV1),
+    /// Session termination notification.
+    SessionTerminated(ConnectSessionTerminatedV1),
+}
+
 #[cfg(test)]
 mod signature_tests {
     use super::*;
@@ -957,6 +1017,8 @@ pub type WalletSignature = WalletSignatureV1;
 pub type ConnectFrame = ConnectFrameV1;
 /// Top-level authenticated Connect P2P relay envelope.
 pub type ConnectRelayEnvelope = ConnectRelayEnvelopeV1;
+/// Top-level Connect P2P control-plane message.
+pub type ConnectP2pMessage = ConnectP2pMessageV1;
 /// Plaintext control channel payload used during session lifecycle.
 pub type ConnectControl = ConnectControlV1;
 /// Ciphertext envelope metadata carried in a frame.

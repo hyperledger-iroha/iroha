@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { blake2b } from "@noble/hashes/blake2b";
@@ -23,6 +24,10 @@ import {
   toHex,
 } from "../src/connect.browser.js";
 import { AccountAddress } from "../src/address.js";
+
+const connectVectors = JSON.parse(
+  readFileSync(new URL("../../../fixtures/connect/session_vectors.json", import.meta.url), "utf8"),
+);
 
 class RecordingWebSocket {
   constructor(url, protocols) {
@@ -140,6 +145,36 @@ function relayAuthHash(preview, relayToken) {
     Buffer.from(relayToken, "utf8"),
   ])));
 }
+
+function tokenAuthHash(kind, sidBytes, token) {
+  return Buffer.from(sha256(Buffer.concat([
+    Buffer.from("iroha-connect|token-auth|v1", "utf8"),
+    Buffer.from(kind, "utf8"),
+    Buffer.from(sidBytes),
+    Buffer.from(token, "utf8"),
+  ])));
+}
+
+test("Connect session vector fixture matches browser crypto helpers", () => {
+  const sidBytes = Buffer.from(connectVectors.sid_hex, "hex");
+  const preview = { sidBytes };
+  assert.equal(
+    relayAuthHash(preview, connectVectors.tokens.relay).toString("hex"),
+    connectVectors.relay_auth_hash_hex,
+  );
+  assert.equal(
+    tokenAuthHash("app", sidBytes, connectVectors.tokens.app).toString("hex"),
+    connectVectors.token_hashes.app,
+  );
+  assert.equal(
+    tokenAuthHash("wallet", sidBytes, connectVectors.tokens.wallet).toString("hex"),
+    connectVectors.token_hashes.wallet,
+  );
+  assert.equal(
+    tokenAuthHash("management", sidBytes, connectVectors.tokens.management).toString("hex"),
+    connectVectors.token_hashes.management,
+  );
+});
 
 function approvalPreimage(preview, walletPublicKey, accountId, relayToken) {
   return Buffer.concat([
