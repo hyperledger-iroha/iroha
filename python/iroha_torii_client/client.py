@@ -1286,6 +1286,10 @@ class ConnectStatusPolicy:
     session_ttl_ms: Optional[int]
     frame_max_bytes: Optional[int]
     session_buffer_max_bytes: Optional[int]
+    relay_strategy: Optional[str]
+    relay_effective_strategy: Optional[str]
+    relay_p2p_attached: Optional[bool]
+    p2p_ttl_hops: Optional[int]
     heartbeat_interval_ms: Optional[int]
     heartbeat_miss_tolerance: Optional[int]
     heartbeat_min_interval_ms: Optional[int]
@@ -1310,7 +1314,13 @@ class ConnectStatusSnapshot:
     buffer_drops_total: int
     plaintext_control_drops_total: int
     monotonic_drops_total: int
+    sequence_violation_closes_total: int
+    role_direction_mismatch_total: int
     ping_miss_total: int
+    p2p_rebroadcasts_total: int
+    p2p_rebroadcast_skipped_total: int
+    p2p_auth_failures_total: int
+    p2p_ttl_drops_total: int
     policy: Optional[ConnectStatusPolicy]
 
 
@@ -1323,6 +1333,8 @@ class ConnectSessionInfo:
     app_uri: str
     token_app: str
     token_wallet: str
+    token_management: str
+    token_relay: str
     extra: Dict[str, Any]
 
 
@@ -2998,11 +3010,17 @@ class ToriiClient:
         )
         return self._parse_connect_session(body, context="connect session")
 
-    def delete_connect_session(self, sid: str) -> bool:
+    def delete_connect_session(self, sid: str, token_management: str) -> bool:
         """Delete a Connect session (`DELETE /v1/connect/session/{sid}`)."""
 
-        response = self._request("DELETE", f"/v1/connect/session/{sid}")
-        self._expect_status(response, {200, 202, 204, 404})
+        if not isinstance(token_management, str) or not token_management:
+            raise TypeError("token_management must be a non-empty string")
+        response = self._request(
+            "DELETE",
+            f"/v1/connect/session/{sid}",
+            headers={"Authorization": f"Bearer {token_management}"},
+        )
+        self._expect_status(response, {204, 404})
         return response.status_code != 404
 
     def list_connect_apps(
@@ -5617,7 +5635,31 @@ class ToriiClient:
                 record.get("monotonic_drops_total"),
                 f"{context}.monotonic_drops_total",
             ),
+            sequence_violation_closes_total=ToriiClient._coerce_int(
+                record.get("sequence_violation_closes_total"),
+                f"{context}.sequence_violation_closes_total",
+            ),
+            role_direction_mismatch_total=ToriiClient._coerce_int(
+                record.get("role_direction_mismatch_total"),
+                f"{context}.role_direction_mismatch_total",
+            ),
             ping_miss_total=ToriiClient._coerce_int(record.get("ping_miss_total"), f"{context}.ping_miss_total"),
+            p2p_rebroadcasts_total=ToriiClient._coerce_int(
+                record.get("p2p_rebroadcasts_total"),
+                f"{context}.p2p_rebroadcasts_total",
+            ),
+            p2p_rebroadcast_skipped_total=ToriiClient._coerce_int(
+                record.get("p2p_rebroadcast_skipped_total"),
+                f"{context}.p2p_rebroadcast_skipped_total",
+            ),
+            p2p_auth_failures_total=ToriiClient._coerce_int(
+                record.get("p2p_auth_failures_total"),
+                f"{context}.p2p_auth_failures_total",
+            ),
+            p2p_ttl_drops_total=ToriiClient._coerce_int(
+                record.get("p2p_ttl_drops_total"),
+                f"{context}.p2p_ttl_drops_total",
+            ),
             policy=policy,
         )
 
@@ -5660,6 +5702,19 @@ class ToriiClient:
                 record.get("session_buffer_max_bytes"),
                 context=f"{context}.session_buffer_max_bytes",
             ),
+            relay_strategy=ToriiClient._optional_string(record.get("relay_strategy"), f"{context}.relay_strategy"),
+            relay_effective_strategy=ToriiClient._optional_string(
+                record.get("relay_effective_strategy"),
+                f"{context}.relay_effective_strategy",
+            ),
+            relay_p2p_attached=ToriiClient._optional_bool(
+                record.get("relay_p2p_attached"),
+                f"{context}.relay_p2p_attached",
+            ),
+            p2p_ttl_hops=ToriiClient._coerce_optional_unsigned(
+                record.get("p2p_ttl_hops"),
+                context=f"{context}.p2p_ttl_hops",
+            ),
             heartbeat_interval_ms=ToriiClient._coerce_optional_unsigned(
                 record.get("heartbeat_interval_ms"),
                 context=f"{context}.heartbeat_interval_ms",
@@ -5684,6 +5739,10 @@ class ToriiClient:
                     "session_ttl_ms",
                     "frame_max_bytes",
                     "session_buffer_max_bytes",
+                    "relay_strategy",
+                    "relay_effective_strategy",
+                    "relay_p2p_attached",
+                    "p2p_ttl_hops",
                     "heartbeat_interval_ms",
                     "heartbeat_miss_tolerance",
                     "heartbeat_min_interval_ms",
@@ -5699,12 +5758,19 @@ class ToriiClient:
         app_uri = ToriiClient._require_string(record.get("app_uri"), f"{context}.app_uri")
         token_app = ToriiClient._require_string(record.get("token_app"), f"{context}.token_app")
         token_wallet = ToriiClient._require_string(record.get("token_wallet"), f"{context}.token_wallet")
+        token_management = ToriiClient._require_string(
+            record.get("token_management"),
+            f"{context}.token_management",
+        )
+        token_relay = ToriiClient._require_string(record.get("token_relay"), f"{context}.token_relay")
         known = {
             "sid",
             "wallet_uri",
             "app_uri",
             "token_app",
             "token_wallet",
+            "token_management",
+            "token_relay",
         }
         extra = {key: value for key, value in record.items() if key not in known}
         return ConnectSessionInfo(
@@ -5713,6 +5779,8 @@ class ToriiClient:
             app_uri=app_uri,
             token_app=token_app,
             token_wallet=token_wallet,
+            token_management=token_management,
+            token_relay=token_relay,
             extra=extra,
         )
 

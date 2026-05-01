@@ -120,7 +120,7 @@ translator: machine-google-reviewed
 1. **删除暂存会话。** 始终删除预览会话，以便队列深度
    警报仍然有意义：
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    对于仅 Swift 的测试运行，请通过 Rust/CLI 帮助程序调用相同的端点。
 2. **清除日志。** 删除任何保留的队列日志

@@ -151,6 +151,8 @@ fn controller_for(owner: &AccountId) -> NameControllerV1 {
     NameControllerV1::account(&address)
 }
 
+const DEFAULT_SNS_LEASE_PAYMENT_AMOUNT: u64 = 500_000_000;
+
 fn build_payment_with_amount(payer: AccountId, amount: u64) -> PaymentProofV1 {
     PaymentProofV1 {
         asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
@@ -163,7 +165,7 @@ fn build_payment_with_amount(payer: AccountId, amount: u64) -> PaymentProofV1 {
 }
 
 fn build_payment_with(payer: AccountId) -> PaymentProofV1 {
-    build_payment_with_amount(payer, 120)
+    build_payment_with_amount(payer, DEFAULT_SNS_LEASE_PAYMENT_AMOUNT)
 }
 
 fn build_register_request_with(label: &str, owner: &AccountId) -> RegisterNameRequestV1 {

@@ -2086,7 +2086,15 @@ final class ToriiClientTests: XCTestCase {
                 "buffered_sessions": 2,
                 "total_buffer_bytes": 128,
                 "dedupe_size": 4,
-                "policy": ["ws_max_sessions": 50, "session_ttl_ms": 60000, "relay_enabled": true],
+                "policy": [
+                    "ws_max_sessions": 50,
+                    "session_ttl_ms": 60000,
+                    "relay_enabled": true,
+                    "relay_strategy": "broadcast",
+                    "relay_effective_strategy": "local_only",
+                    "relay_p2p_attached": false,
+                    "p2p_ttl_hops": 2
+                ],
                 "frames_in_total": 11,
                 "frames_out_total": 12,
                 "ciphertext_total": 13,
@@ -2094,7 +2102,13 @@ final class ToriiClientTests: XCTestCase {
                 "buffer_drops_total": 2,
                 "plaintext_control_drops_total": 3,
                 "monotonic_drops_total": 4,
-                "ping_miss_total": 5
+                "sequence_violation_closes_total": 5,
+                "role_direction_mismatch_total": 6,
+                "ping_miss_total": 7,
+                "p2p_rebroadcasts_total": 8,
+                "p2p_rebroadcast_skipped_total": 9,
+                "p2p_auth_failures_total": 10,
+                "p2p_ttl_drops_total": 11
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
@@ -2107,6 +2121,10 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(status.sessionsTotal, 10)
         XCTAssertEqual(status.perIpSessions.first?.ip, "1.1.1.1")
         XCTAssertEqual(status.policy?.wsMaxSessions, 50)
+        XCTAssertEqual(status.policy?.relayStrategy, "broadcast")
+        XCTAssertEqual(status.policy?.p2pTtlHops, 2)
+        XCTAssertEqual(status.sequenceViolationClosesTotal, 5)
+        XCTAssertEqual(status.p2pAuthFailuresTotal, 10)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2134,6 +2152,8 @@ final class ToriiClientTests: XCTestCase {
                 "app_uri": "app://demo",
                 "token_app": "token-app",
                 "token_wallet": "token-wallet",
+                "token_management": "token-management",
+                "token_relay": "token-relay",
                 "custom": true
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
@@ -2144,6 +2164,8 @@ final class ToriiClientTests: XCTestCase {
         let response = try await makeClient().createConnectSession(sid: " abc ", node: "node-1")
         XCTAssertEqual(response.sid, "abc")
         XCTAssertEqual(response.tokenWallet, "token-wallet")
+        XCTAssertEqual(response.tokenManagement, "token-management")
+        XCTAssertEqual(response.tokenRelay, "token-relay")
         XCTAssertEqual(response.extra["custom"], .bool(true))
     }
 
@@ -2151,10 +2173,11 @@ final class ToriiClientTests: XCTestCase {
     func testDeleteConnectSessionHandles404() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/connect/session/sid-1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-management")
             let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: [:])!
             return (response, Data())
         }
-        let deleted = try await makeClient().deleteConnectSession(sid: "sid-1")
+        let deleted = try await makeClient().deleteConnectSession(sid: "sid-1", tokenManagement: "token-management")
         XCTAssertFalse(deleted)
     }
 

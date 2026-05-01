@@ -29445,6 +29445,8 @@ async fn handler_connect_session(
             sid,
             response.token_app.clone(),
             response.token_wallet.clone(),
+            response.token_management.clone(),
+            response.token_relay.clone(),
         )
         .await
         .map_err(|err| match err {
@@ -29462,12 +29464,31 @@ async fn handler_connect_session(
 #[cfg(feature = "connect")]
 async fn handler_connect_session_delete(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(sid_str): axum::extract::Path<String>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
 
     match crate::connect::decode_sid(&sid_str) {
         Ok(sid) => {
+            let token = match parse_authorization_token(&headers) {
+                Ok(Some(token)) => token,
+                Ok(None) => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        "connect: missing management token",
+                    )
+                        .into_response();
+                }
+                Err(response) => return response,
+            };
+            if !app
+                .connect_bus
+                .authorize_management_token(sid, &token)
+                .await
+            {
+                return StatusCode::NOT_FOUND.into_response();
+            }
             let removed = app
                 .connect_bus
                 .clone()
@@ -29777,8 +29798,56 @@ fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Respon
 }
 
 #[cfg(feature = "connect")]
-async fn handler_connect_status(State(app): State<SharedAppState>) -> impl IntoResponse {
+async fn handler_connect_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+
     let bus = app.connect_bus.clone();
+    if let Some(raw) = raw_query.as_deref() {
+        let mut sid_query = None;
+        for pair in raw.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let mut parts = pair.splitn(2, '=');
+            let key = parts.next().unwrap_or_default();
+            let value = parts.next().unwrap_or_default();
+            if key == "sid" {
+                sid_query = Some(match urlencoding::decode(value) {
+                    Ok(value) => value.into_owned(),
+                    Err(_) => {
+                        return (StatusCode::BAD_REQUEST, "connect: invalid sid query")
+                            .into_response();
+                    }
+                });
+            }
+        }
+        if let Some(sid_query) = sid_query {
+            let sid = match crate::connect::decode_sid(&sid_query) {
+                Ok(sid) => sid,
+                Err(_) => return (StatusCode::BAD_REQUEST, "connect: bad sid").into_response(),
+            };
+            let token = match parse_authorization_token(&headers) {
+                Ok(Some(token)) => token,
+                Ok(None) => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        "connect: missing management token",
+                    )
+                        .into_response();
+                }
+                Err(response) => return response,
+            };
+            return match bus.session_status(sid, &token).await {
+                Some(status) => JsonBody(status).into_response(),
+                None => StatusCode::NOT_FOUND.into_response(),
+            };
+        }
+    }
+
     let status = bus.status().await;
     #[cfg(feature = "telemetry")]
     {
@@ -29807,7 +29876,9 @@ async fn handler_connect_status(State(app): State<SharedAppState>) -> impl IntoR
             }
         }
     }
-    JsonBody(status)
+    let mut public_status = status;
+    public_status.per_ip_sessions.clear();
+    JsonBody(public_status).into_response()
 }
 
 async fn handler_alias_voprf_evaluate(

@@ -120,7 +120,7 @@ translator: machine-google-reviewed
 1. **დადგმული სესიების წაშლა.** ყოველთვის წაშალეთ სესიების გადახედვისას რიგის სიღრმე
    სიგნალიზაცია რჩება მნიშვნელოვანი:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    მხოლოდ Swift-ის სატესტო გაშვებისთვის, გამოიძახეთ იგივე საბოლოო წერტილი Rust/CLI დამხმარე საშუალებით.
 2. ** ჟურნალების გასუფთავება. ** წაშალეთ მუდმივი რიგის ჟურნალები

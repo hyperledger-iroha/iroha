@@ -5837,6 +5837,10 @@ class ConnectPolicyStatusSnapshot:
     frame_max_bytes: int
     session_buffer_max_bytes: int
     relay_enabled: bool
+    relay_strategy: str
+    relay_effective_strategy: str
+    relay_p2p_attached: bool
+    p2p_ttl_hops: int
     heartbeat_interval_ms: int
     heartbeat_miss_tolerance: int
     heartbeat_min_interval_ms: int
@@ -5853,11 +5857,15 @@ class ConnectPolicyStatusSnapshot:
             frame_max_bytes = int(payload.get("frame_max_bytes", 0))
             session_buffer_max_bytes = int(payload.get("session_buffer_max_bytes", 0))
             relay_enabled = bool(payload.get("relay_enabled", False))
+            relay_strategy = str(payload.get("relay_strategy", ""))
+            relay_effective_strategy = str(payload.get("relay_effective_strategy", ""))
+            relay_p2p_attached = bool(payload.get("relay_p2p_attached", False))
+            p2p_ttl_hops = int(payload.get("p2p_ttl_hops", 0))
             heartbeat_interval_ms = int(payload.get("heartbeat_interval_ms", 0))
             heartbeat_miss_tolerance = int(payload.get("heartbeat_miss_tolerance", 0))
             heartbeat_min_interval_ms = int(payload.get("heartbeat_min_interval_ms", 0))
         except (TypeError, ValueError) as exc:
-            raise TypeError("connect policy fields must be numeric/boolean") from exc
+            raise TypeError("connect policy fields have invalid types") from exc
         return cls(
             ws_max_sessions=ws_max_sessions,
             ws_per_ip_max_sessions=ws_per_ip_max_sessions,
@@ -5866,6 +5874,10 @@ class ConnectPolicyStatusSnapshot:
             frame_max_bytes=frame_max_bytes,
             session_buffer_max_bytes=session_buffer_max_bytes,
             relay_enabled=relay_enabled,
+            relay_strategy=relay_strategy,
+            relay_effective_strategy=relay_effective_strategy,
+            relay_p2p_attached=relay_p2p_attached,
+            p2p_ttl_hops=p2p_ttl_hops,
             heartbeat_interval_ms=heartbeat_interval_ms,
             heartbeat_miss_tolerance=heartbeat_miss_tolerance,
             heartbeat_min_interval_ms=heartbeat_min_interval_ms,
@@ -5891,7 +5903,13 @@ class ConnectStatusSnapshot:
     buffer_drops_total: int
     plaintext_control_drops_total: int
     monotonic_drops_total: int
+    sequence_violation_closes_total: int
+    role_direction_mismatch_total: int
     ping_miss_total: int
+    p2p_rebroadcasts_total: int
+    p2p_rebroadcast_skipped_total: int
+    p2p_auth_failures_total: int
+    p2p_ttl_drops_total: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectStatusSnapshot":
@@ -5932,7 +5950,13 @@ class ConnectStatusSnapshot:
             buffer_drops_total=_coerce_int_field("buffer_drops_total"),
             plaintext_control_drops_total=_coerce_int_field("plaintext_control_drops_total"),
             monotonic_drops_total=_coerce_int_field("monotonic_drops_total"),
+            sequence_violation_closes_total=_coerce_int_field("sequence_violation_closes_total"),
+            role_direction_mismatch_total=_coerce_int_field("role_direction_mismatch_total"),
             ping_miss_total=_coerce_int_field("ping_miss_total"),
+            p2p_rebroadcasts_total=_coerce_int_field("p2p_rebroadcasts_total"),
+            p2p_rebroadcast_skipped_total=_coerce_int_field("p2p_rebroadcast_skipped_total"),
+            p2p_auth_failures_total=_coerce_int_field("p2p_auth_failures_total"),
+            p2p_ttl_drops_total=_coerce_int_field("p2p_ttl_drops_total"),
         )
 
 
@@ -9839,12 +9863,18 @@ class ToriiClient(_BaseToriiClient):
             payload=payload,
         )
 
-    def delete_connect_session(self, sid: str) -> bool:
+    def delete_connect_session(self, sid: str, token_management: str) -> bool:
         """DELETE `/v1/connect/session/{sid}` and return True when the session existed."""
 
         if not isinstance(sid, str) or not sid:
             raise TypeError("sid must be a non-empty string")
-        response = self._request("DELETE", f"/v1/connect/session/{sid}")
+        if not isinstance(token_management, str) or not token_management:
+            raise TypeError("token_management must be a non-empty string")
+        response = self._request(
+            "DELETE",
+            f"/v1/connect/session/{sid}",
+            headers={"Authorization": f"Bearer {token_management}"},
+        )
         self._expect_status(response, (204, 404))
         return response.status_code == 204
 

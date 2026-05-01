@@ -246,6 +246,39 @@ Last updated: 2026-05-01
 - Profile artifact:
   `dist/izanami-profile-20k-30s-20260430-185822`.
 
+## 2026-04-30 Iroha Connect session and relay hardening
+
+- Added session-scoped `token_management` and `token_relay` credentials to
+  Connect session creation. Management tokens now gate session deletion and
+  per-session status; public `/v1/connect/status` is redacted to aggregate
+  counters.
+- Wrapped P2P Connect rebroadcasts in MAC-authenticated relay envelopes with a
+  bounded TTL. Torii drops relay frames that fail MAC verification, target an
+  unknown session, or exhaust TTL, and exposes auth/TTL drop counters in
+  status.
+- Bound the relay token into wallet approval signatures with a tagged
+  approval preimage, added browser-side approval verification, and aligned the
+  JS, Python, Swift, Kotlin, and Java SDK surfaces with the new management and
+  relay token contract.
+- Updated MCP/OpenAPI metadata, examples, JS package `dist`, and Connect docs
+  to keep management tokens out of launch URIs while carrying relay tokens in
+  wallet/app deep links.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p iroha_torii_shared connect_sdk -- --nocapture`
+  - `cargo test -p iroha_torii connect_session_delete -- --nocapture`
+  - `cargo test -p iroha_torii connect_session_status_requires_management_token -- --nocapture`
+  - `cargo test -p iroha_torii connect_management_headers_maps_token_to_authorization -- --nocapture`
+  - `node --test test/connect.browser.test.js test/connectPreviewFlow.test.js test/toriiClient.test.js` from `javascript/iroha_js`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/client.py python/iroha_python/src/iroha_python/connect.py python/iroha_python/src/iroha_python/examples/connect_flow.py python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+- Validation blockers in this environment:
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'connect_status or connect_session'` could not run because `pytest` is not installed.
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.connect.ConnectWalletRequestTest --console=plain` could not run because no Java runtime is available.
+  - `swift test --filter 'ConnectCryptoTests|ToriiClientTests/testGetConnectStatusParsesSnapshot|ToriiClientTests/testCreateConnectSessionPostsPayload|ToriiClientTests/testDeleteConnectSessionHandles404'` could not run because `dist/NoritoBridge.xcframework` is missing.
+
 ## 2026-04-30 queue router and Sumeragi focused regression fixes
 
 - Fixed the focused `iroha_core` regression cluster where opaque

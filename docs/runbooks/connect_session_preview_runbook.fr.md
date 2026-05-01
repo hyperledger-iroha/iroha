@@ -87,7 +87,7 @@ Ce runbook documente la procedure end-to-end pour preparer, valider et demantele
 
 1. **Supprimez les sessions en staging.** Supprimez toujours les sessions de preview pour que les alarmes de profondeur de file restent utiles:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Pour les runs Swift uniquement, appelez le meme endpoint via le helper Rust/CLI.
 2. **Purgez les journaux.** Supprimez tout journal de file persistant (`ApplicationSupport/ConnectQueue/<sid>.to`, stores IndexedDB, etc.) afin que le prochain run demarre proprement. Enregistrez le hash du fichier avant suppression si vous devez depanner un probleme de replay.

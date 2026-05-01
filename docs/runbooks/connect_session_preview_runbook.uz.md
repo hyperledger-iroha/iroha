@@ -120,7 +120,7 @@ SDK yo'l xaritalarida va'da qilingan navbat/telemetriya ilgaklarini ishlating yo
 1. **Bosqichli seanslarni o‘chirish.** Navbat chuqurligi uchun har doim oldindan ko‘rish seanslarini o‘chirib tashlang
    signallar mazmunli bo'lib qoladi:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Faqat Swift sinovlari uchun Rust/CLI yordamchisi orqali bir xil so'nggi nuqtaga qo'ng'iroq qiling.
 2. **Jurnallarni tozalash.** Doimiy navbatdagi jurnallarni olib tashlang
