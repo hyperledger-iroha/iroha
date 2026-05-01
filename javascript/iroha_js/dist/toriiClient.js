@@ -25140,6 +25140,30 @@ function normalizeConnectStatusSnapshot(payload, context) {
       record.p2p_ttl_drops_total,
       `${context}.p2p_ttl_drops_total`,
     ),
+    p2pUnknownSessionDropsTotal: coerceStatusInt(
+      record.p2p_unknown_session_drops_total,
+      `${context}.p2p_unknown_session_drops_total`,
+    ),
+    p2pSessionClaimsInTotal: coerceStatusInt(
+      record.p2p_session_claims_in_total,
+      `${context}.p2p_session_claims_in_total`,
+    ),
+    p2pSessionClaimsInstalledTotal: coerceStatusInt(
+      record.p2p_session_claims_installed_total,
+      `${context}.p2p_session_claims_installed_total`,
+    ),
+    p2pSessionClaimConflictsTotal: coerceStatusInt(
+      record.p2p_session_claim_conflicts_total,
+      `${context}.p2p_session_claim_conflicts_total`,
+    ),
+    p2pRoleConsumedTotal: coerceStatusInt(
+      record.p2p_role_consumed_total,
+      `${context}.p2p_role_consumed_total`,
+    ),
+    p2pSessionTerminatedTotal: coerceStatusInt(
+      record.p2p_session_terminated_total,
+      `${context}.p2p_session_terminated_total`,
+    ),
   };
 }
 

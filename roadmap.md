@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -8,9 +8,11 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
-  - Focused Rust and JavaScript checks are green as of 2026-04-30, but Python
-    pytest, Kotlin/JVM, Java Android, and Swift package tests were blocked by
-    missing local tools/artifacts.
+  - P2P session claims, hashed token storage, focused Rust checks, JavaScript
+    checks, JS `dist`, Python syntax checks, and shared relay-auth vectors are
+    green as of 2026-05-01.
+  - Python pytest, Kotlin/JVM, Java Android, and Swift package tests remain
+    blocked by missing local tools/artifacts.
   - When the validation shell has `pytest`, a Java runtime, and
     `dist/NoritoBridge.xcframework`, rerun the focused Python Connect tests,
     `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.connect.ConnectWalletRequestTest --console=plain`,

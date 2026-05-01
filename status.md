@@ -1,6 +1,38 @@
 # Status
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
+
+## 2026-05-01 Iroha Connect P2P rendezvous claims
+
+- Added versioned Connect P2P control messages for relay envelopes, session
+  claims, consumed-role notices, and session termination notices. Torii now
+  gossips session claims over authenticated Iroha P2P so app and wallet
+  WebSockets can rendezvous through different Torii nodes after one
+  `/v1/connect/session` response.
+- Replaced in-memory app, wallet, and management token storage with
+  domain-separated authentication hashes and constant-time comparisons. Claims
+  carry token hashes plus the relay MAC key, not raw app/wallet/management
+  tokens.
+- Added P2P claim, conflict, unknown-session relay drop, consumed-role, and
+  termination counters to Connect status and surfaced them in the JS, Python,
+  and Swift typed SDK status snapshots.
+- Added shared Connect session vectors for token hashes, relay MAC key, and
+  relay auth hash, with Rust/JS fixture coverage and Swift/Kotlin/Java relay
+  auth fixture assertions.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p iroha_torii_shared connect_sdk -- --nocapture`
+  - `cargo test -p iroha_torii --lib p2p_ -- --nocapture`
+  - `cargo test -p iroha_torii --lib register_tokens_stores_token_hashes -- --nocapture`
+  - `node --test test/connect.browser.test.js test/connectPreviewFlow.test.js test/toriiClient.test.js` from `javascript/iroha_js`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/client.py python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+- Validation blockers in this environment:
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'connect_status or connect_session'` could not run because `pytest` is not installed.
+  - Kotlin/JVM and Java Android Connect tests could not run because no Java runtime is available.
+  - Focused Swift Connect tests could not run because `IrohaSwift/dist/NoritoBridge.xcframework` is missing.
 
 ## 2026-04-30 Iroha Connect session and relay hardening
 
