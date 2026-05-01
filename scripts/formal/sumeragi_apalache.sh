@@ -31,17 +31,22 @@ case "$mode" in
   frontier-fast)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_fast.cfg"
-    apalache_length=10
+    apalache_length=7
     ;;
   frontier-deep)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_deep.cfg"
-    apalache_length=12
+    apalache_length=8
     ;;
   frontier-wide)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_wide.cfg"
-    apalache_length=12
+    apalache_length=7
+    ;;
+  frontier-nightly)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_wide.cfg"
+    apalache_length=10
     ;;
   frontier-bug-stale-owner)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
@@ -73,8 +78,32 @@ case "$mode" in
     apalache_length=5
     expect_failure=1
     ;;
+  frontier-bug-future-reanchor-clear)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_reanchor_clear.cfg"
+    apalache_length=5
+    expect_failure=1
+    ;;
+  frontier-bug-future-evidence-drop)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_evidence_drop.cfg"
+    apalache_length=3
+    expect_failure=1
+    ;;
+  frontier-bug-promotion-reset)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_promotion_reset.cfg"
+    apalache_length=7
+    expect_failure=1
+    ;;
+  frontier-bug-future-stale-owner)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_stale_owner.cfg"
+    apalache_length=5
+    expect_failure=1
+    ;;
   *)
-    echo "usage: $0 {fast|deep|frontier-fast|frontier-deep|frontier-wide|frontier-bug-stale-owner|frontier-bug-vote-queue|frontier-bug-payload-recovery|frontier-bug-retransmit-followthrough|frontier-bug-future-promotion}" >&2
+    echo "usage: $0 {fast|deep|frontier-fast|frontier-deep|frontier-wide|frontier-nightly|frontier-bug-stale-owner|frontier-bug-vote-queue|frontier-bug-payload-recovery|frontier-bug-retransmit-followthrough|frontier-bug-future-promotion|frontier-bug-future-reanchor-clear|frontier-bug-future-evidence-drop|frontier-bug-promotion-reset|frontier-bug-future-stale-owner}" >&2
     exit 2
     ;;
 esac

@@ -37,7 +37,15 @@ CONSTANTS
   \* @type: Bool;
   BugDisableRetransmitFollowthrough,
   \* @type: Bool;
-  BugDisableFuturePromotion
+  BugDisableFuturePromotion,
+  \* @type: Bool;
+  BugDisableFutureReanchorClear,
+  \* @type: Bool;
+  BugAllowFutureEvidenceDrop,
+  \* @type: Bool;
+  BugPromoteWithoutReset,
+  \* @type: Bool;
+  BugFutureStaleOwnerBlocksReanchor
 
 VARIABLES
   \* @type: Int;
@@ -89,6 +97,10 @@ VARIABLES
   \* @type: Bool;
   futurePromoted,
   \* @type: Bool;
+  futureEvidenceObserved,
+  \* @type: Bool;
+  promotionFresh,
+  \* @type: Bool;
   gst
 
 vars == <<
@@ -116,6 +128,8 @@ vars == <<
   futureRecoveryOwner,
   futurePromotionReady,
   futurePromoted,
+  futureEvidenceObserved,
+  promotionFresh,
   gst
 >>
 
@@ -161,6 +175,10 @@ TypeInvariant ==
   /\ BugDisablePayloadRecovery \in BOOLEAN
   /\ BugDisableRetransmitFollowthrough \in BOOLEAN
   /\ BugDisableFuturePromotion \in BOOLEAN
+  /\ BugDisableFutureReanchorClear \in BOOLEAN
+  /\ BugAllowFutureEvidenceDrop \in BOOLEAN
+  /\ BugPromoteWithoutReset \in BOOLEAN
+  /\ BugFutureStaleOwnerBlocksReanchor \in BOOLEAN
   /\ frontierSlot \in 0..1
   /\ pending \in BOOLEAN
   /\ contiguous \in BOOLEAN
@@ -188,9 +206,12 @@ TypeInvariant ==
   /\ futureRecoveryOwner \in RecoveryOwners
   /\ futurePromotionReady \in BOOLEAN
   /\ futurePromoted \in BOOLEAN
+  /\ futureEvidenceObserved \in BOOLEAN
+  /\ promotionFresh \in BOOLEAN
   /\ futurePresent =>
        /\ futureContiguous
        /\ FutureVoteBacked
+       /\ futureEvidenceObserved
   /\ ~futurePresent =>
        /\ ~futureContiguous
        /\ futureCommitVotes = 0
@@ -202,10 +223,17 @@ TypeInvariant ==
        /\ ~pending
        /\ FutureFrontierEvidence
        /\ ~futurePromoted
+       /\ futureEvidenceObserved
   /\ futurePromoted =>
        /\ frontierSlot = 1
        /\ ~futurePresent
        /\ ~futurePromotionReady
+       /\ futureEvidenceObserved
+  /\ futureEvidenceObserved /\ ~futurePromoted => FutureFrontierEvidence
+  /\ promotionFresh =>
+       /\ frontierSlot = 1
+       /\ pending
+       /\ futurePromoted
   /\ frontierSlot = 1 => ~futurePresent
   /\ committed => ~pending
   /\ rotated => ~pending
@@ -247,10 +275,13 @@ Init ==
           /\ futureRecoveryOwner = "None"
   /\ futurePromotionReady = FALSE
   /\ futurePromoted = FALSE
+  /\ futureEvidenceObserved = futurePresent
+  /\ promotionFresh = FALSE
   /\ gst = FALSE
 
 ClearStaleRecoveryEnabled ==
   /\ ~BugDisableStaleRecovery
+  /\ ~(BugFutureStaleOwnerBlocksReanchor /\ FutureFrontierEvidence)
   /\ gst
   /\ ActiveFrontier
   /\ recoveryOwner = "Stale"
@@ -341,6 +372,7 @@ DropAtViewBoundEnabled ==
   /\ view = MaxView
 
 ClearCurrentForFutureReanchorEnabled ==
+  /\ ~BugDisableFutureReanchorClear
   /\ gst
   /\ ActiveFrontier
   /\ FreshRecoveryOwner
@@ -360,6 +392,20 @@ DropZeroEvidenceEnabled ==
   /\ ~FutureReanchorReadyForCurrent
   /\ ~VoteBacked
 
+LearnFutureFrontierEvidenceEnabled ==
+  /\ gst
+  /\ frontierSlot = 0
+  /\ ActiveFrontier
+  /\ ~futurePresent
+  /\ ~futurePromotionReady
+  /\ ~futurePromoted
+
+DropFutureFrontierEvidenceEnabled ==
+  /\ BugAllowFutureEvidenceDrop
+  /\ gst
+  /\ FutureFrontierEvidence
+  /\ ~futurePromoted
+
 FrontierProgressEnabled ==
   \/ ClearStaleRecoveryEnabled
   \/ DrainVoteQueueEnabled
@@ -371,6 +417,7 @@ FrontierProgressEnabled ==
   \/ RotateVoteBackedFrontierEnabled
   \/ DropAtViewBoundEnabled
   \/ ClearCurrentForFutureReanchorEnabled
+  \/ LearnFutureFrontierEvidenceEnabled
 
 StallBeforeGst ==
   /\ ~gst
@@ -403,12 +450,47 @@ GstElapsed ==
       futurePayloadState,
       futureRecoveryOwner,
       futurePromotionReady,
-      futurePromoted
+      futurePromoted,
+      futureEvidenceObserved,
+      promotionFresh
+     >>
+
+LearnFutureFrontierEvidence ==
+  /\ LearnFutureFrontierEvidenceEnabled
+  /\ futurePresent' = TRUE
+  /\ futureContiguous' = TRUE
+  /\ futureCommitVotes' = 1
+  /\ futureQueuedVotes' = 0
+  /\ futurePayloadState' = "Missing"
+  /\ futureRecoveryOwner' = "None"
+  /\ futureEvidenceObserved' = TRUE
+  /\ UNCHANGED <<
+      frontierSlot,
+      pending,
+      contiguous,
+      committed,
+      dropped,
+      dropReason,
+      commitVotes,
+      queuedVotes,
+      payloadState,
+      recoveryOwner,
+      quorumRescheduleArmed,
+      quorumWindowAge,
+      view,
+      payloadRecovered,
+      quorumRetransmitted,
+      rotated,
+      futurePromotionReady,
+      futurePromoted,
+      promotionFresh,
+      gst
      >>
 
 ClearStaleRecovery ==
   /\ ClearStaleRecoveryEnabled
   /\ recoveryOwner' = "None"
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -433,6 +515,7 @@ ClearStaleRecovery ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -440,6 +523,7 @@ DrainVoteQueue ==
   /\ DrainVoteQueueEnabled
   /\ commitVotes' = commitVotes + 1
   /\ queuedVotes' = queuedVotes - 1
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -463,6 +547,7 @@ DrainVoteQueue ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -471,6 +556,7 @@ RecoverPayload ==
   /\ payloadState' = "Local"
   /\ payloadRecovered' = TRUE
   /\ recoveryOwner' = "Local"
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -493,6 +579,7 @@ RecoverPayload ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -502,6 +589,7 @@ CommitFrontier ==
   /\ pending' = FALSE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -523,6 +611,7 @@ CommitFrontier ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -530,6 +619,7 @@ ArmQuorumReschedule ==
   /\ ArmQuorumRescheduleEnabled
   /\ quorumRescheduleArmed' = TRUE
   /\ quorumWindowAge' = 0
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -553,12 +643,14 @@ ArmQuorumReschedule ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
 QuorumWindowTick ==
   /\ QuorumWindowTickEnabled
   /\ quorumWindowAge' = quorumWindowAge + 1
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -583,6 +675,7 @@ QuorumWindowTick ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -591,6 +684,7 @@ QuorumRetransmit ==
   /\ quorumRetransmitted' = TRUE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -613,6 +707,7 @@ QuorumRetransmit ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -623,6 +718,7 @@ RotateVoteBackedFrontier ==
   /\ pending' = FALSE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -643,6 +739,7 @@ RotateVoteBackedFrontier ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -654,6 +751,7 @@ DropAtViewBound ==
   /\ rotated' = TRUE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -673,6 +771,7 @@ DropAtViewBound ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -682,6 +781,7 @@ ClearCurrentForFutureReanchor ==
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ futurePromotionReady' = TRUE
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -703,6 +803,7 @@ ClearCurrentForFutureReanchor ==
       futurePayloadState,
       futureRecoveryOwner,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
@@ -718,11 +819,11 @@ PromoteFutureFrontier ==
   /\ queuedVotes' = futureQueuedVotes
   /\ payloadState' = futurePayloadState
   /\ recoveryOwner' = futureRecoveryOwner
-  /\ quorumRescheduleArmed' = FALSE
-  /\ quorumWindowAge' = 0
-  /\ view' = 0
-  /\ payloadRecovered' = FALSE
-  /\ quorumRetransmitted' = FALSE
+  /\ quorumRescheduleArmed' = IF BugPromoteWithoutReset THEN quorumRescheduleArmed ELSE FALSE
+  /\ quorumWindowAge' = IF BugPromoteWithoutReset THEN quorumWindowAge ELSE 0
+  /\ view' = IF BugPromoteWithoutReset THEN view ELSE 0
+  /\ payloadRecovered' = IF BugPromoteWithoutReset THEN payloadRecovered ELSE FALSE
+  /\ quorumRetransmitted' = IF BugPromoteWithoutReset THEN quorumRetransmitted ELSE FALSE
   /\ rotated' = FALSE
   /\ futurePresent' = FALSE
   /\ futureContiguous' = FALSE
@@ -732,7 +833,41 @@ PromoteFutureFrontier ==
   /\ futureRecoveryOwner' = "None"
   /\ futurePromotionReady' = FALSE
   /\ futurePromoted' = TRUE
+  /\ futureEvidenceObserved' = TRUE
+  /\ promotionFresh' = TRUE
   /\ UNCHANGED gst
+
+DropFutureFrontierEvidence ==
+  /\ DropFutureFrontierEvidenceEnabled
+  /\ futurePresent' = FALSE
+  /\ futureContiguous' = FALSE
+  /\ futureCommitVotes' = 0
+  /\ futureQueuedVotes' = 0
+  /\ futurePayloadState' = "Missing"
+  /\ futureRecoveryOwner' = "None"
+  /\ UNCHANGED <<
+      frontierSlot,
+      pending,
+      contiguous,
+      committed,
+      dropped,
+      dropReason,
+      commitVotes,
+      queuedVotes,
+      payloadState,
+      recoveryOwner,
+      quorumRescheduleArmed,
+      quorumWindowAge,
+      view,
+      payloadRecovered,
+      quorumRetransmitted,
+      rotated,
+      futurePromotionReady,
+      futurePromoted,
+      futureEvidenceObserved,
+      promotionFresh,
+      gst
+     >>
 
 DropZeroEvidence ==
   /\ DropZeroEvidenceEnabled
@@ -741,6 +876,7 @@ DropZeroEvidence ==
   /\ dropReason' = "ZeroEvidence"
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ promotionFresh' = FALSE
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -761,12 +897,14 @@ DropZeroEvidence ==
       futureRecoveryOwner,
       futurePromotionReady,
       futurePromoted,
+      futureEvidenceObserved,
       gst
      >>
 
 Next ==
   \/ StallBeforeGst
   \/ GstElapsed
+  \/ LearnFutureFrontierEvidence
   \/ ClearStaleRecovery
   \/ DrainVoteQueue
   \/ RecoverPayload
@@ -778,7 +916,28 @@ Next ==
   \/ DropAtViewBound
   \/ ClearCurrentForFutureReanchor
   \/ PromoteFutureFrontier
+  \/ DropFutureFrontierEvidence
   \/ DropZeroEvidence
+
+Fairness ==
+  /\ WF_vars(GstElapsed)
+  /\ WF_vars(ClearStaleRecovery)
+  /\ WF_vars(DrainVoteQueue)
+  /\ WF_vars(RecoverPayload)
+  /\ WF_vars(CommitFrontier)
+  /\ WF_vars(ArmQuorumReschedule)
+  /\ WF_vars(QuorumWindowTick)
+  /\ WF_vars(QuorumRetransmit)
+  /\ WF_vars(RotateVoteBackedFrontier)
+  /\ WF_vars(DropAtViewBound)
+  /\ WF_vars(ClearCurrentForFutureReanchor)
+  /\ WF_vars(PromoteFutureFrontier)
+  /\ WF_vars(DropZeroEvidence)
+
+Spec ==
+  /\ Init
+  /\ [][Next]_vars
+  /\ Fairness
 
 CommitImpliesVoteQuorum ==
   committed => commitVotes >= CommitQuorum
@@ -799,6 +958,19 @@ FuturePromotionReadyHasProgress ==
   /\ gst
   /\ futurePromotionReady
   => PromoteFutureFrontierEnabled
+
+FutureEvidencePreservedUntilPromotion ==
+  /\ futureEvidenceObserved
+  /\ ~futurePromoted
+  => FutureFrontierEvidence
+
+FuturePromotionResetsActiveProgress ==
+  promotionFresh
+  => /\ ~payloadRecovered
+     /\ ~quorumRetransmitted
+     /\ ~quorumRescheduleArmed
+     /\ quorumWindowAge = 0
+     /\ view = 0
 
 PostGstVoteBackedFrontierEventuallyResolves ==
   [] (

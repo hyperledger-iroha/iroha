@@ -22,6 +22,9 @@ active pending contiguous frontier block plus one concrete future frontier slot:
   ownership,
 - future frontier/new-view evidence derived from that future slot and consumed
   through a two-step reanchor/promotion path,
+- late arrival of future frontier evidence after GST,
+- promotion freshness, so a promoted second slot cannot inherit stale active
+  payload recovery, retransmit, quorum-window, or view-rotation progress,
 - deterministic post-GST commit, retransmit, bounded view-rotation, and
   zero-evidence drop outcomes.
 
@@ -42,6 +45,13 @@ verification, and full networking details.
 - `SumeragiFrontierRecovery_bug_payload_recovery.cfg`: expected-failure payload-recovery mutation.
 - `SumeragiFrontierRecovery_bug_retransmit_followthrough.cfg`: expected-failure retransmit-follow-through mutation.
 - `SumeragiFrontierRecovery_bug_future_promotion.cfg`: expected-failure future-promotion mutation.
+- `SumeragiFrontierRecovery_bug_future_reanchor_clear.cfg`: expected-failure reanchor-clear mutation.
+- `SumeragiFrontierRecovery_bug_future_evidence_drop.cfg`: expected-failure future-evidence drop mutation.
+- `SumeragiFrontierRecovery_bug_promotion_reset.cfg`: expected-failure promotion-reset mutation.
+- `SumeragiFrontierRecovery_bug_future_stale_owner.cfg`: expected-failure future stale-owner mutation.
+- `SumeragiFrontierRecovery_tlc_small.cfg`: small TLC cross-check config.
+- `.github/workflows/nightly_sumeragi_formal.yml`: scheduled/manual longer-bound
+  frontier check using `frontier-nightly`.
 
 ## Properties
 
@@ -69,6 +79,11 @@ Frontier recovery invariants:
 - `FuturePromotionReadyHasProgress`, which rules out a terminal post-GST
   state where the current pending wrapper has cleared for future evidence but
   the future slot cannot be promoted.
+- `FutureEvidencePreservedUntilPromotion`, which requires observed future
+  frontier evidence to remain represented by the concrete future slot until it
+  is promoted.
+- `FuturePromotionResetsActiveProgress`, which requires a freshly promoted
+  second slot to start with cleared active progress flags.
 
 Frontier recovery temporal property:
 - `PostGstVoteBackedFrontierEventuallyResolves`: after GST, every unresolved
@@ -101,7 +116,8 @@ surfaces it abstracts:
 | `payloadRecovered` | Exact frontier body repair and stale RBC repair admission in `request_frontier_owner_body_repair(...)`, `handle_frontier_body_gap_with_topology(...)`, and `stale_frontier_rbc_repair_is_actionable(...)`. |
 | `quorumRetransmitted`, `rotated` | Quorum retransmit target selection, `rebroadcast_pending_block_updates(...)`, and deterministic view-change calls in `reschedule_stale_pending_blocks_with_now(...)`. |
 | `futurePresent`, `futureContiguous`, `futureCommitVotes`, `futureQueuedVotes`, `futurePayloadState`, `futureRecoveryOwner` | One concrete future frontier slot. `FutureFrontierEvidence` is derived from the slot instead of stored as an independent Boolean. |
-| `futurePromotionReady`, `futurePromoted` | The two-step future reanchor path: clear the stale/current pending wrapper, then promote the future slot into the active slot with active progress flags reset. This maps to future new-view / higher-frontier quorum handling in `on_pacemaker_propose_ready(...)`, covered by `pacemaker_reanchors_frontier_when_future_new_view_quorum_exists`. |
+| `futureEvidenceObserved` | A late or initially present future-evidence obligation. Once observed, the future slot must remain concrete evidence until promotion. |
+| `futurePromotionReady`, `futurePromoted`, `promotionFresh` | The two-step future reanchor path: clear the stale/current pending wrapper, then promote the future slot into the active slot with active progress flags reset. This maps to future new-view / higher-frontier quorum handling in `on_pacemaker_propose_ready(...)`, covered by `pacemaker_reanchors_frontier_when_future_new_view_quorum_exists`, `pacemaker_reanchors_future_new_view_quorum_while_vote_queue_backlogged`, and `pacemaker_reanchors_future_new_view_quorum_over_stale_frontier_owner`. |
 
 ## Running
 
@@ -113,6 +129,7 @@ bash scripts/formal/sumeragi_apalache.sh deep
 bash scripts/formal/sumeragi_apalache.sh frontier-fast
 bash scripts/formal/sumeragi_apalache.sh frontier-deep
 bash scripts/formal/sumeragi_apalache.sh frontier-wide
+bash scripts/formal/sumeragi_tlc.sh frontier-small
 ```
 
 The runner sets an explicit Apalache `--length` for each mode:
@@ -121,12 +138,19 @@ The runner sets an explicit Apalache `--length` for each mode:
 | --- | ---: | --- |
 | `fast` | 10 | CI commit-path check |
 | `deep` | 10 | Larger commit-path check |
-| `frontier-fast` | 10 | CI frontier check |
-| `frontier-deep` | 12 | Larger frontier check |
-| `frontier-wide` | 12 | Wider PR formal CI frontier check |
+| `frontier-fast` | 7 | CI frontier check |
+| `frontier-deep` | 8 | Larger frontier check |
+| `frontier-wide` | 7 | Wider PR formal CI frontier check |
+| `frontier-nightly` | 10 | Manual/scheduled wider-bound frontier check |
 
 `APALACHE_LENGTH=<n>` overrides the per-mode default when locally exploring a
 counterexample or widening a bounded proof.
+
+`scripts/formal/sumeragi_tlc.sh frontier-small` runs a small exhaustive TLC
+cross-check using the same module and TLC-friendly weak-fairness specification.
+The TLC config disables generic deadlock rejection because resolved terminal
+states, such as a legitimate zero-evidence drop, are valid endpoints; invariants
+and temporal properties remain checked.
 
 ### Reproducible local setup (no Docker required)
 
@@ -160,6 +184,10 @@ bash scripts/formal/sumeragi_apalache.sh frontier-bug-vote-queue
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-payload-recovery
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-retransmit-followthrough
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-promotion
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-clear
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-evidence-drop
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-promotion-reset
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-stale-owner
 ```
 
 If Apalache is not in `PATH`, you can:
@@ -186,6 +214,8 @@ APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:0.52.2 bash scripts/formal/su
 - The checks are bounded by constant values in the `.cfg` files.
 - PR CI runs these checks in `.github/workflows/pr.yml` via
   `ci/check_sumeragi_formal.sh`.
+- Scheduled/manual CI runs the longer `frontier-nightly` bound in
+  `.github/workflows/nightly_sumeragi_formal.yml`.
 - English documentation is authoritative for the current frontier formal slice.
   Translated `docs/formal/sumeragi/README.*.md` files are intentionally not
   refreshed here and may remain source-current stale until a separate
