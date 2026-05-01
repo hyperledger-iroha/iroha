@@ -36,10 +36,18 @@ public final class OfflineNoteV2 {
       "iroha:offline-note-v2:audit-public-inputs:v1";
   public static final String RECURSIVE_BACKEND = "halo2/ipa";
   public static final String RECURSIVE_VERIFIER_NAME = "offline-note-v2-recursive-v1";
+  public static final String RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1 =
+      "{\"schema\":\"offline_note_v2_recursive_v1\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}";
 
   private static final int MULTISIG_POLICY_VERSION_V1 = 1;
   private static final int MAX_NUMERIC_SCALE = 28;
   private static final int MAX_BIGINT_BYTES = 64;
+  private static final int PUBLIC_VALUE_COUNT = 16;
+  private static final int MAX_INPUT_AMOUNTS = 4;
+  private static final int MAX_OUTPUT_AMOUNTS = 2;
+  private static final long MODE_REDEEM = 1L;
+  private static final long MODE_AUDIT = 2L;
+  private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
 
   private static final String KEY_CERTIFICATE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteKeyCertificateV2";
@@ -94,6 +102,16 @@ public final class OfflineNoteV2 {
 
   public static byte[] hash(final byte[] bytes) {
     return IrohaHash.prehash(bytes);
+  }
+
+  public static byte[] instanceScalarBytes(final long value) {
+    final byte[] out = new byte[32];
+    long word = value;
+    for (int idx = 0; idx < 8; idx++) {
+      out[idx] = (byte) (word & 0xFFL);
+      word >>>= 8;
+    }
+    return out;
   }
 
   private static <T> byte[] encodeWithHeader(
@@ -773,6 +791,17 @@ public final class OfflineNoteV2 {
       }
     }
 
+    public RedeemV2 replacingRecursiveProof(final RecursiveProofV2 recursiveProof) {
+      return new RedeemV2(
+          sourceNoteCommitment(),
+          inputNullifiers(),
+          senderKeyCertificate,
+          recipient,
+          assetId,
+          amount,
+          recursiveProof);
+    }
+
     public byte[] noritoEncoded() {
       return encodeRedeem(this);
     }
@@ -978,8 +1007,166 @@ public final class OfflineNoteV2 {
       }
     }
 
+    public AuditBundleV2 replacingRecursiveProof(final RecursiveProofV2 recursiveProof) {
+      return new AuditBundleV2(
+          tokenId(),
+          senderKeyCertificate,
+          inputNullifiers(),
+          inputClaims,
+          outputCommitments(),
+          outputClaims,
+          recursiveProof);
+    }
+
     public byte[] noritoEncoded() {
       return encodeAudit(this);
+    }
+  }
+
+  public static final class InstanceValues {
+    private final long[] publicValues;
+    private final long[] inputAmounts;
+    private final long[] outputAmounts;
+
+    public InstanceValues(
+        final long[] publicValues, final long[] inputAmounts, final long[] outputAmounts) {
+      this.publicValues = Arrays.copyOf(publicValues, publicValues.length);
+      this.inputAmounts = Arrays.copyOf(inputAmounts, inputAmounts.length);
+      this.outputAmounts = Arrays.copyOf(outputAmounts, outputAmounts.length);
+      if (this.publicValues.length != PUBLIC_VALUE_COUNT) {
+        throw new IllegalArgumentException(
+            "Offline V2 public instance count must be " + PUBLIC_VALUE_COUNT);
+      }
+      if (this.inputAmounts.length != MAX_INPUT_AMOUNTS) {
+        throw new IllegalArgumentException(
+            "Offline V2 input amount witness count must be " + MAX_INPUT_AMOUNTS);
+      }
+      if (this.outputAmounts.length != MAX_OUTPUT_AMOUNTS) {
+        throw new IllegalArgumentException(
+            "Offline V2 output amount witness count must be " + MAX_OUTPUT_AMOUNTS);
+      }
+    }
+
+    public long[] publicValues() {
+      return Arrays.copyOf(publicValues, publicValues.length);
+    }
+
+    public long[] inputAmounts() {
+      return Arrays.copyOf(inputAmounts, inputAmounts.length);
+    }
+
+    public long[] outputAmounts() {
+      return Arrays.copyOf(outputAmounts, outputAmounts.length);
+    }
+
+    public List<byte[]> publicInstanceColumns() {
+      final List<byte[]> columns = new ArrayList<>();
+      for (final long value : publicValues) {
+        columns.add(instanceScalarBytes(value));
+      }
+      return Collections.unmodifiableList(columns);
+    }
+  }
+
+  public static final class InstanceBuilder {
+    private InstanceBuilder() {}
+
+    public static InstanceValues redeemInstanceValues(final RedeemV2 redemption) {
+      final long inputCount =
+          validateCount(redemption.inputNullifiers().size(), MAX_INPUT_AMOUNTS, "redemption input");
+      final List<String> amounts = new ArrayList<>();
+      amounts.add(redemption.canonicalAmount());
+      amounts.add(redemption.canonicalAmount());
+      final List<Long> normalizedAmounts = normalizedAmountUnits(amounts);
+      final long inputSum = normalizedAmounts.get(0);
+      final long outputSum = normalizedAmounts.get(1);
+      final byte[] issuedClaimHash =
+          new IssuedClaimV2(
+                  redemption.sourceNoteCommitment(),
+                  redemption.senderKeyCertificate().payloadHash(),
+                  redemption.assetId(),
+                  redemption.canonicalAmount())
+              .claimHash();
+      final long[] publicValues =
+          publicValues(
+              redemption.publicInputsHash(),
+              MODE_REDEEM,
+              inputCount,
+              1L,
+              inputSum,
+              outputSum,
+              hashLimb0Sum(redemption.inputNullifiers()),
+              0L,
+              redemption.senderKeyCertificate().payloadHash(),
+              redemption.sourceNoteCommitment(),
+              hashLimb0(issuedClaimHash),
+              0L);
+      final long[] inputAmounts = new long[MAX_INPUT_AMOUNTS];
+      inputAmounts[0] = inputSum;
+      final long[] outputAmounts = new long[MAX_OUTPUT_AMOUNTS];
+      outputAmounts[0] = outputSum;
+      return new InstanceValues(publicValues, inputAmounts, outputAmounts);
+    }
+
+    public static InstanceValues auditInstanceValues(final AuditBundleV2 audit) {
+      final long inputCount =
+          validateCount(audit.inputClaims().size(), MAX_INPUT_AMOUNTS, "audit input");
+      final long outputCount =
+          validateCount(audit.outputClaims().size(), MAX_OUTPUT_AMOUNTS, "audit output");
+      if (audit.inputNullifiers().size() != audit.inputClaims().size()) {
+        throw new IllegalArgumentException(
+            "audit input nullifier count must match input claim count");
+      }
+
+      final List<byte[]> inputClaimHashes = new ArrayList<>();
+      final List<String> amountStrings = new ArrayList<>();
+      for (final IssuedClaimV2 claim : audit.inputClaims()) {
+        inputClaimHashes.add(claim.claimHash());
+        amountStrings.add(claim.canonicalAmount());
+      }
+      final List<byte[]> outputClaimHashes = new ArrayList<>();
+      for (final AuditOutputClaimV2 claim : audit.outputClaims()) {
+        final IssuedClaimV2 issued = claim.issuedClaim();
+        outputClaimHashes.add(issued.claimHash());
+        amountStrings.add(issued.canonicalAmount());
+      }
+
+      final List<Long> normalizedAmounts = normalizedAmountUnits(amountStrings);
+      final List<Long> inputUnits =
+          normalizedAmounts.subList(0, audit.inputClaims().size());
+      final List<Long> outputUnits =
+          normalizedAmounts.subList(audit.inputClaims().size(), normalizedAmounts.size());
+      final long inputSum = checkedSum(inputUnits, "input");
+      final long outputSum = checkedSum(outputUnits, "output");
+      if (inputSum != outputSum) {
+        throw new IllegalArgumentException("Offline V2 audit amounts are not conserved");
+      }
+
+      final long[] inputAmounts = new long[MAX_INPUT_AMOUNTS];
+      for (int idx = 0; idx < inputUnits.size(); idx++) {
+        inputAmounts[idx] = inputUnits.get(idx);
+      }
+      final long[] outputAmounts = new long[MAX_OUTPUT_AMOUNTS];
+      for (int idx = 0; idx < outputUnits.size(); idx++) {
+        outputAmounts[idx] = outputUnits.get(idx);
+      }
+
+      return new InstanceValues(
+          publicValues(
+              audit.publicInputsHash(),
+              MODE_AUDIT,
+              inputCount,
+              outputCount,
+              inputSum,
+              outputSum,
+              hashLimb0Sum(audit.inputNullifiers()),
+              hashLimb0Sum(audit.outputCommitments()),
+              audit.senderKeyCertificate().payloadHash(),
+              audit.tokenId(),
+              hashLimb0Sum(inputClaimHashes),
+              hashLimb0Sum(outputClaimHashes)),
+          inputAmounts,
+          outputAmounts);
     }
   }
 
@@ -1434,6 +1621,132 @@ public final class OfflineNoteV2 {
     return len == le.length ? le : Arrays.copyOf(le, len);
   }
 
+  private static long validateCount(final int count, final int max, final String label) {
+    if (count < 1 || count > max) {
+      throw new IllegalArgumentException(
+          "Offline V2 " + label + " count " + count + " must be in 1.." + max);
+    }
+    return count;
+  }
+
+  private static long[] publicValues(
+      final byte[] publicInputsHash,
+      final long mode,
+      final long inputCount,
+      final long outputCount,
+      final long inputSum,
+      final long outputSum,
+      final long inputNullifierSum,
+      final long outputCommitmentSum,
+      final byte[] keyCertificatePayloadHash,
+      final byte[] sourceOrToken,
+      final long inputClaimHashSum,
+      final long outputClaimHashSum) {
+    final long[] limbs = hashLimbsLE(publicInputsHash);
+    return new long[] {
+      limbs[0],
+      limbs[1],
+      limbs[2],
+      limbs[3],
+      mode,
+      inputCount,
+      outputCount,
+      inputSum,
+      outputSum,
+      inputNullifierSum,
+      outputCommitmentSum,
+      hashLimb0(keyCertificatePayloadHash),
+      hashLimb0(sourceOrToken),
+      inputClaimHashSum,
+      outputClaimHashSum,
+      0L,
+    };
+  }
+
+  private static List<Long> normalizedAmountUnits(final List<String> amounts) {
+    final List<TrimmedNumeric> trimmed = new ArrayList<>();
+    int targetScale = 0;
+    for (final String amount : amounts) {
+      final TrimmedNumeric numeric = trimmedNumeric(amount);
+      trimmed.add(numeric);
+      targetScale = Math.max(targetScale, numeric.scale);
+    }
+
+    final List<Long> result = new ArrayList<>();
+    for (final TrimmedNumeric numeric : trimmed) {
+      if (numeric.mantissa.signum() < 0) {
+        throw new IllegalArgumentException(
+            "Offline V2 amount " + numeric.original + " must not be negative");
+      }
+      final int scaleDelta = targetScale - numeric.scale;
+      final BigInteger aligned = numeric.mantissa.multiply(BigInteger.TEN.pow(scaleDelta));
+      if (aligned.bitLength() > 64) {
+        throw new IllegalArgumentException(
+            "Offline V2 amount "
+                + numeric.original
+                + " does not fit the u64 witness corridor");
+      }
+      result.add(aligned.longValue());
+    }
+    return Collections.unmodifiableList(result);
+  }
+
+  private static TrimmedNumeric trimmedNumeric(final String amount) {
+    final NumericValue numeric = parseNumeric(amount);
+    final BigDecimal decimal = new BigDecimal(numeric.canonicalString).stripTrailingZeros();
+    final int scale = Math.max(decimal.scale(), 0);
+    final BigInteger mantissa = decimal.movePointRight(scale).toBigIntegerExact();
+    return new TrimmedNumeric(amount, mantissa, scale);
+  }
+
+  private static long checkedSum(final List<Long> values, final String label) {
+    BigInteger sum = BigInteger.ZERO;
+    for (final long value : values) {
+      sum = sum.add(unsignedLongToBigInteger(value));
+      if (sum.compareTo(MAX_U64) > 0) {
+        throw new IllegalArgumentException(
+            "Offline V2 " + label + " amount sum overflows u64 witness units");
+      }
+    }
+    return sum.longValue();
+  }
+
+  private static BigInteger unsignedLongToBigInteger(final long value) {
+    final byte[] bytes = new byte[9];
+    for (int idx = 0; idx < 8; idx++) {
+      bytes[8 - idx] = (byte) (value >>> (idx * 8));
+    }
+    return new BigInteger(bytes);
+  }
+
+  private static long hashLimb0Sum(final List<byte[]> hashes) {
+    long sum = 0L;
+    for (final byte[] hash : hashes) {
+      sum += hashLimb0(hash);
+    }
+    return sum;
+  }
+
+  private static long hashLimb0(final byte[] hash) {
+    return hashLimbsLE(hash)[0];
+  }
+
+  private static long[] hashLimbsLE(final byte[] hash) {
+    if (hash.length != 32) {
+      throw new IllegalArgumentException("hash must be 32 bytes");
+    }
+    final long[] limbs = new long[4];
+    for (int idx = 0; idx < 4; idx++) {
+      final int start = idx * 8;
+      long value = 0L;
+      for (int offset = 0; offset < 8; offset++) {
+        value |= (hash[start + offset] & 0xFFL) << (offset * 8);
+      }
+      limbs[idx] = value;
+    }
+    return limbs;
+  }
+
   private static void requireCertificateCore(
       final int version, final String accountId, final byte[] publicKey, final boolean oneUse) {
     if (version != 2) {
@@ -1546,6 +1859,18 @@ public final class OfflineNoteV2 {
       this.mantissaBytes = Arrays.copyOf(mantissaBytes, mantissaBytes.length);
       this.scale = scale;
       this.canonicalString = canonicalString;
+    }
+  }
+
+  private static final class TrimmedNumeric {
+    private final String original;
+    private final BigInteger mantissa;
+    private final int scale;
+
+    private TrimmedNumeric(final String original, final BigInteger mantissa, final int scale) {
+      this.original = original;
+      this.mantissa = mantissa;
+      this.scale = scale;
     }
   }
 

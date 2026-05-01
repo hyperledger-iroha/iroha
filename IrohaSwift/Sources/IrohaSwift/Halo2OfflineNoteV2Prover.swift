@@ -20,6 +20,33 @@ public enum Halo2OfflineNoteV2Prover {
     private static let proofDegree = 6
     private static let blindingFactors = 5
 
+    private struct ProverContext: Sendable {
+        let params: Halo2IPAParameters
+        let domain: Halo2ExtendedEvaluationDomain
+        let vkRepr: PastaFp
+        let fixedPolys: [[PastaFp]]
+    }
+
+    private static let contextResult: Result<ProverContext, Error> = Result(catching: {
+        let params = try Halo2IPAParameters.generated(k: ipaK)
+        let domain = try Halo2ExtendedEvaluationDomain(degree: proofDegree, k: ipaK)
+        guard let vkRepr = PastaFp.fromCanonicalBytes(canonicalTranscriptRepresentation) else {
+            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
+        }
+        var selectorLagrange = [PastaFp](repeating: .zero, count: domain.n)
+        selectorLagrange[0] = .one
+        return try ProverContext(
+            params: params,
+            domain: domain,
+            vkRepr: vkRepr,
+            fixedPolys: [domain.lagrangeToCoeff(selectorLagrange)]
+        )
+    })
+
+    private static func context() throws -> ProverContext {
+        try contextResult.get()
+    }
+
     public static func prove(instanceValues: OfflineNoteV2InstanceValues) throws -> OfflineNoteRecursiveProofV2 {
         let proofPayload = try proveZK1Payload(instanceValues: instanceValues)
         let envelope = try openVerifyEnvelope(proofPayload: proofPayload)
@@ -32,9 +59,22 @@ public enum Halo2OfflineNoteV2Prover {
         )
     }
 
+    public static func proveRedeem(_ redemption: OfflineNoteRedeemV2) throws -> OfflineNoteRecursiveProofV2 {
+        try prove(instanceValues: OfflineNoteV2InstanceBuilder.redeemInstanceValues(for: redemption))
+    }
+
+    public static func proveAudit(_ audit: OfflineNoteAuditBundleV2) throws -> OfflineNoteRecursiveProofV2 {
+        try prove(instanceValues: OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit))
+    }
+
+    public static func prewarm() throws {
+        _ = try context()
+    }
+
     public static func proveZK1Payload(instanceValues: OfflineNoteV2InstanceValues) throws -> Data {
-        let params = try Halo2IPAParameters.generated(k: ipaK)
-        let domain = try Halo2ExtendedEvaluationDomain(degree: proofDegree, k: ipaK)
+        let context = try context()
+        let params = context.params
+        let domain = context.domain
         let publicScalars = instanceValues.publicValues.map(PastaFp.init)
         let inputScalars = instanceValues.inputAmounts.map(PastaFp.init)
         let outputScalars = instanceValues.outputAmounts.map(PastaFp.init)
@@ -44,10 +84,7 @@ public enum Halo2OfflineNoteV2Prover {
 
         var rng = SystemRandomNumberGenerator()
         var transcript = Halo2Blake2bWriteTranscript()
-        guard let vkRepr = PastaFp.fromCanonicalBytes(canonicalTranscriptRepresentation) else {
-            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
-        }
-        transcript.commonScalar(vkRepr)
+        transcript.commonScalar(context.vkRepr)
 
         let instanceLagrange = publicScalars.map { scalar -> [PastaFp] in
             var column = [PastaFp](repeating: .zero, count: domain.n)
@@ -55,8 +92,10 @@ public enum Halo2OfflineNoteV2Prover {
             return column
         }
         let instancePolys = try instanceLagrange.map { try domain.lagrangeToCoeff($0) }
-        for column in instanceLagrange {
-            try transcript.commonPoint(params.commitLagrange(evaluations: column, blind: .one).toAffine())
+        for scalar in publicScalars {
+            try transcript.commonPoint(
+                params.commitLagrangeSparse(entries: [(index: 0, scalar: scalar)], blind: .one).toAffine()
+            )
         }
 
         var adviceLagrange = [[PastaFp]]()
@@ -74,7 +113,7 @@ public enum Halo2OfflineNoteV2Prover {
         }
         let adviceBlinds = adviceLagrange.map { _ in randomScalar(rng: &rng) }
         for (column, blind) in zip(adviceLagrange, adviceBlinds) {
-            try transcript.writePoint(params.commitLagrange(evaluations: column, blind: blind).toAffine())
+            try transcript.writePoint(params.commitLagrangeSparse(entries: sparseEntries(column), blind: blind).toAffine())
         }
         let advicePolys = try adviceLagrange.map { try domain.lagrangeToCoeff($0) }
 
@@ -90,9 +129,7 @@ public enum Halo2OfflineNoteV2Prover {
         try transcript.writePoint(params.commit(coefficients: randomPoly, blind: randomBlind).toAffine())
         let y = transcript.squeezeChallenge().scalar
 
-        var selectorLagrange = [PastaFp](repeating: .zero, count: domain.n)
-        selectorLagrange[0] = .one
-        let fixedPolys = [try domain.lagrangeToCoeff(selectorLagrange)]
+        let fixedPolys = context.fixedPolys
 
         let hCoefficients = try evaluateQuotientCoefficients(
             domain: domain,
@@ -182,14 +219,12 @@ public enum Halo2OfflineNoteV2Prover {
             return false
         }
 
-        let params = try Halo2IPAParameters.generated(k: ipaK)
-        let domain = try Halo2ExtendedEvaluationDomain(degree: proofDegree, k: ipaK)
+        let context = try context()
+        let params = context.params
+        let domain = context.domain
         let publicScalars = publicValues.map(PastaFp.init)
         var transcript = Halo2Blake2bReadTranscript(proof: proofTranscript)
-        guard let vkRepr = PastaFp.fromCanonicalBytes(canonicalTranscriptRepresentation) else {
-            throw Halo2OfflineNoteV2ProverError.invalidInstanceValues
-        }
-        transcript.commonScalar(vkRepr)
+        transcript.commonScalar(context.vkRepr)
 
         let instanceLagrange = publicScalars.map { scalar -> [PastaFp] in
             var column = [PastaFp](repeating: .zero, count: domain.n)
@@ -215,9 +250,10 @@ public enum Halo2OfflineNoteV2Prover {
         let randomCommitment = try transcript.readPoint()
         let y = transcript.squeezeChallenge().scalar
 
-        var selectorLagrange = [PastaFp](repeating: .zero, count: domain.n)
-        selectorLagrange[0] = .one
-        let fixedCommitment = try params.commitLagrange(evaluations: selectorLagrange, blind: .one).toAffine()
+        let fixedCommitment = try params.commitLagrangeSparse(
+            entries: [(index: 0, scalar: PastaFp.one)],
+            blind: .one
+        ).toAffine()
 
         var hCommitments: [VestaAffine] = []
         hCommitments.reserveCapacity(domain.quotientPolynomialDegree)
@@ -527,6 +563,15 @@ public enum Halo2OfflineNoteV2Prover {
             withUnsafeBytes(of: &word) { bytes.append(contentsOf: $0) }
         }
         return PastaFp.fromUniformBytes64(bytes)!
+    }
+
+    private static func sparseEntries(_ values: [PastaFp]) -> [(index: Int, scalar: PastaFp)] {
+        var entries: [(index: Int, scalar: PastaFp)] = []
+        entries.reserveCapacity(8)
+        for (index, value) in values.enumerated() where value != .zero {
+            entries.append((index: index, scalar: value))
+        }
+        return entries
     }
 
     private static func evaluatePolynomial(_ polynomial: [PastaFp], at point: PastaFp) -> PastaFp {

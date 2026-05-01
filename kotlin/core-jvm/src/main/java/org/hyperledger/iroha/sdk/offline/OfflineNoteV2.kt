@@ -27,10 +27,18 @@ object OfflineNoteV2 {
         "iroha:offline-note-v2:audit-public-inputs:v1"
     const val RECURSIVE_BACKEND: String = "halo2/ipa"
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
+    const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
+        "{\"schema\":\"offline_note_v2_recursive_v1\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
 
     private const val MULTISIG_POLICY_VERSION_V1 = 1
     private const val MAX_NUMERIC_SCALE = 28
     private const val MAX_BIGINT_BYTES = 64
+    private const val PUBLIC_VALUE_COUNT = 16
+    private const val MAX_INPUT_AMOUNTS = 4
+    private const val MAX_OUTPUT_AMOUNTS = 2
+    private const val MODE_REDEEM = 1L
+    private const val MODE_AUDIT = 2L
+    private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 
     private const val KEY_CERTIFICATE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteKeyCertificateV2"
@@ -83,6 +91,17 @@ object OfflineNoteV2 {
 
     @JvmStatic
     fun hash(bytes: ByteArray): ByteArray = IrohaHash.prehash(bytes)
+
+    @JvmStatic
+    fun instanceScalarBytes(value: Long): ByteArray {
+        val out = ByteArray(32)
+        var word = value
+        for (idx in 0 until 8) {
+            out[idx] = (word and 0xffL).toByte()
+            word = word ushr 8
+        }
+        return out
+    }
 
     private fun <T> encodeWithHeader(value: T, schema: String, adapter: TypeAdapter<T>): ByteArray =
         NoritoCodec.encode(value, schema, adapter, NoritoHeader.COMPACT_LEN)
@@ -336,6 +355,17 @@ object OfflineNoteV2 {
                 "recursive proof public inputs hash mismatch"
             }
         }
+
+        fun replacingRecursiveProof(recursiveProof: RecursiveProofV2): RedeemV2 = RedeemV2(
+            sourceNoteCommitment = sourceNoteCommitment(),
+            inputNullifiers = inputNullifiers(),
+            senderKeyCertificate = senderKeyCertificate,
+            recipient = recipient,
+            assetId = assetId,
+            amount = amount,
+            recursiveProof = recursiveProof,
+        )
+
         fun noritoEncoded(): ByteArray = encodeRedeem(this)
     }
 
@@ -420,7 +450,133 @@ object OfflineNoteV2 {
                 "recursive proof public inputs hash mismatch"
             }
         }
+
+        fun replacingRecursiveProof(recursiveProof: RecursiveProofV2): AuditBundleV2 = AuditBundleV2(
+            tokenId = tokenId(),
+            senderKeyCertificate = senderKeyCertificate,
+            inputNullifiers = inputNullifiers(),
+            inputClaims = inputClaims,
+            outputCommitments = outputCommitments(),
+            outputClaims = outputClaims,
+            recursiveProof = recursiveProof,
+        )
+
         fun noritoEncoded(): ByteArray = encodeAudit(this)
+    }
+
+    class InstanceValues(
+        publicValues: LongArray,
+        inputAmounts: LongArray,
+        outputAmounts: LongArray,
+    ) {
+        private val _publicValues = publicValues.copyOf()
+        private val _inputAmounts = inputAmounts.copyOf()
+        private val _outputAmounts = outputAmounts.copyOf()
+
+        init {
+            require(_publicValues.size == PUBLIC_VALUE_COUNT) {
+                "Offline V2 public instance count must be $PUBLIC_VALUE_COUNT"
+            }
+            require(_inputAmounts.size == MAX_INPUT_AMOUNTS) {
+                "Offline V2 input amount witness count must be $MAX_INPUT_AMOUNTS"
+            }
+            require(_outputAmounts.size == MAX_OUTPUT_AMOUNTS) {
+                "Offline V2 output amount witness count must be $MAX_OUTPUT_AMOUNTS"
+            }
+        }
+
+        fun publicValues(): LongArray = _publicValues.copyOf()
+        fun inputAmounts(): LongArray = _inputAmounts.copyOf()
+        fun outputAmounts(): LongArray = _outputAmounts.copyOf()
+        fun publicInstanceColumns(): List<ByteArray> = _publicValues.map { instanceScalarBytes(it) }
+    }
+
+    object InstanceBuilder {
+        @JvmStatic
+        fun redeemInstanceValues(redemption: RedeemV2): InstanceValues {
+            val inputCount = validateCount(
+                redemption.inputNullifiers().size,
+                MAX_INPUT_AMOUNTS,
+                "redemption input",
+            )
+            val normalizedAmounts = normalizedAmountUnits(
+                listOf(redemption.canonicalAmount, redemption.canonicalAmount)
+            )
+            val inputSum = normalizedAmounts[0]
+            val outputSum = normalizedAmounts[1]
+            val issuedClaimHash = IssuedClaimV2(
+                noteCommitment = redemption.sourceNoteCommitment(),
+                keyCertificatePayloadHash = redemption.senderKeyCertificate.payloadHash(),
+                assetId = redemption.assetId,
+                amount = redemption.canonicalAmount,
+            ).claimHash()
+            val publicValues = publicValues(
+                publicInputsHash = redemption.publicInputsHash(),
+                mode = MODE_REDEEM,
+                inputCount = inputCount,
+                outputCount = 1L,
+                inputSum = inputSum,
+                outputSum = outputSum,
+                inputNullifierSum = hashLimb0Sum(redemption.inputNullifiers()),
+                outputCommitmentSum = 0L,
+                keyCertificatePayloadHash = redemption.senderKeyCertificate.payloadHash(),
+                sourceOrToken = redemption.sourceNoteCommitment(),
+                inputClaimHashSum = hashLimb0(issuedClaimHash),
+                outputClaimHashSum = 0L,
+            )
+            val inputAmounts = LongArray(MAX_INPUT_AMOUNTS)
+            inputAmounts[0] = inputSum
+            val outputAmounts = LongArray(MAX_OUTPUT_AMOUNTS)
+            outputAmounts[0] = outputSum
+            return InstanceValues(publicValues, inputAmounts, outputAmounts)
+        }
+
+        @JvmStatic
+        fun auditInstanceValues(audit: AuditBundleV2): InstanceValues {
+            val inputCount = validateCount(audit.inputClaims.size, MAX_INPUT_AMOUNTS, "audit input")
+            val outputCount = validateCount(audit.outputClaims.size, MAX_OUTPUT_AMOUNTS, "audit output")
+            require(audit.inputNullifiers().size == audit.inputClaims.size) {
+                "audit input nullifier count must match input claim count"
+            }
+
+            val inputClaimHashes = audit.inputClaims.map { it.claimHash() }
+            val outputClaimHashes = audit.outputClaims.map { it.issuedClaim().claimHash() }
+            val normalizedAmounts = normalizedAmountUnits(
+                audit.inputClaims.map { it.canonicalAmount } +
+                    audit.outputClaims.map { it.canonicalAmount }
+            )
+            val inputUnits = normalizedAmounts.take(audit.inputClaims.size)
+            val outputUnits = normalizedAmounts.drop(audit.inputClaims.size)
+            val inputSum = checkedSum(inputUnits, "input")
+            val outputSum = checkedSum(outputUnits, "output")
+            require(inputSum == outputSum) {
+                "Offline V2 audit amounts are not conserved"
+            }
+
+            val inputAmounts = LongArray(MAX_INPUT_AMOUNTS)
+            inputUnits.forEachIndexed { index, amount -> inputAmounts[index] = amount }
+            val outputAmounts = LongArray(MAX_OUTPUT_AMOUNTS)
+            outputUnits.forEachIndexed { index, amount -> outputAmounts[index] = amount }
+
+            return InstanceValues(
+                publicValues(
+                    publicInputsHash = audit.publicInputsHash(),
+                    mode = MODE_AUDIT,
+                    inputCount = inputCount,
+                    outputCount = outputCount,
+                    inputSum = inputSum,
+                    outputSum = outputSum,
+                    inputNullifierSum = hashLimb0Sum(audit.inputNullifiers()),
+                    outputCommitmentSum = hashLimb0Sum(audit.outputCommitments()),
+                    keyCertificatePayloadHash = audit.senderKeyCertificate.payloadHash(),
+                    sourceOrToken = audit.tokenId(),
+                    inputClaimHashSum = hashLimb0Sum(inputClaimHashes),
+                    outputClaimHashSum = hashLimb0Sum(outputClaimHashes),
+                ),
+                inputAmounts,
+                outputAmounts,
+            )
+        }
     }
 
     private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayloadV2> {
@@ -773,6 +929,115 @@ object OfflineNoteV2 {
         return if (len == le.size) le else le.copyOf(len)
     }
 
+    private fun validateCount(count: Int, max: Int, label: String): Long {
+        require(count in 1..max) {
+            "Offline V2 $label count $count must be in 1..$max"
+        }
+        return count.toLong()
+    }
+
+    private fun publicValues(
+        publicInputsHash: ByteArray,
+        mode: Long,
+        inputCount: Long,
+        outputCount: Long,
+        inputSum: Long,
+        outputSum: Long,
+        inputNullifierSum: Long,
+        outputCommitmentSum: Long,
+        keyCertificatePayloadHash: ByteArray,
+        sourceOrToken: ByteArray,
+        inputClaimHashSum: Long,
+        outputClaimHashSum: Long,
+    ): LongArray {
+        val limbs = hashLimbsLE(publicInputsHash)
+        return longArrayOf(
+            limbs[0],
+            limbs[1],
+            limbs[2],
+            limbs[3],
+            mode,
+            inputCount,
+            outputCount,
+            inputSum,
+            outputSum,
+            inputNullifierSum,
+            outputCommitmentSum,
+            hashLimb0(keyCertificatePayloadHash),
+            hashLimb0(sourceOrToken),
+            inputClaimHashSum,
+            outputClaimHashSum,
+            0L,
+        )
+    }
+
+    private fun normalizedAmountUnits(amounts: List<String>): List<Long> {
+        val trimmed = amounts.map { trimmedNumeric(it) }
+        val targetScale = trimmed.maxOfOrNull { it.scale } ?: 0
+        return trimmed.map { numeric ->
+            require(numeric.mantissa.signum() >= 0) {
+                "Offline V2 amount ${numeric.original} must not be negative"
+            }
+            val scaleDelta = targetScale - numeric.scale
+            val aligned = numeric.mantissa.multiply(BigInteger.TEN.pow(scaleDelta))
+            require(aligned.bitLength() <= 64) {
+                "Offline V2 amount ${numeric.original} does not fit the u64 witness corridor"
+            }
+            aligned.toLong()
+        }
+    }
+
+    private fun trimmedNumeric(amount: String): TrimmedNumeric {
+        val numeric = parseNumeric(amount)
+        val decimal = BigDecimal(numeric.canonicalString).stripTrailingZeros()
+        val scale = decimal.scale().coerceAtLeast(0)
+        val mantissa = decimal.movePointRight(scale).toBigIntegerExact()
+        return TrimmedNumeric(amount, mantissa, scale)
+    }
+
+    private fun checkedSum(values: List<Long>, label: String): Long {
+        var sum = BigInteger.ZERO
+        for (value in values) {
+            sum = sum.add(unsignedLongToBigInteger(value))
+            require(sum <= MAX_U64) {
+                "Offline V2 $label amount sum overflows u64 witness units"
+            }
+        }
+        return sum.toLong()
+    }
+
+    private fun unsignedLongToBigInteger(value: Long): BigInteger {
+        val bytes = ByteArray(9)
+        for (idx in 0 until 8) {
+            bytes[8 - idx] = (value ushr (idx * 8)).toByte()
+        }
+        return BigInteger(bytes)
+    }
+
+    private fun hashLimb0Sum(hashes: List<ByteArray>): Long {
+        var sum = 0L
+        for (hash in hashes) {
+            sum += hashLimb0(hash)
+        }
+        return sum
+    }
+
+    private fun hashLimb0(hash: ByteArray): Long = hashLimbsLE(hash)[0]
+
+    private fun hashLimbsLE(hash: ByteArray): LongArray {
+        require(hash.size == 32) { "hash must be 32 bytes" }
+        val limbs = LongArray(4)
+        for (idx in 0 until 4) {
+            val start = idx * 8
+            var value = 0L
+            for (offset in 0 until 8) {
+                value = value or ((hash[start + offset].toLong() and 0xffL) shl (offset * 8))
+            }
+            limbs[idx] = value
+        }
+        return limbs
+    }
+
     private fun requireCertificateCore(version: Int, accountId: String, publicKey: ByteArray, oneUse: Boolean) {
         require(version == 2) { "Offline Note V2 key certificate version must be 2" }
         require(oneUse) { "Offline Note V2 key certificate must be one-use" }
@@ -831,5 +1096,11 @@ object OfflineNoteV2 {
         val mantissaBytes: ByteArray,
         val scale: Int,
         val canonicalString: String,
+    )
+
+    private class TrimmedNumeric(
+        val original: String,
+        val mantissa: BigInteger,
+        val scale: Int,
     )
 }

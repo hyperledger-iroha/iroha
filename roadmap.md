@@ -23,6 +23,15 @@ Completed history lives in `status.md`. This file should only track unfinished w
     corridor when validation budget allows.
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
+  - The pure Swift Offline V2 prover hot path is green as of 2026-05-01 with
+    subsecond median native audit/redeem proofs on macOS arm64. Keep that
+    benchmark in the next iOS-device corridor and broaden Swift package
+    validation when budget allows.
+  - Kotlin/JVM and Java Android now have the native Offline V2 instance-value
+    groundwork and pure Java Halo2/IPA prover path, including focused JVM and
+    Android harness coverage plus env-gated benchmark hooks. Keep the native
+    prover tests, Swift/JVM cross-verification payload, and larger benchmark
+    iteration counts in the next device and full-SDK corridor.
   - The Torii Offline V2 issuer hardening focused corridor is green as of
     2026-05-01. Fold it into the next broader `cargo test -p iroha_torii`,
     SDK, workspace test, and workspace clippy corridor when validation budget
