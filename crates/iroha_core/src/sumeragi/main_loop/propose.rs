@@ -1046,7 +1046,9 @@ impl Actor {
         let owner_age = owner_pending
             .progress_age(now)
             .max(now.saturating_duration_since(owner_pending.inserted_at));
-        let recovery_exhausted = owner_age >= hard_yield_age;
+        let recovery_age = self.stale_same_height_recovery_age(height, now);
+        let recovery_exhausted =
+            owner_age >= hard_yield_age || recovery_age.is_some_and(|age| age >= hard_yield_age);
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
         let local_vote_blocks = local_vote.as_ref().is_some_and(|vote| {
             self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
@@ -1082,6 +1084,7 @@ impl Actor {
                     owner_view,
                     owner = %owner_hash,
                     owner_age_ms = owner_age.as_millis(),
+                    recovery_age_ms = recovery_age.map(|age| age.as_millis()),
                     min_yield_age_ms = min_yield_age.as_millis(),
                     hard_yield_age_ms = hard_yield_age.as_millis(),
                     recovery_exhausted,
@@ -1096,7 +1099,7 @@ impl Actor {
             }
             return false;
         }
-        if owner_age < min_yield_age {
+        if owner_age < min_yield_age && !recovery_exhausted {
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
                 ProposalDeferWarningKind::FrontierOwnerYieldBlocked,
                 height,
@@ -1111,6 +1114,7 @@ impl Actor {
                     owner_view,
                     owner = %owner_hash,
                     owner_age_ms = owner_age.as_millis(),
+                    recovery_age_ms = recovery_age.map(|age| age.as_millis()),
                     min_yield_age_ms = min_yield_age.as_millis(),
                     suppressed_since_last,
                     "stale frontier owner yield blocked: owner still inside yield grace"
@@ -1138,6 +1142,7 @@ impl Actor {
                 owner_view,
                 owner = %owner_hash,
                 owner_age_ms = owner_age.as_millis(),
+                recovery_age_ms = recovery_age.map(|age| age.as_millis()),
                 min_yield_age_ms = min_yield_age.as_millis(),
                 tx_count,
                 requeued,
@@ -1153,6 +1158,7 @@ impl Actor {
                 owner_view,
                 owner = %owner_hash,
                 owner_age_ms = owner_age.as_millis(),
+                recovery_age_ms = recovery_age.map(|age| age.as_millis()),
                 min_yield_age_ms = min_yield_age.as_millis(),
                 cleared_inflight = cleared_inflight.is_some(),
                 queue_len = pending_queue_len,
@@ -1196,6 +1202,20 @@ impl Actor {
                 })
     }
 
+    fn stale_same_height_recovery_age(
+        &self,
+        proposal_height: u64,
+        now: Instant,
+    ) -> Option<Duration> {
+        self.frontier_recovery
+            .as_ref()
+            .filter(|state| {
+                state.frontier_height == proposal_height
+                    && matches!(state.last_cause, "missing_qc" | "quorum_timeout")
+            })
+            .map(|state| now.saturating_duration_since(state.entered_at))
+    }
+
     pub(super) fn local_same_height_vote_blocks_fresh_proposal(
         &self,
         proposal_height: u64,
@@ -1221,6 +1241,10 @@ impl Actor {
             .quorum_timeout(self.runtime_da_enabled())
             .max(self.frontier_slot_lag_window())
             .max(Duration::from_millis(1));
+        let hard_stale_age = min_stale_age.saturating_mul(3);
+        let recovery_exhausted = self
+            .stale_same_height_recovery_age(proposal_height, now)
+            .is_some_and(|age| age >= hard_stale_age);
         if let Some(pending) = self
             .pending
             .pending_blocks
@@ -1251,7 +1275,7 @@ impl Actor {
             } else {
                 min_stale_age
             };
-            if pending_age < stale_age {
+            if pending_age < stale_age && !recovery_exhausted {
                 return true;
             }
         }
@@ -1260,7 +1284,8 @@ impl Actor {
                 && slot.view == existing_vote.view
                 && slot.block_hash == existing_vote.block_hash
                 && (slot.quorum_progress.commit_qc_observed
-                    || self.frontier_slot_competing_quorum_locked_for_view(slot, proposal_view))
+                    || (self.frontier_slot_competing_quorum_locked_for_view(slot, proposal_view)
+                        && !recovery_exhausted))
         }) {
             return true;
         }
