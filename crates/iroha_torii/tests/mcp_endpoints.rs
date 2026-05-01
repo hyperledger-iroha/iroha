@@ -393,6 +393,7 @@ async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
             .expect("properties object");
         assert!(properties.contains_key("sid"));
         assert!(properties.contains_key("session_id"));
+        assert!(properties.contains_key("token_management"));
         assert!(
             !properties.contains_key("path"),
             "{name} schema should keep delete parameters flat for OpenAI-compatible clients"
@@ -5875,6 +5876,13 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             .is_some_and(|token| !token.is_empty()),
         "session create response should contain token_wallet"
     );
+    assert!(
+        create_body
+            .get("token_management")
+            .and_then(Value::as_str)
+            .is_some_and(|token| !token.is_empty()),
+        "session create response should contain token_management"
+    );
     let token_app = create_body
         .get("token_app")
         .and_then(Value::as_str)
@@ -5884,6 +5892,11 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
         .get("token_wallet")
         .and_then(Value::as_str)
         .expect("token_wallet present")
+        .to_owned();
+    let token_management = create_body
+        .get("token_management")
+        .and_then(Value::as_str)
+        .expect("token_management present")
         .to_owned();
 
     let (status, ws_ticket_app_call) = post_mcp(
@@ -6000,7 +6013,8 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
                 "arguments": {
                     "path": {
                         "session_id": sid
-                    }
+                    },
+                    "token_management": token_management
                 }
             }
         }),
@@ -6026,7 +6040,8 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.session.delete",
                 "arguments": {
-                    "sid": sid
+                    "sid": sid,
+                    "token_management": token_management
                 }
             }
         }),
@@ -6089,6 +6104,11 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
         .get("token_app")
         .and_then(Value::as_str)
         .expect("token_app present")
+        .to_owned();
+    let token_management = create_body
+        .get("token_management")
+        .and_then(Value::as_str)
+        .expect("token_management present")
         .to_owned();
 
     let (status, ticket_call) = post_mcp(
@@ -6156,7 +6176,8 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
                 "arguments": {
                     "path": {
                         "session_id": sid
-                    }
+                    },
+                    "token_management": token_management
                 }
             }
         }),

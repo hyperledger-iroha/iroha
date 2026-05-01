@@ -158,7 +158,7 @@ struct OfflineCanonicalNumeric {
         }
         let isZero = normalizedDigits.allSatisfy { $0 == "0" }
         self.isNegative = isZero ? false : isNegative
-        self.scale = scale
+        self.scale = isZero ? 0 : scale
         self.digits = isZero ? "0" : normalizedDigits
     }
 
@@ -296,6 +296,8 @@ struct OfflineCanonicalNumeric {
         _ lhs: String,
         _ rhs: String
     ) -> ComparisonResult {
+        let lhs = normalizedMagnitudeString(lhs)
+        let rhs = normalizedMagnitudeString(rhs)
         if lhs.count != rhs.count {
             return lhs.count < rhs.count ? .orderedAscending : .orderedDescending
         }
@@ -303,6 +305,14 @@ struct OfflineCanonicalNumeric {
             return .orderedSame
         }
         return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+
+    private static func normalizedMagnitudeString(_ value: String) -> String {
+        var digits = value
+        while digits.count > 1 && digits.first == "0" {
+            digits.removeFirst()
+        }
+        return digits
     }
 
     private static func addMagnitudeStrings(_ lhs: String, _ rhs: String) -> String {

@@ -874,12 +874,17 @@ public final class OfflineNoteV2Halo2Prover {
       this.value = value.mod(params.modulus);
     }
 
+    private F(final ParamsField params, final BigInteger value, final boolean canonical) {
+      this.params = params;
+      this.value = canonical ? value : value.mod(params.modulus);
+    }
+
     private static F zero(final ParamsField params) {
-      return new F(params, BigInteger.ZERO);
+      return new F(params, BigInteger.ZERO, true);
     }
 
     private static F one(final ParamsField params) {
-      return new F(params, BigInteger.ONE);
+      return new F(params, BigInteger.ONE, true);
     }
 
     private static F of(final ParamsField params, final long value) {
@@ -914,7 +919,7 @@ public final class OfflineNoteV2Halo2Prover {
       if (value.compareTo(params.modulus) >= 0) {
         throw new IllegalArgumentException("field element is not canonical");
       }
-      return new F(params, value);
+      return new F(params, value, true);
     }
 
     private static F fromUniformBytes64(final ParamsField params, final byte[] littleEndian) {
@@ -926,16 +931,40 @@ public final class OfflineNoteV2Halo2Prover {
 
     private F add(final F rhs) {
       same(rhs);
-      return new F(params, value.add(rhs.value));
+      BigInteger sum = value.add(rhs.value);
+      if (sum.compareTo(params.modulus) >= 0) {
+        sum = sum.subtract(params.modulus);
+      }
+      return new F(params, sum, true);
     }
 
     private F sub(final F rhs) {
       same(rhs);
-      return new F(params, value.subtract(rhs.value));
+      BigInteger difference = value.subtract(rhs.value);
+      if (difference.signum() < 0) {
+        difference = difference.add(params.modulus);
+      }
+      return new F(params, difference, true);
     }
 
     private F neg() {
-      return isZero() ? this : new F(params, params.modulus.subtract(value));
+      return isZero() ? this : new F(params, params.modulus.subtract(value), true);
+    }
+
+    private F doubleValue() {
+      BigInteger doubled = value.shiftLeft(1);
+      if (doubled.compareTo(params.modulus) >= 0) {
+        doubled = doubled.subtract(params.modulus);
+      }
+      return new F(params, doubled, true);
+    }
+
+    private F eightValue() {
+      BigInteger scaled = value.shiftLeft(3);
+      while (scaled.compareTo(params.modulus) >= 0) {
+        scaled = scaled.subtract(params.modulus);
+      }
+      return new F(params, scaled, true);
     }
 
     private F mul(final F rhs) {
@@ -1199,11 +1228,13 @@ public final class OfflineNoteV2Halo2Prover {
       final F b = y.square();
       final F c = b.square();
       final F xPlusB = x.add(b);
-      final F d = xPlusB.square().sub(a).sub(c).add(xPlusB.square().sub(a).sub(c));
+      final F xPlusBSquared = xPlusB.square();
+      final F d0 = xPlusBSquared.sub(a).sub(c);
+      final F d = d0.add(d0);
       final F e = a.add(a).add(a);
       final F f = e.square();
       final F x3 = f.sub(d).sub(d);
-      final F y3 = e.mul(d.sub(x3)).sub(F.of(FQ, 8).mul(c));
+      final F y3 = e.mul(d.sub(x3)).sub(c.eightValue());
       final F z3 = y.add(y).mul(z);
       return new Projective(x3, y3, z3);
     }
@@ -1229,7 +1260,7 @@ public final class OfflineNoteV2Halo2Prover {
       final F r = r0.add(r0);
       final F v = x.mul(i);
       final F x3 = r.square().sub(j).sub(v).sub(v);
-      final F y3 = r.mul(v.sub(x3)).sub(F.of(FQ, 2).mul(y).mul(j));
+      final F y3 = r.mul(v.sub(x3)).sub(y.doubleValue().mul(j));
       final F z3 = z.add(h).square().sub(z2).sub(hh);
       return new Projective(x3, y3, z3);
     }
@@ -1257,7 +1288,7 @@ public final class OfflineNoteV2Halo2Prover {
       final F r = r0.add(r0);
       final F v = u1.mul(i);
       final F x3 = r.square().sub(j).sub(v).sub(v);
-      final F y3 = r.mul(v.sub(x3)).sub(F.of(FQ, 2).mul(s1).mul(j));
+      final F y3 = r.mul(v.sub(x3)).sub(s1.doubleValue().mul(j));
       final F z3 = z.add(rhs.z).square().sub(z1z1).sub(z2z2).mul(h);
       return new Projective(x3, y3, z3);
     }
@@ -1288,6 +1319,58 @@ public final class OfflineNoteV2Halo2Prover {
     }
 
     private static Projective msm(final List<F> scalars, final List<Affine> bases) {
+      if (scalars.size() != bases.size()) {
+        throw new IllegalArgumentException("MSM scalar/base length mismatch");
+      }
+      int active = 0;
+      for (int i = 0; i < scalars.size(); i++) {
+        if (!scalars.get(i).isZero() && !bases.get(i).identity) {
+          active++;
+        }
+      }
+      if (active < 8) {
+        return msmNaive(scalars, bases);
+      }
+
+      final byte[][] scalarBytes = new byte[scalars.size()][];
+      for (int i = 0; i < scalars.size(); i++) {
+        if (!scalars.get(i).isZero() && !bases.get(i).identity) {
+          scalarBytes[i] = scalars.get(i).canonicalBytes();
+        }
+      }
+
+      Projective result = identity();
+      for (int window = 63; window >= 0; window--) {
+        if (!result.isIdentity()) {
+          result = result.doublePoint().doublePoint().doublePoint().doublePoint();
+        }
+        final Projective[] buckets = new Projective[16];
+        for (int i = 0; i < scalarBytes.length; i++) {
+          if (scalarBytes[i] == null) {
+            continue;
+          }
+          final int nibble = windowNibble(scalarBytes[i], window);
+          if (nibble != 0) {
+            buckets[nibble] =
+                buckets[nibble] == null
+                    ? bases.get(i).projective()
+                    : buckets[nibble].mixedAdd(bases.get(i));
+          }
+        }
+        Projective running = identity();
+        for (int bucket = buckets.length - 1; bucket > 0; bucket--) {
+          if (buckets[bucket] != null) {
+            running = running.add(buckets[bucket]);
+          }
+          if (!running.isIdentity()) {
+            result = result.add(running);
+          }
+        }
+      }
+      return result;
+    }
+
+    private static Projective msmNaive(final List<F> scalars, final List<Affine> bases) {
       Projective acc = identity();
       for (int i = 0; i < scalars.size(); i++) {
         if (!scalars.get(i).isZero() && !bases.get(i).identity) {
@@ -1295,6 +1378,11 @@ public final class OfflineNoteV2Halo2Prover {
         }
       }
       return acc;
+    }
+
+    private static int windowNibble(final byte[] scalarBytes, final int window) {
+      final int value = scalarBytes[window / 2] & 0xFF;
+      return (window & 1) == 0 ? value & 0x0F : (value >>> 4) & 0x0F;
     }
   }
 

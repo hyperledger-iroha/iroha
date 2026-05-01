@@ -2,6 +2,15 @@ import XCTest
 @testable import IrohaSwift
 
 final class ToriiNumericParsingTests: XCTestCase {
+    func testFractionalAmountsCompareAgainstZero() throws {
+        XCTAssertEqual(try ToriiOfflineCashCodec.compareAmounts("0.5", "0"), .orderedDescending)
+        XCTAssertEqual(try ToriiOfflineCashCodec.compareAmounts("0.05", "0"), .orderedDescending)
+        XCTAssertEqual(try ToriiOfflineCashCodec.compareAmounts("0.5", "0.50"), .orderedSame)
+        XCTAssertEqual(try ToriiOfflineCashCodec.subtractAmounts("1.3", "0.5"), "0.8")
+        XCTAssertEqual(try ToriiOfflineCashCodec.subtractAmounts("1.3", "1.3"), "0")
+        XCTAssertEqual(try ToriiOfflineCashCodec.canonicalAmountString("0.00"), "0")
+    }
+
     func testConnectStatusPolicySkipsFractionalLimits() {
         let policy = ToriiConnectStatusPolicySnapshot(raw: [
             "ws_max_sessions": .number(5.5),

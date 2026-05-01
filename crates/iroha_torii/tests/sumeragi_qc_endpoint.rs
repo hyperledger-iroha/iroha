@@ -3,13 +3,45 @@
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "telemetry")]
 
+static QC_ENDPOINT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn reset_qc_status() {
+    use iroha_core::sumeragi::status;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+
+    status::set_highest_qc(0, 0);
+    status::set_highest_qc_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0; Hash::LENGTH]),
+    ));
+    status::set_locked_qc(0, 0, None);
+}
+
+fn qc_endpoint_app() -> axum::Router {
+    use axum::{
+        http::{HeaderMap, header::ACCEPT},
+        routing::get,
+    };
+
+    axum::Router::new().route(
+        "/v1/sumeragi/qc",
+        get(|headers: HeaderMap| async move {
+            iroha_torii::handle_v1_sumeragi_qc(headers.get(ACCEPT).cloned()).await
+        }),
+    )
+}
+
 #[tokio::test]
 async fn sumeragi_qc_endpoint_shape() {
-    use axum::{Router, routing::get};
     use iroha_core::sumeragi::status;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
     use tower::ServiceExt;
+
+    let _guard = QC_ENDPOINT_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_qc_status();
 
     // Seed status
     status::set_highest_qc(11, 3);
@@ -22,10 +54,7 @@ async fn sumeragi_qc_endpoint_shape() {
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(h);
     status::set_highest_qc_hash(typed);
 
-    let app = Router::new().route(
-        "/v1/sumeragi/qc",
-        get(|| async move { iroha_torii::handle_v1_sumeragi_qc(None).await }),
-    );
+    let app = qc_endpoint_app();
 
     let resp = app
         .oneshot(
@@ -59,18 +88,19 @@ async fn sumeragi_qc_endpoint_shape() {
 
 #[tokio::test]
 async fn sumeragi_qc_endpoint_supports_norito_payload() {
-    use axum::{Router, routing::get};
     use iroha_core::sumeragi::status;
     use iroha_data_model::block::consensus::SumeragiQcSnapshot;
     use tower::ServiceExt;
 
+    let _guard = QC_ENDPOINT_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_qc_status();
+
     status::set_highest_qc(6, 2);
     status::set_locked_qc(5, 1, None);
 
-    let app = Router::new().route(
-        "/v1/sumeragi/qc",
-        get(|| async move { iroha_torii::handle_v1_sumeragi_qc(None).await }),
-    );
+    let app = qc_endpoint_app();
 
     let resp = app
         .oneshot(
