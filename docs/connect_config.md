@@ -20,7 +20,7 @@ Environment overrides (user config → actual config):
 - `CONNECT_DEDUPE_CAP` (usize; default: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; default: `true`)
 - `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`; allowed: `"broadcast"`, `"local_only"`; compatibility aliases: `"local-only"`, `"local"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; default: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; default: `0`; `0` disables cross-node rebroadcast)
 
 Notes:
 
@@ -31,7 +31,9 @@ Notes:
 - `CONNECT_RELAY_STRATEGY="broadcast"` relays Connect frames through the Iroha node-to-node P2P network;
   `"local_only"` keeps relay traffic on the local node only. Compatibility aliases `"local-only"` and
   `"local"` normalize to `"local_only"`. Unknown strategy values are forced to `"local_only"` to avoid
-  unintended relay behavior. Torii does not use centralized relay servers.
+  unintended relay behavior. Torii does not use centralized relay servers. P2P relay frames are
+  authenticated with the session `token_relay`; frames with invalid MACs are dropped before dedupe or
+  sequence state is updated.
 - WebSocket ingress validates role→direction mapping (`app` must send `AppToWallet`, `wallet` must
   send `WalletToApp`). Mismatches terminate the session with `connect_role_direction_mismatch` and
   increment `connect.role_direction_mismatch_total`.
@@ -40,11 +42,10 @@ Notes:
 - Per direction, sequence numbers are strict and contiguous starting at `1`; non-contiguous frames
   terminate the session with `connect_sequence_violation` and increment
   `connect.sequence_violation_closes_total`.
-- `/v1/connect/status` reports top-level fields `p2p_rebroadcasts_total` and
-  `p2p_rebroadcast_skipped_total` (mirrored by telemetry metrics
-  `connect.p2p_rebroadcasts_total` and `connect.p2p_rebroadcast_skipped_total`). The rebroadcast
-  counter increments when a frame is sent over Iroha P2P; the skipped counter increments when relay
-  is configured as `broadcast` but no P2P network handle is attached at runtime.
+- Public `/v1/connect/status` is redacted and does not expose per-IP session details. Add
+  `?sid=<sid>` plus `Authorization: Bearer <token_management>` for token-gated per-session status.
+- `/v1/connect/status` reports top-level P2P counters including `p2p_rebroadcasts_total`,
+  `p2p_rebroadcast_skipped_total`, `p2p_auth_failures_total`, and `p2p_ttl_drops_total`.
 - `/v1/connect/status.policy` includes both configured and effective relay mode:
   `relay_strategy` (normalized config), `relay_effective_strategy` (runtime behavior), and
   `relay_p2p_attached` (whether Torii currently has a P2P relay handle). This allows operators to
@@ -68,7 +69,12 @@ Notes:
      client-generated 32-byte base64url `sid`.
   2. Reuse the returned `sid` plus `token_app` or `token_wallet` in a websocket
      upgrade request to `/v1/connect/ws?sid=<sid>&role=<role>`.
-  3. Treat a Torii-generated application response (`400/401/...`) as proof that
+  3. Use `token_management` for `DELETE /v1/connect/session/<sid>` and token-gated
+     per-session status. Use `token_relay` from the response/deep link to authenticate
+     P2P Connect relay envelopes.
+  4. Bind `token_relay` into wallet approval signatures with the SDK relay-auth
+     hash helper before signing the approval preimage.
+  5. Treat a Torii-generated application response (`400/401/...`) as proof that
      the proxy upgrade hop is working; proxy-layer `404` / missing-upgrade
      failures mean the reverse proxy still is not preserving websocket
      semantics.

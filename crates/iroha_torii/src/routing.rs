@@ -4149,6 +4149,10 @@ pub struct ConnectSessionResponse {
     pub token_app: String,
     /// One-time token for the wallet role.
     pub token_wallet: String,
+    /// Stable bearer token for deleting or inspecting this session.
+    pub token_management: String,
+    /// Bearer token used to authenticate P2P relay envelopes for this session.
+    pub token_relay: String,
 }
 
 #[cfg(feature = "connect")]
@@ -4186,28 +4190,38 @@ pub async fn handle_connect_session(
     // Generate one-time tokens (32 bytes each)
     let mut t_app = [0u8; 32];
     let mut t_wallet = [0u8; 32];
+    let mut t_management = [0u8; 32];
+    let mut t_relay = [0u8; 32];
     let mut rng = OsRng;
     rng.try_fill_bytes(&mut t_app)
         .expect("operating-system RNG should be available");
     rng.try_fill_bytes(&mut t_wallet)
         .expect("operating-system RNG should be available");
+    rng.try_fill_bytes(&mut t_management)
+        .expect("operating-system RNG should be available");
+    rng.try_fill_bytes(&mut t_relay)
+        .expect("operating-system RNG should be available");
     let token_app = B64.encode(t_app);
     let token_wallet = B64.encode(t_wallet);
+    let token_management = B64.encode(t_management);
+    let token_relay = B64.encode(t_relay);
     let sid_b64 = B64.encode(sid_bytes);
     let node = req.node.unwrap_or_default();
     let wallet_uri = format!(
-        "iroha://connect?sid={}&chain_id={}&node={}&v=1&role=wallet&token={}",
+        "iroha://connect?sid={}&chain_id={}&node={}&v=1&role=wallet&token={}&relay={}",
         sid_b64,
         chain_id.to_string(),
         urlencoding::encode(&node),
-        token_wallet
+        token_wallet,
+        token_relay
     );
     let app_uri = format!(
-        "iroha://connect?sid={}&chain_id={}&node={}&v=1&role=app&token={}",
+        "iroha://connect?sid={}&chain_id={}&node={}&v=1&role=app&token={}&relay={}",
         sid_b64,
         chain_id.to_string(),
         urlencoding::encode(&node),
-        token_app
+        token_app,
+        token_relay
     );
     Ok(JsonBody(ConnectSessionResponse {
         sid: sid_b64,
@@ -4215,6 +4229,8 @@ pub async fn handle_connect_session(
         app_uri,
         token_app,
         token_wallet,
+        token_management,
+        token_relay,
     }))
 }
 
@@ -4263,9 +4279,16 @@ mod connect_session_tests {
             .await
             .expect("ok");
         assert_eq!(resp.0.sid, sid_str);
-        assert!(resp.0.token_app.len() > 0 && resp.0.token_wallet.len() > 0);
+        assert!(
+            resp.0.token_app.len() > 0
+                && resp.0.token_wallet.len() > 0
+                && resp.0.token_management.len() > 0
+                && resp.0.token_relay.len() > 0
+        );
         assert!(resp.0.wallet_uri.contains(&sid_str));
         assert!(resp.0.app_uri.contains(&sid_str));
+        assert!(resp.0.wallet_uri.contains("&relay="));
+        assert!(resp.0.app_uri.contains("&relay="));
     }
 
     #[tokio::test]

@@ -110,7 +110,7 @@ evidence for `status.md`.
 1. **Delete staged sessions.** Always delete preview sessions so queue depth
    alarms remain meaningful:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
 2. **Purge journals.** Remove any persisted queue journals

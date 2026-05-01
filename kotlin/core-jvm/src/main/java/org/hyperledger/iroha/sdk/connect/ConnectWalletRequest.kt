@@ -11,6 +11,7 @@ class ConnectWalletRequest private constructor(
     @JvmField val sidBase64Url: String,
     sessionId: ByteArray,
     @JvmField val token: String,
+    @JvmField val relayToken: String,
     @JvmField val chainId: String?,
     @JvmField val baseUri: URI,
     @JvmField val webSocketUri: URI,
@@ -66,12 +67,20 @@ class ConnectWalletRequest private constructor(
             if (token.isNullOrBlank()) {
                 throw ConnectProtocolException("Missing required query parameter: token_wallet")
             }
+            val relayToken = firstNonBlank(
+                firstPresent(query, "relay"),
+                firstPresent(query, "token_relay"),
+                firstPresent(query, "tokenRelay"),
+            )
+            if (relayToken.isNullOrBlank()) {
+                throw ConnectProtocolException("Missing required query parameter: relay")
+            }
 
             val chainId = trimToNull(firstPresent(query, "chain_id"))
             val base = resolveBaseUri(trimToNull(firstPresent(query, "node")), defaultBaseUri)
             val wsUri = buildWalletWebSocketUri(base, sid)
 
-            return ConnectWalletRequest(sid, sessionId, token, chainId, base, wsUri)
+            return ConnectWalletRequest(sid, sessionId, token, relayToken, chainId, base, wsUri)
         }
 
         @JvmStatic

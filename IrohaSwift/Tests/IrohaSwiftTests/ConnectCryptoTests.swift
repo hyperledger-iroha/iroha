@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import IrohaSwift
 
 final class ConnectCryptoTests: XCTestCase {
@@ -64,5 +65,15 @@ final class ConnectCryptoTests: XCTestCase {
                 return XCTFail("expected invalidSessionIdentifierLength")
             }
         }
+    }
+
+    func testRelayAuthHashUsesConnectDomain() throws {
+        let sessionID = Data((0..<32).map(UInt8.init))
+        var expectedInput = Data("iroha-connect|relay-auth|v1".utf8)
+        expectedInput.append(sessionID)
+        expectedInput.append(contentsOf: "relay-token".utf8)
+        let expected = Data(SHA256.hash(data: expectedInput))
+
+        XCTAssertEqual(try ConnectCrypto.relayAuthHash(sessionID: sessionID, relayToken: "relay-token"), expected)
     }
 }

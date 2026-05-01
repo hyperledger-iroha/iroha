@@ -246,8 +246,8 @@ pub enum NetworkMessage {
     TimePing(Box<crate::time::TimePing>),
     /// Network Time Service: time synchronization pong.
     TimePong(Box<crate::time::TimePong>),
-    /// Iroha Connect (WalletConnect-style) frame relay.
-    Connect(Box<connect_proto::ConnectFrame>),
+    /// Iroha Connect (WalletConnect-style) authenticated frame relay.
+    Connect(Box<connect_proto::ConnectRelayEnvelope>),
     /// Soracloud local-read proxy request routed to the authoritative primary host.
     SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
     /// Soracloud local-read proxy response returned to the ingress node.

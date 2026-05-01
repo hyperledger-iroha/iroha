@@ -120,7 +120,7 @@ translator: machine-google-reviewed
 1. **Эшкә сәхнәләштерелгән сеанстарҙы юй.
    сигналдар мәғәнәле булып ҡала:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Swift-тик һынау өсөн йүгерә, шылтыратыу шул уҡ ос нөктәһе аша Rust/CLI ярҙамсыһы.
 2. **Пурж журналдары.** Теләһә ниндәй һаҡланған сират журналдарын юйырға

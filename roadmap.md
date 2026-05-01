@@ -6,6 +6,19 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
+- Carry the Iroha Connect hardening through the remaining SDK and workspace
+  validation corridor.
+  - Focused Rust and JavaScript checks are green as of 2026-04-30, but Python
+    pytest, Kotlin/JVM, Java Android, and Swift package tests were blocked by
+    missing local tools/artifacts.
+  - When the validation shell has `pytest`, a Java runtime, and
+    `dist/NoritoBridge.xcframework`, rerun the focused Python Connect tests,
+    `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.connect.ConnectWalletRequestTest --console=plain`,
+    the matching Java Android Connect wallet tests, and the focused Swift
+    Connect/Torii tests.
+  - Fold the Connect session/relay changes into the next broader
+    `cargo test -p iroha_torii`, `cargo test --workspace`, and workspace clippy
+    corridor when validation budget allows.
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
 - Carry native asset escrow through the remaining Aitai application corridor.

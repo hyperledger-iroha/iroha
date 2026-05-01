@@ -29,6 +29,8 @@ public final class ConnectCrypto {
       "iroha:x25519:hkdf:v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] X25519_HKDF_INFO =
       "iroha:x25519:session-key".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] RELAY_AUTH_DOMAIN =
+      "iroha-connect|relay-auth|v1".getBytes(StandardCharsets.UTF_8);
 
   private ConnectCrypto() {}
 
@@ -159,6 +161,19 @@ public final class ConnectCrypto {
       final byte[] permissionsHash,
       final byte[] proofHash)
       throws ConnectProtocolException {
+    return buildApprovePreimage(
+        sessionId, appPublicKey, walletPublicKey, accountId, permissionsHash, proofHash, null);
+  }
+
+  public static byte[] buildApprovePreimage(
+      final byte[] sessionId,
+      final byte[] appPublicKey,
+      final byte[] walletPublicKey,
+      final String accountId,
+      final byte[] permissionsHash,
+      final byte[] proofHash,
+      final byte[] relayAuthHash)
+      throws ConnectProtocolException {
     requireLength(sessionId, KEY_LENGTH, "sessionId");
     requireLength(appPublicKey, KEY_LENGTH, "appPublicKey");
     requireLength(walletPublicKey, KEY_LENGTH, "walletPublicKey");
@@ -170,28 +185,55 @@ public final class ConnectCrypto {
       throw new ConnectProtocolException(ex.getMessage(), ex);
     }
 
+    final byte[] domain = "iroha-connect|approve|v1".getBytes(StandardCharsets.UTF_8);
     final byte[] accountBytes = normalizedAccountId.getBytes(StandardCharsets.UTF_8);
-    int size = "iroha-connect|approve|".getBytes(StandardCharsets.UTF_8).length + sessionId.length + appPublicKey.length + walletPublicKey.length + accountBytes.length;
-    if (permissionsHash != null) {
-      size += permissionsHash.length;
-    }
-    if (proofHash != null) {
-      size += proofHash.length;
-    }
-
+    int size = taggedSize("domain", domain)
+        + taggedSize("sid", sessionId)
+        + taggedSize("app_pk", appPublicKey)
+        + taggedSize("wallet_pk", walletPublicKey)
+        + taggedSize("account_id", accountBytes);
+    if (permissionsHash != null) size += taggedSize("permissions", permissionsHash);
+    if (proofHash != null) size += taggedSize("proof", proofHash);
+    if (relayAuthHash != null) size += taggedSize("relay_auth", relayAuthHash);
     final ByteBuffer buffer = ByteBuffer.allocate(size);
-    buffer.put("iroha-connect|approve|".getBytes(StandardCharsets.UTF_8));
-    buffer.put(sessionId);
-    buffer.put(appPublicKey);
-    buffer.put(walletPublicKey);
-    buffer.put(accountBytes);
-    if (permissionsHash != null) {
-      buffer.put(permissionsHash);
-    }
-    if (proofHash != null) {
-      buffer.put(proofHash);
-    }
+    buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    putTagged(buffer, "domain", domain);
+    putTagged(buffer, "sid", sessionId);
+    putTagged(buffer, "app_pk", appPublicKey);
+    putTagged(buffer, "wallet_pk", walletPublicKey);
+    putTagged(buffer, "account_id", accountBytes);
+    if (permissionsHash != null) putTagged(buffer, "permissions", permissionsHash);
+    if (proofHash != null) putTagged(buffer, "proof", proofHash);
+    if (relayAuthHash != null) putTagged(buffer, "relay_auth", relayAuthHash);
     return buffer.array();
+  }
+
+  private static int taggedSize(final String tag, final byte[] value) {
+    return 2 + tag.getBytes(StandardCharsets.UTF_8).length + 8 + value.length;
+  }
+
+  private static void putTagged(final ByteBuffer buffer, final String tag, final byte[] value) {
+    final byte[] tagBytes = tag.getBytes(StandardCharsets.UTF_8);
+    buffer.putShort((short) tagBytes.length);
+    buffer.put(tagBytes);
+    buffer.putLong(value.length);
+    buffer.put(value);
+  }
+
+  public static byte[] relayAuthHash(final byte[] sessionId, final String relayToken)
+      throws ConnectProtocolException {
+    requireLength(sessionId, KEY_LENGTH, "sessionId");
+    if (relayToken == null || relayToken.isBlank()) {
+      throw new ConnectProtocolException("relayToken must not be empty");
+    }
+    final byte[] tokenBytes = relayToken.getBytes(StandardCharsets.UTF_8);
+    final SHA256Digest digest = new SHA256Digest();
+    digest.update(RELAY_AUTH_DOMAIN, 0, RELAY_AUTH_DOMAIN.length);
+    digest.update(sessionId, 0, sessionId.length);
+    digest.update(tokenBytes, 0, tokenBytes.length);
+    final byte[] out = new byte[KEY_LENGTH];
+    digest.doFinal(out, 0);
+    return out;
   }
 
   public static byte[] nonceFromSequence(final long sequence) {
