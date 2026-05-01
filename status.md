@@ -85,6 +85,9 @@ Last updated: 2026-05-01
   separate translation refresh.
 - Added focused Rust bridge regressions for future new-view reanchor while the
   vote queue is backlogged and while the old frontier recovery owner is stale.
+- Improved the surrounding process so nightly formal CI runs the normal formal
+  gate before the longer bound, and PR/nightly docs jobs upload JSON metadata
+  reports for the deliberately stale translated formal READMEs.
 - No runtime consensus code changed in this hardening pass.
 - Validation completed with local Apalache `0.52.2`:
   - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh`
@@ -101,6 +104,7 @@ Last updated: 2026-05-01
   - `cargo test -p iroha_core --lib reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
   - `cargo test -p iroha_core pacemaker_reanchors -- --nocapture`
   - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json`
 
 ## 2026-04-30 Sumeragi frontier recovery formal model
 

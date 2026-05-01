@@ -152,6 +152,27 @@ The TLC config disables generic deadlock rejection because resolved terminal
 states, such as a legitimate zero-evidence drop, are valid endpoints; invariants
 and temporal properties remain checked.
 
+## Operating Process
+
+Use the expected-failure configs as mutation tests when the frontier model
+changes. A useful model change should either keep every existing mutation red or
+add a new expected-failure config before strengthening the spec.
+
+If a new Taira hang report involves more than one concrete future frontier slot,
+do not stretch this two-slot proof by adding more Boolean shortcuts. Add a
+three-slot or parameterized follow-up model, then map the new transition back to
+focused Rust regression tests.
+
+If a counterexample only relies on abstract evidence predicates, first add or
+tighten a Rust bridge test that exercises the corresponding Sumeragi state
+transition. Runtime consensus code should change only after the bridge test
+shows the abstraction mismatch is real.
+
+The docs metadata job intentionally emits stale `source_hash` warnings for
+translated Sumeragi formal READMEs until their bodies are refreshed. PR and
+nightly CI upload a JSON metadata report so the translation refresh can be
+tracked without pretending stale translations are current.
+
 ### Reproducible local setup (no Docker required)
 
 Install the pinned local Apalache toolchain used by this repository:
@@ -214,8 +235,8 @@ APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:0.52.2 bash scripts/formal/su
 - The checks are bounded by constant values in the `.cfg` files.
 - PR CI runs these checks in `.github/workflows/pr.yml` via
   `ci/check_sumeragi_formal.sh`.
-- Scheduled/manual CI runs the longer `frontier-nightly` bound in
-  `.github/workflows/nightly_sumeragi_formal.yml`.
+- Scheduled/manual CI runs the same formal baseline plus the longer
+  `frontier-nightly` bound in `.github/workflows/nightly_sumeragi_formal.yml`.
 - English documentation is authoritative for the current frontier formal slice.
   Translated `docs/formal/sumeragi/README.*.md` files are intentionally not
   refreshed here and may remain source-current stale until a separate

@@ -399,7 +399,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Audit translated documentation metadata
-        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal
+        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
+      - name: Upload formal docs metadata report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-docs-i18n-metadata
+          path: target/docs-i18n/formal-metadata.json
+          if-no-files-found: ignore
 
   nexus_cross_dataspace_localnet:
     runs-on: [self-hosted, Linux, iroha2]

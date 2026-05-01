@@ -21,5 +21,16 @@ jobs:
           java-version: '17'
       - name: Install pinned Apalache
         run: bash scripts/formal/install_apalache.sh 0.52.2
+      - name: Sumeragi formal CI baseline
+        run: bash ci/check_sumeragi_formal.sh
       - name: Sumeragi frontier nightly formal check
         run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly
+      - name: Formal docs metadata report
+        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
+      - name: Upload formal docs metadata report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-docs-i18n-metadata-nightly
+          path: target/docs-i18n/formal-metadata.json
+          if-no-files-found: ignore
