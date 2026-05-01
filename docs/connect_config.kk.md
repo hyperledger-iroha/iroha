@@ -32,7 +32,7 @@ Iroha Torii қосымша WalletConnect стиліндегі WebSocket соңғ
 - `CONNECT_DEDUPE_CAP` (пайдалану; әдепкі: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; әдепкі: `true`)
 - `CONNECT_RELAY_STRATEGY` (жол; әдепкі: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; әдепкі: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; әдепкі: `8`)
 
 Ескертулер:
 

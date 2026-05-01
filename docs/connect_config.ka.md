@@ -32,7 +32,7 @@ Iroha Torii ავლენს არჩევით WalletConnect-ის სტ
 - `CONNECT_DEDUPE_CAP` (გამოყენება; ნაგულისხმევი: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; ნაგულისხმევი: `true`)
 - `CONNECT_RELAY_STRATEGY` (სტრიქონი; ნაგულისხმევი: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; ნაგულისხმევი: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; ნაგულისხმევი: `8`)
 
 შენიშვნები:
 

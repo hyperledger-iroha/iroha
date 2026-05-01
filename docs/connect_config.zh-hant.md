@@ -32,7 +32,7 @@ Iroha Torii 公開可選的 WalletConnect 風格的 WebSocket 端點和最小的
 - `CONNECT_DEDUPE_CAP`（使用大小；默認值：`8192`）
 - `CONNECT_RELAY_ENABLED`（布爾值；默認值：`true`）
 - `CONNECT_RELAY_STRATEGY`（字符串；默認值：`"broadcast"`）
-- `CONNECT_P2P_TTL_HOPS`（u8；默認值：`0`）
+- `CONNECT_P2P_TTL_HOPS`（u8；默認值：`8`）
 
 注意事項：
 
