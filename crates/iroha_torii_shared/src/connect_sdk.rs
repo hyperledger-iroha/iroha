@@ -18,6 +18,27 @@ use crate::connect::{
     encode_connect_envelope_framed,
 };
 
+/// Connect bearer-token class used for domain-separated token hashes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenKind {
+    /// One-time application role token.
+    App,
+    /// One-time wallet role token.
+    Wallet,
+    /// Stable session management token.
+    Management,
+}
+
+impl TokenKind {
+    const fn label(self) -> &'static [u8] {
+        match self {
+            Self::App => b"app",
+            Self::Wallet => b"wallet",
+            Self::Management => b"management",
+        }
+    }
+}
+
 /// Derive per-direction keys from a `SessionKey` using HKDF-SHA256 with a BLAKE2b(sid) salt.
 pub fn derive_direction_keys(session_key: &SessionKey, sid: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     let mut salt = [0u8; 32];
@@ -107,6 +128,17 @@ pub fn relay_auth_hash(sid: &[u8; 32], relay_token: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// Compute a domain-separated authentication hash for a Connect bearer token.
+#[must_use]
+pub fn token_auth_hash(kind: TokenKind, sid: &[u8; 32], token: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    Digest::update(&mut hasher, b"iroha-connect|token-auth|v1");
+    Digest::update(&mut hasher, kind.label());
+    Digest::update(&mut hasher, sid);
+    Digest::update(&mut hasher, token.as_bytes());
+    hasher.finalize().into()
+}
+
 /// Compute the relay MAC for a Connect frame and remaining relay TTL.
 ///
 /// # Errors
@@ -157,8 +189,9 @@ pub fn verify_relay_envelope(
     Ok(constant_time_eq(&expected, &envelope.mac))
 }
 
+/// Compare two byte slices without data-dependent early exit.
 #[must_use]
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -460,6 +493,90 @@ mod tests {
 
         let wrong_key = derive_relay_mac_key(&sid, "wrong-token");
         assert!(!verify_relay_envelope(&wrong_key, &envelope).expect("verify relay envelope"));
+    }
+
+    #[test]
+    fn token_auth_hash_is_domain_separated() {
+        let sid = [0x33_u8; 32];
+        let app = token_auth_hash(TokenKind::App, &sid, "token");
+        let wallet = token_auth_hash(TokenKind::Wallet, &sid, "token");
+        let management = token_auth_hash(TokenKind::Management, &sid, "token");
+
+        assert_ne!(app, wallet);
+        assert_ne!(app, management);
+        assert!(constant_time_eq(
+            &app,
+            &token_auth_hash(TokenKind::App, &sid, "token")
+        ));
+        assert!(!constant_time_eq(
+            &app,
+            &token_auth_hash(TokenKind::App, &sid, "other-token")
+        ));
+    }
+
+    #[test]
+    fn connect_session_vectors_match_fixture() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/connect/session_vectors.json"
+        ))
+        .expect("connect session vectors parse");
+        let sid_hex = fixture
+            .get("sid_hex")
+            .and_then(norito::json::Value::as_str)
+            .expect("sid_hex");
+        let sid_vec = hex::decode(sid_hex).expect("sid hex");
+        let sid: [u8; 32] = sid_vec.try_into().expect("sid length");
+        let tokens = fixture
+            .get("tokens")
+            .and_then(norito::json::Value::as_object)
+            .expect("tokens");
+        let hashes = fixture
+            .get("token_hashes")
+            .and_then(norito::json::Value::as_object)
+            .expect("token_hashes");
+        let token = |name: &str| {
+            tokens
+                .get(name)
+                .and_then(norito::json::Value::as_str)
+                .expect("token")
+        };
+        let hash = |name: &str| {
+            hashes
+                .get(name)
+                .and_then(norito::json::Value::as_str)
+                .expect("hash")
+        };
+
+        assert_eq!(
+            hex::encode(token_auth_hash(TokenKind::App, &sid, token("app"))),
+            hash("app")
+        );
+        assert_eq!(
+            hex::encode(token_auth_hash(TokenKind::Wallet, &sid, token("wallet"))),
+            hash("wallet")
+        );
+        assert_eq!(
+            hex::encode(token_auth_hash(
+                TokenKind::Management,
+                &sid,
+                token("management")
+            )),
+            hash("management")
+        );
+        assert_eq!(
+            hex::encode(derive_relay_mac_key(&sid, token("relay"))),
+            fixture
+                .get("relay_mac_key_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("relay_mac_key_hex")
+        );
+        assert_eq!(
+            hex::encode(relay_auth_hash(&sid, token("relay"))),
+            fixture
+                .get("relay_auth_hash_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("relay_auth_hash_hex")
+        );
     }
 }
 

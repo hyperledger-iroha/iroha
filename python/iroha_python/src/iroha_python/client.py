@@ -5910,6 +5910,12 @@ class ConnectStatusSnapshot:
     p2p_rebroadcast_skipped_total: int
     p2p_auth_failures_total: int
     p2p_ttl_drops_total: int
+    p2p_unknown_session_drops_total: int
+    p2p_session_claims_in_total: int
+    p2p_session_claims_installed_total: int
+    p2p_session_claim_conflicts_total: int
+    p2p_role_consumed_total: int
+    p2p_session_terminated_total: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectStatusSnapshot":
@@ -5957,6 +5963,12 @@ class ConnectStatusSnapshot:
             p2p_rebroadcast_skipped_total=_coerce_int_field("p2p_rebroadcast_skipped_total"),
             p2p_auth_failures_total=_coerce_int_field("p2p_auth_failures_total"),
             p2p_ttl_drops_total=_coerce_int_field("p2p_ttl_drops_total"),
+            p2p_unknown_session_drops_total=_coerce_int_field("p2p_unknown_session_drops_total"),
+            p2p_session_claims_in_total=_coerce_int_field("p2p_session_claims_in_total"),
+            p2p_session_claims_installed_total=_coerce_int_field("p2p_session_claims_installed_total"),
+            p2p_session_claim_conflicts_total=_coerce_int_field("p2p_session_claim_conflicts_total"),
+            p2p_role_consumed_total=_coerce_int_field("p2p_role_consumed_total"),
+            p2p_session_terminated_total=_coerce_int_field("p2p_session_terminated_total"),
         )
 
 
