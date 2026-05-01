@@ -921,7 +921,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     nexus: &iroha_config::parameters::actual::Nexus,
     transaction: &SignedTransaction,
     observation_time_ms: u64,
-    route_dataspace_id: Option<DataSpaceId>,
+    _route_dataspace_id: Option<DataSpaceId>,
 ) -> Result<(), NexusFeeAdmissionError> {
     if !nexus.enabled {
         return Ok(());
@@ -990,12 +990,6 @@ pub(crate) fn check_external_nexus_fee_admission(
     if payer == sink_account {
         return Ok(());
     }
-    if route_dataspace_id.is_some_and(|dataspace_id| dataspace_id != DataSpaceId::UNIVERSAL) {
-        return Err(NexusFeeAdmissionError::Rejected(
-            "non-universal Nexus fee debit must settle through the authoritative global asset route; refusing local global fee lookup".to_owned(),
-        ));
-    }
-
     let Some(balance) = world.assets().get(&payer_asset) else {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "fee asset `{}` is missing for payer `{payer}`",
@@ -1477,38 +1471,20 @@ impl Executor {
             });
             return Ok(());
         }
-        if state_transaction
-            .current_dataspace_id
-            .is_some_and(|dataspace_id| dataspace_id != DataSpaceId::UNIVERSAL)
-        {
-            let reason =
-                "non-universal Nexus fee debit must settle through the authoritative global asset route; refusing local global fee debit"
-                    .to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
-                payer_kind,
-                payer_id: payer_id.clone(),
-                amount: fee.clone(),
-                asset_id: asset_label.clone(),
-                reason: reason.clone(),
-            });
-            warn!(
-                target: "economics",
-                payer = %payer_id,
-                payer_kind = payer_kind_label,
-                fee_amount = %fee,
-                asset = %asset_label,
-                sink = %sink_label,
-                "nexus fee rejected outside authoritative global asset route"
-            );
-            return Err(ValidationFail::NotPermitted(reason));
-        }
         let transfer = iroha_data_model::isi::Transfer::<
             Asset,
             Numeric,
             iroha_data_model::account::Account,
         >::asset_numeric(payer_asset, fee.clone(), sink_account);
         let instr: DMInstructionBox = transfer.into();
-        instr.execute(authority, state_transaction).map_err(|err| {
+        let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
+        let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        let fee_transfer_result = instr.execute(authority, state_transaction);
+        state_transaction.current_dataspace_id = previous_tx_dataspace_id;
+        state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
+        fee_transfer_result.map_err(|err| {
             let reason = format!("nexus fee transfer failed to apply: {err}");
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
                 payer_kind,
@@ -6414,7 +6390,7 @@ mod tests {
     }
 
     #[test]
-    fn nexus_fee_admission_rejects_non_universal_local_global_lookup() {
+    fn nexus_fee_admission_accepts_non_universal_route_with_global_balance() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
@@ -6436,7 +6412,17 @@ mod tests {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&authority_id);
-        let world = World::with_assets([domain], [authority_account, sink_account], [ad], [], []);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), authority_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sink_account],
+            [ad],
+            [payer_asset],
+            [],
+        );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -6457,18 +6443,90 @@ mod tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .sign(authority_kp.private_key());
         let view = state.view();
-        let err = check_external_nexus_fee_admission(
+        check_external_nexus_fee_admission(
             view.world(),
             view.nexus(),
             &tx,
             0,
             Some(DataSpaceId::new(10)),
         )
-        .expect_err("private routes must not perform local global fee lookups");
-        assert!(
-            matches!(err, NexusFeeAdmissionError::Rejected(ref reason) if reason.contains("authoritative global asset route")),
-            "unexpected rejection: {err:?}"
+        .expect("private routes should admit fees against the authoritative global bucket");
+    }
+
+    #[test]
+    fn nexus_fee_non_universal_route_debits_global_fee_asset_bucket() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
         );
+        let ad = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), authority_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sink_account],
+            [ad],
+            [payer_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        stx.current_dataspace_id = Some(DataSpaceId::new(10));
+        stx.world.current_dataspace_id = Some(DataSpaceId::new(10));
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("non-universal route should debit global fee bucket");
+
+        let sink_asset_id = AssetId::of(asset_def_id, sink_id);
+        let sink_balance = stx
+            .world
+            .asset(&sink_asset_id)
+            .expect("sink asset")
+            .value()
+            .as_ref()
+            .clone();
+        assert_eq!(sink_balance, Numeric::from(1_u32));
     }
 
     #[test]
