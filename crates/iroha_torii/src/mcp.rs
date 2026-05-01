@@ -8517,7 +8517,7 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
 fn connect_session_delete_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.delete".to_owned(),
-        description: "Delete/purge an Iroha Connect session by SID.".to_owned(),
+        description: "Delete/purge an Iroha Connect session by SID using the management token or an Authorization header.".to_owned(),
         method: Method::DELETE,
         path_template: "/v1/connect/session/{sid}".to_owned(),
         input_schema: norito::json!({
