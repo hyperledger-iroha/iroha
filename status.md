@@ -2,6 +2,30 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Live Taira faucet authority top-up
+
+- Submitted a live Taira mint from the configured faucet authority to itself
+  for `200000000000000000` canonical XOR
+  (`6TEAJqbb8oEPmLncoNiMRbLEK6tw`), transaction
+  `9C6A2CDE5B8B4377C0D2534CDF9795D4E2FAB7852DB4CA7B0AB1945AA5DAF7D9`.
+- Verified the faucet end-to-end with a fresh account canary. The public
+  faucet returned HTTP `202`, claim transaction
+  `6b71a4fb7c01006e1a6736de347eaa3babf6e04c61ef7d93301572ff8006e021`, and
+  the canary account indexed with `25000` XOR.
+- Post-repair public balance check showed the faucet authority at
+  `199999999999983427.61890` XOR, leaving enough capacity for repeated
+  `25000` XOR claims.
+
+## 2026-05-01 Taira faucet authority seed funding
+
+- Taira genesis now seeds the configured public faucet authority
+  (`testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV`) with
+  `200000000000000000` units of the canonical `xor#universal` asset definition
+  (`6TEAJqbb8oEPmLncoNiMRbLEK6tw`) so the served account faucet can satisfy
+  repeated `25000` XOR claims after a Taira redeploy/reset from this genesis.
+- Focused validation for this slice:
+  - `jq -e . configs/soranexus/taira/genesis.json`
+
 ## 2026-05-01 Offline V2 native SDK prover speedups
 
 - Swift Offline Note V2 pure Halo2 proving now reuses a cached IPA/domain
