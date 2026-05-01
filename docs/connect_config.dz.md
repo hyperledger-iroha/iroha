@@ -32,7 +32,7 @@ Iroha Torii གིས་ གདམ་ཁ་ཅན་གྱི་ ཝ་ལེཊ
 - `CONNECT_DEDUPE_CAP` (ལག་ལེན་; སྔོན་སྒྲིག་: I18NI0000027X)
 - I18NI0000028X (bool; སྔོན་སྒྲིག་: `true`)
 - `CONNECT_RELAY_STRATEGY` (ཡིག་རྒྱུན་; སྔོན་སྒྲིག་: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; སྔོན་སྒྲིག་: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; སྔོན་སྒྲིག་: `8`)
 
 དྲན་ཐོ།
 
