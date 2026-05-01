@@ -270,6 +270,9 @@ latency_decay = 0.25
 
 [gov]
 plain_voting_enabled = false
+voting_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+citizenship_bond_amount = 10000
 citizenship_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 slash_receiver_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
