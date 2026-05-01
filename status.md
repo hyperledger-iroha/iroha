@@ -2,6 +2,26 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Iroha Connect default relay TTL restored
+
+- Changed the default Connect P2P relay TTL from `0` to `8` hops so the
+  default `broadcast` relay strategy actually rebroadcasts over an attached
+  Iroha P2P handle. Operators can still set `CONNECT_P2P_TTL_HOPS=0` to
+  disable cross-node Connect rebroadcast explicitly.
+- Tightened Connect status so zero-TTL broadcast configuration reports an
+  effective `local_only` strategy while preserving the normalized configured
+  strategy.
+- Updated Connect configuration docs, translated default-value references, and
+  the config default fixture.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_torii --test connect_gating --features ws_integration_tests connect_ws_broadcast -- --nocapture`
+  - `cargo test -p iroha_torii --lib broadcast_strategy_with_zero_ttl_reports_local_only_when_p2p_attached -- --nocapture`
+  - `cargo test -p iroha_config minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_torii --test connect_gating --features ws_integration_tests -- --nocapture`
+
 ## 2026-05-01 Iroha Connect P2P rendezvous claims
 
 - Added versioned Connect P2P control messages for relay envelopes, session

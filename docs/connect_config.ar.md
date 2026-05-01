@@ -38,7 +38,7 @@ translation_last_reviewed: 2025-11-14
 - `CONNECT_DEDUPE_CAP` (`usize`; افتراضيًا `8192`)
 - `CONNECT_RELAY_ENABLED` (نوع bool؛ افتراضيًا `true`)
 - `CONNECT_RELAY_STRATEGY` (string؛ افتراضيًا `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (`u8`; افتراضيًا `0`)
+- `CONNECT_P2P_TTL_HOPS` (`u8`; افتراضيًا `8`)
 
 ملاحظات:
 

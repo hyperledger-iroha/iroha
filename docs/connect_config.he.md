@@ -31,7 +31,7 @@ Torii של Iroha חושף נקודות קצה אופציונליות בסגנו�
 - `CONNECT_DEDUPE_CAP` ‏(usize; ברירת מחדל: `8192`)
 - `CONNECT_RELAY_ENABLED` ‏(bool; ברירת מחדל: `true`)
 - `CONNECT_RELAY_STRATEGY` ‏(string; ברירת מחדל: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` ‏(u8; ברירת מחדל: `0`)
+- `CONNECT_P2P_TTL_HOPS` ‏(u8; ברירת מחדל: `8`)
 
 הערות:
 

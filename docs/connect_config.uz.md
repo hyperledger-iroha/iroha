@@ -32,7 +32,7 @@ Atrof-muhitni bekor qilish (foydalanuvchi konfiguratsiyasi → haqiqiy konfigura
 - `CONNECT_DEDUPE_CAP` (foydalanish; standart: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; standart: `true`)
 - `CONNECT_RELAY_STRATEGY` (satr; standart: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; standart: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; standart: `8`)
 
 Eslatmalar:
 

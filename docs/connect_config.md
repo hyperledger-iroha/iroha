@@ -20,7 +20,7 @@ Environment overrides (user config → actual config):
 - `CONNECT_DEDUPE_CAP` (usize; default: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; default: `true`)
 - `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`; allowed: `"broadcast"`, `"local_only"`; compatibility aliases: `"local-only"`, `"local"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; default: `0`; `0` disables cross-node rebroadcast)
+- `CONNECT_P2P_TTL_HOPS` (u8; default: `8`; `0` disables cross-node rebroadcast)
 
 Notes:
 
@@ -58,7 +58,9 @@ Notes:
 - `/v1/connect/status.policy` includes both configured and effective relay mode:
   `relay_strategy` (normalized config), `relay_effective_strategy` (runtime behavior), and
   `relay_p2p_attached` (whether Torii currently has a P2P relay handle). This allows operators to
-  confirm that cross-node forwarding is happening over decentralized node-to-node transport.
+  confirm that cross-node forwarding is happening over decentralized node-to-node transport. An
+  explicit `CONNECT_P2P_TTL_HOPS=0` reports an effective `local_only` strategy because it disables
+  cross-node rebroadcast.
 - Heartbeat enforcement clamps the configured interval to the browser-friendly minimum (`ping_min_interval_ms`);
   the server tolerates `ping_miss_tolerance` consecutive missed pongs before closing the WebSocket and
   increments the `connect.ping_miss_total` metric.
