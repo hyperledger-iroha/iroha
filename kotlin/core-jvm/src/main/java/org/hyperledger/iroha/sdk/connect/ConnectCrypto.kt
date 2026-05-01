@@ -25,6 +25,7 @@ object ConnectCrypto {
     private const val AEAD_TAG_BITS = 128
     private val X25519_HKDF_SALT = "iroha:x25519:hkdf:v1".toByteArray(StandardCharsets.UTF_8)
     private val X25519_HKDF_INFO = "iroha:x25519:session-key".toByteArray(StandardCharsets.UTF_8)
+    private val RELAY_AUTH_DOMAIN = "iroha-connect|relay-auth|v1".toByteArray(StandardCharsets.UTF_8)
 
     class KeyPair internal constructor(publicKey: ByteArray, privateKey: ByteArray) {
         private val _publicKey: ByteArray = publicKey.copyOf()
@@ -139,6 +140,7 @@ object ConnectCrypto {
         accountId: String?,
         permissionsHash: ByteArray?,
         proofHash: ByteArray?,
+        relayAuthHash: ByteArray? = null,
     ): ByteArray {
         requireLength(sessionId, KEY_LENGTH, "sessionId")
         requireLength(appPublicKey, KEY_LENGTH, "appPublicKey")
@@ -147,22 +149,49 @@ object ConnectCrypto {
             throw ConnectProtocolException("accountId must not be empty")
         }
 
-        val prefix = "iroha-connect|approve|".toByteArray(StandardCharsets.UTF_8)
+        val prefix = "iroha-connect|approve|v1".toByteArray(StandardCharsets.UTF_8)
         val accountBytes = accountId.toByteArray(StandardCharsets.UTF_8)
-        var size = prefix.size + sessionId.size + appPublicKey.size +
-            walletPublicKey.size + accountBytes.size
-        if (permissionsHash != null) size += permissionsHash.size
-        if (proofHash != null) size += proofHash.size
+        val fields = mutableListOf(
+            "domain" to prefix,
+            "sid" to sessionId,
+            "app_pk" to appPublicKey,
+            "wallet_pk" to walletPublicKey,
+            "account_id" to accountBytes,
+        )
+        if (permissionsHash != null) fields += "permissions" to permissionsHash
+        if (proofHash != null) fields += "proof" to proofHash
+        if (relayAuthHash != null) fields += "relay_auth" to relayAuthHash
 
-        val buffer = ByteBuffer.allocate(size)
-        buffer.put(prefix)
-        buffer.put(sessionId)
-        buffer.put(appPublicKey)
-        buffer.put(walletPublicKey)
-        buffer.put(accountBytes)
-        if (permissionsHash != null) buffer.put(permissionsHash)
-        if (proofHash != null) buffer.put(proofHash)
+        var size = 0
+        for ((tag, value) in fields) {
+            size += 2 + tag.toByteArray(StandardCharsets.UTF_8).size + 8 + value.size
+        }
+        val buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
+        for ((tag, value) in fields) {
+            val tagBytes = tag.toByteArray(StandardCharsets.UTF_8)
+            buffer.putShort(tagBytes.size.toShort())
+            buffer.put(tagBytes)
+            buffer.putLong(value.size.toLong())
+            buffer.put(value)
+        }
         return buffer.array()
+    }
+
+    @JvmStatic
+    @Throws(ConnectProtocolException::class)
+    fun relayAuthHash(sessionId: ByteArray, relayToken: String): ByteArray {
+        requireLength(sessionId, KEY_LENGTH, "sessionId")
+        if (relayToken.isBlank()) {
+            throw ConnectProtocolException("relayToken must not be empty")
+        }
+        val tokenBytes = relayToken.toByteArray(StandardCharsets.UTF_8)
+        val digest = SHA256Digest()
+        digest.update(RELAY_AUTH_DOMAIN, 0, RELAY_AUTH_DOMAIN.size)
+        digest.update(sessionId, 0, sessionId.size)
+        digest.update(tokenBytes, 0, tokenBytes.size)
+        val out = ByteArray(KEY_LENGTH)
+        digest.doFinal(out, 0)
+        return out
     }
 
     @JvmStatic

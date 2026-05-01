@@ -1053,6 +1053,7 @@ Task {
 ```swift
 let torii = ToriiClient(baseURL: URL(string: "https://torii.example")!)
 let session = try await torii.createConnectSession(sid: "demo-session")
+// Keep tokenManagement server-side for cleanup/status; wallet/app launch URIs carry tokenRelay.
 let apps = try await torii.listConnectApps()
 let manifest = try await torii.getConnectAdmissionManifest()
 let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
@@ -1061,6 +1062,11 @@ let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
                                                        token: session.tokenApp)
 let connect = ConnectClient(request: wsRequest)
 ```
+
+Wallet approval code can derive the relay binding with
+`ConnectCrypto.relayAuthHash(sessionID:relayToken:)` before signing the approval
+preimage. Keep `session.tokenManagement` server-side for deletion and
+per-session status calls.
 
 Encryption/decryption of ciphertext envelopes is handled by the bridge-backed helpers:
 derive keys via `ConnectCrypto`, call `session.setDirectionKeys(_:)`, and `ConnectSession`

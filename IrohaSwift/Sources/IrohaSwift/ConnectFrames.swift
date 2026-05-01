@@ -67,11 +67,12 @@ public enum ConnectControl: Equatable, Sendable {
     case close(ConnectClose)
     case ping(ConnectPing)
     case pong(ConnectPong)
+    case serverEvent(Data)
 }
 
 extension ConnectControl: Codable {
-    private enum CodingKeys: String, CodingKey { case tag, open, approve, reject, close, ping, pong }
-    private enum Tag: String, Codable { case open = "Open", approve = "Approve", reject = "Reject", close = "Close", ping = "Ping", pong = "Pong" }
+    private enum CodingKeys: String, CodingKey { case tag, open, approve, reject, close, ping, pong, serverEvent }
+    private enum Tag: String, Codable { case open = "Open", approve = "Approve", reject = "Reject", close = "Close", ping = "Ping", pong = "Pong", serverEvent = "ServerEvent" }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -95,6 +96,9 @@ extension ConnectControl: Codable {
         case .pong:
             let value = try container.decode(ConnectPong.self, forKey: .pong)
             self = .pong(value)
+        case .serverEvent:
+            let value = try container.decode(Data.self, forKey: .serverEvent)
+            self = .serverEvent(value)
         }
     }
 
@@ -119,6 +123,9 @@ extension ConnectControl: Codable {
         case .pong(let value):
             try container.encode(Tag.pong, forKey: .tag)
             try container.encode(value, forKey: .pong)
+        case .serverEvent(let value):
+            try container.encode(Tag.serverEvent, forKey: .tag)
+            try container.encode(value, forKey: .serverEvent)
         }
     }
 }

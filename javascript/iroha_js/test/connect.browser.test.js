@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { x25519 } from "@noble/curves/ed25519";
+import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { blake2b } from "@noble/hashes/blake2b";
 import { hkdf } from "@noble/hashes/hkdf";
@@ -22,6 +22,7 @@ import {
   rewriteConnectUriProtocol,
   toHex,
 } from "../src/connect.browser.js";
+import { AccountAddress } from "../src/address.js";
 
 class RecordingWebSocket {
   constructor(url, protocols) {
@@ -75,6 +76,11 @@ const CONNECT_SALT_PREFIX = encoder.encode("iroha-connect|salt|");
 const CONNECT_AAD_PREFIX = encoder.encode("connect:v1");
 const CONNECT_K_APP = encoder.encode("iroha-connect|k_app");
 const CONNECT_K_WALLET = encoder.encode("iroha-connect|k_wallet");
+const X25519_HKDF_SALT = encoder.encode("iroha:x25519:hkdf:v1");
+const X25519_HKDF_INFO = encoder.encode("iroha:x25519:session-key");
+const APPROVE_DOMAIN = encoder.encode("iroha-connect|approve|v1");
+const RELAY_AUTH_DOMAIN = encoder.encode("iroha-connect|relay-auth|v1");
+const CONNECT_ENVELOPE_TYPE_NAME = "iroha_torii_shared::connect::EnvelopeV1";
 
 function u16(value) {
   const out = Buffer.alloc(2);
@@ -122,7 +128,35 @@ function encodeWalletSignature(signature) {
   return encodeStruct([Buffer.from([signature.algorithm]), encodeBytes(signature.signature)]);
 }
 
-function encodeApproveControl(walletPublicKey, accountId) {
+function taggedApproveField(tag, value) {
+  const tagBytes = Buffer.from(tag, "utf8");
+  return Buffer.concat([u16(tagBytes.length), tagBytes, u64(value.length), Buffer.from(value)]);
+}
+
+function relayAuthHash(preview, relayToken) {
+  return Buffer.from(sha256(Buffer.concat([
+    Buffer.from(RELAY_AUTH_DOMAIN),
+    Buffer.from(preview.sidBytes),
+    Buffer.from(relayToken, "utf8"),
+  ])));
+}
+
+function approvalPreimage(preview, walletPublicKey, accountId, relayToken) {
+  return Buffer.concat([
+    taggedApproveField("domain", APPROVE_DOMAIN),
+    taggedApproveField("sid", preview.sidBytes),
+    taggedApproveField("app_pk", preview.appKeyPair.publicKey),
+    taggedApproveField("wallet_pk", walletPublicKey),
+    taggedApproveField("account_id", Buffer.from(accountId, "utf8")),
+    taggedApproveField("relay_auth", relayAuthHash(preview, relayToken)),
+  ]);
+}
+
+function encodeApproveControl(preview, walletPublicKey, accountId, accountPrivateKey, relayToken) {
+  const signature = ed25519.sign(
+    approvalPreimage(preview, walletPublicKey, accountId, relayToken),
+    accountPrivateKey,
+  );
   const body = encodeStruct([
     Buffer.from(walletPublicKey),
     encodeString(accountId),
@@ -130,7 +164,7 @@ function encodeApproveControl(walletPublicKey, accountId) {
     Buffer.from([0]),
     encodeWalletSignature({
       algorithm: 0,
-      signature: Buffer.alloc(64, 0x44),
+      signature,
     }),
   ]);
   return Buffer.concat([u32(1), u64(body.length), body]);
@@ -207,10 +241,11 @@ function frameNorito(typeName, payload) {
 
 function deriveKeys(preview, walletPrivateKey) {
   const shared = x25519.getSharedSecret(walletPrivateKey, preview.appKeyPair.publicKey);
+  const sessionKey = hkdf(sha256, shared, X25519_HKDF_SALT, X25519_HKDF_INFO, 32);
   const salt = blake2b(Buffer.concat([CONNECT_SALT_PREFIX, Buffer.from(preview.sidBytes)]), { dkLen: 32 });
   return {
-    appKey: hkdf(sha256, shared, salt, CONNECT_K_APP, 32),
-    walletKey: hkdf(sha256, shared, salt, CONNECT_K_WALLET, 32),
+    appKey: hkdf(sha256, sessionKey, salt, CONNECT_K_APP, 32),
+    walletKey: hkdf(sha256, sessionKey, salt, CONNECT_K_WALLET, 32),
   };
 }
 
@@ -238,7 +273,7 @@ function encodeSignResultOk(preview, keys, seq, signature) {
       }),
     ),
   ]);
-  const envelope = frameNorito("EnvelopeV1", encodeStruct([u64(seq), payload]));
+  const envelope = frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([u64(seq), payload]));
   const ciphertext = Buffer.from(
     chacha20poly1305(keys.walletKey, nonce(seq), aad(preview, 1, seq)).encrypt(envelope),
   );
@@ -257,7 +292,7 @@ function encodeSignResultErr(preview, keys, seq, code, message) {
     lenPrefixed(encodeString(code)),
     lenPrefixed(encodeString(message)),
   ]);
-  const envelope = frameNorito("EnvelopeV1", encodeStruct([u64(seq), payload]));
+  const envelope = frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([u64(seq), payload]));
   const ciphertext = Buffer.from(
     chacha20poly1305(keys.walletKey, nonce(seq), aad(preview, 1, seq)).encrypt(envelope),
   );
@@ -283,7 +318,7 @@ function encodeEncryptedClose(preview, keys, seq, reason) {
       ]),
     ),
   ]);
-  const envelope = frameNorito("EnvelopeV1", encodeStruct([u64(seq), control]));
+  const envelope = frameNorito(CONNECT_ENVELOPE_TYPE_NAME, encodeStruct([u64(seq), control]));
   const ciphertext = Buffer.from(
     chacha20poly1305(keys.walletKey, nonce(seq), aad(preview, 1, seq)).encrypt(envelope),
   );
@@ -356,6 +391,13 @@ function makePreview() {
   });
 }
 
+function makeAccount() {
+  const privateKey = new Uint8Array(32).fill(0x77);
+  const publicKey = ed25519.getPublicKey(privateKey);
+  const accountId = AccountAddress.fromAccount({ publicKey, algorithm: "ed25519" }).toI105();
+  return { accountId, privateKey, publicKey };
+}
+
 test("createConnectSessionPreview is deterministic with fixed nonce and keypair", () => {
   const options = {
     chainId: "alpha-net",
@@ -405,6 +447,8 @@ test("registerConnectSession posts sid and node directly to Torii", async () => 
           app_uri: "iroha://connect?sid=sid123&role=app&token=app-token",
           token_app: "app-token",
           token_wallet: "wallet-token",
+          token_management: "management-token",
+          token_relay: "relay-token",
         }),
         {
           status: 200,
@@ -424,6 +468,7 @@ test("registerConnectSession posts sid and node directly to Torii", async () => 
 test("deleteConnectSession tolerates missing sessions and uses DELETE", async () => {
   const calls = [];
   await deleteConnectSession("https://taira.sora.org", "sid123", {
+    tokenManagement: "management-token",
     fetchImpl: async (url, init) => {
       calls.push({ url: String(url), init });
       return new Response("", { status: 404 });
@@ -433,6 +478,7 @@ test("deleteConnectSession tolerates missing sessions and uses DELETE", async ()
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://taira.sora.org/v1/connect/session/sid123");
   assert.equal(calls[0].init.method, "DELETE");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer management-token");
 });
 
 test("resolveConnectLaunchUri prefers canonical session deeplinks", () => {
@@ -507,6 +553,8 @@ test("openConnectWebSocket sends the connect token as the first subprotocol", ()
 test("createConnectAppSession handles approval and sign success", async () => {
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview();
+  const account = makeAccount();
+  const relayToken = "relay-token";
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
   const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
   const keys = deriveKeys(preview, walletPrivateKey);
@@ -516,6 +564,7 @@ test("createConnectAppSession handles approval and sign success", async () => {
     session: {
       sid: preview.sidBase64Url,
       token_app: "token-app",
+      token_relay: relayToken,
     },
     webSocketImpl: RecordingWebSocket,
   });
@@ -527,12 +576,12 @@ test("createConnectAppSession handles approval and sign success", async () => {
       sidBytes: preview.sidBytes,
       dir: 1,
       seq: 1,
-      control: encodeApproveControl(walletPublicKey, "i105-test-account"),
+      control: encodeApproveControl(preview, walletPublicKey, account.accountId, account.privateKey, relayToken),
     }),
   );
 
   const approval = await session.waitForApproval();
-  assert.equal(approval.accountId, "i105-test-account");
+  assert.equal(approval.accountId, account.accountId);
 
   const signPromise = session.signTransaction(Buffer.from([0xaa, 0xbb, 0xcc]));
   await Promise.resolve();
@@ -555,6 +604,7 @@ test("createConnectAppSession surfaces wallet rejection", async () => {
     session: {
       sid: preview.sidBase64Url,
       token_app: "token-app",
+      token_relay: "relay-token",
     },
     webSocketImpl: RecordingWebSocket,
   });
@@ -579,6 +629,8 @@ test("createConnectAppSession surfaces wallet rejection", async () => {
 test("createConnectAppSession surfaces wallet sign errors", async () => {
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview();
+  const account = makeAccount();
+  const relayToken = "relay-token";
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
   const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
   const keys = deriveKeys(preview, walletPrivateKey);
@@ -588,6 +640,7 @@ test("createConnectAppSession surfaces wallet sign errors", async () => {
     session: {
       sid: preview.sidBase64Url,
       token_app: "token-app",
+      token_relay: relayToken,
     },
     webSocketImpl: RecordingWebSocket,
   });
@@ -598,7 +651,7 @@ test("createConnectAppSession surfaces wallet sign errors", async () => {
       sidBytes: preview.sidBytes,
       dir: 1,
       seq: 1,
-      control: encodeApproveControl(walletPublicKey, "i105-test-account"),
+      control: encodeApproveControl(preview, walletPublicKey, account.accountId, account.privateKey, relayToken),
     }),
   );
   await session.waitForApproval();
@@ -626,6 +679,8 @@ test("createConnectAppSession surfaces wallet sign errors", async () => {
 test("createConnectAppSession surfaces encrypted close frames", async () => {
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview();
+  const account = makeAccount();
+  const relayToken = "relay-token";
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
   const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
   const keys = deriveKeys(preview, walletPrivateKey);
@@ -635,6 +690,7 @@ test("createConnectAppSession surfaces encrypted close frames", async () => {
     session: {
       sid: preview.sidBase64Url,
       token_app: "token-app",
+      token_relay: relayToken,
     },
     webSocketImpl: RecordingWebSocket,
   });
@@ -645,7 +701,7 @@ test("createConnectAppSession surfaces encrypted close frames", async () => {
       sidBytes: preview.sidBytes,
       dir: 1,
       seq: 1,
-      control: encodeApproveControl(walletPublicKey, "i105-test-account"),
+      control: encodeApproveControl(preview, walletPublicKey, account.accountId, account.privateKey, relayToken),
     }),
   );
   await session.waitForApproval();

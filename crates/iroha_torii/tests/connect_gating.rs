@@ -1808,14 +1808,36 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .and_then(|x| x.as_str())
         .expect("sid present")
         .to_owned();
+    let token_management = payload
+        .get("token_management")
+        .and_then(|x| x.as_str())
+        .expect("token_management present")
+        .to_owned();
 
     let delete_uri = format!("/v1/connect/session/{sid}");
+    let missing_token_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(delete_uri.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
+
     let delete_resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("DELETE")
                 .uri(delete_uri.as_str())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1828,12 +1850,97 @@ async fn connect_session_delete_endpoint_removes_tokens() {
             Request::builder()
                 .method("DELETE")
                 .uri(delete_uri.as_str())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(delete_again.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn connect_session_status_requires_management_token() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+
+    let cfg = minimal_actual_config(true);
+    let torii = build_torii(&cfg);
+    let app = torii.api_router_for_tests();
+
+    let sid_fixed = B64.encode([0x34u8; 32]);
+    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
+        ("sid", Some(sid_fixed.clone())),
+        ("node", Option::<String>::None),
+    ]))
+    .expect("json serialization");
+    let create_resp = app
+        .clone()
+        .oneshot(request_with_loopback_connect_info(
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/connect/session"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(req_body))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(create_resp.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    let sid = payload
+        .get("sid")
+        .and_then(|x| x.as_str())
+        .expect("sid present");
+    let token_management = payload
+        .get("token_management")
+        .and_then(|x| x.as_str())
+        .expect("token_management present");
+
+    let status_uri = format!("/v1/connect/status?sid={sid}");
+    let missing_token_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(status_uri.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
+
+    let status_resp = app
+        .oneshot(
+            Request::builder()
+                .uri(status_uri.as_str())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_resp.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(status_resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let payload: norito::json::Value =
+        norito::json::from_slice(&body).expect("session status should be JSON");
+    assert_eq!(payload.get("sid").and_then(|x| x.as_str()), Some(sid));
+    assert_eq!(
+        payload.get("app_attached").and_then(|x| x.as_bool()),
+        Some(false)
+    );
 }
 
 #[cfg(feature = "ws_integration_tests")]
@@ -1894,6 +2001,10 @@ async fn connect_session_delete_rejects_ws_attach() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
+    let token_management = payload
+        .get("token_management")
+        .and_then(|x| x.as_str())
+        .expect("token_management");
 
     // Delete the session through REST and ensure it reports success.
     let delete_uri = format!("/v1/connect/session/{sid}");
@@ -1903,6 +2014,10 @@ async fn connect_session_delete_rejects_ws_attach() {
             Request::builder()
                 .method("DELETE")
                 .uri(delete_uri.clone())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

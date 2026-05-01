@@ -15657,6 +15657,7 @@ test("getConnectStatus normalizes payload", async () => {
             relay_strategy: "broadcast",
             relay_effective_strategy: "local_only",
             relay_p2p_attached: false,
+            p2p_ttl_hops: 3,
             heartbeat_interval_ms: 5000,
             heartbeat_miss_tolerance: 2,
             heartbeat_min_interval_ms: 1000,
@@ -15673,6 +15674,8 @@ test("getConnectStatus normalizes payload", async () => {
           ping_miss_total: 4,
           p2p_rebroadcasts_total: 6,
           p2p_rebroadcast_skipped_total: 7,
+          p2p_auth_failures_total: 8,
+          p2p_ttl_drops_total: 9,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -15686,10 +15689,13 @@ test("getConnectStatus normalizes payload", async () => {
   assert.equal(status?.policy?.relayStrategy, "broadcast");
   assert.equal(status?.policy?.relayEffectiveStrategy, "local_only");
   assert.equal(status?.policy?.relayP2pAttached, false);
+  assert.equal(status?.policy?.p2pTtlHops, 3);
   assert.equal(status?.sequenceViolationClosesTotal, 4);
   assert.equal(status?.roleDirectionMismatchTotal, 5);
   assert.equal(status?.p2pRebroadcastsTotal, 6);
   assert.equal(status?.p2pRebroadcastSkippedTotal, 7);
+  assert.equal(status?.p2pAuthFailuresTotal, 8);
+  assert.equal(status?.p2pTtlDropsTotal, 9);
 });
 
 test("getConnectStatus preserves relay-disabled effective local-only fields", async () => {
@@ -15716,6 +15722,7 @@ test("getConnectStatus preserves relay-disabled effective local-only fields", as
             relay_strategy: "broadcast",
             relay_effective_strategy: "local_only",
             relay_p2p_attached: true,
+            p2p_ttl_hops: 0,
             heartbeat_interval_ms: 5000,
             heartbeat_miss_tolerance: 2,
             heartbeat_min_interval_ms: 1000,
@@ -15732,6 +15739,8 @@ test("getConnectStatus preserves relay-disabled effective local-only fields", as
           ping_miss_total: 0,
           p2p_rebroadcasts_total: 0,
           p2p_rebroadcast_skipped_total: 0,
+          p2p_auth_failures_total: 0,
+          p2p_ttl_drops_total: 0,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -15742,8 +15751,11 @@ test("getConnectStatus preserves relay-disabled effective local-only fields", as
   assert.equal(status?.policy?.relayStrategy, "broadcast");
   assert.equal(status?.policy?.relayEffectiveStrategy, "local_only");
   assert.equal(status?.policy?.relayP2pAttached, true);
+  assert.equal(status?.policy?.p2pTtlHops, 0);
   assert.equal(status?.p2pRebroadcastsTotal, 0);
   assert.equal(status?.p2pRebroadcastSkippedTotal, 0);
+  assert.equal(status?.p2pAuthFailuresTotal, 0);
+  assert.equal(status?.p2pTtlDropsTotal, 0);
 });
 
 test("getConnectStatus rejects non-integer policy values", async () => {
@@ -15770,6 +15782,7 @@ test("getConnectStatus rejects non-integer policy values", async () => {
             relay_strategy: "broadcast",
             relay_effective_strategy: "local_only",
             relay_p2p_attached: false,
+            p2p_ttl_hops: 0,
             heartbeat_interval_ms: 5000,
             heartbeat_miss_tolerance: 2,
             heartbeat_min_interval_ms: 1000,
@@ -15786,6 +15799,8 @@ test("getConnectStatus rejects non-integer policy values", async () => {
           ping_miss_total: 0,
           p2p_rebroadcasts_total: 0,
           p2p_rebroadcast_skipped_total: 0,
+          p2p_auth_failures_total: 0,
+          p2p_ttl_drops_total: 0,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -15813,6 +15828,8 @@ test("createConnectSession validates sid and posts JSON", async () => {
         app_uri: "iroha://connect/app",
         token_app: "token-app",
         token_wallet: "token-wallet",
+        token_management: "token-management",
+        token_relay: "token-relay",
       },
       headers: { "content-type": "application/json" },
     });
@@ -15827,6 +15844,8 @@ test("createConnectSession validates sid and posts JSON", async () => {
   assert.equal(resp.app_uri, "iroha://connect/app");
   assert.equal(resp.token_app, "token-app");
   assert.equal(resp.token_wallet, "token-wallet");
+  assert.equal(resp.token_management, "token-management");
+  assert.equal(resp.token_relay, "token-relay");
   assert.deepEqual(resp.extra, {});
   assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
   assert.equal(captured.init.headers["Content-Type"], "application/json");
@@ -15868,6 +15887,8 @@ test("createConnectSession accepts base64url sid", async () => {
         app_uri: "iroha://connect/app",
         token_app: "token-app",
         token_wallet: "token-wallet",
+        token_management: "token-management",
+        token_relay: "token-relay",
       },
       headers: { "content-type": "application/json" },
     });
@@ -15903,6 +15924,8 @@ test("createConnectSession accepts hex sid", async () => {
         app_uri: "iroha://connect/app",
         token_app: "token-app",
         token_wallet: "token-wallet",
+        token_management: "token-management",
+        token_relay: "token-relay",
       },
       headers: { "content-type": "application/json" },
     });
@@ -15921,20 +15944,27 @@ test("deleteConnectSession returns flag based on status", async () => {
     return createResponse({ status: 204 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ok = await client.deleteConnectSession(SAMPLE_CONNECT_SID_BASE64);
+  const ok = await client.deleteConnectSession({
+    sid: SAMPLE_CONNECT_SID_BASE64,
+    tokenManagement: "token-management",
+  });
   assert.equal(ok, true);
   assert.equal(
     captured.url,
     `${BASE_URL}/v1/connect/session/${encodeURIComponent(SAMPLE_CONNECT_SID_BASE64)}`,
   );
   assert.equal(captured.init.method, "DELETE");
+  assert.equal(captured.init.headers.Authorization, "Bearer token-management");
 });
 
 test("deleteConnectSession returns false for missing session", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const ok = await client.deleteConnectSession(SAMPLE_CONNECT_SID_BASE64);
+  const ok = await client.deleteConnectSession({
+    sid: SAMPLE_CONNECT_SID_BASE64,
+    token_management: "token-management",
+  });
   assert.equal(ok, false);
 });
 

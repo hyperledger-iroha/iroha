@@ -72,6 +72,8 @@ def _print_session_info(info: ConnectSessionInfo) -> None:
     print(f"  App deeplink:  {info.app_uri}")
     print(f"  App token:     {info.app_token}")
     print(f"  Wallet token:  {info.wallet_token}")
+    print(f"  Relay token:   {info.relay_token}")
+    print("  Management token retained for cleanup/status requests")
     if info.expires_at is not None:
         print(f"  Expires at:    {info.expires_at.isoformat(timespec='seconds')}Z")
 

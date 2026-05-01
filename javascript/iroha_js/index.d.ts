@@ -2669,6 +2669,10 @@ export interface ConnectStatusPolicySnapshot {
   frameMaxBytes: number;
   sessionBufferMaxBytes: number;
   relayEnabled: boolean;
+  relayStrategy: string;
+  relayEffectiveStrategy: string;
+  relayP2pAttached: boolean;
+  p2pTtlHops: number;
   heartbeatIntervalMs: number;
   heartbeatMissTolerance: number;
   heartbeatMinIntervalMs: number;
@@ -2690,7 +2694,13 @@ export interface ConnectStatusSnapshot {
   bufferDropsTotal: number;
   plaintextControlDropsTotal: number;
   monotonicDropsTotal: number;
+  sequenceViolationClosesTotal: number;
+  roleDirectionMismatchTotal: number;
   pingMissTotal: number;
+  p2pRebroadcastsTotal: number;
+  p2pRebroadcastSkippedTotal: number;
+  p2pAuthFailuresTotal: number;
+  p2pTtlDropsTotal: number;
 }
 
 export interface ConnectSessionResponse {
@@ -2699,6 +2709,8 @@ export interface ConnectSessionResponse {
   app_uri: string;
   token_app: string;
   token_wallet: string;
+  token_management: string;
+  token_relay: string;
   extra: Record<string, unknown>;
   raw?: Record<string, unknown>;
 }
@@ -2862,7 +2874,7 @@ export interface BootstrapConnectPreviewOptions extends ConnectSessionPreviewOpt
 export interface BootstrapConnectPreviewResult {
   preview: ConnectSessionPreview;
   session: ConnectSessionResponse | null;
-  tokens: { wallet: string; app: string } | null;
+  tokens: { wallet: string; app: string; management: string; relay: string } | null;
 }
 
 export function bootstrapConnectPreviewSession(
@@ -7536,7 +7548,7 @@ export declare class ToriiClient {
   ): Promise<IsoMessageStatusResponse>;
   getConnectStatus(): Promise<ConnectStatusSnapshot | null>;
   createConnectSession(input: { sid: string; node?: string | null }): Promise<ConnectSessionResponse>;
-  deleteConnectSession(sid: string): Promise<boolean>;
+  deleteConnectSession(input: { sid: string; tokenManagement?: string; token_management?: string }): Promise<boolean>;
   listConnectApps(options?: ConnectAppListOptions): Promise<ConnectAppRegistryPage>;
   iterateConnectApps(
     options?: ConnectAppIteratorOptions,
