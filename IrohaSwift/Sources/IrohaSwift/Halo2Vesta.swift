@@ -135,7 +135,9 @@ public struct VestaProjective: Equatable, Sendable {
         let b = y.squared()
         let c = b.squared()
         let xPlusB = x + b
-        let d = (xPlusB.squared() - a - c) + (xPlusB.squared() - a - c)
+        let xPlusBSquared = xPlusB.squared()
+        let d0 = xPlusBSquared - a - c
+        let d = d0 + d0
         let e = a + a + a
         let f = e.squared()
         let x3 = f - d - d

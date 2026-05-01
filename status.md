@@ -10,7 +10,8 @@ Last updated: 2026-05-01
   Lagrange commitments for single-row instance/advice columns, a 4-bit
   windowed Vesta scalar multiplication path, and bucketed 4-bit MSM for dense
   IPA commitments to avoid the previous scalar-multiply-per-base commitment
-  path.
+  path. Projective Vesta doubling now reuses the shared `(x + y^2)^2`
+  intermediate instead of squaring it twice.
 - Added Swift convenience APIs for direct native proof generation from
   `OfflineNoteRedeemV2` / `OfflineNoteAuditBundleV2`, plus proof replacement
   helpers and a `Halo2OfflineNoteV2Prover.prewarm()` hook so callers can keep
@@ -23,15 +24,17 @@ Last updated: 2026-05-01
   and the focused JVM payload was cross-verified by the Swift native verifier.
   The Java-family prover also uses bucketed dense MSM and conditional
   canonical field add/sub paths to avoid repeated `BigInteger.mod(...)` calls
-  in the group-addition hot loop.
+  in the group-addition hot loop, plus the same projective doubling
+  intermediate reuse as Swift.
 - Release Swift benchmark on macOS arm64 for the pure Swift prover after the
-  optimization pass: audit median `0.347s`, p95 `0.382s`, max `0.392s`;
-  redeem median `0.331s`, p95 `0.341s`, max `0.342s` over 20 iterations.
+  latest optimization pass: audit median `0.327s`, p95 `0.359s`, max
+  `0.362s`; redeem median `0.325s`, p95 `0.338s`, max `0.344s` over 20
+  iterations.
 - Env-gated Java-family benchmark hooks now report subsecond native prover
-  medians on macOS arm64 over 5 iterations: Kotlin/JVM audit `0.861s`, p95
-  `0.880s`, max `0.880s`; Kotlin/JVM redeem `0.851s`, p95 `0.866s`, max
-  `0.866s`; Java Android harness audit `0.871s`, p95 `0.919s`, max `0.919s`;
-  Java Android harness redeem `0.871s`, p95 `0.880s`, max `0.880s`.
+  medians on macOS arm64 over 5 iterations: Kotlin/JVM audit `0.850s`, p95
+  `0.877s`, max `0.877s`; Kotlin/JVM redeem `0.846s`, p95 `0.852s`, max
+  `0.852s`; Java Android harness audit `0.823s`, p95 `0.840s`, max `0.840s`;
+  Java Android harness redeem `0.821s`, p95 `0.826s`, max `0.826s`.
 - Focused validation for this slice:
   - `swift test -c release --filter Halo2PastaTests/testPastaUniformBytesAndVestaGroupArithmetic`
   - `swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
