@@ -120,7 +120,7 @@ translator: machine-google-reviewed
 1. **Ջնջեք փուլային նիստերը։** Միշտ ջնջեք նախադիտման նիստերը, որպեսզի հերթի խորությունը
    ահազանգերը մնում են իմաստալից.
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Միայն Swift-ով փորձնական գործարկումների համար զանգահարեք նույն վերջնակետը՝ Rust/CLI օգնականի միջոցով:
 2. **Մաքրեք ամսագրերը** Հեռացրեք շարունակվող հերթերի ամսագրերը

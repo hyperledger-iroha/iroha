@@ -2627,12 +2627,13 @@ async fn dispatch_connect_session_delete(
     let sid = extract_connect_sid_argument(arguments)?;
     let mut path = String::from("/v1/connect/session/");
     path.push_str(&urlencoding::encode(sid));
+    let extra_headers = connect_management_headers(arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::DELETE,
         path.as_str(),
-        arguments.get("headers"),
+        extra_headers.as_ref(),
         Vec::new(),
         None,
         arguments
@@ -2648,12 +2649,18 @@ async fn dispatch_connect_status(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
+    let mut path = String::from("/v1/connect/status");
+    if let Some(sid) = extract_optional_connect_sid_argument(arguments)? {
+        path.push_str("?sid=");
+        path.push_str(&urlencoding::encode(sid));
+    }
+    let extra_headers = connect_management_headers(arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/connect/status",
-        arguments.get("headers"),
+        path.as_str(),
+        extra_headers.as_ref(),
         Vec::new(),
         None,
         arguments
@@ -7052,6 +7059,54 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
         })
 }
 
+fn extract_optional_connect_sid_argument(arguments: &Map) -> Result<Option<&str>, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(sid) = path.get("sid").and_then(Value::as_str)
+            && !sid.is_empty()
+        {
+            return Ok(Some(sid));
+        }
+        if let Some(sid) = path.get("session_id").and_then(Value::as_str)
+            && !sid.is_empty()
+        {
+            return Ok(Some(sid));
+        }
+    }
+
+    Ok(arguments
+        .get("sid")
+        .or_else(|| arguments.get("session_id"))
+        .and_then(Value::as_str)
+        .filter(|sid| !sid.is_empty()))
+}
+
+fn connect_management_headers(arguments: &Map) -> Result<Option<Value>, String> {
+    let token = arguments
+        .get("token_management")
+        .or_else(|| arguments.get("tokenManagement"))
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty());
+    let Some(token) = token else {
+        return Ok(arguments.get("headers").cloned());
+    };
+
+    let mut headers = match arguments.get("headers") {
+        Some(Value::Object(headers)) => headers.clone(),
+        Some(_) => return Err("`headers` must be an object".to_owned()),
+        None => Map::new(),
+    };
+    if !headers.contains_key("Authorization") && !headers.contains_key("authorization") {
+        headers.insert(
+            "Authorization".into(),
+            Value::String(format!("Bearer {token}")),
+        );
+    }
+    Ok(Some(Value::Object(headers)))
+}
+
 fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -8474,6 +8529,10 @@ fn connect_session_delete_tool() -> ToolSpec {
                     "type": "string",
                     "description": "Alias for `sid`."
                 },
+                "token_management": {
+                    "type": "string",
+                    "description": "Management bearer token returned by `connect.session.create`; the dispatcher maps this to `Authorization: Bearer ...`."
+                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -8488,13 +8547,22 @@ fn connect_session_delete_tool() -> ToolSpec {
 fn connect_status_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.status".to_owned(),
-        description: "Get Iroha Connect relay/session status.".to_owned(),
+        description: "Get redacted aggregate Iroha Connect status, or token-gated per-session status when `sid` and `token_management` are provided.".to_owned(),
         method: Method::GET,
         path_template: "/v1/connect/status".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "sid": { "type": "string" },
+                "session_id": {
+                    "type": "string",
+                    "description": "Alias for `sid`."
+                },
+                "token_management": {
+                    "type": "string",
+                    "description": "Management bearer token required for per-session status."
+                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -14887,6 +14955,28 @@ mod tests {
         let sid =
             extract_connect_sid_argument(args.as_object().expect("object")).expect("sid alias");
         assert_eq!(sid, "nested-sid");
+    }
+
+    #[test]
+    fn connect_management_headers_maps_token_to_authorization() {
+        let args = norito::json!({
+            "token_management": "management-token",
+            "headers": {
+                "Accept": "application/json"
+            }
+        });
+        let headers = connect_management_headers(args.as_object().expect("object"))
+            .expect("headers")
+            .expect("headers value");
+        let headers = headers.as_object().expect("headers object");
+        assert_eq!(
+            headers.get("Authorization").and_then(Value::as_str),
+            Some("Bearer management-token")
+        );
+        assert_eq!(
+            headers.get("Accept").and_then(Value::as_str),
+            Some("application/json")
+        );
     }
 
     #[test]

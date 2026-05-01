@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **احذف الجلسات الممرحلة.** احذف جلسات المعاينة دائما حتى تبقى تنبيهات عمق الطابور ذات معنى:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    لعمليات اختبار Swift فقط، استدع نفس النهاية عبر مساعد Rust/CLI.
 2. **نظف السجلات.** ازل اي سجلات طابور محفوظة (`ApplicationSupport/ConnectQueue/<sid>.to`، مخازن IndexedDB، وغيرها) ليبدا التشغيل التالي نظيفا. سجل تجزئة الملف قبل الحذف اذا احتجت لتشخيص مشكلة replay.

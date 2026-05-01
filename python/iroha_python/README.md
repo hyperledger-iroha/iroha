@@ -540,6 +540,7 @@ For Connect automation, pass `--status-only` to the CLI helper when you only nee
 
 ## Typed Connect session helper
 `create_connect_session_info` returns a `ConnectSessionInfo` dataclass. When the node advertises a session TTL via `/v1/connect/status`, the helper populates `expires_at` with a UTC timestamp so callers know when to rotate tokens.
+The response also carries `management_token` for session deletion/per-session status and `relay_token` for wallet/app relay authentication; keep the management token out of launch links and QR payloads.
 
 ### CLI walkthrough
 Run the end-to-end Connect CLI helper to stage a session, inspect policy limits, and emit an Open control frame:

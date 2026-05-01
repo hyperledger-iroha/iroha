@@ -1449,9 +1449,16 @@ fn connect_paths() -> Map {
         Value::Object(json_delete_operation(
             "Connect",
             "Close a Connect session.",
-            "Terminate a Connect session by session id.",
+            "Terminate a Connect session by session id. Requires `Authorization: Bearer <token_management>` from session creation.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("sid", "Connect session id.")],
+            vec![
+                string_path_param("sid", "Connect session id."),
+                string_header_param(
+                    "Authorization",
+                    "Bearer management token returned by `/v1/connect/session`.",
+                    true,
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -1468,9 +1475,16 @@ fn connect_paths() -> Map {
         Value::Object(json_get_operation(
             "Connect",
             "Fetch Connect status.",
-            "Return Connect relay status information.",
+            "Return redacted aggregate Connect relay status. Add `sid` with `Authorization: Bearer <token_management>` for per-session status.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![
+                string_query_param("sid", "Optional Connect session id for token-gated per-session status."),
+                string_header_param(
+                    "Authorization",
+                    "Bearer management token required when `sid` is supplied.",
+                    false,
+                ),
+            ],
         )),
     );
     paths
@@ -6923,6 +6937,18 @@ fn string_path_param(name: &str, description: &str) -> Value {
     param.insert("name".into(), Value::String(name.to_owned()));
     param.insert("in".into(), Value::String("path".to_owned()));
     param.insert("required".into(), Value::Bool(true));
+    param.insert("description".into(), Value::String(description.to_owned()));
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    param.insert("schema".into(), Value::Object(schema));
+    Value::Object(param)
+}
+
+fn string_header_param(name: &str, description: &str, required: bool) -> Value {
+    let mut param = Map::new();
+    param.insert("name".into(), Value::String(name.to_owned()));
+    param.insert("in".into(), Value::String("header".to_owned()));
+    param.insert("required".into(), Value::Bool(required));
     param.insert("description".into(), Value::String(description.to_owned()));
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("string".to_owned()));
