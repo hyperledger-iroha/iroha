@@ -6187,6 +6187,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 return encodeControlPingFrame(frame: frame, ping: ping)
             case .pong(let pong):
                 return encodeControlPongFrame(frame: frame, pong: pong)
+            case .serverEvent:
+                return nil
             }
         case .ciphertext(let ciphertext):
             return encodeCiphertextFrame(frame: frame, ciphertext: ciphertext)
