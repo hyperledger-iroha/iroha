@@ -98,22 +98,38 @@ public struct Halo2IPAParameters: Equatable, Sendable {
         guard coefficients.count == n else {
             throw Halo2IPAError.invalidPolynomialLength(expected: n, actual: coefficients.count)
         }
-        var scalars = coefficients
-        var bases = g
-        scalars.append(blind)
-        bases.append(w)
-        return VestaProjective.multiscalarMultiply(scalars: scalars, bases: bases)
+        return VestaProjective.multiscalarMultiply(
+            scalars: coefficients,
+            bases: g,
+            additionalScalar: blind,
+            additionalBase: w
+        )
     }
 
     public func commitLagrange(evaluations: [PastaFp], blind: PastaFp) throws -> VestaProjective {
         guard evaluations.count == n else {
             throw Halo2IPAError.invalidPolynomialLength(expected: n, actual: evaluations.count)
         }
-        var scalars = evaluations
-        var bases = gLagrange
-        scalars.append(blind)
-        bases.append(w)
-        return VestaProjective.multiscalarMultiply(scalars: scalars, bases: bases)
+        return VestaProjective.multiscalarMultiply(
+            scalars: evaluations,
+            bases: gLagrange,
+            additionalScalar: blind,
+            additionalBase: w
+        )
+    }
+
+    public func commitLagrangeSparse(entries: [(index: Int, scalar: PastaFp)], blind: PastaFp) throws -> VestaProjective {
+        var accumulator = VestaProjective.identity
+        for entry in entries where entry.scalar != .zero {
+            guard entry.index >= 0, entry.index < n else {
+                throw Halo2IPAError.invalidPolynomialLength(expected: n, actual: entry.index)
+            }
+            accumulator += gLagrange[entry.index].projective.multiplied(by: entry.scalar)
+        }
+        if blind != .zero {
+            accumulator += w.projective.multiplied(by: blind)
+        }
+        return accumulator
     }
 
     private static func readUInt32LE(_ data: Data, cursor: inout Int) throws -> UInt32 {

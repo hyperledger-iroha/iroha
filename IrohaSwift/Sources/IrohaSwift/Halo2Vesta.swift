@@ -205,13 +205,27 @@ public struct VestaProjective: Equatable, Sendable {
     }
 
     public func multiplied(by scalar: PastaFp) -> VestaProjective {
+        guard scalar != .zero, !isIdentity else {
+            return .identity
+        }
+
+        let scalarLimbs = scalar.canonicalLimbs()
+        var table = [VestaProjective](repeating: .identity, count: 16)
+        table[1] = self
+        for index in 2..<table.count {
+            table[index] = table[index - 1].added(self)
+        }
+
         var result = VestaProjective.identity
-        var addend = self
-        for bit in 0..<255 {
-            if scalar.bit(at: bit) {
-                result = result.added(addend)
+        for window in stride(from: 63, through: 0, by: -1) {
+            if !result.isIdentity {
+                result = result.doubled().doubled().doubled().doubled()
             }
-            addend = addend.doubled()
+            let limb = scalarLimbs[window / 16]
+            let nibble = Int((limb >> UInt64((window % 16) * 4)) & 0x0f)
+            if nibble != 0 {
+                result = result.added(table[nibble])
+            }
         }
         return result
     }
@@ -233,6 +247,23 @@ public struct VestaProjective: Equatable, Sendable {
         var accumulator = VestaProjective.identity
         for (scalar, base) in zip(scalars, bases) where scalar != .zero && !base.isIdentity {
             accumulator += base.projective.multiplied(by: scalar)
+        }
+        return accumulator
+    }
+
+    public static func multiscalarMultiply(
+        scalars: [PastaFp],
+        bases: [VestaAffine],
+        additionalScalar: PastaFp,
+        additionalBase: VestaAffine
+    ) -> VestaProjective {
+        precondition(scalars.count == bases.count)
+        var accumulator = VestaProjective.identity
+        for (scalar, base) in zip(scalars, bases) where scalar != .zero && !base.isIdentity {
+            accumulator += base.projective.multiplied(by: scalar)
+        }
+        if additionalScalar != .zero && !additionalBase.isIdentity {
+            accumulator += additionalBase.projective.multiplied(by: additionalScalar)
         }
         return accumulator
     }
