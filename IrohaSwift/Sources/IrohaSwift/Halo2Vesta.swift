@@ -244,11 +244,12 @@ public struct VestaProjective: Equatable, Sendable {
 
     public static func multiscalarMultiply(scalars: [PastaFp], bases: [VestaAffine]) -> VestaProjective {
         precondition(scalars.count == bases.count)
-        var accumulator = VestaProjective.identity
-        for (scalar, base) in zip(scalars, bases) where scalar != .zero && !base.isIdentity {
-            accumulator += base.projective.multiplied(by: scalar)
-        }
-        return accumulator
+        return multiscalarMultiply(
+            scalars: scalars,
+            bases: bases,
+            additionalScalar: nil,
+            additionalBase: nil
+        )
     }
 
     public static func multiscalarMultiply(
@@ -258,13 +259,89 @@ public struct VestaProjective: Equatable, Sendable {
         additionalBase: VestaAffine
     ) -> VestaProjective {
         precondition(scalars.count == bases.count)
+        return multiscalarMultiply(
+            scalars: scalars,
+            bases: bases,
+            additionalScalar: Optional(additionalScalar),
+            additionalBase: Optional(additionalBase)
+        )
+    }
+
+    private static func multiscalarMultiply(
+        scalars: [PastaFp],
+        bases: [VestaAffine],
+        additionalScalar: PastaFp?,
+        additionalBase: VestaAffine?
+    ) -> VestaProjective {
         var accumulator = VestaProjective.identity
+        var prepared: [(scalar: ScalarLimbs, base: VestaAffine)] = []
+        prepared.reserveCapacity(scalars.count + (additionalScalar == nil ? 0 : 1))
         for (scalar, base) in zip(scalars, bases) where scalar != .zero && !base.isIdentity {
-            accumulator += base.projective.multiplied(by: scalar)
+            prepared.append((ScalarLimbs(scalar), base))
         }
-        if additionalScalar != .zero && !additionalBase.isIdentity {
-            accumulator += additionalBase.projective.multiplied(by: additionalScalar)
+        if let additionalScalar, let additionalBase, additionalScalar != .zero, !additionalBase.isIdentity {
+            prepared.append((ScalarLimbs(additionalScalar), additionalBase))
+        }
+        guard prepared.count >= 8 else {
+            for item in prepared {
+                accumulator += item.base.projective.multiplied(by: item.scalar.value)
+            }
+            return accumulator
+        }
+
+        for window in stride(from: 63, through: 0, by: -1) {
+            if !accumulator.isIdentity {
+                accumulator = accumulator.doubled().doubled().doubled().doubled()
+            }
+            var buckets = [VestaProjective?](repeating: nil, count: 16)
+            for item in prepared {
+                let nibble = item.scalar.nibble(at: window)
+                if nibble != 0 {
+                    buckets[nibble] = buckets[nibble]?.mixedAdded(item.base) ?? item.base.projective
+                }
+            }
+            var running = VestaProjective.identity
+            for bucket in stride(from: buckets.count - 1, through: 1, by: -1) {
+                if let value = buckets[bucket] {
+                    running += value
+                }
+                if !running.isIdentity {
+                    accumulator += running
+                }
+            }
         }
         return accumulator
+    }
+
+    private struct ScalarLimbs {
+        let value: PastaFp
+        let limb0: UInt64
+        let limb1: UInt64
+        let limb2: UInt64
+        let limb3: UInt64
+
+        init(_ value: PastaFp) {
+            let limbs = value.canonicalLimbs()
+            self.value = value
+            self.limb0 = limbs[0]
+            self.limb1 = limbs[1]
+            self.limb2 = limbs[2]
+            self.limb3 = limbs[3]
+        }
+
+        func nibble(at window: Int) -> Int {
+            let limb: UInt64
+            switch window / 16 {
+            case 0:
+                limb = limb0
+            case 1:
+                limb = limb1
+            case 2:
+                limb = limb2
+            default:
+                limb = limb3
+            }
+            return Int((limb >> UInt64((window % 16) * 4)) & 0x0f)
+        }
     }
 }
