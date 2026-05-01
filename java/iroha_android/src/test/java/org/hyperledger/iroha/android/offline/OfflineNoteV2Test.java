@@ -5,8 +5,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.JsonParser;
 
@@ -19,6 +21,9 @@ public final class OfflineNoteV2Test {
     offlineNoteV2ModelsMatchRustNoritoVectors();
     publicInputHashesMatchRustVectors();
     proofBindingRejectsMismatch();
+    instanceValuesMatchRustVectors();
+    nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
+    nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
     System.out.println("[IrohaAndroid] OfflineNoteV2Test passed.");
   }
@@ -73,6 +78,8 @@ public final class OfflineNoteV2Test {
         "redeem public inputs hash");
     audit.validateProofBinding();
     redeem.validateProofBinding();
+    audit.replacingRecursiveProof(audit.recursiveProof()).validateProofBinding();
+    redeem.replacingRecursiveProof(redeem.recursiveProof()).validateProofBinding();
   }
 
   private static void proofBindingRejectsMismatch() throws Exception {
@@ -95,6 +102,93 @@ public final class OfflineNoteV2Test {
             badProof);
 
     assertThrows(forged::validateProofBinding, "proof binding mismatch should throw");
+  }
+
+  private static void instanceValuesMatchRustVectors() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final OfflineNoteV2.InstanceValues auditValues =
+        OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(fixture));
+    final OfflineNoteV2.InstanceValues redeemValues =
+        OfflineNoteV2.InstanceBuilder.redeemInstanceValues(redeem(fixture));
+    final long[] auditPublic = auditValues.publicValues();
+    final long[] redeemPublic = redeemValues.publicValues();
+
+    assertEquals(
+        string(obj(chain, "audit"), "public_inputs_hash"),
+        hex(hashFromPublicValues(auditPublic)),
+        "audit instance public inputs hash limbs");
+    assertEquals(
+        string(obj(chain, "redeem"), "public_inputs_hash"),
+        hex(hashFromPublicValues(redeemPublic)),
+        "redeem instance public inputs hash limbs");
+    assertEquals(2L, auditPublic[4], "audit mode");
+    assertEquals(1L, auditPublic[5], "audit input count");
+    assertEquals(2L, auditPublic[6], "audit output count");
+    assertEquals(52L, auditPublic[7], "audit input sum");
+    assertEquals(52L, auditPublic[8], "audit output sum");
+    assertEquals(1L, redeemPublic[4], "redeem mode");
+    assertEquals(1L, redeemPublic[5], "redeem input count");
+    assertEquals(1L, redeemPublic[6], "redeem output count");
+    assertEquals(5L, redeemPublic[7], "redeem input sum");
+    assertEquals(5L, redeemPublic[8], "redeem output sum");
+    assertEquals(52L, auditValues.inputAmounts()[0], "audit input amount");
+    assertEquals(5L, auditValues.outputAmounts()[0], "audit first output amount");
+    assertEquals(47L, auditValues.outputAmounts()[1], "audit second output amount");
+    assertEquals(5L, redeemValues.inputAmounts()[0], "redeem input amount");
+    assertEquals(5L, redeemValues.outputAmounts()[0], "redeem output amount");
+    assertEquals(
+        hex(OfflineNoteV2.instanceScalarBytes(auditPublic[0])),
+        hex(auditValues.publicInstanceColumns().get(0)),
+        "audit first instance scalar");
+  }
+
+  private static void nativeHalo2ProverProducesVerifyingPayloadWhenRequested() throws Exception {
+    if (!"1".equals(System.getenv("IROHA_JAVA_OFFLINE_V2_PROVER_TEST"))) {
+      return;
+    }
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.InstanceValues values =
+        OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit);
+    OfflineNoteV2Halo2Prover.prewarm();
+    final byte[] payload = OfflineNoteV2Halo2Prover.proveZk1Payload(values);
+
+    assertTrue(
+        OfflineNoteV2Halo2Prover.verifyZk1Payload(payload, values.publicValues()),
+        "Java Offline V2 Halo2 payload verifies");
+    final OfflineNoteV2.RecursiveProofV2 proof = OfflineNoteV2Halo2Prover.proveAudit(audit);
+    audit.replacingRecursiveProof(proof).validateProofBinding();
+    assertTrue(
+        proof.proof().bytes().length <= OfflineNoteV2Halo2Prover.MAX_ENVELOPE_BYTES,
+        "Java Offline V2 Halo2 envelope fits QR budget");
+  }
+
+  private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
+    if (!"1".equals(System.getenv("IROHA_JAVA_OFFLINE_V2_BENCH"))) {
+      return;
+    }
+    final String configuredIterations = System.getenv("IROHA_JAVA_OFFLINE_V2_BENCH_ITERATIONS");
+    final int iterations =
+        configuredIterations == null ? 20 : Integer.parseInt(configuredIterations);
+    assertTrue(iterations > 0, "Java Offline V2 benchmark iterations must be positive");
+
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNoteV2.AuditBundleV2 audit = audit(fixture);
+    final OfflineNoteV2.RedeemV2 redeem = redeem(fixture);
+    OfflineNoteV2Halo2Prover.prewarm();
+    OfflineNoteV2Halo2Prover.proveAudit(audit);
+    OfflineNoteV2Halo2Prover.proveRedeem(redeem);
+
+    final double[] auditSeconds =
+        benchmarkSeconds(iterations, () -> OfflineNoteV2Halo2Prover.proveAudit(audit));
+    final double[] redeemSeconds =
+        benchmarkSeconds(iterations, () -> OfflineNoteV2Halo2Prover.proveRedeem(redeem));
+    System.out.println(
+        "offline_note_v2_java_bench audit="
+            + summary(auditSeconds)
+            + " redeem="
+            + summary(redeemSeconds));
   }
 
   private static void qrFixtureUsesSdkTextPrefix() throws Exception {
@@ -263,6 +357,50 @@ public final class OfflineNoteV2Test {
     return builder.toString();
   }
 
+  private static byte[] hashFromPublicValues(final long[] values) {
+    final byte[] out = new byte[32];
+    for (int idx = 0; idx < 4; idx++) {
+      long word = values[idx];
+      for (int offset = 0; offset < 8; offset++) {
+        out[idx * 8 + offset] = (byte) (word & 0xFFL);
+        word >>>= 8;
+      }
+    }
+    return out;
+  }
+
+  private static double[] benchmarkSeconds(
+      final int iterations, final ThrowingRunnable action) throws Exception {
+    final double[] durations = new double[iterations];
+    for (int idx = 0; idx < iterations; idx++) {
+      final long start = System.nanoTime();
+      action.run();
+      durations[idx] = (System.nanoTime() - start) / 1_000_000_000.0;
+    }
+    return durations;
+  }
+
+  private static String summary(final double[] values) {
+    final double[] sorted = Arrays.copyOf(values, values.length);
+    Arrays.sort(sorted);
+    if (sorted.length == 0) {
+      return "empty";
+    }
+    final double median =
+        (sorted.length & 1) == 0
+            ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2.0
+            : sorted[sorted.length / 2];
+    final int p95Index =
+        Math.min(sorted.length - 1, Math.max(0, (int) Math.ceil(sorted.length * 0.95) - 1));
+    return String.format(
+        Locale.ROOT,
+        "median=%.3fs p95=%.3fs max=%.3fs n=%d",
+        median,
+        sorted[p95Index],
+        sorted[sorted.length - 1],
+        sorted.length);
+  }
+
   private static byte[] hexBytes(final String value) {
     if ((value.length() & 1) != 0) {
       throw new IllegalArgumentException("hex length must be even");
@@ -281,6 +419,18 @@ public final class OfflineNoteV2Test {
     }
   }
 
+  private static void assertEquals(final long expected, final long actual, final String message) {
+    if (expected != actual) {
+      throw new AssertionError(message + ": expected " + expected + " but got " + actual);
+    }
+  }
+
+  private static void assertTrue(final boolean condition, final String message) {
+    if (!condition) {
+      throw new AssertionError(message);
+    }
+  }
+
   private static void assertThrows(final Runnable action, final String message) {
     try {
       action.run();
@@ -288,5 +438,10 @@ public final class OfflineNoteV2Test {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  @FunctionalInterface
+  private interface ThrowingRunnable {
+    void run() throws Exception;
   }
 }

@@ -1364,7 +1364,9 @@ final class Halo2PastaTests: XCTestCase {
 
     func testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget() throws {
         let fixture = try Self.loadFixture()
-        let auditValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: try Self.audit(fixture))
+        try Halo2OfflineNoteV2Prover.prewarm()
+        let audit = try Self.audit(fixture)
+        let auditValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
         let zk1Payload = try Halo2OfflineNoteV2Prover.proveZK1Payload(instanceValues: auditValues)
         XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyZK1Payload(
             zk1Payload,
@@ -1384,12 +1386,41 @@ final class Halo2PastaTests: XCTestCase {
             publicValues: auditValues.publicValues
         )) == true)
 
-        let proof = try Halo2OfflineNoteV2Prover.prove(instanceValues: auditValues)
+        let proof = try Halo2OfflineNoteV2Prover.proveAudit(audit)
         if let proofOut = ProcessInfo.processInfo.environment["IROHA_SWIFT_OFFLINE_V2_PROOF_OUT"] {
             try proof.proof.bytes.write(to: URL(fileURLWithPath: proofOut))
         }
+        if let externalPayload = ProcessInfo.processInfo.environment["IROHA_SWIFT_OFFLINE_V2_VERIFY_PAYLOAD_IN"] {
+            let payload = try Data(contentsOf: URL(fileURLWithPath: externalPayload))
+            XCTAssertTrue(try Halo2OfflineNoteV2Prover.verifyZK1Payload(payload, publicValues: auditValues.publicValues))
+        }
         XCTAssertLessThan(proof.proof.bytes.count, Halo2OfflineNoteV2Prover.maxEnvelopeBytes)
         XCTAssertEqual(proof.publicInputsHash, Data(hexString: fixture.chainVectors.audit.publicInputsHash))
+        try audit.replacingRecursiveProof(proof).validateProofBinding()
+    }
+
+    func testOfflineNoteV2NativeHalo2ProofPerformanceWhenRequested() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["IROHA_SWIFT_OFFLINE_V2_BENCH"] == "1" else {
+            throw XCTSkip("set IROHA_SWIFT_OFFLINE_V2_BENCH=1 to run the Offline V2 proof benchmark")
+        }
+        let iterations = env["IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS"].flatMap(Int.init) ?? 20
+        XCTAssertGreaterThan(iterations, 0)
+
+        let fixture = try Self.loadFixture()
+        let audit = try Self.audit(fixture)
+        let redeem = try Self.redeem(fixture)
+        try Halo2OfflineNoteV2Prover.prewarm()
+        _ = try Halo2OfflineNoteV2Prover.proveAudit(audit)
+        _ = try Halo2OfflineNoteV2Prover.proveRedeem(redeem)
+
+        let auditSeconds = try benchmarkSeconds(iterations: iterations) {
+            _ = try Halo2OfflineNoteV2Prover.proveAudit(audit)
+        }
+        let redeemSeconds = try benchmarkSeconds(iterations: iterations) {
+            _ = try Halo2OfflineNoteV2Prover.proveRedeem(redeem)
+        }
+        print("offline_note_v2_swift_bench audit=\(summary(auditSeconds)) redeem=\(summary(redeemSeconds))")
     }
 
     func testOfflineNoteV2ProofPayloadRejectsMalformedInputs() throws {
@@ -1590,6 +1621,38 @@ final class Halo2PastaTests: XCTestCase {
         XCTAssertThrowsError(try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: overflowingOutput)) { error in
             XCTAssertEqual(error as? OfflineNoteV2InstanceError, .amountSumOverflow("output"))
         }
+    }
+
+    private func benchmarkSeconds(iterations: Int, body: () throws -> Void) rethrows -> [Double] {
+        var durations: [Double] = []
+        durations.reserveCapacity(iterations)
+        for _ in 0..<iterations {
+            let start = Date()
+            try body()
+            durations.append(Date().timeIntervalSince(start))
+        }
+        return durations
+    }
+
+    private func summary(_ values: [Double]) -> String {
+        let sorted = values.sorted()
+        guard let maxValue = sorted.last else {
+            return "empty"
+        }
+        let median: Double
+        if sorted.count % 2 == 0 {
+            median = (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+        } else {
+            median = sorted[sorted.count / 2]
+        }
+        let p95Index = min(sorted.count - 1, max(0, Int(ceil(Double(sorted.count) * 0.95)) - 1))
+        return String(
+            format: "median=%.3fs p95=%.3fs max=%.3fs n=%d",
+            median,
+            sorted[p95Index],
+            maxValue,
+            sorted.count
+        )
     }
 
     private static func scalarBytes(_ value: UInt64) -> Data {

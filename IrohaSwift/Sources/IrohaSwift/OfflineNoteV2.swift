@@ -459,6 +459,18 @@ public struct OfflineNoteRedeemV2: Equatable, Sendable {
         }
     }
 
+    public func replacingRecursiveProof(_ recursiveProof: OfflineNoteRecursiveProofV2) throws -> OfflineNoteRedeemV2 {
+        try OfflineNoteRedeemV2(
+            sourceNoteCommitment: sourceNoteCommitment,
+            inputNullifiers: inputNullifiers,
+            senderKeyCertificate: senderKeyCertificate,
+            recipient: recipient,
+            assetId: assetId,
+            amount: amount,
+            recursiveProof: recursiveProof
+        )
+    }
+
     public func noritoEncoded() throws -> Data {
         try OfflineNoteV2Encoding.wrap(
             typeName: OfflineNoteV2TypeNames.redeem,
@@ -608,6 +620,18 @@ public struct OfflineNoteAuditBundleV2: Equatable, Sendable {
                 actual: recursiveProof.publicInputsHash.hexLowercased()
             )
         }
+    }
+
+    public func replacingRecursiveProof(_ recursiveProof: OfflineNoteRecursiveProofV2) throws -> OfflineNoteAuditBundleV2 {
+        try OfflineNoteAuditBundleV2(
+            tokenId: tokenId,
+            senderKeyCertificate: senderKeyCertificate,
+            inputNullifiers: inputNullifiers,
+            inputClaims: inputClaims,
+            outputCommitments: outputCommitments,
+            outputClaims: outputClaims,
+            recursiveProof: recursiveProof
+        )
     }
 
     public func noritoEncoded() throws -> Data {

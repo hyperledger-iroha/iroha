@@ -2,6 +2,45 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Offline V2 native SDK prover speedups
+
+- Swift Offline Note V2 pure Halo2 proving now reuses a cached IPA/domain
+  context, verifier-key transcript scalar, and fixed selector polynomial instead
+  of regenerating them on every proof. The hot commitment path now uses sparse
+  Lagrange commitments for single-row instance/advice columns and a 4-bit
+  windowed Vesta scalar multiplication path to avoid the previous 255-step
+  bit-by-bit multiplication for every base.
+- Added Swift convenience APIs for direct native proof generation from
+  `OfflineNoteRedeemV2` / `OfflineNoteAuditBundleV2`, plus proof replacement
+  helpers and a `Halo2OfflineNoteV2Prover.prewarm()` hook so callers can keep
+  the native model, initialize the proof cache before the button path, and swap
+  in the newly generated recursive proof before binding validation.
+- Added Kotlin/JVM and Java Android Offline V2 instance-value builders,
+  scalar-column encoders, proof replacement helpers, and pure Java Halo2/IPA
+  provers. The Java-family path now builds the same `OpenVerifyEnvelope`
+  recursive proof payloads without routing production calls through Rust JNI,
+  and the focused JVM payload was cross-verified by the Swift native verifier.
+- Release Swift benchmark on macOS arm64 for the pure Swift prover after the
+  optimization pass: audit median `0.643s`, p95 `0.724s`, max `0.754s`;
+  redeem median `0.722s`, p95 `1.237s`, max `1.258s` over 20 iterations.
+- Added env-gated Kotlin/JVM and Java Android native prover benchmark hooks.
+  One-iteration local smoke runs on macOS arm64 reported JVM audit `1.870s`
+  / redeem `1.838s`, and Java Android harness audit `1.871s` / redeem
+  `1.849s`; run a larger iteration count before treating these as stable
+  release numbers.
+- Focused validation for this slice:
+  - `swift test -c release --filter Halo2PastaTests/testPastaUniformBytesAndVestaGroupArithmetic`
+  - `swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
+  - `IROHA_SWIFT_OFFLINE_V2_BENCH=1 IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS=20 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofPerformanceWhenRequested`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_V2_PROVER_TEST=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverProducesVerifyingPayloadWhenRequested --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_V2_BENCH=1 IROHA_JVM_OFFLINE_V2_BENCH_ITERATIONS=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverPerformanceWhenRequested --console=plain --info --rerun-tasks` from `kotlin`
+  - `IROHA_SWIFT_OFFLINE_V2_VERIFY_PAYLOAD_IN=/tmp/iroha-jvm-offline-v2-audit.zk1 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_PROVER_TEST=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_BENCH=1 IROHA_JAVA_OFFLINE_V2_BENCH_ITERATIONS=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --info --rerun-tasks` from `java/iroha_android`
+  - `git diff --check`
+
 ## 2026-05-01 Torii Offline V2 issuer hardening
 
 - Torii Offline V2 issuer certificate minting now requires a signed middleware

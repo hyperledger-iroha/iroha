@@ -211,10 +211,7 @@ public struct PastaField<Parameters: PastaFieldParameters>: Equatable, Sendable 
     }
 
     public func canonicalBytes() -> Data {
-        let reduced = Self.montgomeryReduce(
-            limbs[0], limbs[1], limbs[2], limbs[3],
-            0, 0, 0, 0
-        ).limbs
+        let reduced = canonicalLimbs()
         var out = Data(capacity: 32)
         for limb in reduced {
             var value = limb
@@ -224,6 +221,13 @@ public struct PastaField<Parameters: PastaFieldParameters>: Equatable, Sendable 
             }
         }
         return out
+    }
+
+    public func canonicalLimbs() -> [UInt64] {
+        Self.montgomeryReduce(
+            limbs[0], limbs[1], limbs[2], limbs[3],
+            0, 0, 0, 0
+        ).limbs
     }
 
     public func canonicalHex() -> String {
@@ -236,8 +240,8 @@ public struct PastaField<Parameters: PastaFieldParameters>: Equatable, Sendable 
 
     public func bit(at index: Int) -> Bool {
         precondition(index >= 0 && index < 256)
-        let bytes = canonicalBytes()
-        return ((bytes[index / 8] >> UInt8(index % 8)) & 1) == 1
+        let limbs = canonicalLimbs()
+        return ((limbs[index / 64] >> UInt64(index % 64)) & 1) == 1
     }
 
     public func squared() -> Self {
