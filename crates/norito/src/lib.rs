@@ -67,6 +67,12 @@ pub use core::{
     to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes,
 };
 
+#[cfg(feature = "parallel-decode")]
+#[doc(hidden)]
+pub use core::decode_planned_sequence_parallel;
+#[doc(hidden)]
+pub use core::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence};
+
 pub use codec::disable_packed_struct_layout;
 
 struct ArchiveSlice {
@@ -5059,6 +5065,8 @@ pub mod json {
             StructIndex, build_struct_index_scalar, extend_struct_index_scalar,
             stage1_helper_self_test, try_build_struct_index_with_helper, validate_accel,
         };
+        #[cfg(feature = "parallel-stage1")]
+        use super::build_struct_index_parallel;
 
         #[test]
         fn validate_accel_rejects_out_of_bounds_offsets() {
@@ -5218,6 +5226,19 @@ pub mod json {
             assert_eq!(resumed, full.offsets);
             assert!(!tail_in_string);
             assert_eq!(tail_carry_bs_run_len, 0);
+        }
+
+        #[cfg(feature = "parallel-stage1")]
+        #[test]
+        fn parallel_stage1_matches_scalar_when_chunk_starts_inside_string() {
+            let mut input = String::from("{\"s\":\"");
+            input.push_str(&"a".repeat(300 * 1024));
+            input.push_str("\",\"x\":1,\"tail\":[true,false,null]}");
+
+            let scalar = build_struct_index_scalar(&input);
+            let parallel =
+                build_struct_index_parallel(&input).expect("parallel stage1 should plan chunks");
+            assert_eq!(parallel.offsets, scalar.offsets);
         }
 
         #[cfg(target_arch = "x86_64")]
@@ -5532,29 +5553,25 @@ pub mod json {
             start = end;
         }
 
-        // Compute per-chunk tapes in parallel (rayon or threads), using scalar/accelerated builder underneath.
+        // Compute all incoming quote-state variants per chunk, then compose the
+        // states in chunk order. This keeps chunking parallel without assuming a
+        // chunk starts outside a string.
         #[cfg(feature = "parallel-stage1-rayon")]
-        let parts: Vec<(usize, Vec<u32>)> = {
+        let mut parts: Vec<Stage1ChunkPlan> = {
             use rayon::prelude::*;
             ranges
                 .into_par_iter()
-                .map(|(s, e)| {
-                    let t = build_struct_index_scalar(&input[s..e]);
-                    (s, t.offsets)
-                })
+                .map(|(s, e)| plan_stage1_chunk(s, input[s..e].as_bytes()))
                 .collect()
         };
         #[cfg(not(feature = "parallel-stage1-rayon"))]
-        let parts: Vec<(usize, Vec<u32>)> = {
+        let mut parts: Vec<Stage1ChunkPlan> = {
             use std::thread;
             let mut handles = Vec::new();
             for (s, e) in ranges.into_iter() {
                 // Spawn with an owned slice to satisfy the 'static bound on thread::spawn.
-                let chunk = input[s..e].to_owned();
-                handles.push(thread::spawn(move || {
-                    let t = build_struct_index_scalar(&chunk);
-                    (s, t.offsets)
-                }));
+                let chunk = input.as_bytes()[s..e].to_vec();
+                handles.push(thread::spawn(move || plan_stage1_chunk(s, &chunk)));
             }
             let mut v = Vec::new();
             for h in handles {
@@ -5563,45 +5580,8 @@ pub mod json {
             v
         };
 
-        // Merge and normalize
-        let mut all: Vec<u32> = Vec::new();
-        for (base, mut offs) in parts.into_iter() {
-            for o in offs.iter_mut() {
-                *o = (*o as usize + base) as u32;
-            }
-            all.extend(offs);
-        }
-        all.sort_unstable();
-        // Deterministic merge pass: recompute which offsets to keep based on quote parity and structurals
-        let bytes = input.as_bytes();
-        let mut out: Vec<u32> = Vec::with_capacity(all.len());
-        let mut in_string = false;
-        for &o in &all {
-            let off = o as usize;
-            if off >= bytes.len() {
-                continue;
-            }
-            let b = bytes[off];
-            if b == b'"' {
-                // Count preceding backslashes
-                let mut run = 0usize;
-                let mut p = off as isize - 1;
-                while p >= 0 && bytes[p as usize] == b'\\' {
-                    run += 1;
-                    p -= 1;
-                }
-                if (run & 1) == 0 {
-                    in_string = !in_string;
-                    out.push(o);
-                }
-            } else if !in_string {
-                match b {
-                    b'{' | b'}' | b'[' | b']' | b':' | b',' => out.push(o),
-                    _ => {}
-                }
-            }
-        }
-        Some(StructIndex { offsets: out })
+        parts.sort_by_key(|part| part.base);
+        Some(compose_stage1_chunks(parts))
     }
 
     #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
@@ -5625,54 +5605,108 @@ pub mod json {
                 break;
             }
             let end = ((c + 1) * step).min(len);
-            let chunk = input[start..end].to_owned();
-            handles.push(thread::spawn(move || {
-                let t = build_struct_index_scalar(&chunk);
-                (start, t.offsets)
-            }));
+            let chunk = input.as_bytes()[start..end].to_vec();
+            handles.push(thread::spawn(move || plan_stage1_chunk(start, &chunk)));
         }
-        let mut all: Vec<u32> = Vec::new();
+        let mut parts = Vec::new();
         for h in handles {
-            let (base, mut offs) = h.join().unwrap();
-            for o in offs.iter_mut() {
-                *o = (*o as usize + base) as u32;
-            }
-            all.extend(offs);
+            parts.push(h.join().unwrap());
         }
-        all.sort_unstable();
-        // Deterministic finalize
-        let bytes = input.as_bytes();
-        let mut out: Vec<u32> = Vec::with_capacity(all.len());
-        let mut in_string = false;
-        let mut bs_run = 0usize;
-        for &o in &all {
-            let off = o as usize;
-            if off >= bytes.len() {
-                continue;
+        parts.sort_by_key(|part| part.base);
+        compose_stage1_chunks(parts)
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Stage1ChunkState {
+        Outside,
+        InsideEvenBackslash,
+        InsideOddBackslash,
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    impl Stage1ChunkState {
+        fn initial(self) -> (bool, usize) {
+            match self {
+                Self::Outside => (false, 0),
+                Self::InsideEvenBackslash => (true, 0),
+                Self::InsideOddBackslash => (true, 1),
             }
-            let b = bytes[off];
-            if b == b'\\' {
-                bs_run += 1;
-                continue;
-            }
-            if b == b'"' {
-                let escaped = (bs_run & 1) == 1;
-                if !escaped {
-                    in_string = !in_string;
-                    out.push(o);
-                }
-                bs_run = 0;
-                continue;
-            }
-            bs_run = 0;
+        }
+
+        fn from_end(in_string: bool, carry_bs_run_len: usize) -> Self {
             if !in_string {
-                match b {
-                    b'{' | b'}' | b'[' | b']' | b':' | b',' => out.push(o),
-                    _ => {}
-                }
+                Self::Outside
+            } else if (carry_bs_run_len & 1) == 0 {
+                Self::InsideEvenBackslash
+            } else {
+                Self::InsideOddBackslash
             }
         }
-        StructIndex { offsets: out }
+
+        fn index(self) -> usize {
+            match self {
+                Self::Outside => 0,
+                Self::InsideEvenBackslash => 1,
+                Self::InsideOddBackslash => 2,
+            }
+        }
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    struct Stage1ChunkVariant {
+        offsets: Vec<u32>,
+        end_state: Stage1ChunkState,
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    struct Stage1ChunkPlan {
+        base: usize,
+        variants: [Stage1ChunkVariant; 3],
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    fn plan_stage1_chunk(base: usize, input: &[u8]) -> Stage1ChunkPlan {
+        Stage1ChunkPlan {
+            base,
+            variants: [
+                scan_stage1_chunk_variant(base, input, Stage1ChunkState::Outside),
+                scan_stage1_chunk_variant(base, input, Stage1ChunkState::InsideEvenBackslash),
+                scan_stage1_chunk_variant(base, input, Stage1ChunkState::InsideOddBackslash),
+            ],
+        }
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    fn scan_stage1_chunk_variant(
+        base: usize,
+        input: &[u8],
+        state: Stage1ChunkState,
+    ) -> Stage1ChunkVariant {
+        let (in_string, carry_bs_run_len) = state.initial();
+        let mut offsets = Vec::new();
+        let (end_in_string, end_carry_bs_run_len) =
+            extend_struct_index_scalar(input, base, &mut offsets, in_string, carry_bs_run_len);
+        Stage1ChunkVariant {
+            offsets,
+            end_state: Stage1ChunkState::from_end(end_in_string, end_carry_bs_run_len),
+        }
+    }
+
+    #[cfg(feature = "parallel-stage1")]
+    fn compose_stage1_chunks(parts: Vec<Stage1ChunkPlan>) -> StructIndex {
+        let mut state = Stage1ChunkState::Outside;
+        let mut offsets = Vec::new();
+        for part in parts {
+            let variant = part
+                .variants
+                .into_iter()
+                .nth(state.index())
+                .expect("stage1 chunk variant index is valid");
+            offsets.extend(variant.offsets);
+            state = variant.end_state;
+        }
+        StructIndex { offsets }
     }
 
     // Continue the scalar structural scan from an arbitrary byte boundary while

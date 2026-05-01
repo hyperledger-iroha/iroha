@@ -82,6 +82,64 @@ fn apply_mds<const W: usize>(state: &mut [Fr; W], mds: &[[Fr; W]; W]) {
     *state = new_state;
 }
 
+fn apply_mds3(state: &mut [Fr; 3], mds: &[[Fr; 3]; 3]) {
+    let s0 = state[0];
+    let s1 = state[1];
+    let s2 = state[2];
+    *state = [
+        mds[0][0] * s0 + mds[0][1] * s1 + mds[0][2] * s2,
+        mds[1][0] * s0 + mds[1][1] * s1 + mds[1][2] * s2,
+        mds[2][0] * s0 + mds[2][1] * s1 + mds[2][2] * s2,
+    ];
+}
+
+fn apply_mds6(state: &mut [Fr; 6], mds: &[[Fr; 6]; 6]) {
+    let s0 = state[0];
+    let s1 = state[1];
+    let s2 = state[2];
+    let s3 = state[3];
+    let s4 = state[4];
+    let s5 = state[5];
+    *state = [
+        mds[0][0] * s0
+            + mds[0][1] * s1
+            + mds[0][2] * s2
+            + mds[0][3] * s3
+            + mds[0][4] * s4
+            + mds[0][5] * s5,
+        mds[1][0] * s0
+            + mds[1][1] * s1
+            + mds[1][2] * s2
+            + mds[1][3] * s3
+            + mds[1][4] * s4
+            + mds[1][5] * s5,
+        mds[2][0] * s0
+            + mds[2][1] * s1
+            + mds[2][2] * s2
+            + mds[2][3] * s3
+            + mds[2][4] * s4
+            + mds[2][5] * s5,
+        mds[3][0] * s0
+            + mds[3][1] * s1
+            + mds[3][2] * s2
+            + mds[3][3] * s3
+            + mds[3][4] * s4
+            + mds[3][5] * s5,
+        mds[4][0] * s0
+            + mds[4][1] * s1
+            + mds[4][2] * s2
+            + mds[4][3] * s3
+            + mds[4][4] * s4
+            + mds[4][5] * s5,
+        mds[5][0] * s0
+            + mds[5][1] * s1
+            + mds[5][2] * s2
+            + mds[5][3] * s3
+            + mds[5][4] * s4
+            + mds[5][5] * s5,
+    ];
+}
+
 fn poseidon3_params() -> &'static PoseidonConstants<3> {
     static CONSTS: OnceCell<PoseidonConstants<3>> = OnceCell::new();
     CONSTS.get_or_init(|| {
@@ -107,7 +165,7 @@ fn poseidon3_permute(state: &mut [Fr; 3]) {
         for (idx, word) in state.iter_mut().enumerate() {
             *word = sbox(*word + rc[idx]);
         }
-        apply_mds(state, mds);
+        apply_mds3(state, mds);
     }
 
     for rc in round_constants.iter().skip(rf_half).take(rp) {
@@ -115,7 +173,7 @@ fn poseidon3_permute(state: &mut [Fr; 3]) {
             *word += rc[idx];
         }
         state[0] = sbox(state[0]);
-        apply_mds(state, mds);
+        apply_mds3(state, mds);
     }
 
     let tail_start = rf_half + rp;
@@ -123,7 +181,7 @@ fn poseidon3_permute(state: &mut [Fr; 3]) {
         for (idx, word) in state.iter_mut().enumerate() {
             *word = sbox(*word + rc[idx]);
         }
-        apply_mds(state, mds);
+        apply_mds3(state, mds);
     }
 }
 
@@ -152,7 +210,7 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
         for (i, s) in state.iter_mut().enumerate() {
             *s = sbox(*s + rc[i]);
         }
-        apply_mds(&mut state, mds);
+        apply_mds6(&mut state, mds);
     }
 
     for rc in round_constants.iter().skip(rf_half).take(rp) {
@@ -160,7 +218,7 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
             *s += rc[i];
         }
         state[0] = sbox(state[0]);
-        apply_mds(&mut state, mds);
+        apply_mds6(&mut state, mds);
     }
 
     let tail_start = rf_half + rp;
@@ -168,7 +226,7 @@ fn poseidon6_field(inputs: [u64; 6]) -> Fr {
         for (i, s) in state.iter_mut().enumerate() {
             *s = sbox(*s + rc[i]);
         }
-        apply_mds(&mut state, mds);
+        apply_mds6(&mut state, mds);
     }
 
     state[0]

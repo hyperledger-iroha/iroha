@@ -16,6 +16,43 @@ unsafe extern "C" {
     fn norito_crc64_metal_impl(input_ptr: *const u8, input_len: usize, out_crc: *mut u64) -> i32;
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NoritoSequenceSpan {
+    start: usize,
+    end: usize,
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+unsafe extern "C" {
+    fn norito_sequence_plan_metal_impl(
+        input_ptr: *const u8,
+        input_len: usize,
+        flags: u8,
+        layout_kind: u32,
+        out_spans: *mut NoritoSequenceSpan,
+        out_capacity: usize,
+        out_count: *mut usize,
+        out_used: *mut usize,
+    ) -> i32;
+}
+
+#[allow(dead_code)]
+const RC_OK: i32 = 0;
+const RC_INVALID: i32 = 1;
+#[allow(dead_code)]
+const RC_NO_SPACE: i32 = 2;
+#[allow(dead_code)]
+const RC_UNAVAILABLE: i32 = 3;
+#[allow(dead_code)]
+const RC_BACKEND_ERROR: i32 = 4;
+#[allow(dead_code)]
+const FLAG_COMPACT_LEN: u8 = 0x02;
+#[allow(dead_code)]
+const LAYOUT_LENGTH_PREFIXED: u32 = 0;
+#[allow(dead_code)]
+const LAYOUT_FIXED_OFFSETS: u32 = 1;
+
 /// Build a structural tape (offsets) for the given JSON input.
 ///
 /// # Safety
@@ -50,24 +87,31 @@ pub unsafe extern "C" fn json_stage1_build_tape(
     let mut offs = Vec::<u32>::with_capacity(1024);
     let mut i = 0usize;
     let mut in_str = false;
+    let mut backslash_run = 0usize;
     while i < bytes.len() {
         let c = bytes[i];
         if in_str {
             if c == b'\\' {
-                i = i.saturating_add(2);
-                continue;
-            }
-            if c == b'"' {
-                in_str = false;
-                offs.push(i as u32);
+                backslash_run = backslash_run.saturating_add(1);
                 i += 1;
                 continue;
             }
+            if c == b'"' {
+                if (backslash_run & 1) == 0 {
+                    in_str = false;
+                    offs.push(i as u32);
+                }
+                backslash_run = 0;
+                i += 1;
+                continue;
+            }
+            backslash_run = 0;
             i += 1;
         } else {
             match c {
                 b'"' => {
                     in_str = true;
+                    backslash_run = 0;
                     offs.push(i as u32);
                     i += 1;
                 }
@@ -144,12 +188,214 @@ pub unsafe extern "C" fn norito_crc64_metal(
     0
 }
 
+/// Plan Norito binary sequence element spans.
+///
+/// Returns 0 on success, 1 for invalid input, 2 when `out_capacity` is too
+/// small, 3 when no helper backend is available, and 4 for backend failure.
+///
+/// # Safety
+/// The caller must ensure the input and output pointers are valid for the
+/// supplied lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn norito_binary_sequence_plan(
+    input_ptr: *const u8,
+    input_len: usize,
+    flags: u8,
+    layout_kind: u32,
+    out_spans: *mut NoritoSequenceSpan,
+    out_capacity: usize,
+    out_count: *mut usize,
+    out_used: *mut usize,
+) -> i32 {
+    if input_ptr.is_null() || out_count.is_null() || out_used.is_null() {
+        return RC_INVALID;
+    }
+    if out_capacity > 0 && out_spans.is_null() {
+        return RC_INVALID;
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return unsafe {
+            norito_sequence_plan_metal_impl(
+                input_ptr,
+                input_len,
+                flags,
+                layout_kind,
+                out_spans,
+                out_capacity,
+                out_count,
+                out_used,
+            )
+        };
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (flags, layout_kind, out_spans, out_capacity);
+        unsafe {
+            *out_count = 0;
+            *out_used = 0;
+        }
+        RC_UNAVAILABLE
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+enum PlanError {
+    Invalid,
+    Unavailable,
+    Backend,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn plan_sequence_cpu(
+    bytes: &[u8],
+    flags: u8,
+    layout_kind: u32,
+) -> Result<(Vec<NoritoSequenceSpan>, usize), PlanError> {
+    // TODO: replace this ABI reference path with Metal kernels once the
+    // sequence planner workgroup layout is tuned for large transaction batches.
+    let (count, mut offset) = read_seq_len(bytes)?;
+    match layout_kind {
+        LAYOUT_LENGTH_PREFIXED => {
+            let mut spans = Vec::new();
+            spans.try_reserve(count).map_err(|_| PlanError::Invalid)?;
+            for _ in 0..count {
+                let tail = bytes.get(offset..).ok_or(PlanError::Invalid)?;
+                let (elem_len, header_len) = read_value_len(tail, flags)?;
+                let start = offset.checked_add(header_len).ok_or(PlanError::Invalid)?;
+                let end = start.checked_add(elem_len).ok_or(PlanError::Invalid)?;
+                if end > bytes.len() {
+                    return Err(PlanError::Invalid);
+                }
+                spans.push(NoritoSequenceSpan { start, end });
+                offset = end;
+            }
+            Ok((spans, offset))
+        }
+        LAYOUT_FIXED_OFFSETS => {
+            let entries = count.checked_add(1).ok_or(PlanError::Invalid)?;
+            let table_len = entries.checked_mul(8).ok_or(PlanError::Invalid)?;
+            let table_end = offset.checked_add(table_len).ok_or(PlanError::Invalid)?;
+            let table = bytes.get(offset..table_end).ok_or(PlanError::Invalid)?;
+            if read_u64(table, 0)? != 0 {
+                return Err(PlanError::Invalid);
+            }
+            let data_len =
+                usize::try_from(read_u64(table, count)?).map_err(|_| PlanError::Invalid)?;
+            let data_start = table_end;
+            let data_end = data_start.checked_add(data_len).ok_or(PlanError::Invalid)?;
+            if data_end > bytes.len() {
+                return Err(PlanError::Invalid);
+            }
+            let mut spans = Vec::new();
+            spans.try_reserve(count).map_err(|_| PlanError::Invalid)?;
+            let mut prev = 0usize;
+            for idx in 0..count {
+                let next =
+                    usize::try_from(read_u64(table, idx + 1)?).map_err(|_| PlanError::Invalid)?;
+                if next < prev || next > data_len {
+                    return Err(PlanError::Invalid);
+                }
+                spans.push(NoritoSequenceSpan {
+                    start: data_start.checked_add(prev).ok_or(PlanError::Invalid)?,
+                    end: data_start.checked_add(next).ok_or(PlanError::Invalid)?,
+                });
+                prev = next;
+            }
+            if prev != data_len {
+                return Err(PlanError::Invalid);
+            }
+            Ok((spans, data_end))
+        }
+        _ => Err(PlanError::Unavailable),
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn read_seq_len(bytes: &[u8]) -> Result<(usize, usize), PlanError> {
+    let raw = read_u64(bytes, 0)?;
+    let len = usize::try_from(raw).map_err(|_| PlanError::Invalid)?;
+    Ok((len, 8))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn read_u64(bytes: &[u8], idx: usize) -> Result<u64, PlanError> {
+    let start = idx.checked_mul(8).ok_or(PlanError::Invalid)?;
+    let end = start.checked_add(8).ok_or(PlanError::Invalid)?;
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(bytes.get(start..end).ok_or(PlanError::Invalid)?);
+    Ok(u64::from_le_bytes(buf))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn read_value_len(bytes: &[u8], flags: u8) -> Result<(usize, usize), PlanError> {
+    if (flags & FLAG_COMPACT_LEN) == 0 {
+        return read_seq_len(bytes);
+    }
+    let (value, used) = decode_varint(bytes)?;
+    let len = usize::try_from(value).map_err(|_| PlanError::Invalid)?;
+    Ok((len, used))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn decode_varint(bytes: &[u8]) -> Result<(u64, usize), PlanError> {
+    let mut result = 0u64;
+    let mut shift = 0u32;
+    for (idx, byte) in bytes.iter().copied().enumerate().take(10) {
+        let payload = (byte & 0x7f) as u64;
+        if shift == 63 && payload > 1 {
+            return Err(PlanError::Invalid);
+        }
+        result |= payload << shift;
+        if byte & 0x80 == 0 {
+            let used = idx + 1;
+            if used != varint_len(result) {
+                return Err(PlanError::Invalid);
+            }
+            return Ok((result, used));
+        }
+        shift += 7;
+    }
+    Err(PlanError::Invalid)
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn varint_len(mut value: u64) -> usize {
+    let mut len = 1usize;
+    while value >= 0x80 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{crc64_cpu, crc64_raw, json_stage1_build_tape, norito_crc64_metal};
+    use super::{
+        NoritoSequenceSpan, crc64_cpu, crc64_raw, json_stage1_build_tape,
+        norito_binary_sequence_plan, norito_crc64_metal,
+    };
 
     const CRC64_INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const CRC64_XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+
+    fn skip_if_unavailable(rc: i32, helper: &str) -> bool {
+        if rc == super::RC_UNAVAILABLE {
+            eprintln!("{helper} unavailable; skipping Metal-only assertion");
+            true
+        } else {
+            false
+        }
+    }
 
     #[test]
     fn basic_offsets() {
@@ -180,6 +426,42 @@ mod tests {
         let rc = unsafe { norito_crc64_metal(data.as_ptr(), data.len(), &mut out) };
         assert_eq!(rc, 0);
         assert_eq!(out, crc64_cpu(&data));
+    }
+
+    #[test]
+    fn binary_sequence_plan_length_prefixed_compact() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u64.to_le_bytes());
+        bytes.push(1);
+        bytes.push(b'a');
+        bytes.extend_from_slice(&[0x82, 0x01]);
+        bytes.extend(std::iter::repeat(0x55).take(130));
+
+        let mut spans = vec![NoritoSequenceSpan { start: 0, end: 0 }; 2];
+        let mut count = 0usize;
+        let mut used = 0usize;
+        let rc = unsafe {
+            norito_binary_sequence_plan(
+                bytes.as_ptr(),
+                bytes.len(),
+                super::FLAG_COMPACT_LEN,
+                super::LAYOUT_LENGTH_PREFIXED,
+                spans.as_mut_ptr(),
+                spans.len(),
+                &mut count,
+                &mut used,
+            )
+        };
+        if skip_if_unavailable(rc, "jsonstage1_metal sequence planner") {
+            return;
+        }
+        assert_eq!(rc, super::RC_OK);
+        spans.truncate(count);
+        assert_eq!(spans[0].start, 9);
+        assert_eq!(spans[0].end, 10);
+        assert_eq!(spans[1].start, 12);
+        assert_eq!(spans[1].end, 142);
+        assert_eq!(used, bytes.len());
     }
 
     #[test]

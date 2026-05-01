@@ -601,12 +601,14 @@ pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
 #[derive(Debug, Default)]
 pub struct Ed25519BatchScratch {
     public_keys: Vec<signature::ed25519::PublicKey>,
+    signatures: Vec<ed25519_dalek::Signature>,
 }
 
 impl Ed25519BatchScratch {
     /// Clear retained scratch contents while keeping allocated capacity.
     pub fn clear(&mut self) {
         self.public_keys.clear();
+        self.signatures.clear();
     }
 }
 
@@ -694,9 +696,11 @@ pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
     scratch
         .public_keys
         .extend(public_keys.iter().map(|key| key.0));
-    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_deterministic(
+    signature::ed25519::Ed25519Sha512::parse_signatures_into(signatures, &mut scratch.signatures)?;
+    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_deterministic(
         messages,
         signatures,
+        &scratch.signatures,
         &scratch.public_keys,
         seed32,
     )

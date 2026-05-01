@@ -357,7 +357,16 @@ const MAX_VARINT_BYTES: usize = 10;
 /// Honors the active `COMPACT_LEN` layout flag so callers can pre-compute
 /// per-value length prefix sizes accurately.
 pub fn len_prefix_len(value: usize) -> usize {
-    if use_compact_len() {
+    len_prefix_len_with_flags(value, effective_layout_flags())
+}
+
+/// Number of bytes used to encode a length prefix for `value` under `flags`.
+///
+/// This is the flag-explicit variant of [`len_prefix_len`] for tight loops
+/// that have already captured the active Norito layout.
+#[doc(hidden)]
+pub fn len_prefix_len_with_flags(value: usize, flags: u8) -> usize {
+    if compact_len_enabled_for_flags(flags) {
         varint_encoded_len(value as u64)
     } else {
         8
@@ -576,7 +585,7 @@ fn mark_compact_len_used_if_encoding() {
 pub fn note_compact_len_emitted() {
     mark_compact_len_used_if_encoding();
     #[cfg(debug_assertions)]
-    if crate::debug_trace_enabled() && use_compact_len() {
+    if crate::debug_trace_enabled() {
         eprintln!(
             "note_compact_len_emitted compact_len_used={}",
             ENCODE_COMPACT_LEN_USED.with(|flag| flag.get())
@@ -1303,14 +1312,34 @@ fn layout_flag_enabled(flag: u8) -> bool {
     (effective_layout_flags() & flag) != 0
 }
 
+#[inline]
+fn layout_flag_enabled_for_flags(flags: u8, flag: u8) -> bool {
+    if sequential_override_active() {
+        return (default_encode_flags() & flag) != 0;
+    }
+    (sanitize_layout_flags(flags) & flag) != 0
+}
+
 /// True if packed sequence layouts are enabled for the current decode.
 pub fn use_packed_seq() -> bool {
     layout_flag_enabled(header_flags::PACKED_SEQ)
 }
 
+/// True if packed sequence layouts are enabled in an explicit flag snapshot.
+#[doc(hidden)]
+pub fn packed_seq_enabled_for_flags(flags: u8) -> bool {
+    layout_flag_enabled_for_flags(flags, header_flags::PACKED_SEQ)
+}
+
 /// True if compact varint length encoding is enabled for the current decode.
 pub fn use_compact_len() -> bool {
     layout_flag_enabled(header_flags::COMPACT_LEN)
+}
+
+/// True if compact length encoding is enabled in an explicit flag snapshot.
+#[doc(hidden)]
+pub fn compact_len_enabled_for_flags(flags: u8) -> bool {
+    layout_flag_enabled_for_flags(flags, header_flags::COMPACT_LEN)
 }
 
 /// True if packed struct layout is enabled for the current decode.
@@ -1369,15 +1398,702 @@ pub fn decode_packed_offsets_slice(
     Ok((offsets, bytes_needed, data_len, 0))
 }
 
+/// Byte range for a planned binary sequence element.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SequenceSpan {
+    /// Inclusive start offset in the source byte slice.
+    pub start: usize,
+    /// Exclusive end offset in the source byte slice.
+    pub end: usize,
+}
+
+impl SequenceSpan {
+    /// Return this span as a slice of `bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::LengthMismatch`] when the planned range is outside
+    /// `bytes`.
+    #[doc(hidden)]
+    #[inline]
+    pub fn get<'a>(&self, bytes: &'a [u8]) -> Result<&'a [u8], Error> {
+        bytes.get(self.start..self.end).ok_or(Error::LengthMismatch)
+    }
+
+    /// Length of the planned element payload.
+    #[doc(hidden)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Whether the planned element payload is empty.
+    #[doc(hidden)]
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+}
+
+/// Planned element spans and total bytes consumed by a binary sequence.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SequencePlan {
+    /// Element payload ranges in original sequence order.
+    pub spans: Vec<SequenceSpan>,
+    /// Total bytes consumed from the source sequence payload.
+    pub used: usize,
+}
+
+/// Binary sequence layout to plan.
+#[doc(hidden)]
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinarySequenceLayout {
+    /// Sequence is encoded as `[count_u64][len][payload]...`.
+    LengthPrefixed = 0,
+    /// Sequence is encoded as `[count_u64][(count + 1) u64 offsets][payloads...]`.
+    FixedOffsets = 1,
+}
+
+impl BinarySequenceLayout {
+    /// Resolve the sequence layout advertised by Norito header flags.
+    #[doc(hidden)]
+    #[inline]
+    pub fn from_flags(flags: u8) -> Self {
+        if (flags & header_flags::PACKED_SEQ) != 0 {
+            Self::FixedOffsets
+        } else {
+            Self::LengthPrefixed
+        }
+    }
+
+    #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+    #[inline]
+    fn abi_kind(self) -> u32 {
+        self as u32
+    }
+}
+
+#[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+const SEQUENCE_GPU_MIN_BYTES: usize = 1 << 20;
+#[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+const SEQUENCE_GPU_MIN_ELEMENTS: usize = 4096;
+
+/// Plan element byte spans for a Norito binary sequence without materializing
+/// values.
+///
+/// The input starts at the sequence count header. Returned spans are byte
+/// offsets into the same input slice, and `used` is the total sequence payload
+/// length consumed from the front of `bytes`.
+#[doc(hidden)]
+pub fn plan_binary_sequence(
+    bytes: &[u8],
+    flags: u8,
+    layout: BinarySequenceLayout,
+) -> Result<SequencePlan, Error> {
+    validate_header_flags(flags)?;
+    let (count, _) = read_seq_len_slice(bytes)?;
+
+    #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+    if bytes.len() >= SEQUENCE_GPU_MIN_BYTES
+        && count >= SEQUENCE_GPU_MIN_ELEMENTS
+        && let Some(plan) = sequence_gpu::try_plan_binary_sequence(bytes, flags, layout)
+    {
+        note_payload_access(bytes, plan.used);
+        return Ok(plan);
+    }
+
+    let plan = plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)?;
+    note_payload_access(bytes, plan.used);
+    Ok(plan)
+}
+
+/// Decode a pre-planned sequence in parallel at typed call sites that can prove
+/// `T: Send`.
+///
+/// Values preserve the original span order. If any element fails, this returns
+/// the first error in original sequence order after in-flight work finishes.
+#[cfg(feature = "parallel-decode")]
+#[doc(hidden)]
+pub fn decode_planned_sequence_parallel<T>(
+    bytes: &[u8],
+    flags: u8,
+    plan: &SequencePlan,
+) -> Result<Vec<T>, Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize + Send,
+{
+    use rayon::prelude::*;
+
+    validate_header_flags(flags)?;
+    let decoded: Vec<Result<T, Error>> = plan
+        .spans
+        .par_iter()
+        .map(|span| {
+            let element_slice = span.get(bytes)?;
+            let _guard = DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let (value, used) = decode_field_canonical::<T>(element_slice)?;
+            if used != span.len() {
+                return Err(Error::LengthMismatch);
+            }
+            Ok(value)
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    out.try_reserve(decoded.len())
+        .map_err(|_| Error::LengthMismatch)?;
+    for value in decoded {
+        out.push(value?);
+    }
+    Ok(out)
+}
+
+#[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+fn plan_binary_sequence_scalar(
+    bytes: &[u8],
+    flags: u8,
+    layout: BinarySequenceLayout,
+) -> Result<SequencePlan, Error> {
+    validate_header_flags(flags)?;
+    let (count, _) = read_seq_len_slice(bytes)?;
+    plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)
+}
+
+fn plan_binary_sequence_scalar_with_count(
+    bytes: &[u8],
+    flags: u8,
+    layout: BinarySequenceLayout,
+    count: usize,
+) -> Result<SequencePlan, Error> {
+    let (_, mut offset) = read_seq_len_slice(bytes)?;
+    match layout {
+        BinarySequenceLayout::LengthPrefixed => {
+            let mut spans = Vec::new();
+            spans
+                .try_reserve(count)
+                .map_err(|_| Error::LengthMismatch)?;
+            for _ in 0..count {
+                let tail = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+                let (elem_len, header_len) = read_len_from_slice_with_flags(tail, flags)?;
+                let start = offset
+                    .checked_add(header_len)
+                    .ok_or(Error::LengthMismatch)?;
+                let end = start.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
+                if end > bytes.len() {
+                    return Err(Error::LengthMismatch);
+                }
+                spans.push(SequenceSpan { start, end });
+                offset = end;
+            }
+            Ok(SequencePlan {
+                spans,
+                used: offset,
+            })
+        }
+        BinarySequenceLayout::FixedOffsets => {
+            let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
+            let offset_table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+            let offsets_start = offset;
+            let offsets_end = offsets_start
+                .checked_add(offset_table_len)
+                .ok_or(Error::LengthMismatch)?;
+            let offsets = bytes
+                .get(offsets_start..offsets_end)
+                .ok_or(Error::LengthMismatch)?;
+
+            let mut spans = Vec::new();
+            spans
+                .try_reserve(count)
+                .map_err(|_| Error::LengthMismatch)?;
+
+            let first = read_u64_le_at(offsets, 0)?;
+            if first != 0 {
+                return Err(Error::LengthMismatch);
+            }
+            let data_len = read_u64_le_at(offsets, count)?
+                .try_into()
+                .map_err(|_| Error::LengthMismatch)?;
+            let data_start = offsets_end;
+            let data_end = data_start
+                .checked_add(data_len)
+                .ok_or(Error::LengthMismatch)?;
+            if data_end > bytes.len() {
+                return Err(Error::LengthMismatch);
+            }
+
+            let mut prev = 0usize;
+            for idx in 0..count {
+                let next = read_u64_le_at(offsets, idx + 1)?
+                    .try_into()
+                    .map_err(|_| Error::LengthMismatch)?;
+                if next < prev || next > data_len {
+                    return Err(Error::LengthMismatch);
+                }
+                let start = data_start.checked_add(prev).ok_or(Error::LengthMismatch)?;
+                let end = data_start.checked_add(next).ok_or(Error::LengthMismatch)?;
+                spans.push(SequenceSpan { start, end });
+                prev = next;
+            }
+            if prev != data_len {
+                return Err(Error::LengthMismatch);
+            }
+
+            Ok(SequencePlan {
+                spans,
+                used: data_end,
+            })
+        }
+    }
+}
+
+#[inline]
+fn read_u64_le_at(bytes: &[u8], idx: usize) -> Result<u64, Error> {
+    let start = idx.checked_mul(8).ok_or(Error::LengthMismatch)?;
+    let end = start.checked_add(8).ok_or(Error::LengthMismatch)?;
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(bytes.get(start..end).ok_or(Error::LengthMismatch)?);
+    Ok(u64::from_le_bytes(buf))
+}
+
+#[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
+mod sequence_gpu {
+    use std::{
+        ffi::{c_char, c_int, c_void},
+        path::PathBuf,
+        sync::{Mutex, OnceLock},
+    };
+
+    use super::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence_scalar};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct AbiSpan {
+        start: usize,
+        end: usize,
+    }
+
+    type SequencePlanHelperFn = unsafe extern "C" fn(
+        input_ptr: *const u8,
+        input_len: usize,
+        flags: u8,
+        layout_kind: u32,
+        out_spans: *mut AbiSpan,
+        out_capacity: usize,
+        out_count: *mut usize,
+        out_used: *mut usize,
+    ) -> i32;
+
+    const RC_OK: i32 = 0;
+    const RC_INVALID: i32 = 1;
+    const RC_NO_SPACE: i32 = 2;
+    const RC_UNAVAILABLE: i32 = 3;
+
+    struct SequencePlanLib {
+        handle: *mut c_void,
+        func: SequencePlanHelperFn,
+    }
+
+    unsafe impl Send for SequencePlanLib {}
+    unsafe impl Sync for SequencePlanLib {}
+
+    impl Drop for SequencePlanLib {
+        fn drop(&mut self) {
+            unsafe { close_library(self.handle) };
+        }
+    }
+
+    enum SequencePlanCache {
+        Unknown,
+        Loaded(SequencePlanLib),
+        Disabled,
+    }
+
+    static SEQUENCE_PLAN_LIB: OnceLock<Mutex<SequencePlanCache>> = OnceLock::new();
+
+    pub(super) fn try_plan_binary_sequence(
+        bytes: &[u8],
+        flags: u8,
+        layout: BinarySequenceLayout,
+    ) -> Option<SequencePlan> {
+        let cache = SEQUENCE_PLAN_LIB.get_or_init(|| Mutex::new(SequencePlanCache::Unknown));
+        let mut guard = cache.lock().expect("sequence GPU cache poisoned");
+        if matches!(*guard, SequencePlanCache::Unknown) {
+            *guard = unsafe { load_sequence_plan_library() }
+                .map(SequencePlanCache::Loaded)
+                .unwrap_or(SequencePlanCache::Disabled);
+        }
+        let SequencePlanCache::Loaded(lib) = &*guard else {
+            return None;
+        };
+        let plan = match unsafe { call_helper(lib.func, bytes, flags, layout) } {
+            HelperOutcome::Planned(plan) => plan,
+            HelperOutcome::InvalidInput => {
+                if plan_binary_sequence_scalar(bytes, flags, layout).is_ok() {
+                    *guard = SequencePlanCache::Disabled;
+                }
+                return None;
+            }
+            HelperOutcome::BackendFailure => {
+                *guard = SequencePlanCache::Disabled;
+                return None;
+            }
+            HelperOutcome::BackendUnavailable => return None,
+        };
+        match plan_binary_sequence_scalar(bytes, flags, layout) {
+            Ok(scalar) if scalar == plan => Some(plan),
+            Ok(_) | Err(_) => {
+                *guard = SequencePlanCache::Disabled;
+                None
+            }
+        }
+    }
+
+    enum HelperOutcome {
+        Planned(SequencePlan),
+        InvalidInput,
+        BackendUnavailable,
+        BackendFailure,
+    }
+
+    unsafe fn call_helper(
+        func: SequencePlanHelperFn,
+        bytes: &[u8],
+        flags: u8,
+        layout: BinarySequenceLayout,
+    ) -> HelperOutcome {
+        let mut spans: Vec<AbiSpan> = Vec::new();
+        let mut out_count = 0usize;
+        let mut out_used = 0usize;
+        let rc = unsafe {
+            func(
+                bytes.as_ptr(),
+                bytes.len(),
+                flags,
+                layout.abi_kind(),
+                spans.as_mut_ptr(),
+                spans.capacity(),
+                &mut out_count,
+                &mut out_used,
+            )
+        };
+        if rc != RC_NO_SPACE {
+            return if rc == RC_OK && out_count == 0 && out_used <= bytes.len() {
+                HelperOutcome::Planned(SequencePlan {
+                    spans: Vec::new(),
+                    used: out_used,
+                })
+            } else if rc == RC_OK || rc == RC_INVALID {
+                HelperOutcome::InvalidInput
+            } else if rc == RC_UNAVAILABLE {
+                HelperOutcome::BackendUnavailable
+            } else {
+                HelperOutcome::BackendFailure
+            };
+        }
+        if spans.try_reserve(out_count).is_err() {
+            return HelperOutcome::BackendFailure;
+        }
+        let rc = unsafe {
+            func(
+                bytes.as_ptr(),
+                bytes.len(),
+                flags,
+                layout.abi_kind(),
+                spans.as_mut_ptr(),
+                spans.capacity(),
+                &mut out_count,
+                &mut out_used,
+            )
+        };
+        if rc != RC_OK || out_count > spans.capacity() || out_used > bytes.len() {
+            return match rc {
+                RC_INVALID => HelperOutcome::InvalidInput,
+                RC_UNAVAILABLE => HelperOutcome::BackendUnavailable,
+                _ => HelperOutcome::BackendFailure,
+            };
+        }
+        unsafe {
+            spans.set_len(out_count);
+        }
+        let spans = spans
+            .into_iter()
+            .map(|span| {
+                if span.start <= span.end && span.end <= bytes.len() {
+                    Some(SequenceSpan {
+                        start: span.start,
+                        end: span.end,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect::<Option<Vec<_>>>();
+        match spans {
+            Some(spans) => HelperOutcome::Planned(SequencePlan {
+                spans,
+                used: out_used,
+            }),
+            None => HelperOutcome::BackendFailure,
+        }
+    }
+
+    unsafe fn load_sequence_plan_library() -> Option<SequencePlanLib> {
+        #[cfg(unix)]
+        {
+            for path in candidate_paths() {
+                let Some(lib) = (unsafe { load_library_unix(&path) }) else {
+                    continue;
+                };
+                let Some(func) = (unsafe { resolve_symbol(lib) }) else {
+                    unsafe { close_library(lib) };
+                    continue;
+                };
+                if sequence_plan_helper_self_test(func) {
+                    return Some(SequencePlanLib { handle: lib, func });
+                }
+                unsafe { close_library(lib) };
+            }
+        }
+        None
+    }
+
+    fn sequence_plan_helper_self_test(func: SequencePlanHelperFn) -> bool {
+        let cases = [
+            (
+                make_unpacked_case(super::header_flags::COMPACT_LEN),
+                super::header_flags::COMPACT_LEN,
+                BinarySequenceLayout::LengthPrefixed,
+            ),
+            (
+                make_packed_case(),
+                super::header_flags::PACKED_SEQ,
+                BinarySequenceLayout::FixedOffsets,
+            ),
+        ];
+
+        for (bytes, flags, layout) in cases {
+            let accel = match unsafe { call_helper(func, &bytes, flags, layout) } {
+                HelperOutcome::Planned(plan) => plan,
+                HelperOutcome::InvalidInput
+                | HelperOutcome::BackendUnavailable
+                | HelperOutcome::BackendFailure => return false,
+            };
+            let Ok(scalar) = plan_binary_sequence_scalar(&bytes, flags, layout) else {
+                return false;
+            };
+            if accel != scalar {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn make_unpacked_case(flags: u8) -> Vec<u8> {
+        let _guard = super::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let mut out = Vec::new();
+        super::write_seq_len(&mut out, 3).expect("write sequence length");
+        for payload in [&b"a"[..], &[0x55; 130][..], b"tail"] {
+            super::write_len(&mut out, payload.len() as u64).expect("write element length");
+            out.extend_from_slice(payload);
+        }
+        out
+    }
+
+    fn make_packed_case() -> Vec<u8> {
+        let mut out = Vec::new();
+        super::write_seq_len(&mut out, 3).expect("write sequence length");
+        for offset in [0u64, 1, 3, 6] {
+            out.extend_from_slice(&offset.to_le_bytes());
+        }
+        out.extend_from_slice(b"abcdef");
+        out
+    }
+
+    fn candidate_paths() -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            #[cfg(all(feature = "codec-gpu-metal", target_os = "macos"))]
+            {
+                candidates.push(dir.join("libjsonstage1_metal.dylib"));
+                candidates.push(dir.join("../lib/libjsonstage1_metal.dylib"));
+            }
+            #[cfg(feature = "codec-gpu-cuda")]
+            {
+                candidates.push(dir.join("libjsonstage1_cuda.dylib"));
+                candidates.push(dir.join("../lib/libjsonstage1_cuda.dylib"));
+                candidates.push(dir.join("libjsonstage1_cuda.so"));
+                candidates.push(dir.join("../lib/libjsonstage1_cuda.so"));
+            }
+        }
+        candidates
+    }
+
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+        fn dlclose(handle: *mut c_void) -> c_int;
+    }
+
+    #[cfg(unix)]
+    unsafe fn load_library_unix(path: &std::path::Path) -> Option<*mut c_void> {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+        const RTLD_LAZY: c_int = 1;
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.contains(&0) {
+            return None;
+        }
+        let cpath = CString::new(bytes).ok()?;
+        let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
+        if handle.is_null() { None } else { Some(handle) }
+    }
+
+    #[cfg(not(unix))]
+    unsafe fn load_library_unix(_path: &std::path::Path) -> Option<*mut c_void> {
+        None
+    }
+
+    unsafe fn resolve_symbol(handle: *mut c_void) -> Option<SequencePlanHelperFn> {
+        #[cfg(unix)]
+        {
+            let sym = unsafe { dlsym(handle, c"norito_binary_sequence_plan".as_ptr()) };
+            if sym.is_null() {
+                return None;
+            }
+            Some(unsafe { std::mem::transmute(sym) })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = handle;
+            None
+        }
+    }
+
+    unsafe fn close_library(handle: *mut c_void) {
+        #[cfg(unix)]
+        if !handle.is_null() {
+            let _ = unsafe { dlclose(handle) };
+        }
+        #[cfg(not(unix))]
+        let _ = handle;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            AbiSpan, BinarySequenceLayout, HelperOutcome, RC_NO_SPACE, RC_UNAVAILABLE, call_helper,
+            sequence_plan_helper_self_test,
+        };
+
+        unsafe extern "C" fn mismatched_helper(
+            _input_ptr: *const u8,
+            input_len: usize,
+            _flags: u8,
+            _layout_kind: u32,
+            out_spans: *mut AbiSpan,
+            out_capacity: usize,
+            out_count: *mut usize,
+            out_used: *mut usize,
+        ) -> i32 {
+            unsafe {
+                *out_count = 1;
+                *out_used = input_len;
+            }
+            if out_capacity == 0 {
+                return RC_NO_SPACE;
+            }
+            unsafe {
+                *out_spans = AbiSpan { start: 0, end: 0 };
+            }
+            0
+        }
+
+        unsafe extern "C" fn backend_error_helper(
+            _input_ptr: *const u8,
+            _input_len: usize,
+            _flags: u8,
+            _layout_kind: u32,
+            _out_spans: *mut AbiSpan,
+            _out_capacity: usize,
+            _out_count: *mut usize,
+            _out_used: *mut usize,
+        ) -> i32 {
+            4
+        }
+
+        unsafe extern "C" fn unavailable_helper(
+            _input_ptr: *const u8,
+            _input_len: usize,
+            _flags: u8,
+            _layout_kind: u32,
+            _out_spans: *mut AbiSpan,
+            _out_capacity: usize,
+            _out_count: *mut usize,
+            _out_used: *mut usize,
+        ) -> i32 {
+            RC_UNAVAILABLE
+        }
+
+        #[test]
+        fn sequence_plan_helper_self_test_rejects_mismatched_helper() {
+            assert!(!sequence_plan_helper_self_test(mismatched_helper));
+        }
+
+        #[test]
+        fn helper_backend_errors_are_distinguished_from_bad_input() {
+            let bytes = super::make_unpacked_case(super::super::header_flags::COMPACT_LEN);
+            let outcome = unsafe {
+                call_helper(
+                    backend_error_helper,
+                    &bytes,
+                    super::super::header_flags::COMPACT_LEN,
+                    BinarySequenceLayout::LengthPrefixed,
+                )
+            };
+
+            assert!(matches!(outcome, HelperOutcome::BackendFailure));
+        }
+
+        #[test]
+        fn helper_unavailable_is_a_fallback_not_backend_failure() {
+            let bytes = super::make_unpacked_case(super::super::header_flags::COMPACT_LEN);
+            let outcome = unsafe {
+                call_helper(
+                    unavailable_helper,
+                    &bytes,
+                    super::super::header_flags::COMPACT_LEN,
+                    BinarySequenceLayout::LengthPrefixed,
+                )
+            };
+
+            assert!(matches!(outcome, HelperOutcome::BackendUnavailable));
+        }
+    }
+}
+
 /// Write a length prefix honoring `COMPACT_LEN`.
 pub fn write_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
-    if use_compact_len() {
+    write_len_with_flags(writer, value, effective_layout_flags())
+}
+
+/// Write a length prefix honoring `COMPACT_LEN` from an explicit flag snapshot.
+#[doc(hidden)]
+pub fn write_len_with_flags<W: Write>(
+    writer: &mut W,
+    value: u64,
+    flags: u8,
+) -> std::io::Result<()> {
+    if compact_len_enabled_for_flags(flags) {
         let mut buf = [0u8; MAX_VARINT_BYTES];
         let used = encode_varint(value, &mut buf);
         writer.write_all(&buf[..used])?;
-        if use_compact_len() {
-            note_compact_len_emitted();
-        }
+        note_compact_len_emitted();
         Ok(())
     } else {
         writer.write_u64::<LittleEndian>(value)
@@ -1392,13 +2108,18 @@ pub fn write_seq_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()
 /// Append a length prefix honoring `COMPACT_LEN` to `out`.
 #[inline]
 pub fn write_len_to_vec(out: &mut Vec<u8>, value: u64) {
-    if use_compact_len() {
+    write_len_to_vec_with_flags(out, value, effective_layout_flags());
+}
+
+/// Append a length prefix honoring `COMPACT_LEN` from an explicit flag snapshot.
+#[inline]
+#[doc(hidden)]
+pub fn write_len_to_vec_with_flags(out: &mut Vec<u8>, value: u64, flags: u8) {
+    if compact_len_enabled_for_flags(flags) {
         let mut buf = [0u8; MAX_VARINT_BYTES];
         let used = encode_varint(value, &mut buf);
         out.extend_from_slice(&buf[..used]);
-        if use_compact_len() {
-            note_compact_len_emitted();
-        }
+        note_compact_len_emitted();
     } else {
         out.extend_from_slice(&value.to_le_bytes());
     }
@@ -1581,7 +2302,14 @@ pub fn write_len_header_to_vec(out: &mut Vec<u8>, value: u64) {
 /// Read a length prefix from a slice honoring `COMPACT_LEN`.
 /// Returns (value, bytes_consumed).
 pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
-    if use_compact_len() {
+    read_len_from_slice_with_flags(bytes, effective_layout_flags())
+}
+
+/// Read a length prefix from a slice using an explicit Norito flag snapshot.
+/// Returns (value, bytes consumed).
+#[doc(hidden)]
+pub fn read_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(usize, usize), Error> {
+    if compact_len_enabled_for_flags(flags) {
         let (value, used) = decode_varint_from_slice(bytes)?;
         record_slice_access(bytes, used);
         let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
@@ -1895,7 +2623,7 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, mut offset) = read_seq_len_slice(bytes)?;
+        let (len, offset) = read_seq_len_slice(bytes)?;
         // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
         if core::any::type_name::<T>() == "u8"
             && let Some(end) = offset.checked_add(len)
@@ -1912,20 +2640,6 @@ where
         if core::any::type_name::<T>() == "u8" {
             return Err(Error::LengthMismatch);
         }
-        let remaining = bytes.len().saturating_sub(offset);
-        if use_packed_seq() {
-            let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let header_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-            if header_bytes > remaining {
-                return Err(Error::LengthMismatch);
-            }
-        } else {
-            let min_header = if use_compact_len() { 1 } else { 8 };
-            let min_bytes = len.checked_mul(min_header).ok_or(Error::LengthMismatch)?;
-            if min_bytes > remaining {
-                return Err(Error::LengthMismatch);
-            }
-        }
         if crate::debug_trace_enabled() {
             eprintln!(
                 "Vec::<{}>::decode len={} packed_seq={}",
@@ -1934,124 +2648,91 @@ where
                 use_packed_seq()
             );
         }
+        let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+        let layout = if use_packed_seq() {
+            BinarySequenceLayout::FixedOffsets
+        } else {
+            BinarySequenceLayout::LengthPrefixed
+        };
+        let plan = plan_binary_sequence(bytes, flags, layout)?;
+        if layout == BinarySequenceLayout::LengthPrefixed
+            && core::mem::size_of::<T>() != 0
+            && plan.spans.iter().any(SequenceSpan::is_empty)
+        {
+            return decode_length_prefixed_sequence_legacy::<T>(bytes, len, offset);
+        }
+
         let mut out = Vec::new();
-        out.try_reserve(len).map_err(|_| Error::LengthMismatch)?;
-        if use_packed_seq() {
-            // Avoid allocating the offsets vector by streaming offsets directly.
-            let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let header_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
-            let offsets_slice = bytes
-                .get(offset..)
-                .and_then(|slice| slice.get(..header_bytes))
-                .ok_or(Error::LengthMismatch)?;
-
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&offsets_slice[..8]);
-            if u64::from_le_bytes(buf) != 0 {
+        out.try_reserve(plan.spans.len())
+            .map_err(|_| Error::LengthMismatch)?;
+        for span in &plan.spans {
+            let element_slice = span.get(bytes)?;
+            record_slice_access(element_slice, span.len());
+            let (value, used) = decode_field_canonical::<T>(element_slice)?;
+            if used != span.len() {
                 return Err(Error::LengthMismatch);
             }
-
-            let last_off_pos = header_bytes.checked_sub(8).ok_or(Error::LengthMismatch)?;
-            buf.copy_from_slice(
-                offsets_slice
-                    .get(last_off_pos..last_off_pos + 8)
-                    .ok_or(Error::LengthMismatch)?,
-            );
-            let data_len = len_u64_to_usize(u64::from_le_bytes(buf))?;
-
-            offset = offset
-                .checked_add(header_bytes)
-                .ok_or(Error::LengthMismatch)?;
-            let data_start = offset;
-            let data_end = data_start
-                .checked_add(data_len)
-                .ok_or(Error::LengthMismatch)?;
-            if data_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-
-            let mut prev = 0usize;
-            for idx in 0..len {
-                let next_pos = idx
-                    .checked_add(1)
-                    .and_then(|v| v.checked_mul(8))
-                    .ok_or(Error::LengthMismatch)?;
-                buf.copy_from_slice(
-                    offsets_slice
-                        .get(next_pos..next_pos + 8)
-                        .ok_or(Error::LengthMismatch)?,
-                );
-                let next = len_u64_to_usize(u64::from_le_bytes(buf))?;
-                if next < prev {
-                    return Err(Error::LengthMismatch);
-                }
-
-                let start = data_start.checked_add(prev).ok_or(Error::LengthMismatch)?;
-                let end = data_start.checked_add(next).ok_or(Error::LengthMismatch)?;
-                if end > data_end || start > end {
-                    return Err(Error::LengthMismatch);
-                }
-                let elem_len = end - start;
-                let element_slice = &bytes[start..end];
-                record_slice_access(element_slice, elem_len);
-                let (value, used) = decode_field_canonical::<T>(element_slice)?;
-                if used != elem_len {
-                    return Err(Error::LengthMismatch);
-                }
-                out.push(value);
-                prev = next;
-            }
-            if prev != data_len {
-                return Err(Error::LengthMismatch);
-            }
-            return Ok((out, data_end));
-        }
-        for _ in 0..len {
-            let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;
-            offset = offset
-                .checked_add(header_len)
-                .ok_or(Error::LengthMismatch)?;
-            let data_start = offset;
-            let expected_end = data_start
-                .checked_add(elem_len)
-                .ok_or(Error::LengthMismatch)?;
-            if crate::debug_trace_enabled() {
-                eprintln!(
-                    "Vec::<{}> element header_len={} elem_len={} offset_start={}",
-                    core::any::type_name::<T>(),
-                    header_len,
-                    elem_len,
-                    data_start
-                );
-            }
-            if expected_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-            let decode_input = if elem_len == 0 {
-                &bytes[data_start..]
-            } else {
-                &bytes[data_start..expected_end]
-            };
-            let (value, used) = decode_field_canonical::<T>(decode_input)?;
-            if used > bytes.len().saturating_sub(data_start) {
-                return Err(Error::LengthMismatch);
-            }
-            if elem_len != 0 && used != elem_len {
-                return Err(Error::LengthMismatch);
-            }
-            if elem_len == 0 && used == 0 && core::mem::size_of::<T>() != 0 {
-                return Err(Error::LengthMismatch);
-            }
-            let consumed = if elem_len == 0 { used } else { elem_len };
-            let data_end = data_start
-                .checked_add(consumed)
-                .ok_or(Error::LengthMismatch)?;
-            record_slice_access(&bytes[data_start..data_end], consumed);
             out.push(value);
-            offset = data_end;
         }
-        Ok((out, offset))
+        Ok((out, plan.used))
     }
+}
+
+fn decode_length_prefixed_sequence_legacy<'a, T>(
+    bytes: &'a [u8],
+    len: usize,
+    mut offset: usize,
+) -> Result<(Vec<T>, usize), Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+{
+    let mut out = Vec::new();
+    out.try_reserve(len).map_err(|_| Error::LengthMismatch)?;
+    for _ in 0..len {
+        let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;
+        offset = offset
+            .checked_add(header_len)
+            .ok_or(Error::LengthMismatch)?;
+        let data_start = offset;
+        let expected_end = data_start
+            .checked_add(elem_len)
+            .ok_or(Error::LengthMismatch)?;
+        if crate::debug_trace_enabled() {
+            eprintln!(
+                "Vec::<{}> element header_len={} elem_len={} offset_start={}",
+                core::any::type_name::<T>(),
+                header_len,
+                elem_len,
+                data_start
+            );
+        }
+        if expected_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+        let decode_input = if elem_len == 0 {
+            &bytes[data_start..]
+        } else {
+            &bytes[data_start..expected_end]
+        };
+        let (value, used) = decode_field_canonical::<T>(decode_input)?;
+        if used > bytes.len().saturating_sub(data_start) {
+            return Err(Error::LengthMismatch);
+        }
+        if elem_len != 0 && used != elem_len {
+            return Err(Error::LengthMismatch);
+        }
+        if elem_len == 0 && used == 0 && core::mem::size_of::<T>() != 0 {
+            return Err(Error::LengthMismatch);
+        }
+        let consumed = if elem_len == 0 { used } else { elem_len };
+        let data_end = data_start
+            .checked_add(consumed)
+            .ok_or(Error::LengthMismatch)?;
+        record_slice_access(&bytes[data_start..data_end], consumed);
+        out.push(value);
+        offset = data_end;
+    }
+    Ok((out, offset))
 }
 
 impl<'a> DecodeFromSlice<'a> for &'a [u8] {

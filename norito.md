@@ -79,6 +79,28 @@ encoding:
 Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
 overflow or overlong encodings are rejected.
 
+## Binary Sequence Span Planning
+
+Norito implementations may plan binary sequence payload spans before semantic
+decode. The planner is an internal optimization and does not change the wire
+layout:
+
+- Length-prefixed sequences are planned from `[count_u64][len][payload]...`,
+  honoring the header's `COMPACT_LEN` flag for each element length.
+- Packed sequences are planned from `[count_u64][(count + 1) u64 offsets]`
+  followed by concatenated element payloads. Offsets must start at `0`, be
+  monotonic, and the final offset must fit inside the available payload bytes.
+- The plan returns element byte ranges in original sequence order and the total
+  bytes consumed from the sequence payload. Semantic decode and validation still
+  happen on CPU and must report failures in original index order.
+- Optional CPU/GPU helpers may compute the spans for large payloads, but helper
+  results are self-tested and validated against the scalar planner before use.
+  Any unavailable backend, helper error, malformed span output, or mismatch
+  falls back to the scalar planner and disables the helper for the process.
+  Helper use is performance-only: decoded values, rejection class, ordering,
+  hashes, and emitted bytes must remain identical. Future out-of-process or
+  asynchronous helper kernels must add bounded execution before CPU fallback.
+
 ## String Encoding
 
 `String` and `&str` values are encoded as:

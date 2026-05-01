@@ -1,6 +1,89 @@
 # Status
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
+
+## 2026-05-02 Current 20k Bottleneck Profile After Norito Span Planner
+
+- Ran a fresh release `20,000 TPS` / `30s` 4-peer no-fault sampled profile
+  against the rebuilt `izanami`/`iroha3d` binaries. Artifact:
+  `dist/izanami-profile-20k-norito-span-sampled-30s-20260502-020217`; the
+  Izanami run exited `0`, and `sample` completed successfully for the runner
+  plus all four peer processes.
+- The profile offered all `600,000` submissions, built and used all `600,000`
+  prebuilt transactions, had zero prebuild fallback/build failures, accepted
+  `37,021` ingress transactions, and reported submit latency p50/p95/p99/max
+  of `3472/5151/6041/7070 ms`.
+- Final quorum/strict height was `3/3` with `4,141/4,141` approved
+  transactions, max height skew `1`, approved-transaction skew `4,096`, final
+  queue depth `30,458/600,000`, and `tx_queue_saturated=true`. Safety counters
+  stayed free of validation rejects, view changes, DA/RBC pressure, missing
+  block fetches, pending-RBC drops, and commit-inflight timeouts.
+- Aggregated peer recursive stacks now put active-path cost in Norito
+  transaction/instruction codec first, then Poseidon/Ed25519/Curve/hash work,
+  Rayon proof/hash scheduling, allocator/copy churn, TLS/context lookup, and
+  Torii admission queue routing. Leaf samples agree that the hottest active
+  leaves are Poseidon MDS/sbox, Curve25519 field math, malloc/free/memmove,
+  `_tlv_get_addr`, and Norito compact-length/decode/encode routines.
+
+## 2026-05-02 Release Izanami 20k Gate After Norito Span Planner
+
+- Rebuilt the scalar release `izanami` and `iroha3d` binaries with
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`,
+  which completed in `7m33s`, then reran the same 4-peer no-fault prebuilt
+  `20,000 TPS` / `120s` Izanami gate. Fresh artifact:
+  `dist/izanami-prebuilt-20k-rerun-release-norito-span-120s-20260502-015557`;
+  it exited `0`.
+- The gate offered all `2,400,000` submissions, built and used all
+  `2,400,000` prebuilt transactions, had zero prebuild fallback/build
+  failures, and accepted `47,503` ingress transactions. Submit latency
+  p50/p95/p99/max was `3086/4451/4997/6126 ms`.
+- Final quorum/strict height was `10/10` with `32,786/32,786` approved
+  transactions, max height skew `1`, approved-transaction skew `4,096`, final
+  queue depth `10,250/2,400,000`, and `tx_queue_saturated=true`.
+- Safety signals stayed free of validation rejects, quorum-timeout causes, DA
+  gate pressure, RBC store pressure/evictions, pending-RBC drops, and
+  commit-inflight timeouts. The run recorded `3` view-change installs, `2`
+  missing-QC view-change causes, `13` missing-block fetches, `8/8` missing-QC
+  reacquire attempts/successes, `8` range-pull escalations with `2` successes,
+  and `96` pacemaker backpressure deferrals.
+- Contention snapshots only captured the wrapper process and the snapshot `rg`
+  probes; no other Rust build or Izanami jobs were present before or after the
+  gate.
+
+## 2026-05-02 Norito Binary Sequence Span Planner
+
+- Added hidden Norito binary sequence span planning APIs for length-prefixed
+  and packed fixed-offset sequences. `Vec<T>` decode and the `ConstVec<T>`
+  manual unpacked recovery path now plan element byte ranges once and keep
+  final semantic decode on CPU in original order.
+- Added a hidden `parallel-decode` feature using the existing optional Rayon
+  dependency for typed callers that can prove `T: Send`; no generic
+  `ConstVec<T>` `Send` bound or runtime config knob was added.
+- Added the helper-internal `norito_binary_sequence_plan` ABI to the existing
+  Metal and CUDA jsonstage1 helper crates. Norito only attempts it for large
+  payloads behind existing codec GPU features, self-tests and validates helper
+  output against the scalar planner before use, and disables the helper on
+  backend failure or mismatch. The helper bodies currently use deterministic
+  CPU reference implementations with TODOs for tuned Metal/CUDA kernels.
+- No Norito wire layout, decoded values, rejection class, ordering, hashes,
+  runtime config, dependencies, or `Cargo.lock` changed.
+- Focused validation for this slice:
+  - `cargo check -p jsonstage1_metal`
+  - `cargo check -p jsonstage1_cuda --no-default-features`
+  - `cargo check -p norito`
+  - `cargo check -p norito --features parallel-decode`
+  - `cargo check -p norito --features simd-accel,codec-gpu-metal` (passed with
+    existing `simd_crc64.rs` unused-loader warnings)
+  - `cargo check -p norito -p iroha_primitives`
+  - `cargo test -p norito --lib sequence_plan_helper_self_test_rejects_mismatched_helper --features codec-gpu-metal`
+    (passed with existing `simd_crc64.rs` unused-loader warnings)
+  - `cargo test -p norito --lib helper_backend_errors_are_distinguished_from_bad_input --features codec-gpu-metal`
+    (passed with existing `simd_crc64.rs` unused-loader warnings)
+  - `cargo test -p norito --test sequence_plan --features parallel-decode`
+  - `cargo test -p jsonstage1_metal binary_sequence_plan`
+  - `cargo test -p jsonstage1_cuda --no-default-features binary_sequence_plan`
+  - `cargo fmt --all`
+  - `git diff --check`
 
 ## 2026-05-01 FASTPQ BN254 Metal Poseidon Batch Path
 
@@ -652,6 +735,62 @@ Last updated: 2026-05-01
   - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
   - `cargo fmt --all -- --check`
   - `git diff --check`
+
+## 2026-05-01 Soracloud generated auth state hardening
+
+- Generated Soracloud webapp and PII app auth servers now serialize file-backed
+  auth state mutations behind a local lock directory, recover stale locks, and
+  keep the external shared-state adapter path unchanged. This avoids losing
+  challenge/session records when local test replicas share the fallback state
+  file.
+- Generated webapp and PII app request handlers now convert unexpected
+  top-level handler failures into JSON `INTERNAL_SERVER_ERROR` responses rather
+  than surfacing opaque client-side socket drops.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli soracloud::tests::generated_pii_app_auth_core_persists_file_state_canonically -- --nocapture`
+  - `cargo test -p iroha_cli soracloud::tests::generated_webapp -- --nocapture`
+  - `cargo test -p iroha_cli --bin iroha -- --nocapture`
+
+## 2026-05-01 Client submit rejection confirmation race
+
+- Transaction confirmation fallback polling now starts after the first poll
+  interval instead of immediately, so a submit endpoint rejection that arrives
+  just after listener setup preempts status polling and returns without racing
+  the configured status timeout.
+- Added regression coverage for a pending submit failure that must be observed
+  before the first status poll.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha tx_confirmation_stream_tests::pending_submit_failure_preempts_first_status_poll -- --nocapture`
+  - `cargo test -p iroha client::tests::submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout -- --nocapture`
+  - `cargo test -p iroha client::tests -- --nocapture`
+  - `cargo test -p iroha tx_confirmation_stream_tests -- --nocapture`
+  - `cargo test -p iroha --lib -- --nocapture`
+
+## 2026-05-01 Live Taira faucet authority top-up
+
+- Submitted a live Taira mint from the configured faucet authority to itself
+  for `200000000000000000` canonical XOR
+  (`6TEAJqbb8oEPmLncoNiMRbLEK6tw`), transaction
+  `9C6A2CDE5B8B4377C0D2534CDF9795D4E2FAB7852DB4CA7B0AB1945AA5DAF7D9`.
+- Verified the faucet end-to-end with a fresh account canary. The public
+  faucet returned HTTP `202`, claim transaction
+  `6b71a4fb7c01006e1a6736de347eaa3babf6e04c61ef7d93301572ff8006e021`, and
+  the canary account indexed with `25000` XOR.
+- Post-repair public balance check showed the faucet authority at
+  `199999999999983427.61890` XOR, leaving enough capacity for repeated
+  `25000` XOR claims.
+
+## 2026-05-01 Taira faucet authority seed funding
+
+- Taira genesis now seeds the configured public faucet authority
+  (`testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV`) with
+  `200000000000000000` units of the canonical `xor#universal` asset definition
+  (`6TEAJqbb8oEPmLncoNiMRbLEK6tw`) so the served account faucet can satisfy
+  repeated `25000` XOR claims after a Taira redeploy/reset from this genesis.
+- Focused validation for this slice:
+  - `jq -e . configs/soranexus/taira/genesis.json`
 
 ## 2026-05-01 Offline V2 native SDK prover speedups
 

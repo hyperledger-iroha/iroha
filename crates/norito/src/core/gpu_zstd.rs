@@ -15,7 +15,10 @@ use std::{
     ffi::c_void,
     fmt,
     io::{self, Read},
-    sync::OnceLock,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[link(name = "objc")]
@@ -147,6 +150,10 @@ enum Backend {
 }
 
 static BACKEND: OnceLock<Backend> = OnceLock::new();
+static BACKEND_DISABLED: AtomicBool = AtomicBool::new(false);
+static VALIDATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+const VALIDATE_INITIAL_CALLS: usize = 4;
+const VALIDATE_INTERVAL: usize = 257;
 #[cfg(windows)]
 static DLL_DIRECTORY_SETUP: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -192,15 +199,18 @@ fn windows_gpu_helper_library_names() -> &'static [&'static str] {
     &["gpuzstd_cuda.dll"]
 }
 
-fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), SelfTestFailure> {
-    const SAMPLE: &[u8] = b"norito gpu roundtrip parity check v1";
+fn gpu_self_test_sample(
+    compress: CompressFn,
+    decompress: DecompressFn,
+    sample: &[u8],
+) -> Result<(), SelfTestFailure> {
     // GPU encode the sample payload.
-    let mut gpu_encoded = vec![0u8; SAMPLE.len().saturating_mul(4).saturating_add(512)];
+    let mut gpu_encoded = vec![0u8; sample.len().saturating_mul(4).saturating_add(512)];
     let mut gpu_len = gpu_encoded.len();
     let rc = unsafe {
         compress(
-            SAMPLE.as_ptr(),
-            SAMPLE.len(),
+            sample.as_ptr(),
+            sample.len(),
             1,
             gpu_encoded.as_mut_ptr(),
             &mut gpu_len,
@@ -217,13 +227,13 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
     // Ensure CPU zstd can decode the GPU output.
     let decoded_cpu = zstd::decode_all(std::io::Cursor::new(&gpu_encoded))
         .map_err(SelfTestFailure::CpuDecodeGpu)?;
-    if decoded_cpu != SAMPLE {
+    if decoded_cpu != sample {
         return Err(SelfTestFailure::CpuDecodeMismatch);
     }
     // Ensure the GPU decoder can roundtrip CPU-compressed bytes.
     let cpu_encoded =
-        zstd::encode_all(std::io::Cursor::new(SAMPLE), 1).map_err(SelfTestFailure::CpuEncode)?;
-    let mut gpu_decoded = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
+        zstd::encode_all(std::io::Cursor::new(sample), 1).map_err(SelfTestFailure::CpuEncode)?;
+    let mut gpu_decoded = vec![0u8; sample.len().saturating_mul(2).saturating_add(256)];
     let mut gpu_decoded_len = gpu_decoded.len();
     let rc = unsafe {
         decompress(
@@ -241,16 +251,16 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
         });
     }
     gpu_decoded.truncate(gpu_decoded_len);
-    if gpu_decoded != SAMPLE {
+    if gpu_decoded != sample {
         return Err(SelfTestFailure::GpuDecodeMismatch);
     }
     // Full GPU roundtrip for good measure.
-    let mut gpu_roundtrip = vec![0u8; SAMPLE.len().saturating_mul(4).saturating_add(512)];
+    let mut gpu_roundtrip = vec![0u8; sample.len().saturating_mul(4).saturating_add(512)];
     let mut gpu_roundtrip_len = gpu_roundtrip.len();
     let rc = unsafe {
         compress(
-            SAMPLE.as_ptr(),
-            SAMPLE.len(),
+            sample.as_ptr(),
+            sample.len(),
             1,
             gpu_roundtrip.as_mut_ptr(),
             &mut gpu_roundtrip_len,
@@ -264,7 +274,7 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
         });
     }
     gpu_roundtrip.truncate(gpu_roundtrip_len);
-    let mut gpu_roundtrip_out = vec![0u8; SAMPLE.len().saturating_mul(2).saturating_add(256)];
+    let mut gpu_roundtrip_out = vec![0u8; sample.len().saturating_mul(2).saturating_add(256)];
     let mut gpu_roundtrip_out_len = gpu_roundtrip_out.len();
     let rc = unsafe {
         decompress(
@@ -282,10 +292,37 @@ fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), S
         });
     }
     gpu_roundtrip_out.truncate(gpu_roundtrip_out_len);
-    if gpu_roundtrip_out != SAMPLE {
+    if gpu_roundtrip_out != sample {
         return Err(SelfTestFailure::GpuRoundtripMismatch);
     }
     Ok(())
+}
+
+fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), SelfTestFailure> {
+    const SAMPLE: &[u8] = b"norito gpu roundtrip parity check v1";
+    gpu_self_test_sample(compress, decompress, SAMPLE)?;
+
+    for &len in &[
+        super::heuristics::Heuristics::canonical().min_compress_bytes_gpu,
+        super::heuristics::Heuristics::canonical()
+            .min_compress_bytes_gpu
+            .saturating_add(257),
+    ] {
+        let payload = deterministic_payload(len, len as u64 ^ 0x4750_555a_5354_4421);
+        gpu_self_test_sample(compress, decompress, &payload)?;
+    }
+    Ok(())
+}
+
+fn deterministic_payload(len: usize, mut seed: u64) -> Vec<u8> {
+    let mut out = vec![0u8; len];
+    for (idx, byte) in out.iter_mut().enumerate() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        *byte = (seed as u8) ^ (idx as u8).wrapping_mul(31);
+    }
+    out
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -461,6 +498,14 @@ fn backend() -> &'static Backend {
     BACKEND.get_or_init(|| unsafe { init_backend().unwrap_or(Backend::Cpu) })
 }
 
+fn disable_backend() {
+    BACKEND_DISABLED.store(true, Ordering::SeqCst);
+}
+
+fn backend_disabled() -> bool {
+    BACKEND_DISABLED.load(Ordering::SeqCst)
+}
+
 fn try_gpu_encode(compress: CompressFn, payload: &[u8], level: i32) -> Option<Vec<u8>> {
     let mut cap = payload.len().saturating_mul(2) + 128;
     for _ in 0..5 {
@@ -514,7 +559,7 @@ fn try_gpu_decode(
 
 /// Returns `true` if a supported GPU backend (CUDA or Metal) is available.
 pub fn available() -> bool {
-    if !super::hw::gpu_policy_allowed() {
+    if !super::hw::gpu_policy_allowed() || backend_disabled() {
         return false;
     }
     !matches!(backend(), Backend::Cpu)
@@ -522,20 +567,26 @@ pub fn available() -> bool {
 
 pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
     let min_gpu_bytes = super::heuristics::get().min_compress_bytes_gpu;
-    if payload.len() < min_gpu_bytes {
+    if payload.len() < min_gpu_bytes || !super::hw::gpu_policy_allowed() || backend_disabled() {
         return zstd::encode_all(std::io::Cursor::new(payload), level);
     }
     match backend() {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Backend::Metal { compress, .. } => {
             if let Some(out) = try_gpu_encode(*compress, &payload, level) {
-                return Ok(out);
+                if validate_encoded_sample(&payload, &out) {
+                    return Ok(out);
+                }
+                disable_backend();
             }
         }
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         Backend::Cuda { compress, .. } => {
             if let Some(out) = try_gpu_encode(*compress, &payload, level) {
-                return Ok(out);
+                if validate_encoded_sample(&payload, &out) {
+                    return Ok(out);
+                }
+                disable_backend();
             }
         }
         Backend::Cpu => {}
@@ -543,6 +594,23 @@ pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
 
     // CPU fallback
     zstd::encode_all(std::io::Cursor::new(payload), level)
+}
+
+fn should_validate_encoded_sample() -> bool {
+    let call = VALIDATE_CALLS
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    call <= VALIDATE_INITIAL_CALLS || call % VALIDATE_INTERVAL == 0
+}
+
+fn validate_encoded_sample(payload: &[u8], encoded: &[u8]) -> bool {
+    if !should_validate_encoded_sample() {
+        return true;
+    }
+    match zstd::decode_all(std::io::Cursor::new(encoded)) {
+        Ok(decoded) => decoded == payload,
+        Err(_) => false,
+    }
 }
 
 pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, super::Error> {
@@ -854,6 +922,15 @@ mod self_test {
         let payload = b"decode helper length check";
         let encoded = zstd::encode_all(io::Cursor::new(payload), 1).expect("cpu encode");
         assert!(try_gpu_decode(decompress_invalid_len_success, &encoded, payload.len()).is_none());
+    }
+
+    #[test]
+    fn sampled_validation_rejects_wrong_decoded_payload() {
+        VALIDATE_CALLS.store(0, Ordering::Relaxed);
+        let payload = b"expected payload";
+        let encoded_wrong =
+            zstd::encode_all(io::Cursor::new(b"different payload"), 1).expect("cpu encode");
+        assert!(!validate_encoded_sample(payload, &encoded_wrong));
     }
 
     #[cfg(unix)]

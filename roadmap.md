@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -218,16 +218,25 @@ Completed history lives in `status.md`. This file should only track unfinished w
     installed: compile the metallib, run the Metal parity tests, then compare a
     30s sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
     against the latest scalar release artifacts.
+  - Carry the Norito sequence span planner through the remaining acceleration
+    corridor: replace the helper ABI's deterministic CPU reference bodies with
+    tuned Metal/CUDA kernels, add bounded execution for asynchronous helper
+    kernels before CPU fallback, wire `decode_planned_sequence_parallel` into
+    specific typed transaction/admission/block-validation call sites that can
+    prove `T: Send` and lowest-index error ordering, then rerun the 30s sampled
+    20k profile and 120s gate with the target host's acceleration features.
   - The latest scalar release 4-peer no-fault prebuilt `20k TPS` / `120s` gate
-    after the FASTPQ Metal feature-plumbing pass is
-    `dist/izanami-prebuilt-20k-rerun-release-120s-20260501-224554`; it exited
-    `0`, reached strict/quorum height `11`, and approved `36,979`
-    transactions. The matching scalar sampled profile at
-    `dist/izanami-profile-20k-current-sampled2-30s-20260501-225258` shows
-    Norito/transaction wire work as the current top peer bottleneck, followed by
-    syscall/TLS/write overhead, allocation/copy, FASTPQ/Poseidon hashing,
-    Ed25519/Curve25519 math, and Rayon batch/prover scheduling. Use this
-    artifact as the baseline before the next optimization pass.
+    after the Norito span-planner pass is
+    `dist/izanami-prebuilt-20k-rerun-release-norito-span-120s-20260502-015557`;
+    it exited `0`, accepted `47,503` ingress transactions, reached
+    strict/quorum height `10`, and approved `32,786` transactions. The latest
+    matching scalar sampled profile is
+    `dist/izanami-profile-20k-norito-span-sampled-30s-20260502-020217`; it
+    shows Norito transaction/instruction codec as the current top active peer
+    path, followed by Poseidon/Ed25519/Curve/hash work, Rayon proof/hash
+    scheduling, allocation/copy churn, TLS/context lookup, and Torii admission
+    queue routing. Use this artifact as the baseline before the next
+    optimization pass.
   - Reduce Norito decode/allocation overhead on the direct and gossip admission
     corridors without changing wire bytes or canonical hashes. The next useful
     targets are repeated compact-length walks, instruction-registry decode

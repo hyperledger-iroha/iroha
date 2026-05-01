@@ -23,9 +23,12 @@ use std::{
 };
 
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
+const VERIFY_OK_EXACT_CACHE_SIZE: usize = 1024;
 const PUBLIC_KEY_PARSE_CACHE_LIMIT: usize = 4096;
+const PUBLIC_KEY_PARSE_FAST_CACHE_SIZE: usize = 64;
 
 struct PublicKeyParseCache {
+    fast: [Option<([u8; 32], PublicKey)>; PUBLIC_KEY_PARSE_FAST_CACHE_SIZE],
     map: HashMap<[u8; 32], PublicKey>,
     #[cfg(test)]
     hits: usize,
@@ -38,6 +41,7 @@ struct PublicKeyParseCache {
 impl PublicKeyParseCache {
     fn new() -> Self {
         Self {
+            fast: [None; PUBLIC_KEY_PARSE_FAST_CACHE_SIZE],
             map: HashMap::new(),
             #[cfg(test)]
             hits: 0,
@@ -49,7 +53,21 @@ impl PublicKeyParseCache {
     }
 
     fn get(&mut self, bytes: &[u8; 32]) -> Option<PublicKey> {
+        let slot = public_key_parse_fast_index(bytes);
+        if let Some((cached_bytes, key)) = self.fast[slot]
+            && cached_bytes == *bytes
+        {
+            #[cfg(test)]
+            {
+                self.hits = self.hits.saturating_add(1);
+            }
+            return Some(key);
+        }
+
         let key = self.map.get(bytes).copied();
+        if let Some(key) = key {
+            self.fast[slot] = Some((*bytes, key));
+        }
         #[cfg(test)]
         {
             if key.is_some() {
@@ -64,7 +82,9 @@ impl PublicKeyParseCache {
     fn insert(&mut self, bytes: [u8; 32], key: PublicKey) {
         if self.map.len() >= PUBLIC_KEY_PARSE_CACHE_LIMIT {
             self.map.clear();
+            self.fast.fill(None);
         }
+        self.fast[public_key_parse_fast_index(&bytes)] = Some((bytes, key));
         self.map.insert(bytes, key);
         #[cfg(test)]
         {
@@ -74,6 +94,7 @@ impl PublicKeyParseCache {
 
     #[cfg(test)]
     fn reset(&mut self) {
+        self.fast.fill(None);
         self.map.clear();
         self.hits = 0;
         self.misses = 0;
@@ -98,15 +119,50 @@ struct PublicKeyParseCacheStats {
     inserts: usize,
 }
 
+#[inline]
+fn public_key_parse_fast_index(bytes: &[u8; 32]) -> usize {
+    usize::from(bytes[0] ^ bytes[7] ^ bytes[15] ^ bytes[23] ^ bytes[31])
+        & (PUBLIC_KEY_PARSE_FAST_CACHE_SIZE - 1)
+}
+
+#[derive(Clone, Copy)]
+struct VerifyOkExactEntry {
+    pk: [u8; 32],
+    message: [u8; 32],
+    signature: [u8; 64],
+}
+
 struct VerifyOkCache {
+    exact: [Option<VerifyOkExactEntry>; VERIFY_OK_EXACT_CACHE_SIZE],
     map: HashSet<[u8; 32]>,
 }
 
 impl VerifyOkCache {
     fn new() -> Self {
         Self {
+            exact: [None; VERIFY_OK_EXACT_CACHE_SIZE],
             map: HashSet::new(),
         }
+    }
+
+    fn contains_exact_32(&self, pk: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
+        let Some(key) = exact_verify_key(pk, message, signature) else {
+            return false;
+        };
+        let Some(entry) = self.exact[verify_ok_exact_index(&key.pk, &key.message, &key.signature)]
+        else {
+            return false;
+        };
+        entry.pk == key.pk && entry.message == key.message && entry.signature == key.signature
+    }
+
+    fn insert_exact_32(&mut self, pk: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
+        let Some(entry) = exact_verify_key(pk, message, signature) else {
+            return false;
+        };
+        let slot = verify_ok_exact_index(&entry.pk, &entry.message, &entry.signature);
+        self.exact[slot] = Some(entry);
+        true
     }
 
     fn contains(&self, key: &[u8; 32]) -> bool {
@@ -120,6 +176,28 @@ impl VerifyOkCache {
         }
         self.map.insert(key);
     }
+}
+
+#[inline]
+fn exact_verify_key(
+    pk: &PublicKey,
+    message: &[u8],
+    signature: &[u8],
+) -> Option<VerifyOkExactEntry> {
+    let message: [u8; 32] = message.try_into().ok()?;
+    let signature: [u8; 64] = signature.try_into().ok()?;
+    Some(VerifyOkExactEntry {
+        pk: pk.to_bytes(),
+        message,
+        signature,
+    })
+}
+
+#[inline]
+fn verify_ok_exact_index(pk: &[u8; 32], message: &[u8; 32], signature: &[u8; 64]) -> usize {
+    let mixed = u16::from(pk[0] ^ message[31] ^ signature[63])
+        | (u16::from(pk[11] ^ message[13] ^ signature[31]) << 8);
+    usize::from(mixed) & (VERIFY_OK_EXACT_CACHE_SIZE - 1)
 }
 
 thread_local! {
@@ -149,6 +227,15 @@ fn verify_ok_cache_key(pk: &PublicKey, message: &[u8], signature: &[u8]) -> [u8;
     blake2::digest::VariableOutput::finalize_variable(h, &mut out)
         .expect("blake2b output length must match");
     out
+}
+
+fn remember_verify_ok(pk: &PublicKey, message: &[u8], signature: &[u8]) {
+    VERIFY_OK_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.insert_exact_32(pk, message, signature) {
+            cache.insert(verify_ok_cache_key(pk, message, signature));
+        }
+    });
 }
 
 fn parse_fixed_size<T, E, F, const SIZE: usize>(
@@ -279,6 +366,13 @@ impl Ed25519Sha512 {
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
         if signature.len() == ed25519_dalek::SIGNATURE_LENGTH {
+            if message.len() == 32
+                && VERIFY_OK_CACHE.with(|cache| {
+                    cache.borrow().contains_exact_32(pk, message, signature)
+                })
+            {
+                return Ok(());
+            }
             let key = verify_ok_cache_key(pk, message, signature);
             if VERIFY_OK_CACHE.with(|cache| cache.borrow().contains(&key)) {
                 return Ok(());
@@ -287,7 +381,7 @@ impl Ed25519Sha512 {
             let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
             pk.verify_strict(message, &s)
                 .map_err(|_| Error::BadSignature)?;
-            VERIFY_OK_CACHE.with(|cache| cache.borrow_mut().insert(key));
+            remember_verify_ok(pk, message, signature);
             return Ok(());
         }
         let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
@@ -313,38 +407,69 @@ impl Ed25519Sha512 {
         }
         let _ = seed32;
 
-        #[cfg(feature = "ecc-batch")]
-        {
-            let parsed_signatures = signatures
-                .iter()
-                .map(|signature| Signature::try_from(*signature).map_err(|_| Error::BadSignature))
-                .collect::<Result<Vec<_>, _>>()?;
-            ed25519_dalek::verify_batch(messages, &parsed_signatures, public_keys)
-                .map_err(|_| Error::BadSignature)?;
-            for ((message, signature), public_key) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                if signature.len() == ed25519_dalek::SIGNATURE_LENGTH {
-                    let key = verify_ok_cache_key(public_key, message, signature);
-                    VERIFY_OK_CACHE.with(|cache| cache.borrow_mut().insert(key));
-                }
-            }
-            Ok(())
+        let mut parsed_signatures = Vec::new();
+        Self::parse_signatures_into(signatures, &mut parsed_signatures)?;
+        Self::verify_batch_preparsed_signatures_deterministic(
+            messages,
+            signatures,
+            &parsed_signatures,
+            public_keys,
+            seed32,
+        )
+    }
+
+    pub(crate) fn parse_signatures_into(
+        signatures: &[&[u8]],
+        out: &mut Vec<Signature>,
+    ) -> Result<(), Error> {
+        out.clear();
+        out.try_reserve(signatures.len())
+            .map_err(|_| Error::BadSignature)?;
+        for signature in signatures {
+            out.push(Signature::try_from(*signature).map_err(|_| Error::BadSignature)?);
         }
+        Ok(())
+    }
+
+    pub(crate) fn verify_batch_preparsed_signatures_deterministic(
+        messages: &[&[u8]],
+        raw_signatures: &[&[u8]],
+        parsed_signatures: &[Signature],
+        public_keys: &[PublicKey],
+        seed32: [u8; 32],
+    ) -> Result<(), Error> {
+        if messages.is_empty()
+            || !(messages.len() == raw_signatures.len()
+                && raw_signatures.len() == parsed_signatures.len()
+                && parsed_signatures.len() == public_keys.len())
+        {
+            return Err(Error::BadSignature);
+        }
+        let _ = seed32;
+
+        #[cfg(feature = "ecc-batch")]
+        ed25519_dalek::verify_batch(messages, parsed_signatures, public_keys)
+            .map_err(|_| Error::BadSignature)?;
 
         #[cfg(not(feature = "ecc-batch"))]
+        for ((message, signature), public_key) in messages
+            .iter()
+            .zip(parsed_signatures.iter())
+            .zip(public_keys.iter())
         {
-            for ((message, signature), public_key) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                Self::verify(message, signature, public_key)?;
-            }
-            Ok(())
+            public_key
+                .verify_strict(message, signature)
+                .map_err(|_| Error::BadSignature)?;
         }
+
+        for ((message, signature), public_key) in messages
+            .iter()
+            .zip(raw_signatures.iter())
+            .zip(public_keys.iter())
+        {
+            remember_verify_ok(public_key, message, signature);
+        }
+        Ok(())
     }
 
     /// Deterministic batch verification helper.

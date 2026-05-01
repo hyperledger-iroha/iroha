@@ -259,6 +259,14 @@
         {
           "Mint": {
             "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "200000000000000000"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
               "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
               "object": "250000000"
             }

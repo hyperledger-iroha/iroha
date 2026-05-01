@@ -11851,7 +11851,8 @@ where
     } else {
         Duration::from_secs(3600)
     };
-    let mut poll = tokio::time::interval(poll_interval);
+    let first_poll_at = tokio::time::Instant::now() + poll_interval;
+    let mut poll = tokio::time::interval_at(first_poll_at, poll_interval);
     if poll_enabled {
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     }
@@ -13439,6 +13440,51 @@ mod tx_confirmation_stream_tests {
         assert!(
             err.to_string()
                 .contains("missing gas_limit in transaction metadata")
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_submit_failure_preempts_first_status_poll() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([18_u8; Hash::LENGTH]));
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let _ = submit_result_sender.send(Err(eyre!(
+                "Unexpected transaction response: 400 Bad Request rejected before polling"
+            )));
+        });
+
+        let status_polled = Arc::new(AtomicBool::new(false));
+        let status_polled_clone = Arc::clone(&status_polled);
+        let err = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_millis(100),
+                Some(submit_result_receiver),
+                || {
+                    status_polled_clone.store(true, Ordering::SeqCst);
+                    Ok(None)
+                },
+            ),
+        )
+        .await
+        .expect("submission failure should beat first status poll")
+        .expect_err("submission failure should surface as an error");
+
+        assert!(err.to_string().contains("rejected before polling"));
+        assert!(
+            !status_polled.load(Ordering::SeqCst),
+            "submit failure should be observed before the first status poll"
         );
     }
 
