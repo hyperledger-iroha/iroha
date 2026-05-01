@@ -16175,7 +16175,7 @@ pub struct ToriiOfflineIssuer {
     pub enabled: bool,
     /// Private key for the privileged Offline V2 issuer account.
     #[config(env = "TORII_OFFLINE_ISSUER_PRIVATE_KEY")]
-    pub private_key: ExposedPrivateKey,
+    pub private_key: Option<ExposedPrivateKey>,
     /// Maximum authorized offline balance per lineage.
     #[config(default = "defaults::torii::offline_issuer::max_balance()")]
     pub max_balance: String,
@@ -16204,7 +16204,24 @@ impl ToriiOfflineIssuer {
         if !self.enabled {
             return None;
         }
-        let key_pair = KeyPair::from_private_key(self.private_key.0.clone())
+        let private_key = self
+            .private_key
+            .or_else(|| {
+                std::env::var("TORII_OFFLINE_ISSUER_PRIVATE_KEY")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| {
+                        value.parse::<ExposedPrivateKey>().unwrap_or_else(|err| {
+                            panic!("invalid TORII_OFFLINE_ISSUER_PRIVATE_KEY: {err}")
+                        })
+                    })
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "torii.offline_issuer.private_key or TORII_OFFLINE_ISSUER_PRIVATE_KEY is required"
+                )
+            });
+        let key_pair = KeyPair::from_private_key(private_key.0.clone())
             .unwrap_or_else(|err| panic!("invalid torii.offline_issuer.private_key: {err}"));
         if matches!(
             key_pair.public_key().algorithm(),
