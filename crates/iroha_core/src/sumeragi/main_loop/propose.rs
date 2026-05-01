@@ -1046,7 +1046,7 @@ impl Actor {
         let owner_age = owner_pending
             .progress_age(now)
             .max(now.saturating_duration_since(owner_pending.inserted_at));
-        let recovery_age = self.stale_same_height_recovery_age(height, now);
+        let recovery_age = self.stale_same_height_recovery_age(height, owner_view, now);
         let recovery_exhausted =
             owner_age >= hard_yield_age || recovery_age.is_some_and(|age| age >= hard_yield_age);
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
@@ -1205,6 +1205,7 @@ impl Actor {
     fn stale_same_height_recovery_age(
         &self,
         proposal_height: u64,
+        subject_view: u64,
         now: Instant,
     ) -> Option<Duration> {
         self.frontier_recovery
@@ -1212,6 +1213,9 @@ impl Actor {
             .filter(|state| {
                 state.frontier_height == proposal_height
                     && matches!(state.last_cause, "missing_qc" | "quorum_timeout")
+                    && state
+                        .last_rotation_view
+                        .is_some_and(|view| view >= subject_view)
             })
             .map(|state| now.saturating_duration_since(state.entered_at))
     }
@@ -1243,7 +1247,7 @@ impl Actor {
             .max(Duration::from_millis(1));
         let hard_stale_age = min_stale_age.saturating_mul(3);
         let recovery_exhausted = self
-            .stale_same_height_recovery_age(proposal_height, now)
+            .stale_same_height_recovery_age(proposal_height, existing_vote.view, now)
             .is_some_and(|age| age >= hard_stale_age);
         if let Some(pending) = self
             .pending
