@@ -6,12 +6,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
-- Carry the strengthened Sumeragi frontier-recovery formal corridor through
-  periodic wider validation.
-  - `frontier-fast` and `frontier-deep` are part of the normal formal CI gate;
-    keep `frontier-wide` as a manual/nightly check before larger consensus
-    recovery rewrites, or promote it once the scheduled validation budget can
-    absorb the wider Apalache run.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - Focused Rust and JavaScript checks are green as of 2026-04-30, but Python
@@ -103,7 +97,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Add a case where a signatory is materialized by registration and then successfully authors `MultisigPropose` / `MultisigApprove` on the network.
   - Assert transaction-authority shape and final instruction execution, not only account materialization.
 - Extend and burn down the translation metadata audit backlog.
-  - `docs/formal` is the current clean gate target; keep it green with `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current` when formal docs change.
+  - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
+    English-only frontier formal update so `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
+    can be restored for formal docs.
   - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Add a recorded capture gate for the default `sora-temple` petal styles.
