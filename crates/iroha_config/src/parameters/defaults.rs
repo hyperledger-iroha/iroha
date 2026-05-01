@@ -1681,6 +1681,25 @@ pub mod torii {
         /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
         pub const POW_VRF_SEED_ENABLED: bool = false;
     }
+    /// Offline Notes V2 issuer defaults.
+    pub mod offline_issuer {
+        /// Maximum authorized offline balance per lineage.
+        pub fn max_balance() -> String {
+            "1000000".to_string()
+        }
+
+        /// Maximum authorized value for one offline transaction.
+        pub fn max_tx_value() -> String {
+            "100000".to_string()
+        }
+
+        /// Certificate TTL in milliseconds.
+        pub const CERTIFICATE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+        /// Authorization refresh interval in milliseconds.
+        pub const AUTHORIZATION_REFRESH_MS: u64 = 12 * 60 * 60 * 1_000;
+        /// Authorization TTL in milliseconds.
+        pub const AUTHORIZATION_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+    }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
     /// Burst tokens allowed for pre-authorization attempts per IP.

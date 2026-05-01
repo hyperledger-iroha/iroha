@@ -61,6 +61,8 @@ mod api_version;
 mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
+#[cfg(feature = "app_api")]
+mod offline_v2_issuer;
 mod operator_auth;
 mod operator_signatures;
 #[doc(hidden)]
@@ -1560,6 +1562,8 @@ struct AppState {
     sorafs_chunk_range_overrides: DashMap<[u8; 32], bool>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -5318,6 +5322,80 @@ async fn handler_offline_note_v2_readiness() -> Result<impl IntoResponse, Error>
         json_entry("offline_sync_optional", true),
         json_entry("offline_telemetry", true),
     ]))
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_v2_keys_refill(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/v2/keys/refill",
+    )
+    .await?;
+    offline_v2_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_v2_notes_issue(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/v2/notes/issue",
+    )
+    .await?;
+    offline_v2_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_v2_notes_redeem(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/v2/notes/redeem",
+    )
+    .await?;
+    offline_v2_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_note_v2_audit(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/v2/audit").await?;
+    offline_v2_issuer::handle_audit(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -31386,6 +31464,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
+    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -32614,7 +32694,20 @@ impl Torii {
                 .route(
                     "/v1/offline/v2/readiness",
                     get(handler_offline_note_v2_readiness),
-                );
+                )
+                .route(
+                    "/v1/offline/v2/keys/refill",
+                    post(handler_offline_note_v2_keys_refill),
+                )
+                .route(
+                    "/v1/offline/v2/notes/issue",
+                    post(handler_offline_note_v2_notes_issue),
+                )
+                .route(
+                    "/v1/offline/v2/notes/redeem",
+                    post(handler_offline_note_v2_notes_redeem),
+                )
+                .route("/v1/offline/v2/audit", post(handler_offline_note_v2_audit));
             #[cfg(feature = "push")]
             let router = router.route("/v1/notify/devices", post(handler_push_register_device));
             let router = router
@@ -34045,6 +34138,12 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
+        let offline_v2_issuer = config
+            .offline_issuer
+            .clone()
+            .map(offline_v2_issuer::OfflineV2IssuerRuntime::from_config)
+            .map(Arc::new);
+        #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
             if cfg.programs.is_empty() {
                 iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
@@ -34211,6 +34310,8 @@ impl Torii {
             stream_token_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
+            #[cfg(feature = "app_api")]
+            offline_v2_issuer,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             vpn_helper_ticket_secret,
@@ -34544,6 +34645,8 @@ impl Torii {
             sorafs_chunk_range_overrides: DashMap::new(),
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
+            #[cfg(feature = "app_api")]
+            offline_v2_issuer: self.offline_v2_issuer.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
@@ -38267,6 +38370,8 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_chunk_range_overrides: DashMap::new(),
             #[cfg(feature = "app_api")]
             account_faucet: None,
+            #[cfg(feature = "app_api")]
+            offline_v2_issuer: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             vpn_helper_ticket_secret: None,
