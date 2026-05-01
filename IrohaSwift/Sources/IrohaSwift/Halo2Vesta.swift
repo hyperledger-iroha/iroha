@@ -141,7 +141,9 @@ public struct VestaProjective: Equatable, Sendable {
         let e = a + a + a
         let f = e.squared()
         let x3 = f - d - d
-        let y3 = e * (d - x3) - PastaFq(8) * c
+        let c2 = c + c
+        let c4 = c2 + c2
+        let y3 = e * (d - x3) - c4 - c4
         let z3 = (y + y) * z
         return VestaProjective(x: x3, y: y3, z: z3)
     }
@@ -170,7 +172,7 @@ public struct VestaProjective: Equatable, Sendable {
         let r = r0 + r0
         let v = x * i
         let x3 = r.squared() - j - v - v
-        let y3 = r * (v - x3) - PastaFq(2) * y * j
+        let y3 = r * (v - x3) - (y + y) * j
         let z3 = (z + h).squared() - z2 - hh
         return VestaProjective(x: x3, y: y3, z: z3)
     }
@@ -201,7 +203,7 @@ public struct VestaProjective: Equatable, Sendable {
         let r = r0 + r0
         let v = u1 * i
         let x3 = r.squared() - j - v - v
-        let y3 = r * (v - x3) - PastaFq(2) * s1 * j
+        let y3 = r * (v - x3) - (s1 + s1) * j
         let z3 = ((z + rhs.z).squared() - z1z1 - z2z2) * h
         return VestaProjective(x: x3, y: y3, z: z3)
     }
