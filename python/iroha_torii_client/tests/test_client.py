@@ -2905,6 +2905,12 @@ def test_get_connect_status_parses_payload() -> None:
                 "p2p_rebroadcast_skipped_total": 4,
                 "p2p_auth_failures_total": 5,
                 "p2p_ttl_drops_total": 6,
+                "p2p_unknown_session_drops_total": 7,
+                "p2p_session_claims_in_total": 8,
+                "p2p_session_claims_installed_total": 9,
+                "p2p_session_claim_conflicts_total": 10,
+                "p2p_role_consumed_total": 11,
+                "p2p_session_terminated_total": 12,
                 "policy": {
                     "relay_enabled": True,
                     "relay_strategy": "broadcast",
@@ -2933,6 +2939,8 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.policy.p2p_ttl_hops == 2
     assert snapshot.sequence_violation_closes_total == 1
     assert snapshot.p2p_auth_failures_total == 5
+    assert snapshot.p2p_session_claims_installed_total == 9
+    assert snapshot.p2p_session_terminated_total == 12
     assert snapshot.policy.heartbeat_interval_ms == 5000
     assert session.calls[0]["url"].endswith("/v1/connect/status")
 
