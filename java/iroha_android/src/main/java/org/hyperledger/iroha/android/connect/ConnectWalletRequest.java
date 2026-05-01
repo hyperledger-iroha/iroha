@@ -22,6 +22,7 @@ public final class ConnectWalletRequest {
   private final String sidBase64Url;
   private final byte[] sessionId;
   private final String token;
+  private final String relayToken;
   private final String chainId;
   private final URI baseUri;
   private final URI webSocketUri;
@@ -30,12 +31,14 @@ public final class ConnectWalletRequest {
       final String sidBase64Url,
       final byte[] sessionId,
       final String token,
+      final String relayToken,
       final String chainId,
       final URI baseUri,
       final URI webSocketUri) {
     this.sidBase64Url = sidBase64Url;
     this.sessionId = sessionId.clone();
     this.token = token;
+    this.relayToken = relayToken;
     this.chainId = chainId;
     this.baseUri = baseUri;
     this.webSocketUri = webSocketUri;
@@ -68,12 +71,17 @@ public final class ConnectWalletRequest {
     if (token == null || token.isBlank()) {
       throw new ConnectProtocolException("Missing required query parameter: token_wallet");
     }
+    final String relayToken =
+        firstNonBlank(firstPresent(query, "relay"), firstPresent(query, "token_relay"), firstPresent(query, "tokenRelay"));
+    if (relayToken == null || relayToken.isBlank()) {
+      throw new ConnectProtocolException("Missing required query parameter: relay");
+    }
 
     final String chainId = trimToNull(firstPresent(query, "chain_id"));
     final URI baseUri = resolveBaseUri(trimToNull(firstPresent(query, "node")), defaultBaseUri);
     final URI wsUri = buildWalletWebSocketUri(baseUri, sid);
 
-    return new ConnectWalletRequest(sid, sessionId, token, chainId, baseUri, wsUri);
+    return new ConnectWalletRequest(sid, sessionId, token, relayToken, chainId, baseUri, wsUri);
   }
 
   public static ConnectWalletRequest parse(final String rawUri, final URI defaultBaseUri)
@@ -96,6 +104,10 @@ public final class ConnectWalletRequest {
 
   public String token() {
     return token;
+  }
+
+  public String relayToken() {
+    return relayToken;
   }
 
   public String chainId() {

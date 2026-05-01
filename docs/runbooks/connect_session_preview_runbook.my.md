@@ -120,7 +120,7 @@ SDK လမ်းပြမြေပုံတွင် ကတိပြုထား
 1. **အဆင့်သတ်မှတ်ထားသော ဆက်ရှင်များကို ဖျက်ပါ။** အကြိုကြည့်ရှုသည့် ဆက်ရှင်များကို အမြဲတမ်း ဖျက်ပါ ထို့ကြောင့် တန်းစီခြင်း၏ အနက်
    နှိုးစက်များသည် အဓိပ္ပါယ်ရှိနေဆဲဖြစ်သည်-
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Swift-only test runs အတွက် Rust/CLI helper မှတဆင့် တူညီသော endpoint ကို ခေါ်ဆိုပါ။
 2. **ဂျာနယ်များကို ဖယ်ရှားပါ။** တန်းစီနေသော ဂျာနယ်များကို ဖယ်ရှားပါ။

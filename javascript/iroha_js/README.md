@@ -2312,10 +2312,12 @@ const session = await torii.createConnectSession({
   node: preview.node,
 });
 
-console.log(`tokens app=${session.token_app} wallet=${session.token_wallet}`);
+console.log(
+  `tokens app=${session.token_app} wallet=${session.token_wallet} management=${session.token_management} relay=${session.token_relay}`,
+);
 
 // Or run the preview + registration flow in one step:
-const { preview: bundledPreview, session: bundledSession } =
+const { preview: bundledPreview, session: bundledSession, tokens: bundledTokens } =
   await bootstrapConnectPreviewSession(torii, {
     chainId: "test-chain",
     node: "torii.devnet.example",
@@ -2323,7 +2325,7 @@ const { preview: bundledPreview, session: bundledSession } =
     sessionOptions: { node: "torii.devnet.backup" },
   });
 console.log(bundledPreview.walletUri);
-console.log(`Connect session registered with tokens:`, bundledSession?.token_wallet);
+console.log(`Connect session registered with tokens:`, bundledTokens?.wallet, bundledTokens?.relay);
 ```
 
 > **Note:** `sid` must encode exactly 32 bytes as either hexadecimal (with or without
@@ -2436,6 +2438,9 @@ inherited from the client config; standalone calls can supply their own
 
 - Keep endpoint hosts/schemes aligned with the Torii base; credentialed calls reject overrides.
 - Enable telemetry hooks to detect accidental `ws://` usage during development.
+- Use `token_management` for session deletion and `GET /v1/connect/status?sid=...`.
+- Deep links include `relay=<token_relay>`; SDKs bind that relay token into approval signatures and
+  Torii uses it to authenticate cross-node Connect relay envelopes.
 
 ### Connect error taxonomy
 

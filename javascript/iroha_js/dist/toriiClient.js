@@ -6468,14 +6468,24 @@ export class ToriiClient {
 
   /**
    * Delete a Connect session (`DELETE /v1/connect/session/{sid}`).
-   * @param {string} sid
+   * @param {{sid:string, tokenManagement?:string, token_management?:string}} sid
    * @returns {Promise<boolean>} True when the session existed.
    */
   async deleteConnectSession(sid) {
-    const normalizedSid = normalizeConnectSid(sid, "sid");
+    const input = typeof sid === "object" && sid !== null ? sid : { sid };
+    const normalizedSid = normalizeConnectSid(input.sid, "sid");
+    const tokenManagement = requireNonEmptyString(
+      input.tokenManagement ?? input.token_management,
+      "tokenManagement",
+    );
     const response = await this._request(
       "DELETE",
       `/v1/connect/session/${encodeURIComponent(normalizedSid)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokenManagement}`,
+        },
+      },
     );
     if (response.status === 404) {
       return false;
@@ -24684,12 +24694,22 @@ function normalizeConnectSessionResponse(payload, context) {
     record.token_wallet,
     `${context}.token_wallet`,
   );
+  const tokenManagement = requireNonEmptyString(
+    record.token_management,
+    `${context}.token_management`,
+  );
+  const tokenRelay = requireNonEmptyString(
+    record.token_relay,
+    `${context}.token_relay`,
+  );
   const recognized = new Set([
     "sid",
     "wallet_uri",
     "app_uri",
     "token_app",
     "token_wallet",
+    "token_management",
+    "token_relay",
   ]);
   const extra = extractExtraFields(record, recognized);
   return {
@@ -24698,6 +24718,8 @@ function normalizeConnectSessionResponse(payload, context) {
     app_uri: appUri,
     token_app: tokenApp,
     token_wallet: tokenWallet,
+    token_management: tokenManagement,
+    token_relay: tokenRelay,
     extra,
     raw: record,
   };
@@ -25110,6 +25132,14 @@ function normalizeConnectStatusSnapshot(payload, context) {
       record.p2p_rebroadcast_skipped_total,
       `${context}.p2p_rebroadcast_skipped_total`,
     ),
+    p2pAuthFailuresTotal: coerceStatusInt(
+      record.p2p_auth_failures_total,
+      `${context}.p2p_auth_failures_total`,
+    ),
+    p2pTtlDropsTotal: coerceStatusInt(
+      record.p2p_ttl_drops_total,
+      `${context}.p2p_ttl_drops_total`,
+    ),
   };
 }
 
@@ -25175,6 +25205,11 @@ function normalizeConnectStatusPolicySnapshot(payload, context) {
     relayP2pAttached: requireBooleanLike(
       record.relay_p2p_attached,
       `${context}.relay_p2p_attached`,
+    ),
+    p2pTtlHops: ToriiClient._normalizeUnsignedInteger(
+      record.p2p_ttl_hops,
+      `${context}.p2p_ttl_hops`,
+      { allowZero: true },
     ),
     heartbeatIntervalMs: ToriiClient._normalizeUnsignedInteger(
       record.heartbeat_interval_ms,

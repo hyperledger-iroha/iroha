@@ -120,7 +120,7 @@ translator: machine-google-reviewed
 1. ** སྟེགས་རིས་ཀྱི་ལཱ་ཡུན་ཚུ་བཏོན་གཏང་།** སྔོན་ལྟ་ལཱ་ཡུན་ཚུ་ཨ་རྟག་ར་རྩ་བསྐྲད་གཏང་བསུ།
    ཉེན་བརྡ་ཚུ་ དོན་དག་ཅན་སྦེ་སྡོད་ནི།
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    སུའིཕཊི་-རྐྱངམ་ཅིག་བརྟག་དཔྱད་གཡོག་བཀོལ་ནིའི་དོན་ལུ་ རཱསིཊི་/སི་ཨེལ་ཨའི་གྲོགས་རམ་བརྒྱུད་དེ་ མཐའ་ཐིག་གཅིགཔོ་འདི་ལུ་ ཁ་བཏང་།
 2. **Purge thep.** གནས་ཡུན་བརྟན་ཏོག་ཏོ་ཡོད་པའི་གྲལ་ཐིག་དུས་དེབ་ཚུ་རྩ་བསྐྲད་གཏང་།

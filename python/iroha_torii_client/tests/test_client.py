@@ -2898,9 +2898,19 @@ def test_get_connect_status_parses_payload() -> None:
                 "buffer_drops_total": 0,
                 "plaintext_control_drops_total": 0,
                 "monotonic_drops_total": 0,
+                "sequence_violation_closes_total": 1,
+                "role_direction_mismatch_total": 2,
                 "ping_miss_total": 0,
+                "p2p_rebroadcasts_total": 3,
+                "p2p_rebroadcast_skipped_total": 4,
+                "p2p_auth_failures_total": 5,
+                "p2p_ttl_drops_total": 6,
                 "policy": {
                     "relay_enabled": True,
+                    "relay_strategy": "broadcast",
+                    "relay_effective_strategy": "local_only",
+                    "relay_p2p_attached": False,
+                    "p2p_ttl_hops": 2,
                     "ws_max_sessions": 32,
                     "session_ttl_ms": 10000,
                     "heartbeat_interval_ms": 5000,
@@ -2919,6 +2929,10 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.per_ip_sessions[0].ip == "192.0.2.1"
     assert snapshot.policy is not None
     assert snapshot.policy.ws_max_sessions == 32
+    assert snapshot.policy.relay_strategy == "broadcast"
+    assert snapshot.policy.p2p_ttl_hops == 2
+    assert snapshot.sequence_violation_closes_total == 1
+    assert snapshot.p2p_auth_failures_total == 5
     assert snapshot.policy.heartbeat_interval_ms == 5000
     assert session.calls[0]["url"].endswith("/v1/connect/status")
 
@@ -2933,6 +2947,8 @@ def test_create_and_delete_connect_session() -> None:
                 "app_uri": "iroha://app",
                 "token_app": "app-token",
                 "token_wallet": "wallet-token",
+                "token_management": "management-token",
+                "token_relay": "relay-token",
                 "ttl": 30,
             }
         )
@@ -2941,15 +2957,18 @@ def test_create_and_delete_connect_session() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     session_info = client.create_connect_session({"scope": "demo"})
-    deleted = client.delete_connect_session("abc")
+    deleted = client.delete_connect_session("abc", session_info.token_management)
 
     assert session_info.sid == "abc"
+    assert session_info.token_relay == "relay-token"
     assert session_info.extra["ttl"] == 30
     assert deleted is True
     post_call = session.calls[0]
     assert post_call["method"] == "POST"
     assert post_call["url"].endswith("/v1/connect/session")
     assert json.loads(post_call["data"]) == {"scope": "demo"}
+    delete_call = session.calls[1]
+    assert delete_call["headers"] == {"Authorization": "Bearer management-token"}
 
 
 def test_connect_app_registry_and_policy_helpers() -> None:

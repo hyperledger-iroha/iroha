@@ -1,8 +1,9 @@
-import { x25519 } from "@noble/curves/ed25519";
+import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { blake2b } from "@noble/hashes/blake2b";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
+import { AccountAddress } from "./address.js";
 
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
@@ -10,6 +11,11 @@ const CONNECT_SALT_PREFIX = encoder.encode("iroha-connect|salt|");
 const CONNECT_AAD_PREFIX = encoder.encode("connect:v1");
 const CONNECT_K_APP = encoder.encode("iroha-connect|k_app");
 const CONNECT_K_WALLET = encoder.encode("iroha-connect|k_wallet");
+const X25519_HKDF_SALT = encoder.encode("iroha:x25519:hkdf:v1");
+const X25519_HKDF_INFO = encoder.encode("iroha:x25519:session-key");
+const APPROVE_DOMAIN = encoder.encode("iroha-connect|approve|v1");
+const RELAY_AUTH_DOMAIN = encoder.encode("iroha-connect|relay-auth|v1");
+const CONNECT_ENVELOPE_TYPE_NAME = "iroha_torii_shared::connect::EnvelopeV1";
 const CONNECT_URI_VERSION = "1";
 const CONNECT_URI_SCHEME = "iroha://connect";
 const DEFAULT_CONNECT_LAUNCH_PROTOCOL = "irohaconnect";
@@ -29,6 +35,7 @@ const CONTROL_REJECT = 2;
 const CONTROL_CLOSE = 3;
 const CONTROL_PING = 4;
 const CONTROL_PONG = 5;
+const CONTROL_SERVER_EVENT = 6;
 const PAYLOAD_CONTROL = 0;
 const PAYLOAD_SIGN_REQUEST_TX = 2;
 const PAYLOAD_SIGN_RESULT_OK = 3;
@@ -306,6 +313,14 @@ export async function registerConnectSession(baseUrl, sid, options = {}) {
 }
 
 export async function deleteConnectSession(baseUrl, sid, options = {}) {
+  const tokenManagement = requireNonEmptyString(
+    options.tokenManagement ?? options.token_management,
+    "tokenManagement",
+  );
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${tokenManagement}`,
+  };
   const response = await getFetch(options.fetchImpl)(
     new URL(
       `/v1/connect/session/${encodeURIComponent(requireNonEmptyString(sid, "sid"))}`,
@@ -313,9 +328,7 @@ export async function deleteConnectSession(baseUrl, sid, options = {}) {
     ),
     {
       method: "DELETE",
-      headers: {
-        Accept: "application/json",
-      },
+      headers,
     },
   );
   if (!response.ok && response.status !== 404) {
@@ -383,14 +396,45 @@ function mergeConnectProtocols(protocols, tokenProtocol) {
   throw new TypeError("protocols must be a string or array");
 }
 
+function normalizeSocketOptions(baseUrl, sid, token, role, options) {
+  if (baseUrl && typeof baseUrl === "object") {
+    return {
+      baseUrl: requireNonEmptyString(baseUrl.baseUrl, "baseUrl"),
+      sid: requireNonEmptyString(baseUrl.sid, "sid"),
+      token: requireNonEmptyString(baseUrl.token, "token"),
+      role: normalizeConnectRole(baseUrl.role ?? "app"),
+      options: baseUrl,
+    };
+  }
+  return {
+    baseUrl: requireNonEmptyString(baseUrl, "baseUrl"),
+    sid: requireNonEmptyString(sid, "sid"),
+    token: requireNonEmptyString(token, "token"),
+    role: normalizeConnectRole(role),
+    options: options ?? {},
+  };
+}
+
+function assertSecureWebSocket(url, allowInsecure = false) {
+  if (allowInsecure) {
+    return;
+  }
+  if (new URL(url).protocol !== "wss:") {
+    throw new Error("Connect WebSocket requires wss://; pass allowInsecure: true for local/dev use only");
+  }
+}
+
 export function openConnectWebSocket(baseUrl, sid, token, role = "app", options = {}) {
-  const WebSocketImpl = options.webSocketImpl ?? globalThis.WebSocket;
+  const normalized = normalizeSocketOptions(baseUrl, sid, token, role, options);
+  const WebSocketImpl = normalized.options.webSocketImpl ?? globalThis.WebSocket;
   if (typeof WebSocketImpl !== "function") {
     throw new Error("WebSocket implementation is required");
   }
+  const url = buildConnectWebSocketUrl(normalized.baseUrl, normalized.sid, normalized.role);
+  assertSecureWebSocket(url, normalized.options.allowInsecure === true);
   return new WebSocketImpl(
-    buildConnectWebSocketUrl(baseUrl, sid, role),
-    mergeConnectProtocols(options.protocols, buildConnectTokenProtocol(token)),
+    url,
+    mergeConnectProtocols(normalized.options.protocols, buildConnectTokenProtocol(normalized.token)),
   );
 }
 
@@ -793,6 +837,9 @@ function decodeConnectControl(bytes) {
     );
     return { kind: "pong", nonce };
   }
+  if (tag === CONTROL_SERVER_EVENT) {
+    return { kind: "server_event", bytes: body };
+  }
   return { kind: "unknown", tag };
 }
 
@@ -875,7 +922,7 @@ function frameNoritoPayload(typeName, payload) {
   );
 }
 
-function decodeNoritoFrame(bytes, label) {
+function decodeNoritoFrame(bytes, label, typeName = CONNECT_ENVELOPE_TYPE_NAME) {
   if (bytes.length < 40) {
     throw new Error(`${label} is not a valid Norito frame`);
   }
@@ -884,6 +931,14 @@ function decodeNoritoFrame(bytes, label) {
   }
   if (bytes[4] !== 0 || bytes[5] !== 0) {
     throw new Error(`${label} uses an unsupported Norito version`);
+  }
+  const expectedSchema = noritoSchemaHash(typeName);
+  const actualSchema = bytes.subarray(6, 22);
+  if (toHex(actualSchema) !== toHex(expectedSchema)) {
+    throw new Error(`${label} Norito schema mismatch`);
+  }
+  if (bytes[22] !== 0 || bytes[39] !== 0) {
+    throw new Error(`${label} uses unsupported Norito layout flags`);
   }
   const payloadLength = readU64(bytes, 23, `${label}.payloadLength`);
   const checksum = new DataView(bytes.buffer, bytes.byteOffset + 31, 8).getBigUint64(0, true);
@@ -899,7 +954,7 @@ function decodeNoritoFrame(bytes, label) {
 
 function encodeEnvelope(seq, payload) {
   return frameNoritoPayload(
-    "EnvelopeV1",
+    CONNECT_ENVELOPE_TYPE_NAME,
     encodeNoritoStruct([u64ToBytes(seq), payload]),
   );
 }
@@ -981,11 +1036,65 @@ function decodeConnectPayload(bytes) {
 }
 
 function deriveDirectionKeys(sharedSecret, sidBytes) {
+  const sessionKey = hkdf(sha256, sharedSecret, X25519_HKDF_SALT, X25519_HKDF_INFO, 32);
   const salt = blake2b(concatBytes(CONNECT_SALT_PREFIX, sidBytes), { dkLen: 32 });
   return {
-    appKey: hkdf(sha256, sharedSecret, salt, CONNECT_K_APP, 32),
-    walletKey: hkdf(sha256, sharedSecret, salt, CONNECT_K_WALLET, 32),
+    appKey: hkdf(sha256, sessionKey, salt, CONNECT_K_APP, 32),
+    walletKey: hkdf(sha256, sessionKey, salt, CONNECT_K_WALLET, 32),
   };
+}
+
+function taggedApproveField(tag, value) {
+  const tagBytes = encoder.encode(tag);
+  return concatBytes(u16ToBytes(tagBytes.length), tagBytes, u64ToBytes(value.length), value);
+}
+
+function relayAuthHash(sidBytes, relayToken) {
+  return sha256(concatBytes(RELAY_AUTH_DOMAIN, sidBytes, encoder.encode(relayToken)));
+}
+
+function isNoritoNoneOption(bytes) {
+  if (bytes.length === 1 && bytes[0] === 0) {
+    return true;
+  }
+  return bytes.length === 4 && readU32(bytes, 0, "option.tag") === 0;
+}
+
+function accountEd25519PublicKey(accountId) {
+  const address = AccountAddress.fromI105(accountId);
+  const controller = address._controller;
+  if (!controller || controller.tag !== 0 || controller.curve !== 1 || controller.publicKey.length !== 32) {
+    throw new Error("Connect approval account id must be a canonical single-key Ed25519 I105 address");
+  }
+  return Uint8Array.from(controller.publicKey);
+}
+
+function buildApprovalPreimage(preview, control, relayToken) {
+  if (!isNoritoNoneOption(control.permissions) || !isNoritoNoneOption(control.proof)) {
+    throw new Error("Connect approval verification does not support permission/proof payloads yet");
+  }
+  return concatBytes(
+    taggedApproveField("domain", APPROVE_DOMAIN),
+    taggedApproveField("sid", preview.sidBytes),
+    taggedApproveField("app_pk", preview.appKeyPair.publicKey),
+    taggedApproveField("wallet_pk", control.walletPublicKey),
+    taggedApproveField("account_id", encoder.encode(control.accountId)),
+    taggedApproveField("relay_auth", relayAuthHash(preview.sidBytes, relayToken)),
+  );
+}
+
+function verifyApproval(preview, control, relayToken) {
+  if (control.signature.algorithm !== ALGORITHM_ED25519) {
+    throw new Error(`unsupported Connect approval signature algorithm ${control.signature.algorithm}`);
+  }
+  if (control.signature.signature.length !== 64) {
+    throw new Error("Connect approval Ed25519 signature must be 64 bytes");
+  }
+  const publicKey = accountEd25519PublicKey(control.accountId);
+  const preimage = buildApprovalPreimage(preview, control, relayToken);
+  if (!ed25519.verify(control.signature.signature, preimage, publicKey)) {
+    throw new Error("Connect approval signature verification failed");
+  }
 }
 
 function buildAad(sidBytes, dir, seq) {
@@ -1051,6 +1160,7 @@ function normalizeSessionInput(session) {
   return {
     sid: requireNonEmptyString(session.sid, "session.sid"),
     tokenApp: requireNonEmptyString(session.token_app ?? session.tokenApp, "session.token_app"),
+    tokenRelay: requireNonEmptyString(session.token_relay ?? session.tokenRelay, "session.token_relay"),
   };
 }
 
@@ -1093,6 +1203,7 @@ export function createConnectAppSession(options = {}) {
   const socket = openConnectWebSocket(baseUrl, session.sid, session.tokenApp, "app", {
     webSocketImpl: options.webSocketImpl,
     protocols: options.protocols,
+    allowInsecure: options.allowInsecure,
   });
   if ("binaryType" in socket) {
     socket.binaryType = "arraybuffer";
@@ -1102,6 +1213,7 @@ export function createConnectAppSession(options = {}) {
   let pendingSign = null;
   let appSeq = 1;
   let walletSeq = 1;
+  let serverSeqWalletToApp = 1;
   let closed = false;
   let approved = null;
   let keys = null;
@@ -1159,14 +1271,22 @@ export function createConnectAppSession(options = {}) {
       if (toHex(frame.sidBytes) !== toHex(preview.sidBytes)) {
         throw new Error("received a connect frame for a different session");
       }
-      if (frame.seq !== walletSeq) {
-        throw new Error(`unexpected wallet sequence ${frame.seq}; expected ${walletSeq}`);
-      }
-      walletSeq += 1;
 
       if (frame.kind.type === "control") {
         const control = frame.kind.control;
+        if (control.kind === "server_event") {
+          if (frame.seq !== serverSeqWalletToApp) {
+            throw new Error(`unexpected server event sequence ${frame.seq}; expected ${serverSeqWalletToApp}`);
+          }
+          serverSeqWalletToApp += 1;
+          return;
+        }
+        if (frame.seq !== walletSeq) {
+          throw new Error(`unexpected wallet sequence ${frame.seq}; expected ${walletSeq}`);
+        }
+        walletSeq += 1;
         if (control.kind === "approve") {
+          verifyApproval(preview, control, session.tokenRelay);
           keys = deriveDirectionKeys(
             x25519.getSharedSecret(preview.appKeyPair.privateKey, control.walletPublicKey),
             preview.sidBytes,
@@ -1174,6 +1294,7 @@ export function createConnectAppSession(options = {}) {
           approved = {
             accountId: control.accountId,
             walletPublicKey: control.walletPublicKey,
+            signature: control.signature.signature,
           };
           approval.resolve(approved);
           return;
@@ -1195,6 +1316,10 @@ export function createConnectAppSession(options = {}) {
       if (!keys) {
         throw new Error("received ciphertext before approval");
       }
+      if (frame.seq !== walletSeq) {
+        throw new Error(`unexpected wallet sequence ${frame.seq}; expected ${walletSeq}`);
+      }
+      walletSeq += 1;
       const envelope = decryptEnvelope(keys.walletKey, preview.sidBytes, frame);
       if (envelope.payload.kind === "sign_result_ok") {
         if (!pendingSign) {

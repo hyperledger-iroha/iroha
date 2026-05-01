@@ -250,6 +250,8 @@ class ConnectPreviewTokens:
 
     wallet: str
     app: str
+    management: str
+    relay: str
 
 
 @dataclass(frozen=True)
@@ -269,6 +271,8 @@ class ConnectSessionInfo:
     app_uri: str
     app_token: str
     wallet_token: str
+    management_token: str
+    relay_token: str
     expires_at: Optional[datetime] = None
 
     @classmethod
@@ -287,6 +291,8 @@ class ConnectSessionInfo:
                 app_uri=str(payload["app_uri"]),
                 app_token=str(payload["token_app"]),
                 wallet_token=str(payload["token_wallet"]),
+                management_token=str(payload["token_management"]),
+                relay_token=str(payload["token_relay"]),
                 expires_at=expires_at,
             )
         except KeyError as exc:  # pragma: no cover - defensive
@@ -300,6 +306,8 @@ class ConnectSessionInfo:
             "app_uri": self.app_uri,
             "token_app": self.app_token,
             "token_wallet": self.wallet_token,
+            "token_management": self.management_token,
+            "token_relay": self.relay_token,
             "expires_at": self.expires_at.isoformat(timespec="seconds") if self.expires_at else None,
         }
 
@@ -1313,7 +1321,14 @@ def bootstrap_connect_preview_session(
     session = torii_client.create_connect_session(payload)
     wallet_token = _read_session_token(session, "wallet_token")
     app_token = _read_session_token(session, "app_token")
-    tokens = ConnectPreviewTokens(wallet=wallet_token, app=app_token)
+    management_token = _read_session_token(session, "management_token")
+    relay_token = _read_session_token(session, "relay_token")
+    tokens = ConnectPreviewTokens(
+        wallet=wallet_token,
+        app=app_token,
+        management=management_token,
+        relay=relay_token,
+    )
     return ConnectPreviewBootstrapResult(preview=preview, session=session, tokens=tokens)
 
 

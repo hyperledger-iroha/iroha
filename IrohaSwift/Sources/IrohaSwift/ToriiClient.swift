@@ -3858,6 +3858,10 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
     public let frameMaxBytes: UInt64?
     public let sessionBufferMaxBytes: UInt64?
     public let relayEnabled: Bool?
+    public let relayStrategy: String?
+    public let relayEffectiveStrategy: String?
+    public let relayP2pAttached: Bool?
+    public let p2pTtlHops: UInt64?
     public let heartbeatIntervalMs: UInt64?
     public let heartbeatMissTolerance: UInt64?
     public let heartbeatMinIntervalMs: UInt64?
@@ -3873,6 +3877,10 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
         frameMaxBytes = ToriiConnectJSON.optionalUInt64(raw, key: "frame_max_bytes")
         sessionBufferMaxBytes = ToriiConnectJSON.optionalUInt64(raw, key: "session_buffer_max_bytes")
         relayEnabled = ToriiConnectJSON.optionalBool(raw, key: "relay_enabled")
+        relayStrategy = ToriiConnectJSON.optionalString(raw, key: "relay_strategy")
+        relayEffectiveStrategy = ToriiConnectJSON.optionalString(raw, key: "relay_effective_strategy")
+        relayP2pAttached = ToriiConnectJSON.optionalBool(raw, key: "relay_p2p_attached")
+        p2pTtlHops = ToriiConnectJSON.optionalUInt64(raw, key: "p2p_ttl_hops")
         heartbeatIntervalMs = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_interval_ms")
         heartbeatMissTolerance = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_miss_tolerance")
         heartbeatMinIntervalMs = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_min_interval_ms")
@@ -3884,6 +3892,10 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
             "frame_max_bytes",
             "session_buffer_max_bytes",
             "relay_enabled",
+            "relay_strategy",
+            "relay_effective_strategy",
+            "relay_p2p_attached",
+            "p2p_ttl_hops",
             "heartbeat_interval_ms",
             "heartbeat_miss_tolerance",
             "heartbeat_min_interval_ms"
@@ -3913,7 +3925,13 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
     public let bufferDropsTotal: UInt64
     public let plaintextControlDropsTotal: UInt64
     public let monotonicDropsTotal: UInt64
+    public let sequenceViolationClosesTotal: UInt64
+    public let roleDirectionMismatchTotal: UInt64
     public let pingMissTotal: UInt64
+    public let p2pRebroadcastsTotal: UInt64
+    public let p2pRebroadcastSkippedTotal: UInt64
+    public let p2pAuthFailuresTotal: UInt64
+    public let p2pTtlDropsTotal: UInt64
     public let raw: [String: ToriiJSONValue]
 
     public init(raw: [String: ToriiJSONValue]) throws {
@@ -3931,7 +3949,13 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
         bufferDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "buffer_drops_total", field: "buffer_drops_total")
         plaintextControlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "plaintext_control_drops_total", field: "plaintext_control_drops_total")
         monotonicDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "monotonic_drops_total", field: "monotonic_drops_total")
+        sequenceViolationClosesTotal = try ToriiConnectJSON.requireUInt64(raw, key: "sequence_violation_closes_total", field: "sequence_violation_closes_total")
+        roleDirectionMismatchTotal = try ToriiConnectJSON.requireUInt64(raw, key: "role_direction_mismatch_total", field: "role_direction_mismatch_total")
         pingMissTotal = try ToriiConnectJSON.requireUInt64(raw, key: "ping_miss_total", field: "ping_miss_total")
+        p2pRebroadcastsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_rebroadcasts_total", field: "p2p_rebroadcasts_total")
+        p2pRebroadcastSkippedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_rebroadcast_skipped_total", field: "p2p_rebroadcast_skipped_total")
+        p2pAuthFailuresTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_auth_failures_total", field: "p2p_auth_failures_total")
+        p2pTtlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_ttl_drops_total", field: "p2p_ttl_drops_total")
         let perIpRaw = try ToriiConnectJSON.objectsArray(raw,
                                                          key: "per_ip_sessions",
                                                          field: "per_ip_sessions")
@@ -3955,6 +3979,8 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
     public let appURI: String
     public let tokenApp: String
     public let tokenWallet: String
+    public let tokenManagement: String
+    public let tokenRelay: String
     public let extra: [String: ToriiJSONValue]
     public let raw: [String: ToriiJSONValue]
 
@@ -3965,12 +3991,16 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
         appURI = try ToriiConnectJSON.requireString(raw, key: "app_uri", field: "app_uri")
         tokenApp = try ToriiConnectJSON.requireString(raw, key: "token_app", field: "token_app")
         tokenWallet = try ToriiConnectJSON.requireString(raw, key: "token_wallet", field: "token_wallet")
+        tokenManagement = try ToriiConnectJSON.requireString(raw, key: "token_management", field: "token_management")
+        tokenRelay = try ToriiConnectJSON.requireString(raw, key: "token_relay", field: "token_relay")
         let known: Set<String> = [
             "sid",
             "wallet_uri",
             "app_uri",
             "token_app",
-            "token_wallet"
+            "token_wallet",
+            "token_management",
+            "token_relay"
         ]
         extra = ToriiConnectJSON.mergeExtra(record: raw, knownKeys: known)
     }
@@ -10775,8 +10805,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     @discardableResult
     public func deleteConnectSession(sid: String,
+                                     tokenManagement: String,
                                      completion: @escaping (Result<Bool, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.deleteConnectSession(sid: sid) }
+        runTask(completion) { try await self.deleteConnectSession(sid: sid, tokenManagement: tokenManagement) }
     }
 
     @discardableResult
@@ -12065,10 +12096,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiConnectSessionResponse.self, from: data)
     }
 
-    public func deleteConnectSession(sid: String) async throws -> Bool {
+    public func deleteConnectSession(sid: String, tokenManagement: String) async throws -> Bool {
         let trimmed = try ToriiConnectJSON.trimmedNonEmpty(sid, field: "sid")
+        let token = try ToriiConnectJSON.trimmedNonEmpty(tokenManagement, field: "tokenManagement")
         let encoded = encodePathComponent(trimmed)
-        let request = try makeRequest(path: "/v1/connect/session/\(encoded)", method: .delete)
+        let request = try makeRequest(path: "/v1/connect/session/\(encoded)",
+                                      method: .delete,
+                                      headers: ["Authorization": "Bearer \(token)"])
         let (data, response) = try await send(request)
         if response.statusCode == 404 {
             return false
