@@ -2,6 +2,22 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Soracloud generated auth state hardening
+
+- Generated Soracloud webapp and PII app auth servers now serialize file-backed
+  auth state mutations behind a local lock directory, recover stale locks, and
+  keep the external shared-state adapter path unchanged. This avoids losing
+  challenge/session records when local test replicas share the fallback state
+  file.
+- Generated webapp and PII app request handlers now convert unexpected
+  top-level handler failures into JSON `INTERNAL_SERVER_ERROR` responses rather
+  than surfacing opaque client-side socket drops.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli soracloud::tests::generated_pii_app_auth_core_persists_file_state_canonically -- --nocapture`
+  - `cargo test -p iroha_cli soracloud::tests::generated_webapp -- --nocapture`
+  - `cargo test -p iroha_cli --bin iroha -- --nocapture`
+
 ## 2026-05-01 Client submit rejection confirmation race
 
 - Transaction confirmation fallback polling now starts after the first poll
