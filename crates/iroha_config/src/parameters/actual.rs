@@ -5553,6 +5553,8 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
+    /// Optional app-facing Offline Notes V2 issuer configuration.
+    pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
@@ -6139,6 +6141,25 @@ pub struct ToriiFaucet {
     pub pow_adaptive_max_extra_bits: u8,
     /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
     pub pow_vrf_seed_enabled: bool,
+}
+
+/// Offline Notes V2 issuer configuration exposed to Torii.
+#[derive(Debug, Clone)]
+pub struct ToriiOfflineIssuer {
+    /// Account derived from the issuer private key; must hold `CanManageOfflineEscrow`.
+    pub authority: AccountId,
+    /// Key pair used to sign certificates and submit `IssueOfflineNoteV2`.
+    pub key_pair: KeyPair,
+    /// Maximum authorized offline balance per lineage.
+    pub max_balance: Numeric,
+    /// Maximum authorized value for one offline transaction.
+    pub max_tx_value: Numeric,
+    /// Certificate TTL.
+    pub certificate_ttl: Duration,
+    /// Authorization refresh interval.
+    pub authorization_refresh: Duration,
+    /// Authorization TTL.
+    pub authorization_ttl: Duration,
 }
 
 /// RAM-LFE runtime configuration exposed to Torii.
