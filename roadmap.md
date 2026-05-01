@@ -23,6 +23,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
     corridor when validation budget allows.
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
+  - The Torii Offline V2 issuer hardening focused corridor is green as of
+    2026-05-01. Fold it into the next broader `cargo test -p iroha_torii`,
+    SDK, workspace test, and workspace clippy corridor when validation budget
+    allows.
 - Carry native asset escrow through the remaining Aitai application corridor.
   - Wire the Sora Aitai application UI/backend onto the native numeric escrow ISIs and proof-carrying anonymous escrow helper surfaces, then subscribe through the numeric and anonymous escrow query/event APIs.
   - Add app-facing lifecycle events for transparent and shielded offer state changes, and keep any remaining Kotodama wrapper work scoped to app calls that still need contract compatibility.

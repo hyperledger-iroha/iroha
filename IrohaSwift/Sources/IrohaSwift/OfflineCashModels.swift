@@ -26,6 +26,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
     public let deviceId: String
     public let offlinePublicKey: String
     public let attestationReportBase64: String
+    public let attestationReceipt: ToriiOfflineAttestationReceipt?
     public let iosTeamId: String?
     public let iosBundleId: String?
     public let iosEnvironment: String?
@@ -36,6 +37,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         deviceId: String,
         offlinePublicKey: String,
         attestationReportBase64: String,
+        attestationReceipt: ToriiOfflineAttestationReceipt? = nil,
         iosTeamId: String? = nil,
         iosBundleId: String? = nil,
         iosEnvironment: String? = nil
@@ -45,6 +47,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
         self.attestationReportBase64 = attestationReportBase64
+        self.attestationReceipt = attestationReceipt
         self.iosTeamId = iosTeamId
         self.iosBundleId = iosBundleId
         self.iosEnvironment = iosEnvironment
@@ -56,6 +59,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
         case attestationReportBase64 = "attestation_report_base64"
+        case attestationReceipt = "attestation_receipt"
         case iosTeamId = "ios_team_id"
         case iosBundleId = "ios_bundle_id"
         case iosEnvironment = "ios_environment"
@@ -68,9 +72,44 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
         try container.encode(attestationReportBase64, forKey: .attestationReportBase64)
+        try container.encodeIfPresent(attestationReceipt, forKey: .attestationReceipt)
         try container.encodeIfPresent(iosTeamId, forKey: .iosTeamId)
         try container.encodeIfPresent(iosBundleId, forKey: .iosBundleId)
         try container.encodeIfPresent(iosEnvironment, forKey: .iosEnvironment)
+    }
+}
+
+public struct ToriiOfflineAttestationReceipt: Codable, Sendable, Equatable {
+    public let version: UInt64
+    public let platform: String
+    public let accountId: String
+    public let deviceId: String
+    public let offlinePublicKeyBase64: String
+    public let assertionPublicKeyBase64: String
+    public let assertionScheme: String
+    public let assertionKeyAlgorithm: String
+    public let attestationKeyId: String
+    public let hardwareOneUse: Bool
+    public let attestationReportHashHex: String
+    public let issuedAtMs: UInt64
+    public let expiresAtMs: UInt64
+    public let signatureBase64: String
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case platform
+        case accountId = "account_id"
+        case deviceId = "device_id"
+        case offlinePublicKeyBase64 = "offline_public_key_base64"
+        case assertionPublicKeyBase64 = "assertion_public_key_base64"
+        case assertionScheme = "assertion_scheme"
+        case assertionKeyAlgorithm = "assertion_key_algorithm"
+        case attestationKeyId = "attestation_key_id"
+        case hardwareOneUse = "hardware_one_use"
+        case attestationReportHashHex = "attestation_report_hash_hex"
+        case issuedAtMs = "issued_at_ms"
+        case expiresAtMs = "expires_at_ms"
+        case signatureBase64 = "signature_base64"
     }
 }
 
