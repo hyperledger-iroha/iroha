@@ -45828,16 +45828,25 @@ mod tests {
             AssetDefinitionId::new(domain_id.clone(), "e".parse().unwrap()),
         ];
 
-        let assets = accounts
+        let mut assets = accounts
             .into_iter()
             .zip(asset_definitions)
             .map(|(account, asset_definition)| AssetId::new(asset_definition, account))
-            .map(|asset| (asset, ()));
+            .map(|asset| (asset, ()))
+            .collect::<Vec<_>>();
+        assets.push((
+            AssetId::with_scope(
+                AssetDefinitionId::new(domain_id, "g".parse().unwrap()),
+                account_id.clone(),
+                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            ),
+            (),
+        ));
 
-        let map: Storage<_, _> = assets.collect();
+        let map: Storage<_, _> = assets.into_iter().collect();
         let view = map.view();
         let range = view.range(AssetByAccountBounds::new(&account_id));
-        assert_eq!(range.count(), 2);
+        assert_eq!(range.count(), 3);
     }
 
     #[test]
