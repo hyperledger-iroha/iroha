@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 ## 2026-04-30 20k bottleneck fix implementation
 
@@ -33,7 +33,44 @@ Last updated: 2026-04-30
   `cargo test -p iroha_torii --lib transaction_ingress_rejects_latency_saturated_queue_before_capacity -- --nocapture`,
   `cargo test -p iroha_core --test admission_batching ed25519_batch_bisection_finds_bad_sig -- --nocapture`,
   and `cargo test -p iroha_core --test signature_batch_determinism ed25519_batch_permutation_finds_same_bad_sig -- --nocapture`.
-  Post-fix clean 20k TPS benchmark artifacts are still pending.
+  Post-fix clean 20k TPS benchmark artifacts are recorded below.
+
+## 2026-05-01 20k post-fix release validation
+
+- Built the benchmark binaries with both requested commands:
+  `cargo build -p izanami --bin izanami -p irohad --bin iroha3d` and
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`.
+- Ran a clean release `4`-peer, no-fault, prebuilt `20,000 TPS` profile for
+  `30s` at `dist/izanami-profile-20k-postfix-30s-20260501-003504`. Izanami
+  offered all `600,000` planned submissions and ingress accepted `47,670`.
+  Submit latency p50/p95/p99/max was `3374/5297/6016/7079 ms`; final
+  quorum/strict height was `2/2`; quorum/strict approved transactions were
+  `58/58`; the tx queue was age-saturated at `37,089/600,000`.
+- Ran the clean sampled release profile at
+  `dist/izanami-profile-20k-postfix-sampled-30s-20260501-004220`, with macOS
+  `sample` output for the Izanami runner and all four `iroha3d` peers. It
+  offered `600,000`, accepted `44,999`, recorded submit latency
+  `3173/4340/5181/6536 ms`, ended at quorum/strict height `2/2`, and copied
+  diagnostics plus `profiles/sample-*.txt`.
+- The fresh samples show the remaining hot stacks in peer processes are still
+  transaction validation and wire-format work: Ed25519 public-key
+  parse/decompress/verify paths, Norito transaction deserialize/serialize
+  paths, and `AcceptedTransaction::signed_encoded_len` fallback into
+  `norito::core::to_bytes` during block validation. Torii routing/state
+  helpers are still visible but no longer dominate the top stack counts.
+- Ran the clean release `4`-peer `120s` validation at
+  `dist/izanami-prebuilt-20k-postfix-120s-20260501-003649`. Izanami offered
+  all `2,400,000` planned submissions and ingress accepted `48,679`; submit
+  latency p50/p95/p99/max was `2958/4484/4995/6116 ms`; final quorum/strict
+  height was `5/5`; quorum/strict approved transactions were `12,328/12,328`;
+  the tx queue remained age-saturated at `32,034/2,400,000`.
+- Post-fix conclusion: the implemented fixes reduced the worst submit-latency
+  and failover symptoms and improved finality progress, especially versus the
+  earlier `120s` rerun's `2/2` height and `10/10` approved transactions, but
+  this is still not a successful committed-20k run. The next measured
+  bottleneck is queue-drain/block-validation throughput under sustained
+  ingress pressure, with no current evidence that RBC pressure, DA gating,
+  validation rejects, or view-change storms are the primary limiter.
 
 ## 2026-04-30 Izanami 20k TPS stress rerun
 
@@ -208,6 +245,21 @@ Last updated: 2026-04-30
      pressure refresh work under heavy ingress.
 - Profile artifact:
   `dist/izanami-profile-20k-30s-20260430-185822`.
+
+## 2026-04-30 queue router and Sumeragi focused regression fixes
+
+- Fixed the focused `iroha_core` regression cluster where opaque
+  asset-definition IDs in queue routing fell back to the default dataspace
+  instead of resolving the stored canonical asset definition and its alias
+  binding.
+- Tightened Sumeragi quorum-timeout frontier recovery ownership checks to the
+  active view so stale owner state from an earlier post-rotation view no
+  longer suppresses the direct empty-view rotation path.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core queue::router::tests:: -- --nocapture`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner -- --nocapture`
+  - `cargo test -p iroha_core sumeragi::main_loop::tests::force_view_change_if_idle_ignores_stale_quorum_timeout_owner_after_frontier_grace -- --nocapture`
 
 ## 2026-04-30 Izanami 20k ingress restored; committed TPS still blocked
 

@@ -387,7 +387,7 @@ impl Actor {
                 continue;
             }
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
-            let pending_age = pending.age();
+            let pending_age = now.saturating_duration_since(pending.inserted_at);
             let fast_timeout = match consensus_mode {
                 ConsensusMode::Permissioned => fast_timeout_permissioned,
                 ConsensusMode::Npos => fast_timeout_npos,
@@ -675,6 +675,7 @@ impl Actor {
             if near_commit_quorum
                 && missing_local_data
                 && !quorum_reached
+                && !near_quorum_queue_backlog
                 && progress_stall_age >= near_quorum_recovery_window
             {
                 near_quorum_recovery_candidates.push((

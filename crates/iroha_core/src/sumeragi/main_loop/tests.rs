@@ -79877,7 +79877,12 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
         actor.latest_committed_qc(),
         committed_height,
     );
-    let current_view = 1_u64;
+    let search_limit = u64::try_from(actor.effective_commit_topology().len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(2);
+    let current_view = (1..search_limit)
+        .find(|candidate_view| !actor.local_is_round_leader(height, *candidate_view))
+        .expect("find non-zero post-rotation view where local peer is not leader");
     let now = Instant::now();
     let timeout = super::idle_view_timeout(
         false,
@@ -79913,6 +79918,10 @@ async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum
     assert!(
         !actor.slot_has_proposal_evidence(height, current_view),
         "stale old-view frontier ownership must not count as proposal evidence for the post-rotation round"
+    );
+    assert!(
+        !actor.local_is_round_leader(height, current_view),
+        "test setup must avoid the forced leader self-proposal path"
     );
 
     let before = super::status::snapshot();
@@ -80775,7 +80784,7 @@ async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_with_remote_
         "remote NEW_VIEW votes must not reserve a dependency-driven frontier recovery cause"
     );
     assert!(
-        !actor.frontier_vote_backed_recovery_active(height, now),
+        !actor.frontier_vote_backed_recovery_active(height, current_view, now),
         "remote NEW_VIEW votes must not activate vote-backed frontier recovery"
     );
     let committed_height_after_votes = actor
@@ -100230,6 +100239,9 @@ async fn pacemaker_bootstraps_frontier_from_committed_qc_when_liveness_slot_was_
 async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_rotation() {
     use std::borrow::Cow;
 
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -100346,6 +100358,7 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_ro
         "idle missing-QC handling should assemble the frontier proposal from committed QC"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -100353,6 +100366,9 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_before_ro
 async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_after_stall_with_dependencies()
  {
     use std::borrow::Cow;
+
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -100469,6 +100485,7 @@ async fn force_view_change_if_idle_forces_missing_qc_frontier_proposal_after_sta
         "stalled missing-QC recovery should populate the current-view proposal cache"
     );
 
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -129766,6 +129783,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let sweep_now = Instant::now();
 
     for peer in signature_topology
         .as_ref()
@@ -129817,7 +129835,9 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
         near_timeout < quorum_timeout,
         "test requires reduced near-quorum timeout to be smaller than quorum timeout"
     );
-    let now = Instant::now();
+    // Use an explicit sweep instant so slow parallel test execution cannot age the
+    // missing-block recovery budget into a separate frontier-recovery branch.
+    let now = sweep_now;
     let pending_age = near_timeout + Duration::from_millis(1);
     let near_quorum_recent_progress_grace =
         super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
@@ -129834,7 +129854,7 @@ async fn reschedule_uses_reduced_timeout_for_near_quorum_missing_payload() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(None),
+        actor.reschedule_stale_pending_blocks_with_now(now, None),
         "near-quorum missing payload should reschedule before full quorum timeout"
     );
     let pending_after = actor
@@ -129942,7 +129962,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
         super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
     }
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
+        !actor.reschedule_stale_pending_blocks_with_now(now, None),
         "queue backlog should suppress reduced near-quorum timeout path"
     );
     let pending_after = actor
@@ -129960,7 +129980,7 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
         rbc_queue_backlog_threshold,
     );
     assert!(
-        actor.reschedule_stale_pending_blocks(None),
+        actor.reschedule_stale_pending_blocks_with_now(now, None),
         "transient queue depth should not suppress near-quorum reduced timeout reschedule"
     );
     let pending_after = actor
@@ -129971,6 +129991,106 @@ async fn reschedule_near_quorum_reduced_timeout_is_suppressed_by_queue_backlog()
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
         "pending should reschedule once backlog suppression is removed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_near_quorum_backlog_uses_explicit_sweep_time_for_pending_age() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(b"near-quorum-explicit-sweep-time");
+    let view_idx = block.header().view_change_index();
+    seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        view_idx,
+    );
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let availability_timeout =
+        actor.availability_timeout(quorum_timeout, actor.runtime_da_enabled());
+    let near_timeout = super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+        .min(quorum_timeout);
+    assert!(
+        near_timeout < quorum_timeout,
+        "test requires reduced near-quorum timeout"
+    );
+    let sweep_now = Instant::now()
+        .checked_sub(Duration::from_secs(30))
+        .expect("test sweep time can be moved into the past");
+    let pending_age = near_timeout + Duration::from_millis(1);
+    assert!(
+        pending_age < availability_timeout,
+        "backlog suppression path should still be inside availability timeout"
+    );
+    let stale_progress_age = quorum_timeout + Duration::from_millis(1);
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = sweep_now
+        .checked_sub(pending_age)
+        .expect("pending insertion before sweep");
+    pending.touch_progress(
+        sweep_now
+            .checked_sub(stale_progress_age)
+            .expect("stale progress before sweep"),
+    );
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let rbc_queue_backlog_threshold = usize::try_from(
+        super::Actor::near_quorum_queue_depth_threshold(actor.config.queues.rbc_chunks),
+    )
+    .expect("queue threshold fits usize");
+    for _ in 0..rbc_queue_backlog_threshold {
+        super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
+    }
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(sweep_now, None),
+        "availability backoff must use the explicit sweep time, not wall-clock pending age"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .and_then(|pending| pending.last_quorum_reschedule)
+            .is_none(),
+        "backlog suppression should not mark the quorum reschedule gate"
+    );
+
+    super::status::record_worker_queue_drain(
+        super::status::WorkerQueueKind::RbcChunks,
+        rbc_queue_backlog_threshold,
+    );
+    assert!(
+        actor.reschedule_stale_pending_blocks_with_now(sweep_now, None),
+        "draining the backlog should let the same explicit sweep time arm the reduced timeout"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .and_then(|pending| pending.last_quorum_reschedule)
+            .is_some(),
+        "near-quorum reschedule should mark the gate after backlog drains"
     );
 
     harness.shutdown.send();

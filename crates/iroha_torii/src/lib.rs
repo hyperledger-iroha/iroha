@@ -1358,6 +1358,70 @@ fn load_tx_history_access_policy(
     }
 }
 
+#[cfg(feature = "app_api")]
+fn parse_public_dataspace_upstream_selector(
+    state: &CoreState,
+    selector: &str,
+) -> Option<DataSpaceId> {
+    let selector = selector.trim().trim_start_matches('@');
+    if selector.is_empty() {
+        return None;
+    }
+    if selector.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    if let Ok(id) = selector.parse::<u64>() {
+        return Some(DataSpaceId::new(id));
+    }
+    state
+        .view()
+        .nexus()
+        .dataspace_catalog
+        .by_alias(selector)
+        .map(|entry| entry.id)
+}
+
+#[cfg(feature = "app_api")]
+fn load_public_dataspace_upstreams(state: &CoreState) -> BTreeMap<DataSpaceId, String> {
+    let Ok(raw) = std::env::var("IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS") else {
+        return BTreeMap::new();
+    };
+
+    let mut upstreams = BTreeMap::new();
+    for entry in raw.split([',', ';']) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((selector, url)) = entry.split_once('=') else {
+            iroha_logger::warn!(
+                entry,
+                "ignoring malformed IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS entry"
+            );
+            continue;
+        };
+        let Some(dataspace_id) = parse_public_dataspace_upstream_selector(state, selector) else {
+            iroha_logger::warn!(
+                selector,
+                "ignoring public dataspace upstream with unknown dataspace selector"
+            );
+            continue;
+        };
+        let url = url.trim().trim_end_matches('/').to_owned();
+        if reqwest::Url::parse(&url).is_err() {
+            iroha_logger::warn!(
+                dataspace_id = %dataspace_id,
+                url,
+                "ignoring public dataspace upstream with invalid URL"
+            );
+            continue;
+        }
+        upstreams.insert(dataspace_id, url);
+    }
+
+    upstreams
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
@@ -1444,6 +1508,8 @@ struct AppState {
     da_receipt_log: Arc<da::DaReceiptLog>,
     da_receipt_signer: KeyPair,
     torii_proxy_bridge_signer: KeyPair,
+    #[cfg(feature = "app_api")]
+    public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
@@ -18063,6 +18129,241 @@ fn torii_read_request(
 }
 
 #[cfg(feature = "app_api")]
+fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
+    match endpoint {
+        ToriiReadEndpointV1::AccountAssetsQuery
+        | ToriiReadEndpointV1::AccountTransactionsQuery
+        | ToriiReadEndpointV1::AccountsQuery
+        | ToriiReadEndpointV1::AssetDefinitionsQuery
+        | ToriiReadEndpointV1::AssetHoldersQuery
+        | ToriiReadEndpointV1::DomainsQuery
+        | ToriiReadEndpointV1::NftsQuery
+        | ToriiReadEndpointV1::RwasQuery
+        | ToriiReadEndpointV1::AliasResolve
+        | ToriiReadEndpointV1::AliasResolveIndex
+        | ToriiReadEndpointV1::AliasLookupByAccount
+        | ToriiReadEndpointV1::ContractAliasResolve
+        | ToriiReadEndpointV1::ContractViewPost
+        | ToriiReadEndpointV1::ContractViewBatchPost => reqwest::Method::POST,
+        _ => reqwest::Method::GET,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn torii_read_path_arg_encoded(
+    request: &ToriiReadProxyRequestV1,
+    index: usize,
+    label: &str,
+) -> Result<String, Response> {
+    torii_proxy_path_arg(request, index, label)
+        .map(|value| urlencoding::encode(&value).into_owned())
+}
+
+#[cfg(feature = "app_api")]
+fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String, Response> {
+    let path = match request.endpoint {
+        ToriiReadEndpointV1::AccountGet => format!(
+            "/v1/accounts/{}",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::ExplorerAccountDetail => format!(
+            "/v1/explorer/accounts/{}",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountAssetsGet => format!(
+            "/v1/accounts/{}/assets",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountAssetsQuery => format!(
+            "/v1/accounts/{}/assets/query",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountPermissionsGet => format!(
+            "/v1/accounts/{}/permissions",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountTransactionsGet => format!(
+            "/v1/accounts/{}/transactions",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountTransactionsQuery => format!(
+            "/v1/accounts/{}/transactions/query",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::PipelineTransactionStatusGet => {
+            "/v1/pipeline/transactions/status".to_owned()
+        }
+        ToriiReadEndpointV1::ProofRecordGet => format!(
+            "/v1/proofs/{}",
+            torii_read_path_arg_encoded(request, 0, "proof_id")?
+        ),
+        ToriiReadEndpointV1::AccountsList => "/v1/accounts".to_owned(),
+        ToriiReadEndpointV1::AccountsQuery => "/v1/accounts/query".to_owned(),
+        ToriiReadEndpointV1::AccountsPortfolio => format!(
+            "/v1/accounts/{}/portfolio",
+            torii_read_path_arg_encoded(request, 0, "uaid")?
+        ),
+        ToriiReadEndpointV1::AssetDefinitionGet => format!(
+            "/v1/assets/definitions/{}",
+            torii_read_path_arg_encoded(request, 0, "asset")?
+        ),
+        ToriiReadEndpointV1::AssetDefinitionsList => "/v1/assets/definitions".to_owned(),
+        ToriiReadEndpointV1::AssetDefinitionsQuery => "/v1/assets/definitions/query".to_owned(),
+        ToriiReadEndpointV1::AssetHoldersGet => format!(
+            "/v1/assets/{}/holders",
+            torii_read_path_arg_encoded(request, 0, "definition_id")?
+        ),
+        ToriiReadEndpointV1::AssetHoldersQuery => format!(
+            "/v1/assets/{}/holders/query",
+            torii_read_path_arg_encoded(request, 0, "definition_id")?
+        ),
+        ToriiReadEndpointV1::ExplorerAssetDefinitionDetail => format!(
+            "/v1/explorer/asset-definitions/{}",
+            torii_read_path_arg_encoded(request, 0, "definition_id")?
+        ),
+        ToriiReadEndpointV1::ExplorerAssetDefinitionEconometrics => format!(
+            "/v1/explorer/asset-definitions/{}/econometrics",
+            torii_read_path_arg_encoded(request, 0, "definition_id")?
+        ),
+        ToriiReadEndpointV1::ExplorerAssetDefinitionSnapshot => format!(
+            "/v1/explorer/asset-definitions/{}/snapshot",
+            torii_read_path_arg_encoded(request, 0, "definition_id")?
+        ),
+        ToriiReadEndpointV1::DomainsList => "/v1/domains".to_owned(),
+        ToriiReadEndpointV1::DomainsQuery => "/v1/domains/query".to_owned(),
+        ToriiReadEndpointV1::NftsList => "/v1/nfts".to_owned(),
+        ToriiReadEndpointV1::NftsQuery => "/v1/nfts/query".to_owned(),
+        ToriiReadEndpointV1::NexusPublicLaneValidators => format!(
+            "/v1/nexus/public_lanes/{}/validators",
+            torii_read_path_arg_encoded(request, 0, "lane_id")?
+        ),
+        ToriiReadEndpointV1::NexusPublicLaneStake => format!(
+            "/v1/nexus/public_lanes/{}/stake",
+            torii_read_path_arg_encoded(request, 0, "lane_id")?
+        ),
+        ToriiReadEndpointV1::NexusPublicLaneRewards => format!(
+            "/v1/nexus/public_lanes/{}/rewards/pending",
+            torii_read_path_arg_encoded(request, 0, "lane_id")?
+        ),
+        ToriiReadEndpointV1::NexusDataspacesAccountSummary => format!(
+            "/v1/nexus/dataspaces/accounts/{}/summary",
+            torii_read_path_arg_encoded(request, 0, "account")?
+        ),
+        ToriiReadEndpointV1::SpaceDirectoryBindingsGet => format!(
+            "/v1/space-directory/uaids/{}",
+            torii_read_path_arg_encoded(request, 0, "uaid")?
+        ),
+        ToriiReadEndpointV1::SpaceDirectoryManifestsGet => format!(
+            "/v1/space-directory/uaids/{}/manifests",
+            torii_read_path_arg_encoded(request, 0, "uaid")?
+        ),
+        ToriiReadEndpointV1::RwasList => "/v1/rwas".to_owned(),
+        ToriiReadEndpointV1::RwasQuery => "/v1/rwas/query".to_owned(),
+        ToriiReadEndpointV1::AliasResolve => "/v1/aliases/resolve".to_owned(),
+        ToriiReadEndpointV1::AliasResolveIndex => "/v1/aliases/resolve_index".to_owned(),
+        ToriiReadEndpointV1::AliasLookupByAccount => "/v1/aliases/by_account".to_owned(),
+        ToriiReadEndpointV1::ContractAliasResolve => "/v1/contracts/aliases/resolve".to_owned(),
+        ToriiReadEndpointV1::ContractStateGet => "/v1/contracts/state".to_owned(),
+        ToriiReadEndpointV1::ContractViewPost => "/v1/contracts/view".to_owned(),
+        ToriiReadEndpointV1::ContractViewBatchPost => "/v1/contracts/view/batch".to_owned(),
+        ToriiReadEndpointV1::MusubiPackagesSearch => "/v1/musubi/packages".to_owned(),
+        ToriiReadEndpointV1::MusubiReleaseGet => "/v1/musubi/release".to_owned(),
+        ToriiReadEndpointV1::MusubiPackageReleases => "/v1/musubi/releases".to_owned(),
+        ToriiReadEndpointV1::MusubiPackageVersions => "/v1/musubi/versions".to_owned(),
+        ToriiReadEndpointV1::MusubiAliasResolve => format!(
+            "/v1/musubi/aliases/{}",
+            torii_read_path_arg_encoded(request, 0, "alias")?
+        ),
+    };
+    Ok(path)
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_read_via_public_dataspace_upstream(
+    upstream_url: String,
+    routing_decision: RoutingDecision,
+    request: ToriiReadProxyRequestV1,
+) -> Response {
+    let path = match torii_external_read_path(&request) {
+        Ok(path) => path,
+        Err(response) => return response,
+    };
+    let mut url = format!(
+        "{}/{}",
+        upstream_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    if let Some(query_string) = request
+        .query_string
+        .as_deref()
+        .filter(|query| !query.is_empty())
+    {
+        url.push('?');
+        url.push_str(query_string);
+    }
+
+    let method = torii_read_http_method(request.endpoint);
+    let client = reqwest::Client::new();
+    let mut builder = client
+        .request(method.clone(), url.clone())
+        .header(
+            axum::http::header::ACCEPT.as_str(),
+            torii_proxy_accept_header(request.response_format)
+                .to_str()
+                .unwrap_or("application/json"),
+        )
+        .timeout(DEFAULT_ROUTE_TIMEOUT);
+    if method == reqwest::Method::POST {
+        builder = builder
+            .header(
+                axum::http::header::CONTENT_TYPE.as_str(),
+                "application/json",
+            )
+            .body(request.body);
+    }
+
+    let response = match builder.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                format!(
+                    "public dataspace upstream `{url}` for dataspace {} is unavailable: {error}",
+                    routing_decision.dataspace_id
+                ),
+            );
+        }
+    };
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE.as_str())
+        .cloned();
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "route_unavailable",
+                format!("failed to read public dataspace upstream response from `{url}`: {error}"),
+            );
+        }
+    };
+
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    if let Some(content_type) = content_type {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_TYPE, content_type);
+    }
+    insert_routing_headers(&mut response, routing_decision, "external");
+    response
+}
+
+#[cfg(feature = "app_api")]
 fn torii_proxy_accept_header(format: ToriiProxyResponseFormatV1) -> HeaderValue {
     match format {
         ToriiProxyResponseFormatV1::Norito => {
@@ -18922,6 +19223,19 @@ async fn execute_torii_read_for_route(
     routing_decision: RoutingDecision,
     request: ToriiReadProxyRequestV1,
 ) -> Response {
+    if let Some(upstream_url) = app
+        .public_dataspace_upstreams
+        .get(&routing_decision.dataspace_id)
+        .cloned()
+    {
+        return execute_torii_read_via_public_dataspace_upstream(
+            upstream_url,
+            routing_decision,
+            request,
+        )
+        .await;
+    }
+
     if should_execute_route_locally(app.as_ref(), routing_decision) {
         execute_torii_read_request_locally(app, request, routing_decision, "local").await
     } else {
@@ -31157,6 +31471,8 @@ pub struct Torii {
     rbc_sampling: iroha_config::parameters::actual::RbcSampling,
     da_receipt_signer: KeyPair,
     torii_proxy_bridge_signer: KeyPair,
+    #[cfg(feature = "app_api")]
+    public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     da_ingest: iroha_config::parameters::actual::DaIngest,
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
@@ -33873,6 +34189,8 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let tx_history_access_policy =
             Arc::new(load_tx_history_access_policy(config.tx_history.as_ref()));
+        #[cfg(feature = "app_api")]
+        let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
@@ -33971,6 +34289,8 @@ impl Torii {
             rbc_sampling: config.rbc_sampling.clone(),
             da_receipt_signer,
             torii_proxy_bridge_signer,
+            #[cfg(feature = "app_api")]
+            public_dataspace_upstreams,
             da_ingest: config.da_ingest.clone(),
             #[cfg(feature = "connect")]
             connect_bus: connect::Bus::from_config(&config.connect),
@@ -34278,6 +34598,8 @@ impl Torii {
             da_receipt_log,
             da_receipt_signer: self.da_receipt_signer.clone(),
             torii_proxy_bridge_signer: self.torii_proxy_bridge_signer.clone(),
+            #[cfg(feature = "app_api")]
+            public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             da_ingest: self.da_ingest.clone(),
             da_spooler,
             sumeragi: self.sumeragi.clone(),
@@ -36697,19 +37019,52 @@ pub(crate) mod tests_runtime_handlers {
                 .expect("register asset domain");
         }
 
-        Register::asset_definition(
+        let mut asset_definition =
             iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
                 .with_name(
                     asset_definition_id
                         .try_name()
                         .map_or_else(String::new, ToString::to_string),
-                ),
-        )
-        .execute(&ALICE_ID, &mut tx)
-        .expect("register asset definition");
+                );
+        if asset_definition_requires_restricted_balance_policy_for_test(app, asset_definition_id) {
+            asset_definition =
+                asset_definition.with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted);
+        }
+
+        Register::asset_definition(asset_definition)
+            .execute(&ALICE_ID, &mut tx)
+            .expect("register asset definition");
 
         tx.apply();
         block.commit().expect("commit asset definition seed");
+    }
+
+    fn asset_definition_requires_restricted_balance_policy_for_test(
+        app: &SharedAppState,
+        asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    ) -> bool {
+        let Some(domain_id) = asset_definition_id.try_domain() else {
+            return false;
+        };
+        let dataspace_alias = domain_id.dataspace().as_ref();
+        let state_view = app.state.view();
+        let nexus = state_view.nexus();
+        let Some(dataspace_id) = (if dataspace_alias.eq_ignore_ascii_case("universal") {
+            Some(DataSpaceId::UNIVERSAL)
+        } else {
+            nexus
+                .dataspace_catalog
+                .by_alias(dataspace_alias)
+                .map(|entry| entry.id)
+        }) else {
+            return false;
+        };
+
+        dataspace_id != DataSpaceId::UNIVERSAL
+            && !nexus.lane_catalog.lanes().iter().any(|lane| {
+                lane.dataspace_id == dataspace_id
+                    && lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
+            })
     }
 
     fn configure_nexus_fee_admission_for_test(
@@ -37991,6 +38346,8 @@ pub(crate) mod tests_runtime_handlers {
             da_receipt_log,
             da_receipt_signer,
             torii_proxy_bridge_signer: KeyPair::random(),
+            #[cfg(feature = "app_api")]
+            public_dataspace_upstreams: Arc::new(BTreeMap::new()),
             da_ingest,
             da_spooler: None,
             #[cfg(feature = "app_api")]
@@ -38627,10 +38984,6 @@ pub(crate) mod tests_runtime_handlers {
             .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
             .sign(keypair.private_key());
 
-        let _ = app
-            .queue
-            .set_pressure_age_budget_for_tests(Duration::from_millis(1));
-
         let first = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
@@ -38644,7 +38997,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let snapshot = app
             .queue
-            .backdate_queued_transactions_for_tests(Duration::from_millis(2));
+            .backdate_queued_transactions_for_tests(Duration::from_secs(3));
         assert!(
             snapshot.saturated_by_age,
             "test setup should make queue age saturation observable"
@@ -39728,6 +40081,84 @@ pub(crate) mod tests_runtime_handlers {
                 .is_none(),
             "visible dataspace fanout should not expose a singular dataspace",
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn public_dataspace_upstream_serves_routed_account_assets() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let captured_for_route = Arc::clone(&captured);
+        let upstream = Router::new().route(
+            "/v1/accounts/{account_id}/assets",
+            get(
+                move |axum::extract::Path(account_id): axum::extract::Path<String>,
+                      uri: Uri| {
+                    let captured = Arc::clone(&captured_for_route);
+                    async move {
+                        captured
+                            .lock()
+                            .expect("capture lock")
+                            .push((account_id, uri.query().unwrap_or_default().to_owned()));
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(axum::http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                br#"{"items":[{"asset":"xor#universal","quantity":"74.7664","scope":"global"}],"total":1}"#
+                                    .to_vec(),
+                            ))
+                            .expect("upstream response")
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream listener");
+        let addr = listener.local_addr().expect("upstream addr");
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream.into_make_service())
+                .await
+                .expect("serve upstream");
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .public_dataspace_upstreams = Arc::new(BTreeMap::from([(
+            DataSpaceId::UNIVERSAL,
+            format!("http://{addr}"),
+        )]));
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone()).to_string();
+        let request = torii_read_request(
+            ToriiReadEndpointV1::AccountAssetsGet,
+            route,
+            vec![account_id.clone()],
+            Some("limit=500".to_owned()),
+            Vec::new(),
+        );
+        let response = execute_torii_read_for_route(&app, route, request).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("external"),
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: Value = norito::json::from_slice(&body).expect("json response");
+        assert_eq!(json["items"][0]["quantity"].as_str(), Some("74.7664"));
+        assert_eq!(
+            captured.lock().expect("capture lock").as_slice(),
+            &[(account_id, "limit=500".to_owned())],
+        );
+        upstream_task.abort();
     }
 
     #[tokio::test]
@@ -54281,7 +54712,7 @@ mod tests {
                 .headers()
                 .get("x-iroha-fanout-routes-attempted")
                 .and_then(|value| value.to_str().ok()),
-            Some("2")
+            Some("3")
         );
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await

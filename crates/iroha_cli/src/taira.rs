@@ -356,6 +356,10 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     canary_config.transaction_status_timeout = Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS);
     canary_config.transaction_add_nonce = false;
 
+    if let Some(path) = &args.write_config {
+        write_runtime_config(path, &canary_config)?;
+    }
+
     let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let client = IrohaClient::new(canary_config.clone());
     let mut metadata = metadata_with_gas_asset(&args.gas_asset_id)?;
@@ -397,10 +401,6 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     };
     if !tx_query_verified {
         warnings.push("write canary reached pipeline terminal status but transaction query did not return the entry yet".to_owned());
-    }
-
-    if let Some(path) = &args.write_config {
-        write_runtime_config(path, &canary_config)?;
     }
 
     let status = if failures.is_empty() { "ok" } else { "fail" };
