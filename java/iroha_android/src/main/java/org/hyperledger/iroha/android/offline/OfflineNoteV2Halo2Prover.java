@@ -951,6 +951,22 @@ public final class OfflineNoteV2Halo2Prover {
       return isZero() ? this : new F(params, params.modulus.subtract(value), true);
     }
 
+    private F doubleValue() {
+      BigInteger doubled = value.shiftLeft(1);
+      if (doubled.compareTo(params.modulus) >= 0) {
+        doubled = doubled.subtract(params.modulus);
+      }
+      return new F(params, doubled, true);
+    }
+
+    private F eightValue() {
+      BigInteger scaled = value.shiftLeft(3);
+      while (scaled.compareTo(params.modulus) >= 0) {
+        scaled = scaled.subtract(params.modulus);
+      }
+      return new F(params, scaled, true);
+    }
+
     private F mul(final F rhs) {
       same(rhs);
       return new F(params, value.multiply(rhs.value));
@@ -1218,7 +1234,7 @@ public final class OfflineNoteV2Halo2Prover {
       final F e = a.add(a).add(a);
       final F f = e.square();
       final F x3 = f.sub(d).sub(d);
-      final F y3 = e.mul(d.sub(x3)).sub(F.of(FQ, 8).mul(c));
+      final F y3 = e.mul(d.sub(x3)).sub(c.eightValue());
       final F z3 = y.add(y).mul(z);
       return new Projective(x3, y3, z3);
     }
@@ -1244,7 +1260,7 @@ public final class OfflineNoteV2Halo2Prover {
       final F r = r0.add(r0);
       final F v = x.mul(i);
       final F x3 = r.square().sub(j).sub(v).sub(v);
-      final F y3 = r.mul(v.sub(x3)).sub(F.of(FQ, 2).mul(y).mul(j));
+      final F y3 = r.mul(v.sub(x3)).sub(y.doubleValue().mul(j));
       final F z3 = z.add(h).square().sub(z2).sub(hh);
       return new Projective(x3, y3, z3);
     }
@@ -1272,7 +1288,7 @@ public final class OfflineNoteV2Halo2Prover {
       final F r = r0.add(r0);
       final F v = u1.mul(i);
       final F x3 = r.square().sub(j).sub(v).sub(v);
-      final F y3 = r.mul(v.sub(x3)).sub(F.of(FQ, 2).mul(s1).mul(j));
+      final F y3 = r.mul(v.sub(x3)).sub(s1.doubleValue().mul(j));
       final F z3 = z.add(rhs.z).square().sub(z1z1).sub(z2z2).mul(h);
       return new Projective(x3, y3, z3);
     }
