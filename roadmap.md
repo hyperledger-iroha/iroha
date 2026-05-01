@@ -1,11 +1,17 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
 ## Validation corridor
 
+- Carry the strengthened Sumeragi frontier-recovery formal corridor through
+  periodic wider validation.
+  - `frontier-fast` and `frontier-deep` are part of the normal formal CI gate;
+    keep `frontier-wide` as a manual/nightly check before larger consensus
+    recovery rewrites, or promote it once the scheduled validation budget can
+    absorb the wider Apalache run.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - Focused Rust and JavaScript checks are green as of 2026-04-30, but Python
@@ -101,10 +107,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Start from the existing materialization coverage in `integration_tests/tests/multisig.rs`.
   - Add a case where a signatory is materialized by registration and then successfully authors `MultisigPropose` / `MultisigApprove` on the network.
   - Assert transaction-authority shape and final instruction execution, not only account materialization.
-- Verify the deterministic Sumeragi formal CI source of truth.
-  - Rerun `bash ci/check_sumeragi_formal.sh` and record the exact Apalache version or digest in `status.md`.
 - Extend and burn down the translation metadata audit backlog.
-  - The new `ci/check_docs_i18n_metadata.py` gate covers `docs/formal`; refresh the stale `docs/formal` translations or decide when to turn on `--require-current`.
+  - `docs/formal` is the current clean gate target; keep it green with `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current` when formal docs change.
   - Clean the existing `docs/source` and `docs/portal` metadata debt, including files missing `source_hash` and `translation_last_reviewed`, before adding those trees to the CI gate.
   - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Add a recorded capture gate for the default `sora-temple` petal styles.
