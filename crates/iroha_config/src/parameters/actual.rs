@@ -6150,6 +6150,8 @@ pub struct ToriiOfflineIssuer {
     pub authority: AccountId,
     /// Key pair used to sign certificates and submit `IssueOfflineNoteV2`.
     pub key_pair: KeyPair,
+    /// Public key used to verify middleware attestation receipts.
+    pub attestation_verifier_public_key: PublicKey,
     /// Maximum authorized offline balance per lineage.
     pub max_balance: Numeric,
     /// Maximum authorized value for one offline transaction.
