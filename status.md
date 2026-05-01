@@ -2,21 +2,29 @@
 
 Last updated: 2026-05-01
 
-## 2026-05-01 Sumeragi frontier formal corridor hardened
+## 2026-05-01 Sumeragi frontier formal gaps closed
 
-- Strengthened the focused Taira frontier-recovery model with explicit
-  follow-through after payload recovery and quorum retransmit, plus a finite
-  future-frontier/new-view evidence abstraction that can reanchor the pending
-  frontier instead of leaving it behind stale local state.
+- Refactored the focused Taira frontier-recovery model from one active frontier
+  plus a Boolean future-evidence shortcut into one active frontier plus one
+  concrete future frontier slot. The future slot carries presence, contiguity,
+  vote counts, queued votes, payload state, and recovery owner, while
+  `FutureFrontierEvidence` is now derived from that slot.
+- Added the two-step future reanchor path: clear the stale/current pending
+  wrapper, then promote the future slot into the active slot with active
+  progress flags reset and `frontierSlot` advanced.
+- Strengthened liveness so an active vote-backed pending wrapper must
+  eventually clear. Payload recovery, quorum retransmit, future-slot reanchor,
+  and promoted second-slot behavior now have focused follow-through
+  properties.
 - Made Apalache bounds explicit in `scripts/formal/sumeragi_apalache.sh` for
-  every mode, added the manual `frontier-wide` profile, and kept the normal
-  CI gate to the cheaper `frontier-fast` / `frontier-deep` profiles.
-- Added expected-failure stale-owner and vote-queue mutation profiles outside
-  normal CI so model edits can prove that those hang-class assumptions are
-  still actually exercised.
-- Updated the Sumeragi formal README with the model-to-implementation
-  assumption map and refreshed all translated `docs/formal/sumeragi/README.*.md`
-  files so the formal docs pass the current-source metadata gate.
+  every mode, kept existing modes backward-compatible, added payload-recovery,
+  retransmit-follow-through, and future-promotion bug modes, and promoted
+  `frontier-wide` plus all expected-failure mutations into normal formal CI.
+- Updated the English Sumeragi formal README with the two-slot proof scope,
+  runner modes, CI behavior, and model-to-implementation assumption map.
+  Translated `docs/formal/sumeragi/README.*.md` bodies were intentionally not
+  refreshed in this slice, so they may remain source-current stale until a
+  separate translation refresh.
 - No runtime consensus code changed in this hardening pass.
 - Validation completed with local Apalache `0.52.2`:
   - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
@@ -28,7 +36,8 @@ Last updated: 2026-05-01
   - `cargo test -p iroha_core reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
   - `cargo test -p iroha_core reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
   - `cargo test -p iroha_core reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
-  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
+  - `cargo test -p iroha_core pacemaker_reanchors_frontier_when_future_new_view_quorum_exists -- --nocapture`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal`
 
 ## 2026-04-30 Sumeragi frontier recovery formal model
 
