@@ -38731,7 +38731,7 @@ mod app_api_integration_tests {
     fn app_query_limits_guard() -> MutexGuard<'static, ()> {
         APP_QUERY_LIMITS_TEST_LOCK
             .lock()
-            .expect("app query limits test lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     struct AppQueryLimitsOverride {
@@ -40788,10 +40788,25 @@ mod app_api_integration_tests {
             },
         ])
         .expect("paynet dataspace catalog");
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            std::num::NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: iroha_data_model::nexus::LaneId::new(1),
+                    dataspace_id: paynet_dataspace_id,
+                    alias: "paynet".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("paynet lane catalog");
         Arc::get_mut(&mut state)
             .expect("unique state")
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 enabled: true,
+                lane_catalog,
                 dataspace_catalog,
                 ..iroha_config::parameters::actual::Nexus::default()
             })

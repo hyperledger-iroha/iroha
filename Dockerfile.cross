@@ -97,6 +97,10 @@ RUN --mount=type=cache,target=/app/target <<EOF
   done
 EOF
 
+FROM scratch AS bins
+
+COPY --from=xx-build /app/bins/ /
+
 FROM alpine
 
 COPY --from=xx-build /app/bins/* /usr/local/bin/
