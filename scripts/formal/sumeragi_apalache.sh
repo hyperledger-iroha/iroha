@@ -41,7 +41,7 @@ case "$mode" in
   frontier-wide)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_wide.cfg"
-    apalache_length=14
+    apalache_length=12
     ;;
   frontier-bug-stale-owner)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
@@ -55,8 +55,26 @@ case "$mode" in
     apalache_length=4
     expect_failure=1
     ;;
+  frontier-bug-payload-recovery)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_payload_recovery.cfg"
+    apalache_length=4
+    expect_failure=1
+    ;;
+  frontier-bug-retransmit-followthrough)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_retransmit_followthrough.cfg"
+    apalache_length=6
+    expect_failure=1
+    ;;
+  frontier-bug-future-promotion)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_promotion.cfg"
+    apalache_length=5
+    expect_failure=1
+    ;;
   *)
-    echo "usage: $0 {fast|deep|frontier-fast|frontier-deep|frontier-wide|frontier-bug-stale-owner|frontier-bug-vote-queue}" >&2
+    echo "usage: $0 {fast|deep|frontier-fast|frontier-deep|frontier-wide|frontier-bug-stale-owner|frontier-bug-vote-queue|frontier-bug-payload-recovery|frontier-bug-retransmit-followthrough|frontier-bug-future-promotion}" >&2
     exit 2
     ;;
 esac

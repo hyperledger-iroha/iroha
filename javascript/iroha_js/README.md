@@ -2441,6 +2441,10 @@ inherited from the client config; standalone calls can supply their own
 - Use `token_management` for session deletion and `GET /v1/connect/status?sid=...`.
 - Deep links include `relay=<token_relay>`; SDKs bind that relay token into approval signatures and
   Torii uses it to authenticate cross-node Connect relay envelopes.
+- In broadcast relay mode, Torii also gossips session claims over authenticated
+  Iroha P2P so app and wallet WebSockets can attach through different Torii
+  nodes. Claims carry token hashes plus the relay MAC key, never raw app,
+  wallet, or management tokens.
 
 ### Connect error taxonomy
 

@@ -57,6 +57,18 @@ class ConnectWalletRequestTest {
         )
     }
 
+    @Test
+    fun relayAuthHashMatchesSharedFixture() {
+        val sid = ByteArray(32) { it.toByte() }
+
+        assertEquals(
+            "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f",
+            ConnectCrypto.relayAuthHash(sid, "relay-token-vector").toHex(),
+        )
+    }
+
     private fun sampleSid(): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32))
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
