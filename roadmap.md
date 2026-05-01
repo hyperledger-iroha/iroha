@@ -54,11 +54,6 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Rerun `cargo test -p iroha_core --lib`, including `quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_without_roster_proof` in a fresh cargo process.
   - Rerun `cargo test -p iroha_torii` and `cargo test -p integration_tests -- --nocapture` once the current tree is stable enough for network suites.
   - When validation budget allows, rerun `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`, then capture failures or green status in `status.md`.
-- Carry the sealed transaction pipeline hardening through broader multi-peer validation.
-  - Focused checks for entrypoint gossip, result alignment, receipts, sealed commitment gas, block commit/reveal execution, expiry pruning, and Torii pipeline-status lookup are green as of 2026-05-01.
-  - Add or rerun an integration test that submits a sealed commitment, lets it gossip across at least 4 peers, reveals it in-window, and verifies explorer lookup by the reveal entrypoint hash.
-  - Fold this slice into the next `cargo test -p iroha_core --lib`, `cargo test -p iroha_torii`, `cargo test -p integration_tests -- --nocapture`, and workspace clippy corridor.
-
 ## Consensus and Izanami
 
 - Maintain Izanami communication vulnerability publication evidence.
@@ -84,7 +79,7 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Rerun the stepped single-host sweep.
   - Repeat permissioned and NPoS passes on the same hardware envelope and compare against the archived `25-50 TPS` / `75-100 TPS` baselines.
   - Record the new knee points and any regressions in `status.md`.
-- Validate the 20k hot-path cache push under the release Izanami profile.
+- Continue the 20k post-cache throughput tuning corridor.
   - The first post-cache 4-peer no-fault prebuilt `20k TPS` / `120s` release
     gate at `dist/izanami-prebuilt-20k-hotpath-120s-20260501-142015` improved
     strict approved transactions to `28,713` but still failed the committed
@@ -101,10 +96,21 @@ Completed history lives in `status.md`. This file should only track unfinished w
     `TxOverlay::apply_with_chunk`, incoming transaction-gossip Norito decode,
     and the remaining `AcceptedTransaction::signed_encoded_len` serialization
     fallback.
-  - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate the new knee.
-  - Remove the remaining signed length/serialization metadata walk, reduce
-    repeated incoming transaction-gossip decode/materialization, and shrink the
-    state overlay work inside block validation before tuning queue capacity.
+  - The targeted post-cache tuning pass at
+    `dist/izanami-prebuilt-20k-postcache-tuned-120s-20260501-165947` improved
+    strict approved transactions over the cachepass repeat to `28,790`, but
+    still failed the committed 20k target and accepted fewer ingress
+    submissions. The matching sampled profile at
+    `dist/izanami-profile-20k-postcache-tuned-sampled-30s-20260501-165811`
+    confirms `Queue::encode_gossip_payload`, `TxOverlay::byte_size`, and
+    `external_entrypoints_cloned` are absent from current peer samples.
+  - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate
+    the new knee after the targeted tuning pass.
+  - Reduce the remaining signed length/serialization metadata walk, incoming
+    transaction-gossip Norito decode/materialization, and state overlay
+    execution cost before tuning queue capacity.
+  - Keep the broader borrowed-instruction execution rewrite separate from the
+    targeted tuning pass because `Execute` currently consumes instructions.
   - Treat RBC authoritative-payload delays as symptoms of slow validation and
     materialization unless a later profile shows DA/RBC storage pressure,
     missing `BlockCreated`, or QC payload-missing counters.

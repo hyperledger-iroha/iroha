@@ -12,7 +12,11 @@
 //! admission limits (`pipeline.overlay_max_*`) in one place.
 
 use core::str::FromStr;
-use std::{collections::BTreeMap, mem, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    mem,
+    sync::{Arc, OnceLock},
+};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
@@ -673,6 +677,7 @@ pub struct TxOverlay {
     execution_contexts: Option<Vec<OverlayInstructionExecutionContext>>,
     ivm_gas_used: Option<u64>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    byte_size: OnceLock<usize>,
 }
 
 impl TxOverlay {
@@ -683,6 +688,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: None,
             durable_state_overlay: BTreeMap::new(),
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -693,6 +699,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay: BTreeMap::new(),
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -707,6 +714,7 @@ impl TxOverlay {
             execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -729,6 +737,7 @@ impl TxOverlay {
             execution_contexts: Some(execution_contexts),
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
+            byte_size: OnceLock::new(),
         }
     }
 
@@ -769,10 +778,12 @@ impl TxOverlay {
 
     /// Approximate byte size of this overlay when serialized via Norito TLV.
     pub fn byte_size(&self) -> usize {
-        self.instructions
-            .iter()
-            .map(|i| NoritoEncode::encode(i).len())
-            .sum()
+        *self.byte_size.get_or_init(|| {
+            self.instructions
+                .iter()
+                .map(|i| NoritoEncode::encode(i).len())
+                .sum()
+        })
     }
 
     /// Apply the overlay to the given state transaction via the runtime executor.
@@ -2079,6 +2090,25 @@ mod tests {
     fn empty_overlay_is_noop() {
         let ovl = TxOverlay::default();
         assert!(ovl.is_empty());
+    }
+
+    #[test]
+    fn overlay_byte_size_cache_matches_norito_instruction_sum() {
+        let instructions: Vec<InstructionBox> = vec![
+            iroha_data_model::isi::Log::new(iroha_logger::Level::INFO, "cached-size-a".to_owned())
+                .into(),
+            iroha_data_model::isi::Log::new(iroha_logger::Level::INFO, "cached-size-b".to_owned())
+                .into(),
+        ];
+        let expected = instructions
+            .iter()
+            .map(|instruction| NoritoEncode::encode(instruction).len())
+            .sum();
+        let overlay = TxOverlay::from_instructions(instructions);
+
+        assert_eq!(overlay.byte_size(), expected);
+        assert_eq!(overlay.byte_size.get(), Some(&expected));
+        assert_eq!(overlay.byte_size(), expected);
     }
 
     #[test]

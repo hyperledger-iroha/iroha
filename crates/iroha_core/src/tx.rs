@@ -74,6 +74,22 @@ type StateTelemetry = ();
 type NexusDataSpaceId = iroha_data_model::nexus::DataSpaceId;
 type NexusLaneId = iroha_data_model::nexus::LaneId;
 
+/// Hash canonical Norito-framed [`TransactionEntrypoint`] bytes without decoding and re-encoding.
+///
+/// The outer Norito header is validated and the hash is computed over the archived payload, which
+/// is the same byte sequence used by [`HashOf::new`] for canonical entrypoint frames.
+pub(crate) fn entrypoint_hash_from_framed_bytes(
+    framed: &[u8],
+) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
+    let view = norito::core::from_bytes_view(framed)?;
+    if view.schema() != <TransactionEntrypoint as norito::core::NoritoSerialize>::schema_hash() {
+        return Err(norito::core::Error::SchemaMismatch);
+    }
+    Ok(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+        view.as_bytes(),
+    )))
+}
+
 /// Stateful admission facts that must be committed only if transaction execution succeeds.
 #[derive(Debug, Clone)]
 pub(crate) struct StatefulAdmission {
@@ -941,6 +957,20 @@ impl<'tx> AcceptedTransaction<'tx> {
         let _ = accepted.single_ed25519_key.set(single_ed25519_key);
         let _ = accepted.entrypoint_hash.set(entrypoint_hash);
         let _ = accepted.signed_hash.set(signed_hash);
+        accepted
+    }
+
+    fn from_entrypoint_with_cached_entrypoint_bytes(
+        tx: TransactionEntrypoint,
+        entrypoint_bytes: Arc<Vec<u8>>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Self {
+        let accepted = Self::from_entrypoint(Cow::Owned(tx));
+        let _ = accepted.entrypoint_bytes.set(entrypoint_bytes);
+        let _ = accepted.entrypoint_hash.set(entrypoint_hash);
+        let _ = accepted
+            .signed_hash
+            .set(Self::compat_signed_hash(entrypoint_hash));
         accepted
     }
 
@@ -2382,6 +2412,61 @@ impl<'tx> AcceptedTransaction<'tx> {
 }
 
 impl AcceptedTransaction<'static> {
+    fn validate_entrypoint_with_now(
+        tx: &TransactionEntrypoint,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+    ) -> Result<(), AcceptTransactionFail> {
+        match tx {
+            TransactionEntrypoint::External(signed) => {
+                Self::validate_with_now(
+                    signed,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
+                enforce_nts_health_for_time_sensitive(signed)?;
+            }
+            TransactionEntrypoint::SealedCommitment(commitment) => {
+                validate_sealed_commitment_stateless(commitment, expected_chain_id, limits)?;
+            }
+            TransactionEntrypoint::SealedReveal(reveal) => {
+                let signed = reveal.signed_transaction();
+                Self::validate_with_now(
+                    signed,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
+                enforce_nts_health_for_time_sensitive(signed)?;
+            }
+            TransactionEntrypoint::PrivateKaigi(private) => {
+                Self::validate_private_kaigi_with_now(
+                    private,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    now,
+                )?;
+            }
+            TransactionEntrypoint::Time(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "direct time entrypoints are not accepted on ingress".into(),
+                    },
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Accept genesis transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
     ///
     /// # Errors
@@ -2470,54 +2555,48 @@ impl AcceptedTransaction<'static> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
         let now = current_unix_time();
-        match &tx {
-            TransactionEntrypoint::External(signed) => {
-                Self::validate_with_now(
-                    signed,
-                    expected_chain_id,
-                    max_clock_drift,
-                    limits,
-                    crypto,
-                    now,
-                )?;
-                enforce_nts_health_for_time_sensitive(signed)?;
-            }
-            TransactionEntrypoint::SealedCommitment(commitment) => {
-                validate_sealed_commitment_stateless(commitment, expected_chain_id, limits)?;
-            }
-            TransactionEntrypoint::SealedReveal(reveal) => {
-                let signed = reveal.signed_transaction();
-                Self::validate_with_now(
-                    signed,
-                    expected_chain_id,
-                    max_clock_drift,
-                    limits,
-                    crypto,
-                    now,
-                )?;
-                enforce_nts_health_for_time_sensitive(signed)?;
-            }
-            TransactionEntrypoint::PrivateKaigi(private) => {
-                Self::validate_private_kaigi_with_now(
-                    private,
-                    expected_chain_id,
-                    max_clock_drift,
-                    limits,
-                    now,
-                )?;
-            }
-            TransactionEntrypoint::Time(_) => {
-                return Err(AcceptTransactionFail::TransactionLimit(
-                    TransactionLimitError {
-                        reason: "direct time entrypoints are not accepted on ingress".into(),
-                    },
-                ));
-            }
-        }
+        Self::validate_entrypoint_with_now(
+            &tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+        )?;
         Ok(match tx {
             TransactionEntrypoint::External(signed) => Self::from_external_with_hot_cache(signed),
             other => Self::from_entrypoint(Cow::Owned(other)),
         })
+    }
+
+    /// Accept an already-decoded gossip entrypoint and seed its canonical entrypoint frame bytes.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    pub(crate) fn accept_gossip_entrypoint_with_payload(
+        tx: TransactionEntrypoint,
+        entrypoint_bytes: Arc<Vec<u8>>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+    ) -> Result<Self, AcceptTransactionFail> {
+        let now = current_unix_time();
+        Self::validate_entrypoint_with_now(
+            &tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+        )?;
+        Ok(Self::from_entrypoint_with_cached_entrypoint_bytes(
+            tx,
+            entrypoint_bytes,
+            entrypoint_hash,
+        ))
     }
 }
 
@@ -6188,6 +6267,60 @@ pub mod tests {
             ))
             .encoded_len(),
             private_expected_len
+        );
+    }
+
+    #[test]
+    fn signed_encoded_len_matches_norito_for_optional_metadata_shapes() {
+        let chain: ChainId = "signed-len-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("signed-len-tag").expect("name"),
+            Json::from("cached"),
+        );
+
+        let mut builder = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "signed-len".into())])
+            .with_metadata(metadata);
+        builder.set_nonce(NonZeroU32::new(7).expect("nonce"));
+        builder.set_ttl(Duration::from_millis(5_000));
+        let signed = builder.sign(keypair.private_key());
+        let expected_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+
+        assert!(
+            norito::NoritoSerialize::encoded_len_exact(&signed).is_some(),
+            "representative signed transaction should have an exact encoded length"
+        );
+        assert_eq!(
+            AcceptedTransaction::signed_encoded_len(&signed),
+            expected_len
+        );
+
+        let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
+        assert_eq!(prepared.encoded_len, expected_len);
+    }
+
+    #[test]
+    fn signed_encoded_len_for_limit_uses_cached_canonical_bytes() {
+        let chain: ChainId = "signed-len-cache-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "signed-len-cache".into())])
+            .sign(keypair.private_key());
+        let signed_bytes = Arc::new(norito::to_bytes(&signed).expect("signed transaction encodes"));
+        let mut prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
+        prepared.encoded_len = usize::MAX;
+        prepared.signed_bytes = Some(Arc::clone(&signed_bytes));
+
+        assert_eq!(
+            AcceptedTransaction::signed_encoded_len_for_limit_with_prepared(
+                &signed,
+                Some(&prepared)
+            ),
+            u64::try_from(signed_bytes.len()).expect("length fits in u64")
         );
     }
 

@@ -3548,6 +3548,14 @@ impl NoritoSerialize for NonZeroU16 {
     fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
         self.get().serialize(writer)
     }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.get().encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.get().encoded_len_exact()
+    }
 }
 
 impl<'a> NoritoDeserialize<'a> for NonZeroU16 {
@@ -3605,6 +3613,14 @@ impl<'a> NoritoDeserialize<'a> for u32 {
 impl NoritoSerialize for NonZeroU32 {
     fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
         self.get().serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.get().encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.get().encoded_len_exact()
     }
 }
 
@@ -3739,6 +3755,14 @@ impl<'a> NoritoDeserialize<'a> for u64 {
 impl NoritoSerialize for NonZeroU64 {
     fn serialize<W: Write>(&self, writer: W) -> Result<(), Error> {
         self.get().serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.get().encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.get().encoded_len_exact()
     }
 }
 
@@ -4368,10 +4392,9 @@ impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         match self {
-            Some(v) => {
-                let _ = v;
-                None
-            }
+            Some(v) => v
+                .encoded_len_exact()
+                .map(|len| 1 + len_prefix_len(len) + len),
             None => Some(1),
         }
     }
@@ -5266,6 +5289,33 @@ macro_rules! impl_tuple {
                     writer.write_all(__buf.as_slice())?;
                 )+
                 Ok(())
+            }
+
+            fn encoded_len_hint(&self) -> Option<usize> {
+                let mut total = 0usize;
+                $(
+                    let elem_len = self.$idx.encoded_len_hint()?;
+                    total = total
+                        .checked_add(core::mem::size_of::<u64>())?
+                        .checked_add(elem_len)?;
+                )+
+                Some(total)
+            }
+
+            fn encoded_len_exact(&self) -> Option<usize> {
+                let mut total = 0usize;
+                $(
+                    let elem_len = self.$idx.encoded_len_exact()?;
+                    let prefix_len = if use_compact_len() {
+                        len_prefix_len(elem_len)
+                    } else {
+                        core::mem::size_of::<u64>()
+                    };
+                    total = total
+                        .checked_add(prefix_len)?
+                        .checked_add(elem_len)?;
+                )+
+                Some(total)
             }
         }
 

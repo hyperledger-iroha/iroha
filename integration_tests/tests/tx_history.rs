@@ -128,31 +128,45 @@ async fn submit_entrypoint(
     http: &reqwest::Client,
     client: &Client,
     entrypoint: TransactionEntrypoint,
+    timeout: Duration,
 ) -> Result<HashOf<TransactionEntrypoint>> {
     let entrypoint_hash = entrypoint.hash();
-    let response = http
-        .post(client.torii_url.join("/transaction/entrypoint")?)
-        .header("content-type", "application/x-norito")
-        .body(encode_versioned_entrypoint(&entrypoint))
-        .send()
-        .await?;
-    let status = response.status();
-    let header_hash = response
-        .headers()
-        .get("x-iroha-transaction-hash")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let body = response.text().await.unwrap_or_default();
-    ensure!(
-        status == reqwest::StatusCode::ACCEPTED,
-        "entrypoint submit failed with {status}: {body}"
-    );
-    assert_eq!(
-        header_hash.as_deref(),
-        Some(entrypoint_hash.to_string().as_str()),
-        "Torii should return the submitted entrypoint hash"
-    );
-    Ok(entrypoint_hash)
+    let body = encode_versioned_entrypoint(&entrypoint);
+    let deadline = Instant::now() + timeout;
+    loop {
+        let response = http
+            .post(client.torii_url.join("/transaction/entrypoint")?)
+            .header("content-type", "application/x-norito")
+            .body(body.clone())
+            .send()
+            .await?;
+        let status = response.status();
+        let header_hash = response
+            .headers()
+            .get("x-iroha-transaction-hash")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let response_body = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::ACCEPTED {
+            assert_eq!(
+                header_hash.as_deref(),
+                Some(entrypoint_hash.to_string().as_str()),
+                "Torii should return the submitted entrypoint hash"
+            );
+            return Ok(entrypoint_hash);
+        }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            && is_retryable_queue_pressure(&response_body)
+            && Instant::now() < deadline
+        {
+            sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+        ensure!(
+            status == reqwest::StatusCode::ACCEPTED,
+            "entrypoint submit failed with {status}: {response_body}"
+        );
+    }
 }
 
 async fn wait_for_entrypoint_applied(
@@ -185,35 +199,43 @@ async fn wait_for_entrypoint_applied(
     ))
 }
 
-async fn wait_for_height(client: &Client, target: u64, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_height = 0;
-    while Instant::now() < deadline {
-        let poll_client = client.clone();
-        let status = tokio::task::spawn_blocking(move || poll_client.get_status()).await??;
-        last_height = status.blocks;
-        if last_height >= target {
-            return Ok(());
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-    Err(eyre!(
-        "timed out waiting for height {target}; last height={last_height}"
-    ))
+fn is_retryable_queue_pressure(error: &(impl std::fmt::Display + ?Sized)) -> bool {
+    let message = error.to_string();
+    message.contains("PRTRY:QUEUE_LATENCY")
+        || message.contains("queue_latency_saturated")
+        || message.contains("429 Too Many Requests")
 }
 
 async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
-    while network.client().get_status()?.blocks < target {
+    let client = network.client();
+    let deadline = Instant::now() + network.sync_timeout();
+    loop {
+        let status_client = client.clone();
+        let blocks = tokio::task::spawn_blocking(move || status_client.get_status())
+            .await??
+            .blocks;
+        if blocks >= target {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out advancing chain to height {target}; last height={blocks}");
+        }
+
         let submit_client = network.client();
-        tokio::task::spawn_blocking(move || {
+        let submitted = tokio::task::spawn_blocking(move || {
             submit_client.submit(Log::new(
                 Level::INFO,
                 "sealed reveal height tick".to_owned(),
             ))
         })
-        .await??;
+        .await?;
+        if let Err(error) = submitted
+            && !is_retryable_queue_pressure(&error)
+        {
+            return Err(error.into());
+        }
+        sleep(Duration::from_secs(1)).await;
     }
-    wait_for_height(&network.client(), target, network.sync_timeout()).await
 }
 
 #[tokio::test]
@@ -257,8 +279,13 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     let commitment =
         SignedSealedTransactionCommitment::sign(commitment_payload, client.key_pair.private_key());
     let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(commitment);
-    let commitment_entrypoint_hash =
-        submit_entrypoint(&http, &client, commitment_entrypoint).await?;
+    let commitment_entrypoint_hash = submit_entrypoint(
+        &http,
+        &client,
+        commitment_entrypoint,
+        network.sync_timeout(),
+    )
+    .await?;
     wait_for_entrypoint_applied(
         &client,
         commitment_entrypoint_hash,
@@ -270,7 +297,8 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
 
     let reveal = SealedTransactionReveal::new(commitment_hash, inner_tx, salt);
     let reveal_entrypoint = TransactionEntrypoint::SealedReveal(reveal);
-    let reveal_entrypoint_hash = submit_entrypoint(&http, &client, reveal_entrypoint).await?;
+    let reveal_entrypoint_hash =
+        submit_entrypoint(&http, &client, reveal_entrypoint, network.sync_timeout()).await?;
     wait_for_entrypoint_applied(
         &client,
         reveal_entrypoint_hash,

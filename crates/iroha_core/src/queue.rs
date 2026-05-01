@@ -6071,8 +6071,34 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let hash = tx.as_ref().hash();
+        let entrypoint = tx.entrypoint().clone();
+        let entrypoint_hash = tx.hash_as_entrypoint();
         let payload = tx.entrypoint_bytes();
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let tx = AcceptedTransaction::accept_gossip_entrypoint_with_payload(
+            entrypoint,
+            Arc::clone(&payload),
+            entrypoint_hash,
+            &ChainId::from("00000000-0000-0000-0000-000000000000"),
+            Duration::from_millis(10),
+            tx_limits,
+            &crypto_cfg,
+        )
+        .expect("accept gossip entrypoint with cached payload");
+        let hash = tx.as_ref().hash();
+        assert!(
+            Arc::ptr_eq(&tx.entrypoint_bytes(), &payload),
+            "accepted gossip transaction should reuse inbound entrypoint bytes"
+        );
 
         queue
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))

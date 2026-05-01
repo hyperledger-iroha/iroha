@@ -20884,22 +20884,6 @@ fn block_proofs_for_entry_from_kura(
             block_height,
         })?;
 
-    let external_count = block.external_entrypoint_count();
-    let entry_root = if entry_index < external_count {
-        header
-            .merkle_root()
-            .ok_or(BlockProofError::MerkleProofUnavailable {
-                entry_hash,
-                block_height,
-            })?
-    } else {
-        block
-            .full_entry_merkle_root()
-            .ok_or(BlockProofError::MerkleProofUnavailable {
-                entry_hash,
-                block_height,
-            })?
-    };
     let entry_index_u32: u32 =
         entry_index
             .try_into()
@@ -20908,14 +20892,42 @@ fn block_proofs_for_entry_from_kura(
                 block_height,
             })?;
 
-    let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
-    let entry_receipt_proof =
-        entry_merkle
-            .get_proof(entry_index_u32)
+    let external_count = block.external_entrypoint_count();
+    let (entry_root, entry_receipt_proof) = if entry_index < external_count {
+        let entry_root = header
+            .merkle_root()
             .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
             })?;
+        let external_hashes = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash());
+        let external_merkle: CanonMerkleTree<_> = external_hashes.collect();
+        let proof = external_merkle.get_proof(entry_index_u32).ok_or(
+            BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            },
+        )?;
+        (entry_root, proof)
+    } else {
+        let entry_root =
+            block
+                .full_entry_merkle_root()
+                .ok_or(BlockProofError::MerkleProofUnavailable {
+                    entry_hash,
+                    block_height,
+                })?;
+        let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
+        let proof = entry_merkle.get_proof(entry_index_u32).ok_or(
+            BlockProofError::MerkleProofUnavailable {
+                entry_hash,
+                block_height,
+            },
+        )?;
+        (entry_root, proof)
+    };
 
     let entry_receipt = BlockReceiptProof::new(entry_hash, entry_receipt_proof);
 

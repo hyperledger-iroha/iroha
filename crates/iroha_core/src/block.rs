@@ -530,8 +530,7 @@ type QuarantineClassifier = fn(&iroha_data_model::transaction::SignedTransaction
 type CommittedBlockEval = Result<CommittedBlock, (Box<ValidBlock>, Box<BlockValidationError>)>;
 type WithCommittedBlockEvents = WithEvents<CommittedBlockEval>;
 
-struct PreparedBlockTransaction<'tx> {
-    tx: &'tx SignedTransaction,
+struct PreparedBlockTransaction {
     metadata: crate::tx::PreparedTransactionMetadata,
 }
 
@@ -4543,15 +4542,16 @@ pub(crate) mod valid {
                 // No callback available here; rejection is emitted by the caller in
                 // `_with_events` variants. Keep behavior unchanged.
                 let _ = ev; // avoid unused warning if optimized out
-                drop(prepared_txs);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for prepared in &prepared_txs {
-                    let tx = prepared.tx;
+                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
+                    .into_iter()
+                    .zip(prepared_txs.iter())
+                {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4563,7 +4563,6 @@ pub(crate) mod valid {
                     cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
-            drop(prepared_txs);
             if let Some(timings) = timings.as_deref_mut() {
                 timings.stateless_snapshot_ms = to_ms(static_snapshot_start.elapsed());
             }
@@ -4599,11 +4598,12 @@ pub(crate) mod valid {
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             let tx_start = Instant::now();
-            Self::validate_and_record_transactions(
+            Self::validate_and_record_transactions_with_prepared(
                 &mut block,
                 &mut state_block,
                 timings.as_deref_mut(),
                 true,
+                Some(&prepared_txs),
             );
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_tx_ms = to_ms(tx_start.elapsed());
@@ -4733,15 +4733,16 @@ pub(crate) mod valid {
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
                 });
                 send_events(ev);
-                drop(prepared_txs);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Some(context) = cache_context {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for prepared in &prepared_txs {
-                    let tx = prepared.tx;
+                for (tx, prepared) in Self::collect_external_signed_transactions(&block)
+                    .into_iter()
+                    .zip(prepared_txs.iter())
+                {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -4753,7 +4754,6 @@ pub(crate) mod valid {
                     cache.insert_ok(prepared.metadata.signed_hash, expires_at_ms, not_before_ms);
                 }
             }
-            drop(prepared_txs);
             // Release block writer before creating new one
             let _ = voting_block.take();
             if let Err(error) = state.ensure_da_indexes_hydrated() {
@@ -4771,7 +4771,13 @@ pub(crate) mod valid {
                 state.block(block.header())
             };
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, &mut state_block, None, true);
+            Self::validate_and_record_transactions_with_prepared(
+                &mut block,
+                &mut state_block,
+                None,
+                true,
+                Some(&prepared_txs),
+            );
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -5056,7 +5062,7 @@ pub(crate) mod valid {
         }
 
         fn committed_heights_for_prepared_transactions(
-            prepared_txs: &[PreparedBlockTransaction<'_>],
+            prepared_txs: &[PreparedBlockTransaction],
             transactions: &impl TransactionsReadOnly,
         ) -> Vec<Option<NonZeroUsize>> {
             prepared_txs
@@ -5065,34 +5071,36 @@ pub(crate) mod valid {
                 .collect()
         }
 
-        fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction<'_>> {
+        fn signed_transaction_from_entrypoint(
+            entrypoint: &TransactionEntrypoint,
+        ) -> Option<&SignedTransaction> {
+            match entrypoint {
+                TransactionEntrypoint::External(tx) => Some(tx),
+                TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => None,
+            }
+        }
+
+        fn collect_external_signed_transactions(block: &SignedBlock) -> Vec<&SignedTransaction> {
             if let Some(entries) = block.external_entrypoints_slice() {
                 entries
                     .iter()
-                    .filter_map(|entry| match entry {
-                        TransactionEntrypoint::External(tx) => Some(tx),
-                        TransactionEntrypoint::SealedReveal(reveal) => {
-                            Some(reveal.signed_transaction())
-                        }
-                        TransactionEntrypoint::SealedCommitment(_)
-                        | TransactionEntrypoint::PrivateKaigi(_)
-                        | TransactionEntrypoint::Time(_) => None,
-                    })
-                    .map(|tx| PreparedBlockTransaction {
-                        tx,
-                        metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
-                    })
+                    .filter_map(Self::signed_transaction_from_entrypoint)
                     .collect()
             } else {
-                block
-                    .transactions_vec()
-                    .iter()
-                    .map(|tx| PreparedBlockTransaction {
-                        tx,
-                        metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
-                    })
-                    .collect()
+                block.transactions_vec().iter().collect()
             }
+        }
+
+        fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
+            Self::collect_external_signed_transactions(block)
+                .into_iter()
+                .map(|tx| PreparedBlockTransaction {
+                    metadata: crate::tx::AcceptedTransaction::prepare_signed_metadata(tx),
+                })
+                .collect()
         }
 
         /// Static checks that do not require holding a state view.
@@ -5111,7 +5119,7 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
-            prepared_txs: &[PreparedBlockTransaction<'_>],
+            prepared_txs: &[PreparedBlockTransaction],
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
@@ -5127,12 +5135,28 @@ pub(crate) mod valid {
                 prepared_txs.len(),
                 "committed-height snapshot must align with block transaction list",
             );
+            if committed_heights.len() != prepared_txs.len() {
+                return Err(BlockValidationError::MerkleRootMismatch);
+            }
+            let signed_txs = Self::collect_external_signed_transactions(block);
+            debug_assert_eq!(
+                signed_txs.len(),
+                prepared_txs.len(),
+                "prepared metadata must align with signed block transactions",
+            );
+            if signed_txs.len() != prepared_txs.len() {
+                return Err(BlockValidationError::MerkleRootMismatch);
+            }
             let mut seen_hashes: std::collections::BTreeSet<HashOf<SignedTransaction>> =
                 std::collections::BTreeSet::new();
             let mut seen_sealed_commitments = std::collections::BTreeSet::new();
 
-            for (prepared, committed_height) in prepared_txs.iter().zip(committed_heights.iter()) {
-                let tx = prepared.tx;
+            for ((tx, prepared), committed_height) in signed_txs
+                .iter()
+                .copied()
+                .zip(prepared_txs.iter())
+                .zip(committed_heights.iter())
+            {
                 let tx_hash = prepared.metadata.signed_hash;
                 // In case of soft-fork transaction is check if it was added at the same height as candidate block.
                 if committed_height
@@ -5289,8 +5313,12 @@ pub(crate) mod valid {
                 let mut signatures = Vec::new();
                 let mut public_keys = Vec::new();
                 let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
-                for (idx, prepared) in prepared_txs.iter().enumerate() {
-                    let tx = prepared.tx;
+                for (idx, (tx, prepared)) in signed_txs
+                    .iter()
+                    .copied()
+                    .zip(prepared_txs.iter())
+                    .enumerate()
+                {
                     let signature = tx.signature().payload().payload();
                     if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
                         continue;
@@ -5330,35 +5358,37 @@ pub(crate) mod valid {
                             first_bad_ed25519_slice(messages, signatures, public_keys, &mut scratch)
                         {
                             let idx = items[range_start + relative_idx].idx;
-                            return Err(signature_error(prepared_txs[idx].tx, detail));
+                            return Err(signature_error(signed_txs[idx], detail));
                         }
                         let idx = items.get(range_start).map_or(0, |item| item.idx);
-                        return Err(signature_error(prepared_txs[idx].tx, err.to_string()));
+                        return Err(signature_error(signed_txs[idx], err.to_string()));
                     }
                     for item in &items[range_start..range_end] {
                         ed25519_prechecked[item.idx] = true;
                     }
                 }
             }
-            let validate_tx =
-                |(idx, prepared): (usize, &PreparedBlockTransaction<'_>)| -> Option<BlockValidationError> {
-                    let tx = prepared.tx;
-                    if is_genesis_block {
-                        return AcceptedTransaction::validate_genesis_with_now(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            genesis_account,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                        )
-                        .err()
-                        .map(BlockValidationError::TransactionAccept);
-                    }
+            let validate_tx = |(idx, (tx, prepared)): (
+                usize,
+                (&SignedTransaction, &PreparedBlockTransaction),
+            )|
+             -> Option<BlockValidationError> {
+                if is_genesis_block {
+                    return AcceptedTransaction::validate_genesis_with_now(
+                        tx,
+                        chain_id,
+                        max_clock_drift,
+                        genesis_account,
+                        crypto_cfg.as_ref(),
+                        block_creation_time,
+                    )
+                    .err()
+                    .map(BlockValidationError::TransactionAccept);
+                }
 
-                    let stateless = if crate::tx::is_heartbeat_transaction(tx) {
-                        if ed25519_prechecked[idx] {
-                            AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+                let stateless = if crate::tx::is_heartbeat_transaction(tx) {
+                    if ed25519_prechecked[idx] {
+                        AcceptedTransaction::validate_heartbeat_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                                 tx,
                                 chain_id,
                                 max_clock_drift,
@@ -5367,29 +5397,8 @@ pub(crate) mod valid {
                                 block_creation_time,
                                 &prepared.metadata,
                             )
-                        } else {
-                            AcceptedTransaction::validate_heartbeat_with_now_and_prepared_metadata(
-                                tx,
-                                chain_id,
-                                max_clock_drift,
-                                tx_params,
-                                crypto_cfg.as_ref(),
-                                block_creation_time,
-                                &prepared.metadata,
-                            )
-                        }
-                    } else if ed25519_prechecked[idx] {
-                        AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            &prepared.metadata,
-                        )
                     } else {
-                        AcceptedTransaction::validate_with_now_and_prepared_metadata(
+                        AcceptedTransaction::validate_heartbeat_with_now_and_prepared_metadata(
                             tx,
                             chain_id,
                             max_clock_drift,
@@ -5398,19 +5407,48 @@ pub(crate) mod valid {
                             block_creation_time,
                             &prepared.metadata,
                         )
-                    };
-                    stateless.err().map(BlockValidationError::TransactionAccept)
+                    }
+                } else if ed25519_prechecked[idx] {
+                    AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+                            tx,
+                            chain_id,
+                            max_clock_drift,
+                            tx_params,
+                            crypto_cfg.as_ref(),
+                            block_creation_time,
+                            &prepared.metadata,
+                        )
+                } else {
+                    AcceptedTransaction::validate_with_now_and_prepared_metadata(
+                        tx,
+                        chain_id,
+                        max_clock_drift,
+                        tx_params,
+                        crypto_cfg.as_ref(),
+                        block_creation_time,
+                        &prepared.metadata,
+                    )
                 };
+                stateless.err().map(BlockValidationError::TransactionAccept)
+            };
 
             let use_parallel = pipeline_cfg.workers != 1 && prepared_txs.len() > 1;
             let tx_errors: Vec<Option<BlockValidationError>> = if use_parallel {
-                prepared_txs
+                signed_txs
                     .par_iter()
+                    .copied()
+                    .zip(prepared_txs.par_iter())
                     .enumerate()
                     .map(validate_tx)
                     .collect()
             } else {
-                prepared_txs.iter().enumerate().map(validate_tx).collect()
+                signed_txs
+                    .iter()
+                    .copied()
+                    .zip(prepared_txs.iter())
+                    .enumerate()
+                    .map(validate_tx)
+                    .collect()
             };
             for maybe_err in tx_errors {
                 if let Some(err) = maybe_err {
@@ -5495,8 +5533,10 @@ pub(crate) mod valid {
                 let mut cache = state.stateless_validation_cache().lock();
                 cache.set_cap(cache_cap);
                 cache.ensure_context(context);
-                for prepared in &prepared_txs {
-                    let tx = prepared.tx;
+                for (tx, prepared) in Self::collect_external_signed_transactions(block)
+                    .into_iter()
+                    .zip(prepared_txs.iter())
+                {
                     let expires_at_ms = tx
                         .time_to_live()
                         .and_then(|ttl| tx.creation_time().checked_add(ttl))
@@ -5646,6 +5686,21 @@ pub(crate) mod valid {
         /// Must be called with a **block that is _assumed_ to be valid**.
         /// When `skip_stateless_checks` is true, signature/limit validation is skipped under the
         /// assumption that the static snapshot validation already passed.
+        fn validate_and_record_transactions(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            timings: Option<&mut ValidationTimings>,
+            skip_stateless_checks: bool,
+        ) {
+            Self::validate_and_record_transactions_with_prepared(
+                block,
+                state_block,
+                timings,
+                skip_stateless_checks,
+                None,
+            );
+        }
+
         #[allow(
             clippy::too_many_lines,
             clippy::explicit_iter_loop,
@@ -5654,11 +5709,12 @@ pub(crate) mod valid {
             clippy::option_as_ref_cloned,
             clippy::needless_option_as_deref
         )]
-        fn validate_and_record_transactions(
+        fn validate_and_record_transactions_with_prepared(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
             timings: Option<&mut ValidationTimings>,
             skip_stateless_checks: bool,
+            prepared_txs: Option<&[PreparedBlockTransaction]>,
         ) {
             use rayon::prelude::*;
 
@@ -5683,24 +5739,38 @@ pub(crate) mod valid {
             // Start a new witness window for this block (SBV‑AM prototype)
             crate::sumeragi::witness::start_block();
 
-            let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
-            if external_entrypoints
-                .iter()
-                .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
-            {
+            let sequential_entrypoints =
+                block.external_entrypoints_slice().and_then(|entrypoints| {
+                    entrypoints
+                        .iter()
+                        .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
+                        .then(|| entrypoints.to_vec())
+                });
+            if let Some(entrypoints) = sequential_entrypoints {
                 Self::validate_and_record_entrypoints_sequential(
                     block,
                     state_block,
                     timings,
-                    external_entrypoints,
+                    entrypoints,
                 );
                 return;
             }
 
             // Prepare scheduling: collect transactions, their access sets, and hashes
-            let prepared_txs = Self::prepare_external_transactions(block);
-            let txs: Vec<&SignedTransaction> =
-                prepared_txs.iter().map(|prepared| prepared.tx).collect();
+            let txs = Self::collect_external_signed_transactions(block);
+            let local_prepared_txs;
+            let prepared_txs = match prepared_txs {
+                Some(prepared) if prepared.len() == txs.len() => prepared,
+                _ => {
+                    local_prepared_txs = Self::prepare_external_transactions(block);
+                    &local_prepared_txs
+                }
+            };
+            debug_assert_eq!(
+                prepared_txs.len(),
+                txs.len(),
+                "prepared metadata must align with external transactions"
+            );
             #[allow(clippy::disallowed_types)]
             let tx_hashes: std::collections::HashSet<_> = prepared_txs
                 .iter()
@@ -7106,13 +7176,13 @@ pub(crate) mod valid {
                                             ));
                                         }
                                         let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                        if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                        let byte_size = overlay.byte_size() as u64;
+                                        if max_bytes > 0 && byte_size > max_bytes {
                                             return Err((
                                                 idx,
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                        "overlay exceeds max bytes: {} > {max_bytes}",
-                                                        overlay.byte_size()
+                                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                                     )),
                                                 ),
                                             ));
@@ -7154,13 +7224,13 @@ pub(crate) mod valid {
                                         ));
                                     }
                                     let max_bytes = state_block.pipeline.overlay_max_bytes;
-                                    if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                    let byte_size = overlay.byte_size() as u64;
+                                    if max_bytes > 0 && byte_size > max_bytes {
                                         return Err((
                                             idx,
                                             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                 iroha_data_model::ValidationFail::NotPermitted(format!(
-                                                    "overlay exceeds max bytes: {} > {max_bytes}",
-                                                    overlay.byte_size()
+                                                    "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                                 )),
                                             ),
                                         ));
@@ -7194,9 +7264,10 @@ pub(crate) mod valid {
                                 )));
                             }
                             let max_bytes = state_block.pipeline.overlay_max_bytes;
-                            if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                            let byte_size = overlay.byte_size() as u64;
+                            if max_bytes > 0 && byte_size > max_bytes {
                                 return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {} > {max_bytes}", overlay.byte_size())),
+                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {byte_size} > {max_bytes}")),
                                 )));
                             }
                             Ok(PreparedEntry {
@@ -7719,13 +7790,12 @@ pub(crate) mod valid {
                                 ));
                             }
                             let max_bytes = state_block_mut.pipeline.overlay_max_bytes;
-                            if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                            let byte_size = overlay.byte_size() as u64;
+                            if max_bytes > 0 && byte_size > max_bytes {
                                 record_amx_abort(state_block_mut, idx, "prepare");
                                 return Err(TransactionRejectionReason::Validation(
                                     iroha_data_model::ValidationFail::NotPermitted(format!(
-                                        "overlay exceeds max bytes: {} > {}",
-                                        overlay.byte_size(),
-                                        max_bytes
+                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                     )),
                                 ));
                             }
@@ -8075,14 +8145,14 @@ pub(crate) mod valid {
                             continue;
                         }
                         let max_bytes = state_block.pipeline.overlay_max_bytes;
-                        if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                        let byte_size = overlay.byte_size() as u64;
+                        if max_bytes > 0 && byte_size > max_bytes {
                             record_result(
                                 idx,
                                 Err(
                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                         iroha_data_model::ValidationFail::NotPermitted(format!(
-                                            "overlay exceeds max bytes: {} > {}",
-                                            overlay.byte_size(), max_bytes
+                                            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                         )),
                                     ),
                                 ),
@@ -8272,15 +8342,15 @@ pub(crate) mod valid {
                         continue;
                     }
                     let max_bytes = state_block.pipeline.overlay_max_bytes;
-                    if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                    let byte_size = overlay.byte_size() as u64;
+                    if max_bytes > 0 && byte_size > max_bytes {
                         record_amx_abort(state_block, idx, "prepare");
                         record_result(
                             idx,
                             Err(
                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                     iroha_data_model::ValidationFail::NotPermitted(format!(
-                                        "overlay exceeds max bytes: {} > {}",
-                                        overlay.byte_size(), max_bytes
+                                        "overlay exceeds max bytes: {byte_size} > {max_bytes}"
                                     )),
                                 ),
                             ),
@@ -15104,6 +15174,67 @@ mod tests {
             TransactionEntrypoint::SealedCommitment(signed_commitment),
             TransactionEntrypoint::SealedReveal(reveal),
         )
+    }
+
+    #[test]
+    fn block_validation_external_only_records_entrypoint_hash_without_fallback() {
+        let chain_id = ChainId::from("external-only-borrowed-validation");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let signed = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "external-only".to_owned())])
+            .sign(keypair.private_key());
+        let entrypoint_hash = TransactionEntrypoint::External(signed.clone()).hash();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.hash(), entrypoint_hash);
+        assert!(
+            results[0].2.0.is_ok(),
+            "external-only transaction must execute successfully: {:?}",
+            results[0].2
+        );
+    }
+
+    #[test]
+    fn block_validation_non_external_entrypoint_uses_sequential_fallback() {
+        let chain_id = ChainId::from("non-external-sequential-fallback");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let metadata_key = Name::from_str("sequential_fallback_marker").expect("metadata key");
+        let (commitment_entrypoint, _reveal_entrypoint) =
+            sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
+        let block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.hash(), commitment_entrypoint_hash);
+        assert!(
+            results[0].2.0.is_ok(),
+            "non-external entrypoint fallback must preserve execution: {:?}",
+            results[0].2
+        );
     }
 
     #[test]

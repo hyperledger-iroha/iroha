@@ -1691,6 +1691,14 @@ impl norito::core::NoritoSerialize for PublicKey {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+    }
 }
 
 #[cfg(not(feature = "ffi_import"))]
@@ -2953,6 +2961,23 @@ mod tests {
         let from_decoded = PublicKey(decoded.clone());
         let from_original = PublicKey(compact.clone());
         assert_eq!(from_decoded, from_original);
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_encoded_len_exact_matches_norito() {
+        let pk: PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key");
+        let expected = norito::core::to_bytes(&pk)
+            .expect("encode public key")
+            .len();
+
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
+            expected
+        );
     }
 
     #[test]

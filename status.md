@@ -2,6 +2,95 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 20k post-cache tuned release gate rerun
+
+- Reran the release 4-peer, no-fault, prebuilt `20,000 TPS` / `120s` gate
+  against the current post-cache tuned binaries. Artifact:
+  `dist/izanami-prebuilt-20k-postcache-tuned-rerun-120s-20260501-170823`.
+- The runner exited `0`, offered all `2,400,000` submissions, built and used all
+  `2,400,000` prebuilt transactions, and had no prebuild fallback or build
+  failures. Ingress accepted `46,748` transactions. Submit latency
+  p50/p95/p99/max was `3109/4828/5770/7788 ms`.
+- Final quorum/strict height was `9/9` with `28,694/28,694` strict approved
+  transactions, final queue depth `18,063/2,400,000`, and
+  `tx_queue_saturated=true`. The rerun is effectively consistent with the
+  previous tuned 120s gate (`28,790` strict approved), while still far below
+  the committed-20k target.
+- Diagnostics recorded `23,090` latency-saturated ingress rejects, `312`
+  deferred local `RBC READY` events, `274` deferred `RBC DELIVER` events, `96`
+  targeted RBC payload sends, `96` targeted READY-set sends, and `66` targeted
+  BlockBodyResponse companions. There were no inline validation fallback
+  warnings, slow commit-pipeline warnings, slow block-validation warnings,
+  validation rejects, view changes, RBC store pressure, RBC evictions, or
+  pending-RBC drops.
+
+## 2026-05-01 20k post-cache targeted tuning pass
+
+- Implemented the low/medium-risk post-cache slice without public API,
+  wire-format, config, or dependency changes. Transaction gossip now derives
+  the `TransactionEntrypoint` hash directly from canonical framed Norito
+  entrypoint bytes, routes accepted gossip through a crate-private constructor
+  that seeds those inbound bytes after normal validation, and performs
+  per-entry route/plane rejection before hash/materialization where that keeps
+  existing drop reasons intact.
+- Block validation keeps external-only blocks on borrowed
+  `external_entrypoints_slice()` inspection and only allocates cloned
+  entrypoints for non-external sequential fallback. Regression coverage now
+  checks both the external-only path and the non-external sealed-commitment
+  fallback while preserving entrypoint hashes and execution results.
+- `TxOverlay` now caches its Norito instruction byte-size sum with a local
+  `OnceLock`; max-byte rejection paths compute `byte_size()` once per check and
+  reuse that value in the unchanged rejection message. The broader borrowed
+  instruction execution rewrite remains deliberately out of this pass.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib gossip_transaction_hash_from_framed_entrypoint_matches_canonical_hash -- --nocapture`
+  - `cargo test -p iroha_core --lib queue_accepts_gossip_payload_cache -- --nocapture`
+  - `cargo test -p iroha_core --lib queue_generated_gossip_payload_uses_framed_entrypoint_wire -- --nocapture`
+  - `cargo test -p iroha_core --lib overlay_byte_size_cache_matches_norito_instruction_sum -- --nocapture`
+  - `cargo test -p iroha_core --lib block_validation_external_only_records_entrypoint_hash_without_fallback -- --nocapture`
+  - `cargo test -p iroha_core --lib block_validation_non_external_entrypoint_uses_sequential_fallback -- --nocapture`
+  - `cargo test -p iroha_core --test overlay_bounds overlay_bytes_cap_rejects_and_rest_apply -- --nocapture`
+  - `cargo check -p norito -p iroha_crypto -p iroha_data_model -p iroha_core -p iroha_torii -p irohad`
+  - `git diff --check`
+- Rebuilt release binaries with
+  `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`.
+  Fresh 30s sampled artifact:
+  `dist/izanami-profile-20k-postcache-tuned-sampled-30s-20260501-165811`.
+  It exited `0`, sampled the runner plus four current peers, offered all
+  `600,000` submissions, built/used all `600,000` prebuilt transactions,
+  accepted `51,852` ingress transactions, and reached final quorum/strict
+  height `3/3` with `4,164/4,164` strict approved transactions. Submit latency
+  p50/p95/p99/max was `3484/5504/6442/8837 ms`; final queue depth was
+  `42,101/600,000` with `tx_queue_saturated=true`.
+- Fresh 120s release gate artifact:
+  `dist/izanami-prebuilt-20k-postcache-tuned-120s-20260501-165947`. It exited
+  `0`, offered all `2,400,000` submissions, built/used all `2,400,000`
+  prebuilt transactions, accepted `47,174` ingress transactions, and reached
+  final quorum/strict height `9/9` with `28,790/28,790` strict approved
+  transactions. Submit latency p50/p95/p99/max was `3193/4687/5706/7139 ms`;
+  final queue depth fell to `14,282/2,400,000`, with
+  `tx_queue_saturated=true`.
+- Against the cachepass baselines, the 30s sampled run improved strict height
+  from `2` to `3`, strict approved transactions from `4,116` to `4,164`, and
+  p95/p99 latency from `6198/7260 ms` to `5504/6442 ms`, while ingress accepted
+  transactions fell from `53,626` to `51,852`. The 120s gate improved strict
+  approved transactions from `24,623` to `28,790` (`+16.9%`) and final queue
+  depth from `23,457` to `14,282`, while ingress accepted transactions fell
+  from `52,167` to `47,174`.
+- Current-peer sample classification confirms the intended hot-path removals:
+  `Queue::encode_gossip_payload=0`, `TxOverlay::byte_size=0`, and
+  `external_entrypoints_cloned=0`. Relative to the cachepass sample,
+  current-peer pattern counts fell for `write_len_prefixed` (`22,787` to
+  `19,403`), `TransactionGossip` (`1,602` to `1,441`), and
+  `GossipTransaction` (`1,010` to `402`). Remaining visible costs are still
+  Norito/gossip decode/materialization, signed length/metadata walks
+  (`AcceptedTransaction::signed_encoded_len=1,217`,
+  `prepare_signed_metadata=50` in this sample), validation/overlay execution,
+  and crypto/math leaves. No validation rejects, DA-gate view changes, RBC
+  store pressure, RBC evictions, or pending-RBC drops were recorded in either
+  fresh run.
+
 ## 2026-05-01 20k post-cache sampled profile bottlenecks
 
 - Captured a fresh release 4-peer, no-fault, prebuilt `20,000 TPS` / `30s`
@@ -88,6 +177,22 @@ Last updated: 2026-05-01
   its reveal in the next block through the real block-builder validation path,
   checks expiry pruning after the reveal deadline, and verifies Torii resolves
   pipeline status by the sealed-reveal entrypoint hash stored in Kura/state.
+- Sealed commitments are no longer expired by the wall-clock queue TTL; their
+  lifetime remains governed by reveal-height windows during block execution.
+- Post-execution block application now indexes canonical external entrypoint
+  hashes instead of signed-transaction-only hashes, which avoids duplicate
+  transaction-index insertion mismatches when sealed commitment blocks are
+  replayed with commit-QC evidence.
+- Block receipt proof construction now uses an external-entrypoint Merkle tree
+  for external receipts and the full entrypoint tree for time-trigger receipts,
+  so sealed commitments and mixed external/time-trigger blocks verify against
+  the correct root. Explorer block totals now count external entrypoints rather
+  than only external signed transactions.
+- The multi-peer sealed pipeline integration now submits a sealed commitment,
+  waits for gossip/commit across a 4-peer network, reveals it in-window, and
+  verifies explorer lookup by the reveal entrypoint hash. The test backs off on
+  temporary queue-latency `429` responses instead of treating transient queue
+  pressure as a protocol failure.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
@@ -101,7 +206,13 @@ Last updated: 2026-05-01
   - `cargo test -p iroha_torii handler_post_transaction_honors_prefer_return_minimal --lib -- --nocapture`
   - `cargo test -p iroha_core block_pipeline_executes_sealed_reveal_and_records_entrypoint_hash --lib -- --nocapture`
   - `cargo test -p iroha_core prune_expired_sealed_commitments_removes_pending_state_after_deadline --lib -- --nocapture`
+  - `cargo test -p iroha_core sealed_commitment_is_not_expired_by_wall_clock_queue_ttl --lib -- --nocapture`
+  - `cargo test -p iroha_core apply_without_execution_indexes_sealed_commitment_entrypoint_hash --lib -- --nocapture`
+  - `cargo test -p iroha_core block_proofs_for_sealed_commitment_use_external_merkle_root --lib -- --nocapture`
+  - `cargo test -p iroha_data_model --features transparent_api proofs_for_external_entry_with_time_trigger_use_consensus_root --lib -- --nocapture`
   - `cargo test -p iroha_torii pipeline_status_handler_returns_applied_for_sealed_reveal_entrypoint_hash --lib -- --nocapture`
+  - `cargo test -p iroha_torii block_dto_counts_sealed_commitment_entrypoints --lib -- --nocapture`
+  - `cargo test -p integration_tests --test core_api sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_hash -- --nocapture`
   - `git diff --check`
 
 ## 2026-05-01 20k hot-path release gate rerun

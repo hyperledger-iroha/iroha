@@ -1318,6 +1318,27 @@ where
     }
 }
 
+fn peel_instruction_box(mut instr: &dyn Instruction) -> &dyn Instruction {
+    loop {
+        if let Some(nested) = instr.as_any().downcast_ref::<InstructionBox>() {
+            instr = &**nested;
+        } else {
+            break instr;
+        }
+    }
+}
+
+fn encoded_instruction_pair(instr: &InstructionBox) -> Option<(String, Vec<u8>)> {
+    let inner = peel_instruction_box(&**instr);
+    let type_name = Instruction::id(inner);
+    let name = instruction_registry()
+        .wire_id_for_type_name(type_name)
+        .to_string();
+    let payload = Instruction::dyn_encode(inner);
+    let payload = frame_instruction_payload(type_name, &payload).ok()?;
+    Some((name, payload))
+}
+
 impl norito::core::NoritoSerialize for InstructionBox {
     fn schema_hash() -> [u8; 16]
     where
@@ -1328,25 +1349,19 @@ impl norito::core::NoritoSerialize for InstructionBox {
     }
 
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        // Unwrap any accidental nesting of InstructionBox to reach the concrete instruction
-        fn peel(mut instr: &dyn Instruction) -> &dyn Instruction {
-            loop {
-                if let Some(nested) = instr.as_any().downcast_ref::<InstructionBox>() {
-                    instr = &**nested;
-                } else {
-                    break instr;
-                }
-            }
-        }
-
-        let inner = peel(&**self);
-        let type_name = Instruction::id(inner);
-        let name = instruction_registry()
-            .wire_id_for_type_name(type_name)
-            .to_string();
-        let payload = Instruction::dyn_encode(inner);
-        let payload = frame_instruction_payload(type_name, &payload)?;
+        let (name, payload) = encoded_instruction_pair(self).ok_or_else(|| {
+            norito::core::Error::Message("failed to encode instruction payload".to_owned())
+        })?;
         norito::core::NoritoSerialize::serialize(&(name, payload), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded_len_exact()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let pair = encoded_instruction_pair(self)?;
+        norito::core::NoritoSerialize::encoded_len_exact(&pair)
     }
 }
 
@@ -3225,6 +3240,24 @@ mod tests {
         assert_eq!(
             &payload_slice[norito::core::Header::SIZE..],
             bare.as_slice()
+        );
+    }
+
+    #[test]
+    fn instruction_box_encoded_len_exact_matches_norito() {
+        let boxed = InstructionBox::from(Log {
+            level: Level::INFO,
+            msg: "exact length".to_string(),
+        });
+        let expected = norito::core::to_bytes(&boxed)
+            .expect("serialize instruction box")
+            .len()
+            - norito::core::Header::SIZE;
+
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&boxed)
+                .expect("instruction box exact len"),
+            expected
         );
     }
 

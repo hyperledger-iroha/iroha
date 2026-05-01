@@ -274,15 +274,23 @@ impl SignedBlock {
             .find(|(_, hash)| hash == entry_hash)?;
         let idx_u32: u32 = idx.try_into().ok()?;
 
-        let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
-        let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
-
         let external_count = self.external_entrypoint_count();
-        let entry_root = if idx < external_count {
-            self.payload.header.merkle_root?
+        let (entry_root, entry_merkle_proof) = if idx < external_count {
+            let external_merkle: MerkleTree<TransactionEntrypoint> = self
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect();
+            (
+                self.payload.header.merkle_root?,
+                external_merkle.get_proof(idx_u32)?,
+            )
         } else {
-            self.full_entry_merkle_root()?
+            (
+                self.full_entry_merkle_root()?,
+                result_state.merkle.get_proof(idx_u32)?,
+            )
         };
+        let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
 
         let result_root = self.payload.header.result_merkle_root;
         let result_proof = if result_root.is_some() {
@@ -2533,6 +2541,72 @@ mod tests {
         let result_proof = proofs.result_proof.expect("result proof");
         assert!(result_proof.verify(&result_root));
         assert_eq!(result_root, expected_result_root);
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn proofs_for_external_entry_with_time_trigger_use_consensus_root() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
+        use iroha_primitives::const_vec::ConstVec;
+
+        use crate::{
+            ChainId,
+            account::AccountId,
+            transaction::{
+                ExecutionStep,
+                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
+            },
+            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+        };
+
+        let keypair = KeyPair::random();
+        let chain: ChainId = "external-proof-block".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+
+        let tx =
+            TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
+        let time_trigger = TimeTriggerEntrypoint {
+            id: "cleanup".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority,
+        };
+
+        let external_hash = tx.hash_as_entrypoint();
+        let time_hash = time_trigger.hash_as_entrypoint();
+        let entry_hashes = vec![external_hash, time_hash];
+        let results_inner = vec![
+            TransactionResultInner::Ok(DataTriggerSequence::default()),
+            TransactionResultInner::Ok(DataTriggerSequence::default()),
+        ];
+        let expected_result_root = {
+            let result_hashes = results_inner.iter().map(TransactionResult::hash_from_inner);
+            let tree: MerkleTree<TransactionResult> = result_hashes.collect();
+            tree.root().expect("result root")
+        };
+
+        let header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block.set_transaction_results(vec![time_trigger], &entry_hashes, results_inner);
+
+        let proofs = block
+            .proofs_for_entry_hash(&external_hash)
+            .expect("external proof exists");
+        let consensus_root = block.header().merkle_root().expect("consensus root");
+        let full_root = block.full_entry_merkle_root().expect("full root");
+        assert_ne!(consensus_root, full_root);
+        assert_eq!(proofs.entry_root, consensus_root);
+        assert!(proofs.entry_proof.verify(&proofs.entry_root));
+
+        let result_root = proofs.result_root.expect("result root");
+        assert_eq!(result_root, expected_result_root);
+        let result_proof = proofs.result_proof.expect("result proof");
+        assert!(result_proof.verify(&result_root));
     }
 
     #[cfg(feature = "transparent_api")]
