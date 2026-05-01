@@ -58,11 +58,14 @@ Last updated: 2026-05-01
 - `torii.offline_issuer` configuration now requires an attestation verifier
   public key and explicitly accepts only Ed25519 or Secp256k1 issuer/verifier
   keys.
+- Refreshed the minimal `iroha_config` fixture snapshot so the Torii defaults
+  include `offline_issuer: None`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_config -p iroha_torii --features app_api`
   - `cargo test -p iroha_torii offline_v2_issuer`
   - `cargo test -p iroha_config torii_offline_issuer`
+  - `cargo test -p iroha_config --test fixtures`
 
 ## 2026-05-01 Iroha Connect default relay TTL restored
 

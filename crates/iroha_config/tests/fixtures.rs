@@ -1047,6 +1047,7 @@ fn minimal_config_snapshot() {
                 },
                 onboarding: None,
                 faucet: None,
+                offline_issuer: None,
                 ram_lfe: None,
                 tx_history: None,
                 app_api: AppApi {
