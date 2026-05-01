@@ -440,6 +440,59 @@ pub mod extractors {
     #[derive(Clone, Copy, Debug)]
     pub struct NoritoVersioned<T>(pub T);
 
+    /// Extractor of raw Norito-versioned bytes from the request body.
+    ///
+    /// Missing or unsupported `Content-Type` yields `415 Unsupported Media Type`.
+    /// Callers that need exact payload bytes can decode the returned buffer with
+    /// the appropriate versioned decoder.
+    #[derive(Clone, Debug)]
+    pub struct NoritoVersionedBytes(pub Bytes);
+
+    impl<S> FromRequest<S> for NoritoVersionedBytes
+    where
+        Bytes: FromRequest<S>,
+        S: Send + Sync,
+    {
+        type Rejection = Response;
+
+        async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+            let declared = req
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|hv| hv.to_str().ok())
+                .map(str::trim)
+                .filter(|ct| !ct.is_empty())
+                .map(str::to_owned);
+
+            let Some(raw) = declared.as_deref() else {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "Norito requests must set `Content-Type: {}`",
+                        super::NORITO_MIME_TYPE
+                    ),
+                )
+                    .into_response());
+            };
+
+            if !super::is_norito_media_type(raw) {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "Norito requests must set `Content-Type: {}` (got `{raw}`)",
+                        super::NORITO_MIME_TYPE
+                    ),
+                )
+                    .into_response());
+            }
+
+            Bytes::from_request(req, state)
+                .await
+                .map(NoritoVersionedBytes)
+                .map_err(IntoResponse::into_response)
+        }
+    }
+
     impl<S, T> FromRequest<S> for NoritoVersioned<T>
     where
         Bytes: FromRequest<S>,

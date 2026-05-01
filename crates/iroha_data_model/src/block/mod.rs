@@ -921,9 +921,10 @@ impl fmt::Display for error::BlockRejectionReason {
     }
 }
 
-/// Prefix versioned [`SignedBlock`] bytes with a Norito header using the default
-/// framing flags. The returned buffer contains the original version byte
-/// followed by the framed payload.
+/// Prefix versioned [`SignedBlock`] bytes with a Norito header using the layout
+/// flags recorded by the encoder, falling back to the default framing flags.
+/// The returned buffer contains the original version byte followed by the
+/// framed payload.
 ///
 /// # Errors
 ///
@@ -1064,7 +1065,7 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
             default_encode_flags()
         );
     }
-    let encode_flags = default_encode_flags();
+    let encode_flags = norito::codec::take_last_encode_flags().unwrap_or_else(default_encode_flags);
     #[cfg(debug_assertions)]
     if norito::debug_trace_enabled() {
         eprintln!("write_signed_block_header flags=0x{encode_flags:02x}");
@@ -1128,10 +1129,7 @@ fn validate_signed_block_header(payload: &[u8]) -> Result<(), NoritoFrameError> 
         return Err(NoritoFrameError::ChecksumMismatch);
     }
     let flags = payload[header_size - 1];
-    let expected_flags = default_encode_flags();
-    if flags != expected_flags {
-        return Err(NoritoFrameError::UnsupportedFeature("layout flag"));
-    }
+    norito::core::validate_header_flags(flags)?;
     Ok(())
 }
 
@@ -1181,7 +1179,11 @@ pub fn decode_versioned_signed_block(
     let deframed = deframe_versioned_signed_block_bytes(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
 
-    decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
+    decode_framed_versioned_signed_block_inner(
+        deframed.bytes.as_ref(),
+        deframed.bare_versioned.as_ref(),
+        bytes,
+    )
 }
 
 /// Decode a Norito-framed [`SignedBlock`] payload, validating the header before
@@ -1204,7 +1206,11 @@ pub fn decode_framed_signed_block(
     let deframed = deframe_versioned_signed_block_bytes(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
 
-    decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
+    decode_framed_versioned_signed_block_inner(
+        deframed.bytes.as_ref(),
+        deframed.bare_versioned.as_ref(),
+        bytes,
+    )
 }
 
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
@@ -1217,6 +1223,30 @@ fn decode_versioned_signed_block_inner(
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
     iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)
+}
+
+fn decode_framed_versioned_signed_block_inner(
+    framed_versioned: &[u8],
+    bare_versioned: &[u8],
+    raw_for_error: &[u8],
+) -> Result<SignedBlock, iroha_version::error::Error> {
+    use iroha_version::{RawVersioned, UnsupportedVersion, error::Error as VersionError};
+
+    let Some((&version, _payload)) = bare_versioned.split_first() else {
+        return Err(VersionError::NotVersioned);
+    };
+
+    if !SignedBlock::supported_versions().contains(&version) {
+        return Err(VersionError::UnsupportedVersion(Box::new(
+            UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
+        )));
+    }
+
+    let framed_payload = framed_versioned
+        .get(1..)
+        .ok_or(VersionError::NotVersioned)?;
+    let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
+    view.decode::<SignedBlock>().map_err(VersionError::from)
 }
 
 pub mod prelude {
@@ -1938,7 +1968,7 @@ mod tests {
     }
 
     #[test]
-    fn framed_signed_block_uses_default_flags() {
+    fn framed_signed_block_preserves_recorded_layout_flags() {
         use nonzero_ext::nonzero;
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -1956,12 +1986,15 @@ mod tests {
             result: None,
         };
 
-        let versioned = block.encode_versioned();
+        let (payload, expected_flags) = norito::codec::encode_with_header_flags(&block);
+        let mut versioned = Vec::with_capacity(1 + payload.len());
+        versioned.push(block.version());
+        versioned.extend_from_slice(&payload);
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame payload");
 
         let header_size = norito::core::Header::SIZE;
         let flags = framed[1 + header_size - 1];
-        assert_eq!(flags, norito::core::default_encode_flags());
+        assert_eq!(flags, expected_flags);
     }
 
     #[test]

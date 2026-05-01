@@ -384,7 +384,8 @@ pub const fn should_emit_varint_tail(_len: usize) -> bool {
 }
 
 #[inline]
-const fn supported_header_flags() -> u8 {
+/// Return the set of Norito header layout flags supported by this build.
+pub const fn supported_header_flags() -> u8 {
     // Mask of known header flag bits allowed in v1 headers.
     header_flags::PACKED_SEQ
         | header_flags::COMPACT_LEN
@@ -393,7 +394,8 @@ const fn supported_header_flags() -> u8 {
 }
 
 #[inline]
-fn validate_header_flags(flags: u8) -> Result<(), Error> {
+/// Validate that a Norito header flag byte uses only supported v1 layout combinations.
+pub fn validate_header_flags(flags: u8) -> Result<(), Error> {
     let unsupported_layout = flags & !supported_header_flags();
     if unsupported_layout != 0 {
         return Err(Error::UnsupportedFeature("layout flag"));

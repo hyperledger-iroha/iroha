@@ -3,7 +3,8 @@
 
 use std::time::Duration;
 
-use eyre::{Result, bail, ensure, eyre};
+use eyre::{Result, WrapErr, bail, ensure, eyre};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -192,6 +193,62 @@ async fn submit_entrypoint_maybe_rejected(
     }
 }
 
+async fn submit_entrypoint_once_maybe_rejected(
+    http: &reqwest::Client,
+    client: &Client,
+    entrypoint: TransactionEntrypoint,
+) -> Result<EntrypointSubmitOutcome> {
+    let entrypoint_hash = entrypoint.hash();
+    let response = http
+        .post(client.torii_url.join("/transaction/entrypoint")?)
+        .header("content-type", "application/x-norito")
+        .body(encode_versioned_entrypoint(&entrypoint))
+        .send()
+        .await?;
+    let status = response.status();
+    let header_hash = response
+        .headers()
+        .get("x-iroha-transaction-hash")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let response_body = response.text().await.unwrap_or_default();
+    if status == reqwest::StatusCode::ACCEPTED {
+        assert_eq!(
+            header_hash.as_deref(),
+            Some(entrypoint_hash.to_string().as_str()),
+            "Torii should return the submitted entrypoint hash"
+        );
+        return Ok(EntrypointSubmitOutcome::Accepted(entrypoint_hash));
+    }
+    Ok(EntrypointSubmitOutcome::Rejected {
+        status,
+        body: response_body,
+    })
+}
+
+async fn submit_entrypoints_round_robin(
+    http: &reqwest::Client,
+    clients: &[Client],
+    entrypoints: Vec<TransactionEntrypoint>,
+    timeout: Duration,
+    parallelism: usize,
+) -> Result<Vec<HashOf<TransactionEntrypoint>>> {
+    ensure!(
+        !clients.is_empty(),
+        "entrypoint submission requires at least one peer client"
+    );
+    let parallelism = parallelism.max(1).min(clients.len());
+    stream::iter(entrypoints.into_iter().enumerate())
+        .map(|(index, entrypoint)| {
+            let http = http.clone();
+            let client = clients[index % clients.len()].clone();
+            async move { submit_entrypoint(&http, &client, entrypoint, timeout).await }
+        })
+        .buffer_unordered(parallelism)
+        .try_collect()
+        .await
+}
+
 async fn wait_for_entrypoint_applied(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -265,6 +322,24 @@ fn is_retryable_queue_pressure(error: &(impl std::fmt::Display + ?Sized)) -> boo
     message.contains("PRTRY:QUEUE_LATENCY")
         || message.contains("queue_latency_saturated")
         || message.contains("429 Too Many Requests")
+}
+
+fn assert_duplicate_reveal_outcome(
+    outcome: EntrypointSubmitOutcome,
+    reveal_hash: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
+    match outcome {
+        EntrypointSubmitOutcome::Accepted(hash) => {
+            assert_eq!(hash, reveal_hash);
+        }
+        EntrypointSubmitOutcome::Rejected { status, body } => {
+            ensure!(
+                status.is_client_error(),
+                "duplicate reveal should be rejected with a client error or accepted for no-op processing, got {status}: {body}"
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
@@ -350,6 +425,48 @@ fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
         })?
         .value()
         .clone())
+}
+
+async fn wait_for_all_peers_to_observe_reveals(
+    clients: &[Client],
+    marker_keys: &[Name],
+    asset_id: &AssetId,
+    expected_amount: &Numeric,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_gap = String::new();
+    loop {
+        let mut all_observed = true;
+        for (index, client) in clients.iter().enumerate() {
+            let peer_result = (|| -> Result<()> {
+                for marker in marker_keys {
+                    ensure!(
+                        account_has_metadata(client, marker)?,
+                        "metadata marker {marker} is missing"
+                    );
+                }
+                let amount = numeric_asset_value(client, asset_id)?;
+                ensure!(
+                    amount == *expected_amount,
+                    "asset amount is {amount}, expected {expected_amount}"
+                );
+                Ok(())
+            })();
+            if let Err(error) = peer_result {
+                all_observed = false;
+                last_gap = format!("peer {index}: {error}");
+                break;
+            }
+        }
+        if all_observed {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for all peers to observe reveals; last gap: {last_gap}");
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
 }
 
 #[tokio::test]
@@ -447,13 +564,13 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_min_peers(4)
-            .with_pipeline_time(Duration::from_secs(5))
-            .with_sync_timeout(Duration::from_secs(180)),
+            .with_pipeline_time(Duration::from_secs(10))
+            .with_sync_timeout(Duration::from_secs(240)),
         stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
     )
     .await?
@@ -461,6 +578,11 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         return Ok(());
     };
     let client = network.client();
+    let peer_clients: Vec<_> = network.peers().iter().map(NetworkPeer::client).collect();
+    ensure!(
+        peer_clients.len() >= 4,
+        "adversarial sealed reveal coverage requires at least 4 peers"
+    );
     let http = reqwest::Client::new();
 
     let asset_definition_id = AssetDefinitionId::new(
@@ -481,6 +603,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     let mut commitment_entrypoints = Vec::new();
     let mut reveal_entrypoints = Vec::new();
     let mut marker_keys = Vec::new();
+    let primary_submit_clients = vec![client.clone(); peer_clients.len()];
 
     for idx in 0..4_u8 {
         let marker = format!("sealed_batch_marker_{idx}").parse::<Name>()?;
@@ -514,69 +637,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     commitment_entrypoints.push(mint_commitment);
     reveal_entrypoints.push(mint_reveal.clone());
 
-    let mut commitment_hashes = Vec::new();
-    for commitment in commitment_entrypoints {
-        commitment_hashes.push(submit_entrypoint(&http, &client, commitment, timeout).await?);
-    }
-    for hash in commitment_hashes {
-        wait_for_entrypoint_applied(&client, hash, status_timeout).await?;
-    }
-
-    advance_to_height(&network, reveal_after_height).await?;
-
-    let mut reveal_hashes = Vec::new();
-    for reveal in reveal_entrypoints.iter().cloned() {
-        reveal_hashes.push(submit_entrypoint(&http, &client, reveal, timeout).await?);
-    }
-
-    let mut reveal_heights = Vec::new();
-    for hash in &reveal_hashes {
-        let height = wait_for_entrypoint_applied(&client, *hash, status_timeout)
-            .await?
-            .ok_or_else(|| eyre!("applied reveal {hash} did not report a block height"))?;
-        reveal_heights.push(height);
-    }
-    ensure!(
-        reveal_heights
-            .iter()
-            .all(|height| *height == reveal_heights[0]),
-        "sealed reveals should be batched into one block; observed heights={reveal_heights:?}"
-    );
-
-    for marker in &marker_keys {
-        ensure!(
-            account_has_metadata(&client, marker)?,
-            "batched sealed reveal did not apply metadata marker {marker}"
-        );
-    }
-    assert_eq!(numeric_asset_value(&client, &asset_id)?, mint_amount);
-
-    match submit_entrypoint_maybe_rejected(&http, &client, mint_reveal, timeout).await? {
-        EntrypointSubmitOutcome::Accepted(hash) => {
-            assert_eq!(
-                hash,
-                *reveal_hashes
-                    .last()
-                    .expect("mint reveal hash should be recorded")
-            );
-        }
-        EntrypointSubmitOutcome::Rejected { status, body } => {
-            ensure!(
-                status.is_client_error(),
-                "duplicate reveal should be rejected with a client error or accepted for no-op processing, got {status}: {body}"
-            );
-        }
-    }
-    advance_to_height(&network, client.get_status()?.blocks + 2).await?;
-    assert_eq!(
-        numeric_asset_value(&client, &asset_id)?,
-        mint_amount,
-        "duplicate reveal must not execute the sealed inner transaction twice"
-    );
-
     let expired_marker = "sealed_expired_marker".parse::<Name>()?;
-    let expired_base_height = client.get_status()?.blocks;
-    let expired_reveal_height = expired_base_height + 1;
+    let expired_reveal_height = reveal_after_height + 1;
     let expired_deadline_height = expired_reveal_height;
     let (_, expired_commitment, expired_reveal) = sealed_entrypoints_for_instructions(
         &client,
@@ -592,9 +654,72 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         expired_reveal_height,
         expired_deadline_height,
     );
-    let expired_commitment_hash =
-        submit_entrypoint(&http, &client, expired_commitment, timeout).await?;
-    wait_for_entrypoint_applied(&client, expired_commitment_hash, status_timeout).await?;
+    commitment_entrypoints.push(expired_commitment);
+
+    let commitment_hashes = submit_entrypoints_round_robin(
+        &http,
+        &primary_submit_clients,
+        commitment_entrypoints,
+        timeout,
+        1,
+    )
+    .await
+    .wrap_err("submitting sealed commitment batch")?;
+    for hash in commitment_hashes {
+        wait_for_entrypoint_applied(&client, hash, status_timeout).await?;
+    }
+
+    advance_to_height(&network, reveal_after_height).await?;
+
+    let reveal_hashes = submit_entrypoints_round_robin(
+        &http,
+        &primary_submit_clients,
+        reveal_entrypoints.clone(),
+        timeout,
+        primary_submit_clients.len(),
+    )
+    .await
+    .wrap_err("submitting same-block sealed reveal batch")?;
+
+    let mut reveal_heights = Vec::new();
+    for hash in &reveal_hashes {
+        let height = wait_for_entrypoint_applied(&client, *hash, status_timeout)
+            .await?
+            .ok_or_else(|| eyre!("applied reveal {hash} did not report a block height"))?;
+        reveal_heights.push(height);
+    }
+    ensure!(
+        reveal_heights
+            .iter()
+            .all(|height| *height == reveal_heights[0]),
+        "sealed reveals should be batched into one block; observed heights={reveal_heights:?}"
+    );
+
+    wait_for_all_peers_to_observe_reveals(
+        &peer_clients,
+        &marker_keys,
+        &asset_id,
+        &mint_amount,
+        status_timeout,
+    )
+    .await?;
+
+    let mint_reveal_hash = mint_reveal.hash();
+    let primary_duplicate =
+        submit_entrypoint_maybe_rejected(&http, &client, mint_reveal.clone(), timeout).await?;
+    assert_duplicate_reveal_outcome(primary_duplicate, mint_reveal_hash)?;
+
+    let duplicate_replay_client = peer_clients
+        .get(1)
+        .expect("adversarial test should have a non-primary peer client");
+    let duplicate_outcome =
+        submit_entrypoint_once_maybe_rejected(&http, duplicate_replay_client, mint_reveal).await?;
+    assert_duplicate_reveal_outcome(duplicate_outcome, mint_reveal_hash)?;
+    assert_eq!(
+        numeric_asset_value(&client, &asset_id)?,
+        mint_amount,
+        "duplicate reveal must not execute the sealed inner transaction twice"
+    );
     advance_to_height(&network, expired_deadline_height + 1).await?;
 
     match submit_entrypoint_maybe_rejected(&http, &client, expired_reveal, timeout).await? {
@@ -613,6 +738,12 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         !account_has_metadata(&client, &expired_marker)?,
         "expired delayed reveal must not execute its inner transaction"
     );
+    for peer_client in &peer_clients {
+        ensure!(
+            !account_has_metadata(peer_client, &expired_marker)?,
+            "expired delayed reveal must not execute on any peer"
+        );
+    }
 
     Ok(())
 }

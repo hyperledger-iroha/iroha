@@ -199,6 +199,53 @@ impl Signature {
     }
 }
 
+fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
+    if bytes.len() < 8 {
+        return Err(ncore::Error::LengthMismatch);
+    }
+
+    let mut count_bytes = [0u8; 8];
+    count_bytes.copy_from_slice(&bytes[..8]);
+    let count = usize::try_from(u64::from_le_bytes(count_bytes))
+        .map_err(|_| ncore::Error::LengthMismatch)?;
+    let raw_start = 8usize;
+    if bytes.len() == raw_start.saturating_add(count) {
+        return Ok(ConstVec::from(bytes[raw_start..].to_vec()));
+    }
+
+    let mut offset = raw_start;
+    let mut payload = Vec::new();
+    payload
+        .try_reserve(count)
+        .map_err(|_| ncore::Error::LengthMismatch)?;
+    for _ in 0..count {
+        let (elem_len, header_len) =
+            ncore::read_len_from_slice(bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?)?;
+        if elem_len != 1 {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        offset = offset
+            .checked_add(header_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let byte = *bytes.get(offset).ok_or(ncore::Error::LengthMismatch)?;
+        payload.push(byte);
+        offset = offset
+            .checked_add(elem_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+    }
+    if offset != bytes.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    Ok(ConstVec::from(payload))
+}
+
+fn decode_signature_payload_from_slice(
+    bytes: &[u8],
+) -> Result<(ConstVec<u8>, usize), ncore::Error> {
+    <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)
+        .or_else(|_| decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len())))
+}
+
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
 impl FastJsonWrite for Signature {
     fn write_json(&self, out: &mut String) {
@@ -324,18 +371,23 @@ impl<'de> ncore::NoritoDeserialize<'de> for Signature {
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let vec = Vec::<u8>::try_deserialize(archived.cast::<Vec<u8>>())?;
-        Ok(Signature {
-            payload: ConstVec::from(vec),
-        })
+        let payload_bytes =
+            ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>()).ok();
+        let payload =
+            ConstVec::<u8>::try_deserialize(archived.cast::<ConstVec<u8>>()).or_else(|err| {
+                let bytes = payload_bytes.ok_or(err)?;
+                let payload = decode_signature_payload_unpacked(bytes)?;
+                ncore::note_payload_access(bytes, bytes.len());
+                Ok::<_, ncore::Error>(payload)
+            })?;
+        Ok(Signature { payload })
     }
 }
 
 // Use default Norito derives for SignatureOf<T> provided by the crate macros.
 impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (payload, used) =
-            <ConstVec<u8> as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        let (payload, used) = decode_signature_payload_from_slice(bytes)?;
         Ok((Signature { payload }, used))
     }
 }
@@ -363,10 +415,8 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
-        let (sig, used) = <Signature as DecodeFromSlice>::decode_from_slice(bytes)?;
-        norito::core::note_payload_access(bytes, used);
-        Ok(SignatureOf(sig, PhantomData))
+        let signature = Signature::try_deserialize(archived.cast::<Signature>())?;
+        Ok(SignatureOf(signature, PhantomData))
     }
 }
 
@@ -565,6 +615,22 @@ mod tests {
         assert_eq!(used, inner_payload.len());
         assert_eq!(decoded_from_slice, signature);
 
+        norito::core::reset_decode_state();
+    }
+
+    #[test]
+    fn signature_of_try_deserialize_preserves_compact_const_vec_payload() {
+        let payload = (0u8..64).collect::<Vec<_>>();
+        let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&payload));
+        let framed = norito::core::to_bytes(&typed).expect("frame typed signature");
+        let archived =
+            norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
+
+        let decoded =
+            <SignatureOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+                .expect("typed signature decodes");
+
+        assert_eq!(decoded, typed);
         norito::core::reset_decode_state();
     }
 

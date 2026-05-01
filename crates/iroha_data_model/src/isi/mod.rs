@@ -141,6 +141,10 @@ impl Instruction for OpaqueInstruction {
         self.bare_payload.clone()
     }
 
+    fn dyn_encoded_len(&self) -> Option<usize> {
+        Some(self.bare_payload.len())
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -1251,6 +1255,11 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
     /// Encode instruction into bytes
     fn dyn_encode(&self) -> Vec<u8>;
 
+    /// Return the encoded instruction payload length without allocating when available.
+    fn dyn_encoded_len(&self) -> Option<usize> {
+        None
+    }
+
     /// Downcast to concrete type
     fn as_any(&self) -> &dyn Any;
 
@@ -1297,6 +1306,10 @@ where
         self.encode()
     }
 
+    fn dyn_encoded_len(&self) -> Option<usize> {
+        Some(Encode::encoded_len(self))
+    }
+
     fn as_any(&self) -> &dyn Any {
         // Special-case: if `self` is `InstructionBox`, expose its inner instruction
         // to preserve downcasting behavior used by the visitor helpers.
@@ -1339,6 +1352,44 @@ fn encoded_instruction_pair(instr: &InstructionBox) -> Option<(String, Vec<u8>)>
     Some((name, payload))
 }
 
+fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
+    let inner = peel_instruction_box(&**instr);
+    let type_name = Instruction::id(inner);
+    let registry = instruction_registry();
+    let name = registry.wire_id_for_type_name(type_name);
+    let payload_len = Instruction::dyn_encoded_len(inner)?;
+    let framed_payload_len = registry.frame_payload_len_for_type(type_name, payload_len)??;
+    encoded_instruction_tuple_len(name, framed_payload_len)
+}
+
+fn encoded_instruction_tuple_len(name: &str, framed_payload_len: usize) -> Option<usize> {
+    let name_len = norito::core::len_prefix_len(name.len()).checked_add(name.len())?;
+    let payload_vec_len = core::mem::size_of::<u64>().checked_add(framed_payload_len)?;
+    tuple_field_len(name_len)?.checked_add(tuple_field_len(payload_vec_len)?)
+}
+
+fn tuple_field_len(elem_len: usize) -> Option<usize> {
+    let prefix_len = if norito::core::use_compact_len() {
+        norito::core::len_prefix_len(elem_len)
+    } else {
+        core::mem::size_of::<u64>()
+    };
+    prefix_len.checked_add(elem_len)
+}
+
+fn framed_instruction_payload_len_for<T>(payload_len: usize) -> Option<usize> {
+    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    let padding = if align <= 1 {
+        0
+    } else {
+        let remainder = norito::core::Header::SIZE % align;
+        if remainder == 0 { 0 } else { align - remainder }
+    };
+    norito::core::Header::SIZE
+        .checked_add(padding)?
+        .checked_add(payload_len)
+}
+
 impl norito::core::NoritoSerialize for InstructionBox {
     fn schema_hash() -> [u8; 16]
     where
@@ -1360,8 +1411,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let pair = encoded_instruction_pair(self)?;
-        norito::core::NoritoSerialize::encoded_len_exact(&pair)
+        encoded_instruction_pair_len(self)
     }
 }
 
@@ -1714,6 +1764,7 @@ struct RegistryEntry {
     ctor: InstructionConstructor,
     wire_id: &'static str,
     frame: fn(&[u8]) -> Result<Vec<u8>, norito::core::Error>,
+    frame_len: fn(usize) -> Option<usize>,
 }
 
 impl InstructionRegistry {
@@ -1755,11 +1806,22 @@ impl InstructionRegistry {
                 norito::core::default_encode_flags(),
             )
         }
+        fn frame_len<T>(payload_len: usize) -> Option<usize>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            framed_instruction_payload_len_for::<T>(payload_len)
+        }
         let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
             ctor: ctor::<T>,
             wire_id: name,
             frame: frame::<T>,
+            frame_len: frame_len::<T>,
         };
         self.entries.insert(name, entry);
         self.index.insert(name, name);
@@ -1800,11 +1862,22 @@ impl InstructionRegistry {
                 norito::core::default_encode_flags(),
             )
         }
+        fn frame_len<T>(payload_len: usize) -> Option<usize>
+        where
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
+        {
+            framed_instruction_payload_len_for::<T>(payload_len)
+        }
         let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
             ctor: ctor::<T>,
             wire_id,
             frame: frame::<T>,
+            frame_len: frame_len::<T>,
         };
         self.entries.insert(name, entry);
         self.index.insert(name, name);
@@ -1869,6 +1942,15 @@ impl InstructionRegistry {
     ) -> Option<Result<Vec<u8>, norito::core::Error>> {
         self.entry_for_key(type_name)
             .map(|entry| (entry.frame)(payload))
+    }
+
+    fn frame_payload_len_for_type(
+        &self,
+        type_name: &str,
+        payload_len: usize,
+    ) -> Option<Option<usize>> {
+        self.entry_for_key(type_name)
+            .map(|entry| (entry.frame_len)(payload_len))
     }
 
     fn entry_for_key(&self, key: &str) -> Option<&RegistryEntry> {
@@ -3245,20 +3327,26 @@ mod tests {
 
     #[test]
     fn instruction_box_encoded_len_exact_matches_norito() {
-        let boxed = InstructionBox::from(Log {
-            level: Level::INFO,
-            msg: "exact length".to_string(),
-        });
-        let expected = norito::core::to_bytes(&boxed)
-            .expect("serialize instruction box")
-            .len()
-            - norito::core::Header::SIZE;
+        let cases = [
+            InstructionBox::from(Log {
+                level: Level::INFO,
+                msg: "exact length".to_string(),
+            }),
+            InstructionBox::from(CustomInstruction::new("custom exact length")),
+        ];
 
-        assert_eq!(
-            norito::core::NoritoSerialize::encoded_len_exact(&boxed)
-                .expect("instruction box exact len"),
-            expected
-        );
+        for boxed in cases {
+            let expected = norito::core::to_bytes(&boxed)
+                .expect("serialize instruction box")
+                .len()
+                - norito::core::Header::SIZE;
+
+            assert_eq!(
+                norito::core::NoritoSerialize::encoded_len_exact(&boxed)
+                    .expect("instruction box exact len"),
+                expected
+            );
+        }
     }
 
     #[test]

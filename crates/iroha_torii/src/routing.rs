@@ -76,8 +76,8 @@ use iroha_core::{
         ProofFilters as CoreProofFilters, ProofListItem, ProofListParams as CoreProofListParams,
     },
     tx::{
-        AcceptTransactionFail, SIGNATURE_LIMIT_REASON_PREFIX, SignatureRejectionCode,
-        SignatureVerificationFail,
+        AcceptTransactionFail, DecodedVersionedSignedTransaction, SIGNATURE_LIMIT_REASON_PREFIX,
+        SignatureRejectionCode, SignatureVerificationFail,
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
@@ -10347,6 +10347,113 @@ pub fn accept_transaction_for_ingress(
         tx_limits,
         crypto_cfg.as_ref(),
     ) {
+        Ok(tx) => {
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "ok",
+                verify_started.elapsed(),
+            );
+            Ok(tx)
+        }
+        Err(err) => {
+            iroha_logger::warn!(?err, "transaction rejected during admission");
+            #[cfg(feature = "telemetry")]
+            telemetry.with_metrics(|tel| {
+                if let AcceptTransactionFail::TransactionLimit(limit) = &err {
+                    if limit.reason.starts_with(SIGNATURE_LIMIT_REASON_PREFIX) {
+                        tel.inc_torii_signature_limit_reject(
+                            signature_count,
+                            signature_limit,
+                            authority_label,
+                        );
+                    }
+                }
+                if matches!(err, AcceptTransactionFail::NetworkTimeUnhealthy { .. }) {
+                    tel.inc_torii_nts_unhealthy_reject();
+                }
+            });
+            #[cfg(feature = "telemetry")]
+            observe_route_stage_latency(
+                telemetry,
+                "transaction",
+                "verify",
+                "error",
+                verify_started.elapsed(),
+            );
+            Err(Error::AcceptTransaction(err))
+        }
+    }
+}
+
+/// Validate an already decoded signed transaction at Torii ingress.
+pub fn accept_decoded_signed_transaction_for_ingress(
+    chain_id: Arc<ChainId>,
+    state: Arc<CoreState>,
+    tx: DecodedVersionedSignedTransaction,
+    telemetry: &MaybeTelemetry,
+) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = telemetry;
+    #[cfg(feature = "telemetry")]
+    let decode_started = std::time::Instant::now();
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        telemetry,
+        "transaction",
+        "decode_or_build",
+        "ok",
+        decode_started.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
+    let verify_started = std::time::Instant::now();
+
+    let (max_clock_drift, tx_limits) = state.transaction_admission_limits();
+    if let Some(rejection) = reject_direct_multisig_signing(state.as_ref(), tx.signed()) {
+        iroha_logger::warn!(
+            authority = %tx.authority(),
+            "rejecting transaction directly signed by multisig account"
+        );
+        #[cfg(feature = "telemetry")]
+        telemetry.with_metrics(|tel| {
+            tel.inc_torii_multisig_direct_sign_reject();
+            let signature_count = tx.signed().signature_count() as u64;
+            let signature_limit = tx_limits.max_signatures().get();
+            let authority_label = match tx.authority().controller() {
+                iroha_data_model::account::AccountController::Single(_) => "single",
+                iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+            };
+            tel.inc_torii_signature_limit_reject(signature_count, signature_limit, authority_label);
+        });
+        #[cfg(feature = "telemetry")]
+        observe_route_stage_latency(
+            telemetry,
+            "transaction",
+            "verify",
+            "error",
+            verify_started.elapsed(),
+        );
+        return Err(Error::AcceptTransaction(rejection));
+    }
+
+    #[cfg(feature = "telemetry")]
+    let (signature_count, signature_limit, authority_label) = {
+        let authority_label = match tx.authority().controller() {
+            iroha_data_model::account::AccountController::Single(_) => "single",
+            iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+        };
+        (
+            tx.signed().signature_count() as u64,
+            tx_limits.max_signatures().get(),
+            authority_label,
+        )
+    };
+
+    let crypto_cfg = state.crypto();
+    match tx.into_accepted(&chain_id, max_clock_drift, tx_limits, crypto_cfg.as_ref()) {
         Ok(tx) => {
             #[cfg(feature = "telemetry")]
             observe_route_stage_latency(

@@ -162,11 +162,9 @@ enum NoritoBridgeLoader {
         return handle
     }
 
-    #if DEBUG
     static func validateForTests(at path: String, allowUntrustedLocation: Bool = true) -> ValidationStatus {
         validateBridge(at: path, allowUntrustedLocation: allowUntrustedLocation)
     }
-    #endif
 
     private static func validateBridge(at path: String, allowUntrustedLocation: Bool) -> ValidationStatus {
         let url = URL(fileURLWithPath: path)

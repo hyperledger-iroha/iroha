@@ -23,6 +23,15 @@ Completed history lives in `status.md`. This file should only track unfinished w
     corridor when validation budget allows.
 - Carry Offline V2 real-proof support through the remaining release corridor.
   - The native bridge prover FFI focused corridor is green as of 2026-04-30. Fold it into a broader `cargo test -p iroha_core --lib`, SDK test, and workspace clippy corridor when validation budget allows.
+  - The pure Swift Offline V2 prover hot path is green as of 2026-05-01 with
+    subsecond median native audit/redeem proofs on macOS arm64. Keep that
+    benchmark in the next iOS-device corridor and broaden Swift package
+    validation when budget allows.
+  - Kotlin/JVM and Java Android now have the native Offline V2 instance-value
+    groundwork and pure Java Halo2/IPA prover path, including focused JVM and
+    Android harness coverage plus env-gated benchmark hooks. Keep the native
+    prover tests, Swift/JVM cross-verification payload, and larger benchmark
+    iteration counts in the next device and full-SDK corridor.
   - The Torii Offline V2 issuer hardening focused corridor is green as of
     2026-05-01. Fold it into the next broader `cargo test -p iroha_torii`,
     SDK, workspace test, and workspace clippy corridor when validation budget
@@ -147,30 +156,58 @@ Completed history lives in `status.md`. This file should only track unfinished w
     in `AcceptedTransaction::from_external_with_hot_cache`, exact-length
     `InstructionBox` payload framing, gossip materialization during admission,
     and remaining overlay instruction clones.
-  - Next conservative slice: carry inbound canonical signed/entrypoint bytes
-    through Torii acceptance so external transactions can seed
-    `AcceptedTransaction::from_external_with_cached_bytes` without re-running
-    `norito::to_bytes(&tx)` after validation; keep transaction wire/hash
-    semantics unchanged and prove cached bytes match canonical Norito bytes.
-  - Add or reuse an Ed25519 parsed-public-key/signature verification cache for
-    the Torii/direct-ingress single-key Ed25519 authority path. Gossip-side
-    deterministic Ed25519 batch precheck is now implemented, but sampled ingress
-    stacks were still dominated by `verify_signature_for_check`,
-    `PublicKeyFull::from_bytes`, `ed25519_dalek`, and `curve25519_dalek`.
-  - Reduce the exact-length `InstructionBox` cost without changing Norito wire:
-    avoid repeated dynamic ISI payload framing during size checks by caching or
-    threading framed instruction payload lengths where the canonical bytes are
-    already available.
-  - Rerun an isolated 30s sampled 20k Izanami profile after the next ingress
-    byte-cache or `InstructionBox` sizing slice; use it to separate real
-    remaining overlay/gossip work from the contention visible in the latest
-    requested runs.
+  - The broader 20k bottleneck pass is focused-validation green as of
+    2026-05-01. Lazy transaction-gossip materialization now preserves cached
+    framed entrypoint bytes and skips semantic decode before route, plane, and
+    known-duplicate filters; route-valid single-key Ed25519 gossip candidates
+    use deterministic batch precheck through the existing signature-batch
+    setting; overlay apply goes through the crate-private borrowed adapter while
+    custom executors keep the owned path. The profile at
+    `dist/izanami-profile-20k-postcache-tuned-bottleneck-30s-20260501-171955`
+    is pre-broader-pass evidence; the fresh reruns are
+    `dist/izanami-profile-20k-broader-pass-sampled-30s-20260501-194734` and
+    `dist/izanami-prebuilt-20k-broader-pass-120s-20260501-194908`.
+    The 120s gate kept final approved transactions flat against the previous
+    gate (`28740` vs `28710`) but accepted fewer ingress submissions
+    (`52291` vs `54574`), so treat the pass as bottleneck reshaping rather than
+    a confirmed throughput win.
+  - The fixed-runner follow-up sampled profile at
+    `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200527`
+    completed with `sample_status=0` and sampled the actual Izanami runner plus
+    all observed peer processes. It classifies the next bottlenecks as
+    direct-peer Ed25519/curve25519 verification math first, then allocation /
+    `memmove` and Norito compact/decode work, with ZK/BLS math and hashing as
+    secondary costs. Queue mechanics and borrowed overlay apply are not primary
+    CPU bottlenecks in that sample.
+  - The direct-ingress conservative cache slice is code-complete as of
+    2026-05-01: Torii signed transaction and batch submission now decode
+    versioned signed payloads into a prepared core admission token, reusing
+    signed/entrypoint hashes, payload hash, exact signed length, and parsed
+    single-Ed25519 key metadata without changing transaction wire/hash
+    semantics.
+  - The exact-length `InstructionBox` cost is reduced without changing Norito
+    wire: `encoded_len_exact` now counts the existing `(wire_id,
+    framed_payload)` representation without re-framing the dynamic ISI payload.
+  - Add or reuse an Ed25519 parsed-public-key/signature verification cache or a
+    deterministic batch corridor for the Torii/direct-ingress single-key
+    Ed25519 authority path. Gossip-side deterministic Ed25519 batch precheck is
+    now implemented, but the fixed-runner sampled profile still shows the
+    offered-20k direct-ingress path dominated by `ed25519_dalek` /
+    `curve25519_dalek` verification math.
+  - Reduce Norito decode/allocation overhead on the direct and gossip admission
+    corridors without changing wire bytes or canonical hashes. The next useful
+    targets are repeated compact-length walks, instruction-registry decode
+    paths, and allocation/memmove churn around canonical transaction material.
+  - Investigate `iroha_zkp_halo2::poseidon`, `ark_ff`, `ark_bls12_381`, and
+    `w3f_bls` public-key deserialization/subgroup stacks after the direct
+    ingress crypto/decode work, unless a narrower profile shows these are
+    fixture-only startup costs rather than sustained admission costs.
   - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate
     the new knee after the conservative cache pass.
-  - Keep clone-heavy `TxOverlay::apply_with_chunk` / overlay-builder API work as
-    the next overlay follow-up if the post-broader-pass profile still shows
-    `InstructionDynClone::dyn_box_clone`, `Transfer::clone`, or
-    `WorldTransaction::apply` as active costs.
+  - Keep clone-heavy `TxOverlay::apply_with_chunk` / overlay-builder API work
+    as a lower-priority overlay follow-up unless a later post-crypto/decode
+    profile again shows `InstructionDynClone::dyn_box_clone`,
+    `Transfer::clone`, or `WorldTransaction::apply` as active costs.
   - Keep the broader borrowed-instruction execution rewrite separate from the
     targeted tuning pass because `Execute` currently consumes instructions.
   - Treat RBC authoritative-payload delays as symptoms of slow validation and

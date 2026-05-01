@@ -1,5 +1,5 @@
 [payload]
-checksum_sha256 = "430943A6D4E8BB34DE9A39879C39FAA5814B5D1FE3D13FE43DEFBA1F2C1741F2"
+checksum_sha256 = "A8C50EF2D4A9E80C0D79AB392B626B62F176B1603963E51CAE1E923B88AE8A06"
 generated_at = 1765012527
 generator_commit = "7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877"
 version = 1
@@ -51,4 +51,3 @@ frequencies = [
 group_size = 8
 precision_bits = 12
 width_bits = 3
-

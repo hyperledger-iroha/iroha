@@ -356,6 +356,18 @@ pub(crate) struct PreparedTransactionMetadata {
     pub(crate) single_ed25519_key: Option<iroha_crypto::Ed25519ParsedPublicKey>,
 }
 
+/// Signed transaction decoded from a versioned Torii payload with reusable admission metadata.
+///
+/// This is public only so Torii can pass the decoded transaction across crate boundaries without
+/// redoing stateless preparation. The metadata is derived internally and cannot be supplied by
+/// callers.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct DecodedVersionedSignedTransaction {
+    tx: SignedTransaction,
+    prepared: PreparedTransactionMetadata,
+}
+
 impl<'tx> CheckedTransaction<'tx> {
     /// Attempt to construct a [`CheckedTransaction`] by verifying the transaction hash against the provided state.
     ///
@@ -679,6 +691,146 @@ fn duration_since_epoch_with_fallback(result: Result<Duration, SystemTimeError>)
 
 fn current_unix_time() -> Duration {
     duration_since_epoch_with_fallback(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH))
+}
+
+impl DecodedVersionedSignedTransaction {
+    /// Decode a versioned signed transaction and prepare admission metadata once.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same versioning and Norito decode errors as the signed transaction
+    /// versioned decoder.
+    pub fn decode_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
+        let tx =
+            <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+                input,
+            )?;
+        let payload_len = input.len().saturating_sub(1);
+        let encoded_len =
+            AcceptedTransaction::framed_encoded_payload_len::<SignedTransaction>(payload_len);
+        debug_assert_eq!(
+            encoded_len,
+            AcceptedTransaction::signed_encoded_len(&tx),
+            "versioned signed transaction payload length must match canonical framed length",
+        );
+        let prepared =
+            AcceptedTransaction::prepare_signed_metadata_with_encoded_len(&tx, encoded_len);
+        Ok(Self { tx, prepared })
+    }
+
+    /// Decode an owned versioned signed transaction and prepare admission metadata once.
+    ///
+    /// This keeps Torii batch admission on the exact inbound payload length without
+    /// re-encoding the signed transaction during stateless validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same versioning and Norito decode errors as the signed transaction
+    /// versioned decoder.
+    pub fn decode_versioned_owned(input: Vec<u8>) -> iroha_version::error::Result<Self> {
+        Self::decode_versioned(input.as_slice())
+    }
+
+    /// Borrow the decoded signed transaction.
+    #[must_use]
+    pub fn signed(&self) -> &SignedTransaction {
+        &self.tx
+    }
+
+    /// Borrow the decoded authority.
+    #[must_use]
+    pub fn authority(&self) -> &AccountId {
+        self.tx.authority()
+    }
+
+    /// Return the prepared canonical transaction hash.
+    #[must_use]
+    pub fn hash(&self) -> HashOf<SignedTransaction> {
+        self.prepared.signed_hash
+    }
+
+    /// Return the prepared canonical entrypoint hash.
+    #[must_use]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        self.prepared.entrypoint_hash
+    }
+
+    /// Return the prepared exact framed signed-transaction length.
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        self.prepared.encoded_len
+    }
+
+    /// Return the message/signature/public-key tuple used for deterministic Ed25519 batch precheck.
+    #[must_use]
+    pub fn single_ed25519_precheck_parts(
+        &self,
+    ) -> Option<(&[u8], &[u8], iroha_crypto::Ed25519ParsedPublicKey)> {
+        let public_key = self.prepared.single_ed25519_key?;
+        Some((
+            self.prepared.payload_hash.as_ref().as_slice(),
+            self.tx.signature().payload().payload(),
+            public_key,
+        ))
+    }
+
+    /// Validate and accept the decoded signed transaction using prepared metadata.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    pub fn into_accepted(
+        self,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+    ) -> Result<AcceptedTransaction<'static>, AcceptTransactionFail> {
+        let now = current_unix_time();
+        AcceptedTransaction::validate_with_now_and_prepared_metadata(
+            &self.tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            &self.prepared,
+        )?;
+        enforce_nts_health_for_time_sensitive(&self.tx)?;
+        Ok(AcceptedTransaction::from_external_with_prepared_metadata(
+            self.tx,
+            self.prepared,
+        ))
+    }
+
+    /// Validate and accept the decoded signed transaction after deterministic Ed25519 precheck.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    pub fn into_accepted_after_single_ed25519_precheck(
+        self,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+    ) -> Result<AcceptedTransaction<'static>, AcceptTransactionFail> {
+        let now = current_unix_time();
+        AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+            &self.tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            &self.prepared,
+        )?;
+        enforce_nts_health_for_time_sensitive(&self.tx)?;
+        Ok(AcceptedTransaction::from_external_with_prepared_metadata(
+            self.tx,
+            self.prepared,
+        ))
+    }
 }
 
 fn heartbeat_marker_value(tx: &SignedTransaction) -> Result<Option<bool>, TransactionLimitError> {
@@ -1014,6 +1166,12 @@ impl<'tx> AcceptedTransaction<'tx> {
             })
     }
 
+    fn framed_encoded_payload_len<T>(payload_len: usize) -> usize {
+        norito::core::Header::SIZE
+            .saturating_add(Self::framed_padding_for::<T>())
+            .saturating_add(payload_len)
+    }
+
     fn signed_encoded_len(tx: &SignedTransaction) -> usize {
         Self::framed_encoded_len(tx)
     }
@@ -1070,16 +1228,39 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Build reusable stateless metadata for a signed transaction.
     #[must_use]
     pub(crate) fn prepare_signed_metadata(tx: &SignedTransaction) -> PreparedTransactionMetadata {
+        Self::prepare_signed_metadata_with_encoded_len(tx, Self::signed_encoded_len(tx))
+    }
+
+    fn prepare_signed_metadata_with_encoded_len(
+        tx: &SignedTransaction,
+        encoded_len: usize,
+    ) -> PreparedTransactionMetadata {
         let entrypoint_hash = tx.hash_as_entrypoint();
         let signed_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash));
         PreparedTransactionMetadata {
             signed_hash,
             entrypoint_hash,
             payload_hash: HashOf::new(tx.payload()),
-            encoded_len: Self::signed_encoded_len(tx),
+            encoded_len,
             signed_bytes: None,
             single_ed25519_key: Self::parsed_single_ed25519_key(tx),
         }
+    }
+
+    fn from_external_with_prepared_metadata(
+        tx: SignedTransaction,
+        prepared: PreparedTransactionMetadata,
+    ) -> Self {
+        let accepted = Self::from_entrypoint(Cow::Owned(TransactionEntrypoint::External(tx)));
+        let _ = accepted.encoded_len.set(prepared.encoded_len);
+        let _ = accepted.payload_hash.set(Some(prepared.payload_hash));
+        let _ = accepted.single_ed25519_key.set(prepared.single_ed25519_key);
+        if let Some(signed_bytes) = prepared.signed_bytes {
+            let _ = accepted.signed_bytes.set(Some(signed_bytes));
+        }
+        let _ = accepted.signed_hash.set(prepared.signed_hash);
+        let _ = accepted.entrypoint_hash.set(prepared.entrypoint_hash);
+        accepted
     }
 
     fn validate_common(
@@ -6292,6 +6473,63 @@ pub mod tests {
 
         let cached = accepted.signed_bytes().expect("canonical bytes cached");
         assert!(Arc::ptr_eq(&cached, &signed_bytes));
+    }
+
+    #[test]
+    fn decoded_versioned_signed_transaction_prepares_exact_length_from_payload() {
+        let chain: ChainId = "decoded-versioned-cache-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain.clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "versioned-cache".into())])
+            .sign(keypair.private_key());
+        let expected_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+        let versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+
+        let decoded = DecodedVersionedSignedTransaction::decode_versioned(&versioned)
+            .expect("versioned signed transaction decodes");
+
+        assert_eq!(decoded.hash(), signed.hash());
+        assert_eq!(decoded.hash_as_entrypoint(), signed.hash_as_entrypoint());
+        assert_eq!(decoded.encoded_len(), expected_len);
+        assert_eq!(decoded.prepared.encoded_len, expected_len);
+        assert!(decoded.prepared.signed_bytes.is_none());
+        assert_eq!(decoded.prepared.payload_hash, HashOf::new(signed.payload()));
+        assert!(decoded.prepared.single_ed25519_key.is_some());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = decoded
+            .into_accepted(&chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("decoded transaction accepts");
+
+        assert_eq!(accepted.hash(), signed.hash());
+        assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
+        assert_eq!(accepted.encoded_len(), expected_len);
+        assert_eq!(accepted.payload_hash(), Some(HashOf::new(signed.payload())));
+        assert!(accepted.single_ed25519_key().is_some());
+    }
+
+    #[test]
+    fn decoded_versioned_signed_transaction_rejects_malformed_payloads() {
+        let chain: ChainId = "decoded-versioned-reject-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "versioned-reject".into())])
+            .sign(keypair.private_key());
+        let mut versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+
+        assert!(DecodedVersionedSignedTransaction::decode_versioned(&[]).is_err());
+
+        let mut unsupported = versioned.clone();
+        unsupported[0] = 0x7f;
+        assert!(DecodedVersionedSignedTransaction::decode_versioned(&unsupported).is_err());
+
+        versioned.push(0);
+        assert!(DecodedVersionedSignedTransaction::decode_versioned(&versioned).is_err());
     }
 
     #[test]

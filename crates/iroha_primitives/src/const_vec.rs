@@ -907,7 +907,8 @@ where
     let count =
         usize::try_from(u64::from_le_bytes(len_bytes)).map_err(|_| ncore::Error::LengthMismatch)?;
     let mut offset = 8usize;
-    let max_items_with_length_headers = bytes.len().saturating_sub(offset) / 8;
+    let min_len_header = if ncore::use_compact_len() { 1 } else { 8 };
+    let max_items_with_length_headers = bytes.len().saturating_sub(offset) / min_len_header;
     if count > max_items_with_length_headers {
         return Err(ncore::Error::LengthMismatch);
     }
@@ -916,13 +917,11 @@ where
         .try_reserve(count)
         .map_err(|_| ncore::Error::LengthMismatch)?;
     for idx in 0..count {
-        if offset.checked_add(8).is_none_or(|end| end > bytes.len()) {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        len_bytes.copy_from_slice(&bytes[offset..offset + 8]);
-        let elem_len = usize::try_from(u64::from_le_bytes(len_bytes))
-            .map_err(|_| ncore::Error::LengthMismatch)?;
-        let start = offset.checked_add(8).ok_or(ncore::Error::LengthMismatch)?;
+        let (elem_len, header_len) =
+            ncore::read_len_from_slice(bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?)?;
+        let start = offset
+            .checked_add(header_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
         let end = start
             .checked_add(elem_len)
             .ok_or(ncore::Error::LengthMismatch)?;
@@ -1408,6 +1407,25 @@ mod tests {
         let mut cursor = const_bytes.as_slice();
         let roundtrip = ConstVec::<u8>::decode(&mut cursor).expect("decode const vec");
         assert_eq!(roundtrip.into_vec(), bytes);
+    }
+
+    #[test]
+    fn byte_const_vec_try_deserialize_accepts_compact_length_elements() {
+        let bytes = (0_u8..64).collect::<Vec<_>>();
+        let value = ConstVec::new(bytes.clone());
+        let mut payload = Vec::new();
+        {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            NoritoSerialize::serialize(&value, &mut payload).expect("serialize const vec");
+        }
+
+        let archived = ncore::archived_from_slice_unchecked::<ConstVec<u8>>(&payload);
+        let _payload_ctx = ncore::PayloadCtxGuard::enter(&payload);
+        let _flags = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+
+        let decoded = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived.as_ref())
+            .expect("compact unpacked byte const vec should decode");
+        assert_eq!(decoded.as_ref(), bytes.as_slice());
     }
 
     #[test]

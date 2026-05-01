@@ -10631,7 +10631,7 @@ mod tests {
 
     #[test]
     fn load_bundle_tables_accepts_mangled_payload_string() {
-        let payload = r#"{"version""1","generated_at""1765012527","generator_commit""7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877","checksum_sha256""430943A6D4E8BB34DE9A39879C39FAA5814B5D1FE3D13FE43DEFBA1F2C1741F2","body":{"bundle_width""3","seed""0","groups":[{"width_bits""2","group_size""4","precision_bits""12","frequencies":["542","1113","1011","1430"],"cumulative":["0","542","1655","2666","4096"]},{"width_bits""3","group_size""8","precision_bits""12","frequencies":["280","262","672","441","818","193","692","738"],"cumulative":["0","280","542","1214","1655","2473","2666","3358","4096"]}]}}"#;
+        let payload = r#"{"version""1","generated_at""1765012527","generator_commit""7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877","checksum_sha256""A8C50EF2D4A9E80C0D79AB392B626B62F176B1603963E51CAE1E923B88AE8A06","body":{"bundle_width""3","seed""0","groups":[{"width_bits""2","group_size""4","precision_bits""12","frequencies":["542","1113","1011","1430"],"cumulative":["0","542","1655","2666","4096"]},{"width_bits""3","group_size""8","precision_bits""12","frequencies":["280","262","672","441","818","193","692","738"],"cumulative":["0","280","542","1214","1655","2473","2666","3358","4096"]}]}}"#;
         let toml = format!("payload = '''{payload}'''\nsignature = ''\n");
         let path = write_temp_tables_toml(&toml);
 

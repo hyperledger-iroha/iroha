@@ -249,6 +249,7 @@ use iroha_core::{
         ToriiReadFanoutMergeV1, ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1,
         ToriiRouteHintV1,
     },
+    tx::DecodedVersionedSignedTransaction,
 };
 use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf,
@@ -331,7 +332,7 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::{DefaultMakeSpan, TraceLayer},
 };
-use utils::extractors::NoritoVersioned;
+use utils::extractors::{NoritoVersioned, NoritoVersionedBytes};
 
 // Bring connect-info make service into scope for axum 0.8 serve path
 use crate::iso20022_bridge::{Iso20022BridgeRuntime, IsoMessageState, Pacs002Status};
@@ -28507,8 +28508,13 @@ async fn handler_post_vk_update(
 async fn handler_post_transaction(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    NoritoVersioned(transaction): NoritoVersioned<SignedTransaction>,
+    NoritoVersionedBytes(transaction_bytes): NoritoVersionedBytes,
 ) -> Result<impl IntoResponse, Error> {
+    let transaction = DecodedVersionedSignedTransaction::decode_versioned(&transaction_bytes)
+        .map_err(|error| Error::AppQueryValidation {
+            code: "invalid_transaction_payload",
+            message: format!("transaction payload could not be decoded: {error}"),
+        })?;
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -28531,17 +28537,15 @@ async fn handler_post_transaction(
     }
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let signed_transaction_hash = Some(transaction.hash());
-    let transaction = TransactionEntrypoint::External(transaction);
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
-        let transaction_for_admission = transaction.clone();
         let telemetry = app.telemetry.clone();
         tokio::task::spawn_blocking(move || {
-            routing::accept_transaction_for_ingress(
+            routing::accept_decoded_signed_transaction_for_ingress(
                 chain_id,
                 state,
-                transaction_for_admission,
+                transaction,
                 &telemetry,
             )
         })
@@ -28558,7 +28562,12 @@ async fn handler_post_transaction(
         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if !should_execute_route_locally(app.as_ref(), routing_decision) {
-        return Ok(execute_torii_transaction_via_proxy(&app, transaction, routing_decision).await);
+        return Ok(execute_torii_transaction_via_proxy(
+            &app,
+            accepted_tx.entrypoint().clone(),
+            routing_decision,
+        )
+        .await);
     }
     let routing_decision = routing::push_accepted_transaction_for_ingress(
         app.queue.clone(),
@@ -28654,20 +28663,68 @@ async fn handler_post_transaction_entrypoint(
 
 fn decode_transaction_batch_payloads(
     payloads: Vec<Vec<u8>>,
-) -> Result<Vec<SignedTransaction>, Error> {
+) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
     payloads
         .into_iter()
         .enumerate()
         .map(|(idx, payload)| {
-            <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
-                payload.as_slice(),
+            DecodedVersionedSignedTransaction::decode_versioned(payload.as_slice()).map_err(
+                |error| Error::AppQueryValidation {
+                    code: "invalid_transaction_batch_payload",
+                    message: format!("transaction batch item {idx} could not be decoded: {error}"),
+                },
             )
-            .map_err(|error| Error::AppQueryValidation {
-                code: "invalid_transaction_batch_payload",
-                message: format!("transaction batch item {idx} could not be decoded: {error}"),
-            })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod transaction_ingress_decode_tests {
+    use super::*;
+    use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+    use iroha_logger::Level;
+
+    fn signed_transaction_for_test() -> SignedTransaction {
+        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "batch decode".into())])
+            .sign(keypair.private_key())
+    }
+
+    #[test]
+    fn decode_transaction_batch_payloads_prepares_exact_lengths() {
+        let signed = signed_transaction_for_test();
+        let expected_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+        let versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+
+        let decoded =
+            decode_transaction_batch_payloads(vec![versioned]).expect("batch transaction decodes");
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].hash(), signed.hash());
+        assert_eq!(decoded[0].hash_as_entrypoint(), signed.hash_as_entrypoint());
+        assert_eq!(decoded[0].encoded_len(), expected_len);
+    }
+
+    #[test]
+    fn decode_transaction_batch_payloads_rejects_trailing_payload() {
+        let signed = signed_transaction_for_test();
+        let mut versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+        versioned.push(0);
+
+        match decode_transaction_batch_payloads(vec![versioned]) {
+            Err(Error::AppQueryValidation { code, .. }) => {
+                assert_eq!(code, "invalid_transaction_batch_payload");
+            }
+            other => panic!("expected invalid batch payload, got {other:?}"),
+        }
+    }
 }
 
 fn transaction_batch_submission_response(accepted_count: usize) -> Response {
@@ -28739,11 +28796,10 @@ async fn handler_post_transactions_batch(
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             let mut local_route_cache = Vec::new();
             for transaction in transactions {
-                let entrypoint = TransactionEntrypoint::External(transaction);
-                let accepted_tx = routing::accept_transaction_for_ingress(
+                let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
                     app.chain_id.clone(),
                     app.state.clone(),
-                    entrypoint,
+                    transaction,
                     &app.telemetry,
                 )?;
                 let routing_decision = app
@@ -39007,6 +39063,12 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    fn versioned_signed_bytes_for_test(tx: &SignedTransaction) -> NoritoVersionedBytes {
+        NoritoVersionedBytes(Bytes::from(
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(tx),
+        ))
+    }
+
     #[tokio::test]
     async fn handler_post_transaction_uses_tx_rate_limiter() {
         let mut app = mk_app_state_for_tests();
@@ -39032,7 +39094,7 @@ pub(crate) mod tests_runtime_handlers {
         let ok = super::handler_post_transaction(
             State(app.clone()),
             headers.clone(),
-            NoritoVersioned(tx1),
+            versioned_signed_bytes_for_test(&tx1),
         )
         .await
         .expect("accepted");
@@ -39063,8 +39125,12 @@ pub(crate) mod tests_runtime_handlers {
         assert!(!dataspace_header.trim().is_empty());
         assert_eq!(routed_by, "local");
 
-        let err = match super::handler_post_transaction(State(app), headers, NoritoVersioned(tx2))
-            .await
+        let err = match super::handler_post_transaction(
+            State(app),
+            headers,
+            versioned_signed_bytes_for_test(&tx2),
+        )
+        .await
         {
             Ok(_) => panic!("expected rate limit"),
             Err(err) => err,
@@ -39128,11 +39194,14 @@ pub(crate) mod tests_runtime_handlers {
             HeaderValue::from_static("respond-async, return=minimal"),
         );
 
-        let response =
-            super::handler_post_transaction(State(app), headers, NoritoVersioned(transaction))
-                .await
-                .expect("accepted")
-                .into_response();
+        let response = super::handler_post_transaction(
+            State(app),
+            headers,
+            versioned_signed_bytes_for_test(&transaction),
+        )
+        .await
+        .expect("accepted")
+        .into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         assert_eq!(
             response
@@ -39232,7 +39301,7 @@ pub(crate) mod tests_runtime_handlers {
         let response = match super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx),
+            versioned_signed_bytes_for_test(&tx),
         )
         .await
         {
@@ -39311,7 +39380,7 @@ pub(crate) mod tests_runtime_handlers {
         let first = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx1),
+            versioned_signed_bytes_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -39322,7 +39391,7 @@ pub(crate) mod tests_runtime_handlers {
         let second = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx2),
+            versioned_signed_bytes_for_test(&tx2),
         )
         .await
         .expect("second transaction should not be rejected")
@@ -39351,7 +39420,7 @@ pub(crate) mod tests_runtime_handlers {
         let first = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx1),
+            versioned_signed_bytes_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -39375,7 +39444,7 @@ pub(crate) mod tests_runtime_handlers {
         let second = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx2),
+            versioned_signed_bytes_for_test(&tx2),
         )
         .await
         .expect("second transaction should not be age-shed")
@@ -39408,7 +39477,7 @@ pub(crate) mod tests_runtime_handlers {
         let first = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx1),
+            versioned_signed_bytes_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -39418,7 +39487,7 @@ pub(crate) mod tests_runtime_handlers {
         let err = match super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx2),
+            versioned_signed_bytes_for_test(&tx2),
         )
         .await
         {
@@ -39460,7 +39529,7 @@ pub(crate) mod tests_runtime_handlers {
         let first = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx1),
+            versioned_signed_bytes_for_test(&tx1),
         )
         .await
         .expect("first transaction should be accepted")
@@ -39481,7 +39550,7 @@ pub(crate) mod tests_runtime_handlers {
         let second = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
-            NoritoVersioned(tx2),
+            versioned_signed_bytes_for_test(&tx2),
         )
         .await
         .expect("second transaction should not be age-shed")

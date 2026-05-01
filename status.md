@@ -2,6 +2,48 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Sealed reveal adversarial multi-peer coverage
+
+- Broadened `tx_history::sealed_reveal_adversarial_cases_hold_on_multi_peer_network`
+  to keep a real 4-peer network and cover five same-window sealed reveals in
+  one block, duplicate reveal replay after commit, delayed expired reveal
+  rejection, and all-peer state checks for both successful and expired reveal
+  effects. The duplicate path now verifies the canonical reveal hash on primary
+  replay and probes a secondary peer without letting Torii queue backpressure
+  dominate the test result.
+- Refreshed the bundled rANS fixture checksum used by peer startup so the
+  repository fixture matches the current legacy Norito body framing.
+- Focused validation passed:
+  `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-norito-fixture cargo test -p norito load_bundle_tables_accepts --lib -- --nocapture`,
+  `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test core_api sealed_reveal_adversarial_cases_hold_on_multi_peer_network --no-run`,
+  `NORITO_SKIP_BINDINGS_SYNC=1 RUST_BACKTRACE=1 cargo test -p integration_tests --test core_api sealed_reveal_adversarial_cases_hold_on_multi_peer_network -- --nocapture`,
+  and `cargo fmt --all`.
+
+## 2026-05-01 Conservative ingress and exact-length cache implementation
+
+- Implemented the next conservative cache slice without changing transaction
+  wire bytes, block wire bytes, canonical hashes, consensus rules, or config
+  defaults. Torii direct signed-transaction and batch submission now decode
+  versioned signed payloads once into a core-owned prepared admission token,
+  preserving the existing validation path while reusing prepared hashes,
+  encoded length, payload hash, and parsed single-Ed25519 key metadata.
+- `InstructionBox::encoded_len_exact` now counts the existing
+  `(wire_id, framed_payload)` Norito layout without materializing the framed
+  instruction payload, keeping serialization/decode behavior unchanged while
+  removing the residual dynamic framing allocation from size checks.
+- Focused validation passed:
+  `cargo test -p iroha_data_model instruction_box_encoded_len_exact -- --nocapture`,
+  `cargo test -p iroha_core decoded_versioned_signed_transaction --lib -- --nocapture`,
+  `cargo test -p iroha_core signed_encoded_len --lib -- --nocapture`,
+  `cargo test -p iroha_torii decode_transaction_batch_payloads --lib -- --nocapture`,
+  `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`, and
+  `cargo fmt --all -- --check`.
+- Release validation for this code is now recorded in the broader 20k
+  bottleneck-pass entries below, including the fixed-runner sampled profile at
+  `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200527`
+  and the latest 120s gate rerun at
+  `dist/izanami-prebuilt-20k-broader-pass-rerun-120s-20260501-195617`.
+
 ## 2026-05-01 Contended conservative-cache release 20k gate rerun
 
 - Reran the 4-peer, no-fault, prebuilt `20,000 TPS` / `120s` Izanami gate from
@@ -106,6 +148,10 @@ Last updated: 2026-05-01
     iroha_schema --test floats -- --nocapture` passed.
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-fixes cargo test -p norito
     --features schema-structural --test schema_hash -- --nocapture` passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-fixes cargo check -p
+    iroha_kagami` passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-fixes cargo check -p
+    iroha_torii --features schema` passed.
 
 ## 2026-05-01 Broader 20k bottleneck pass
 
@@ -129,31 +175,116 @@ Last updated: 2026-05-01
   executor adapter. The public `Execute` trait and custom executor API remain
   owned-instruction based; user-provided executor paths still explicitly fall
   back to owned `InstructionBox` execution.
+- Fixed the signature materialization corridor needed by lazy gossip decode:
+  `iroha_crypto::Signature` now has a narrow `ConstVec<u8>` fallback for the
+  compact per-byte signature payload layout, so valid cached entrypoint frames
+  can materialize through normal Norito validation instead of being dropped as
+  semantic decode failures.
 - Added focused unit coverage for lazy gossip decode/cache behavior,
   route-invalid and known-duplicate drops without materialization, accepted
   cached gossip payload reuse, and valid/invalid gossip Ed25519 batch precheck
   behavior.
 - Profile classification after this pass: the prior 30s profile at
   `dist/izanami-profile-20k-postcache-tuned-bottleneck-30s-20260501-171955`
-  should be considered pre-broader-pass. The latest completed 120s gate remains
-  `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-175213`;
-  no fresh 30s sampled profile or 120s release gate was rerun in this coding
-  pass.
+  is pre-broader-pass evidence. The fresh sampled 30s profile is
+  `dist/izanami-profile-20k-broader-pass-sampled-30s-20260501-194734`; it
+  completed with `ingress_accepted=37324`, submit latency
+  `p50/p95/p99=3355/5723/6477ms`, final strict height `2`, final approved
+  transactions `143`, and a saturated queue depth of `37402`. Peer samples
+  still classify active CPU mostly under Ed25519/curve25519, ZKP poseidon,
+  memory movement/allocation, SHA/Blake hashing, and Norito decode/compact-len
+  paths; the sample wrapper captured the shell pipeline's `tee` process instead
+  of the Izanami runner, but the four peer samples were captured successfully.
+  Gossip materialization and deterministic gossip Ed25519 batch precheck now
+  appear as narrower peer-side stacks rather than the broadest top-level
+  categories.
+- The fresh unsampled 120s release gate is
+  `dist/izanami-prebuilt-20k-broader-pass-120s-20260501-194908`; it completed
+  with `offered=2400000`, `ingress_accepted=52291`, submit latency
+  `p50/p95/p99=3290/4753/5217ms`, final strict height `9`, final approved
+  transactions `28740`, final height skew `1`, and saturated queue depth
+  `18527`. Compared with
+  `dist/izanami-prebuilt-20k-conservative-cache-rerun-120s-20260501-175213`,
+  final approved transactions were effectively flat (`28740` vs `28710`) and
+  p95/p99 submit latency improved, while ingress accepted count was lower
+  (`52291` vs `54574`).
+- The immediate release-gate rerun is
+  `dist/izanami-prebuilt-20k-broader-pass-rerun-120s-20260501-195617`; it
+  completed with `offered=2400000`, `ingress_accepted=51802`, submit latency
+  `p50/p95/p99=3099/4543/5075ms`, final strict height `9`, final approved
+  transactions `28699`, final height skew `0`, saturated queue depth `23112`,
+  `view_change_* = 0`, and exit code `0`. Compared with the previous
+  broader-pass 120s gate, final approved transactions and ingress accepted
+  count were slightly lower (`28699` vs `28740`, `51802` vs `52291`), while
+  p50/p95/p99 submit latency improved.
+- The follow-up fixed-runner sampled 30s profile is
+  `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200527`.
+  It completed with `sample_ready=true`, `sample_status=0`, and exit code `0`,
+  and sampled the actual Izanami runner plus all eight observed `iroha3d`
+  peer processes. The run offered `600000`, accepted `54750`, had submit
+  latency `p50/p95/p99=3391/6921/7769ms`, final strict height `2`, final
+  approved transactions `12`, final height skew `1`, and a saturated queue
+  depth of `41098`. Treat this artifact as CPU bottleneck classification, not
+  a committed-throughput baseline.
+- Fixed-runner profile classification: direct peer CPU is dominated by
+  Ed25519/curve25519 verification math, with `curve25519_dalek` field
+  exponentiation/multiplication and multiscalar paths as the largest leaves.
+  Memory allocation/copying and Norito compact/decode work are the next tier,
+  including `memmove`, `malloc`/`free`, `norito::core::use_compact_len`, and
+  data-model instruction registry/decode paths. Hashing (`sha2`, `blake2`,
+  `crc64fast`) remains visible but secondary. ZK/BLS math is also material:
+  direct peer samples include `iroha_zkp_halo2::poseidon`, while the
+  `core_api` child peer processes are dominated by `ark_ff`,
+  `ark_bls12_381`, and `w3f_bls` public-key deserialization/subgroup math.
+  Gossip materialization and gossip deterministic Ed25519 batch precheck are
+  present as narrow stacks, while queue mechanics and borrowed overlay apply
+  are not primary CPU bottlenecks in this sample.
+- Two earlier fixed-runner profile attempts,
+  `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200044`
+  and
+  `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200211`,
+  failed before peer startup because the bundled rANS table checksum did not
+  match the current Norito table payload. The table checksum was restored to
+  the current-source value before the successful sampled rerun.
 - Validation:
   - `cargo fmt --all` passed.
   - `git diff --check` passed.
-  - `cargo check -p iroha_core` without overrides failed before reaching this
-    code because `crates/norito/build.rs` ran the binding parity script against
-    then-stale SDK fixtures. The Norito first-release cleanup recorded above
-    has since refreshed the binding parity corridor.
-  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo check -p iroha_core` passed.
   - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
-    check -p iroha_core` passed.
-  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib
-    gossip_transaction -- --nocapture` did not run tests because the
-    `iroha_core` lib-test build hit then-stale test-only Norito config fields.
-    The Norito first-release cleanup recorded above has since removed those
-    ignored fields from config construction.
+    test -p iroha_core --lib gossip_transaction -- --nocapture` passed
+    (`5` tests).
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    test -p iroha_core --lib gossip_drop_does_not_materialize -- --nocapture`
+    passed (`2` tests).
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    test -p iroha_core --lib gossip_ed25519_batch_precheck -- --nocapture`
+    passed (`2` tests).
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    test -p iroha_core --lib queue_accepts_gossip_payload_cache --
+    --nocapture` passed (`3` tests).
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    test -p iroha_core --lib
+    queue_generated_gossip_payload_uses_framed_entrypoint_wire -- --nocapture`
+    passed (`1` test).
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    test -p iroha_crypto
+    signature_of_try_deserialize_preserves_compact_const_vec_payload --
+    --nocapture` passed (`1` test).
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-check cargo
+    check -p norito -p iroha_crypto -p iroha_data_model -p iroha_core -p
+    iroha_torii -p irohad` passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-check-unskipped cargo check -p norito
+    -p iroha_crypto -p iroha_data_model -p iroha_core -p iroha_torii -p
+    irohad` passed, including the Norito binding parity build-script corridor.
+  - `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+    passed.
+  - Fresh `30s` sampled 20k Izanami profile passed with artifact
+    `dist/izanami-profile-20k-broader-pass-sampled-30s-20260501-194734`.
+  - Fresh `120s` prebuilt 20k Izanami gate passed with artifact
+    `dist/izanami-prebuilt-20k-broader-pass-120s-20260501-194908`.
+  - Fresh `120s` prebuilt 20k Izanami gate rerun passed with artifact
+    `dist/izanami-prebuilt-20k-broader-pass-rerun-120s-20260501-195617`.
+  - Fresh fixed-runner `30s` sampled 20k Izanami profile passed with artifact
+    `dist/izanami-profile-20k-broader-pass-rerun-sampled-30s-20260501-200527`.
 
 ## 2026-05-01 Conservative cache release 20k gate rerun
 
@@ -273,6 +404,45 @@ Last updated: 2026-05-01
   - `cargo fmt --all -- --check`
   - `git diff --check`
 
+## 2026-05-01 Offline V2 native SDK prover speedups
+
+- Swift Offline Note V2 pure Halo2 proving now reuses a cached IPA/domain
+  context, verifier-key transcript scalar, and fixed selector polynomial instead
+  of regenerating them on every proof. The hot commitment path now uses sparse
+  Lagrange commitments for single-row instance/advice columns and a 4-bit
+  windowed Vesta scalar multiplication path to avoid the previous 255-step
+  bit-by-bit multiplication for every base.
+- Added Swift convenience APIs for direct native proof generation from
+  `OfflineNoteRedeemV2` / `OfflineNoteAuditBundleV2`, plus proof replacement
+  helpers and a `Halo2OfflineNoteV2Prover.prewarm()` hook so callers can keep
+  the native model, initialize the proof cache before the button path, and swap
+  in the newly generated recursive proof before binding validation.
+- Added Kotlin/JVM and Java Android Offline V2 instance-value builders,
+  scalar-column encoders, proof replacement helpers, and pure Java Halo2/IPA
+  provers. The Java-family path now builds the same `OpenVerifyEnvelope`
+  recursive proof payloads without routing production calls through Rust JNI,
+  and the focused JVM payload was cross-verified by the Swift native verifier.
+- Release Swift benchmark on macOS arm64 for the pure Swift prover after the
+  optimization pass: audit median `0.643s`, p95 `0.724s`, max `0.754s`;
+  redeem median `0.722s`, p95 `1.237s`, max `1.258s` over 20 iterations.
+- Added env-gated Kotlin/JVM and Java Android native prover benchmark hooks.
+  One-iteration local smoke runs on macOS arm64 reported JVM audit `1.870s`
+  / redeem `1.838s`, and Java Android harness audit `1.871s` / redeem
+  `1.849s`; run a larger iteration count before treating these as stable
+  release numbers.
+- Focused validation for this slice:
+  - `swift test -c release --filter Halo2PastaTests/testPastaUniformBytesAndVestaGroupArithmetic`
+  - `swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
+  - `IROHA_SWIFT_OFFLINE_V2_BENCH=1 IROHA_SWIFT_OFFLINE_V2_BENCH_ITERATIONS=20 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofPerformanceWhenRequested`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_V2_PROVER_TEST=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverProducesVerifyingPayloadWhenRequested --console=plain` from `kotlin`
+  - `IROHA_JVM_OFFLINE_V2_BENCH=1 IROHA_JVM_OFFLINE_V2_BENCH_ITERATIONS=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test.nativeHalo2ProverPerformanceWhenRequested --console=plain --info --rerun-tasks` from `kotlin`
+  - `IROHA_SWIFT_OFFLINE_V2_VERIFY_PAYLOAD_IN=/tmp/iroha-jvm-offline-v2-audit.zk1 swift test -c release --filter Halo2PastaTests/testOfflineNoteV2NativeHalo2ProofEnvelopeFitsQrBudget`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_PROVER_TEST=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) IROHA_JAVA_OFFLINE_V2_BENCH=1 IROHA_JAVA_OFFLINE_V2_BENCH_ITERATIONS=1 ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteV2Test ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --info --rerun-tasks` from `java/iroha_android`
+  - `git diff --check`
+
 ## 2026-05-01 Torii Offline V2 issuer hardening
 
 - Torii Offline V2 issuer certificate minting now requires a signed middleware
@@ -286,11 +456,14 @@ Last updated: 2026-05-01
 - `torii.offline_issuer` configuration now requires an attestation verifier
   public key and explicitly accepts only Ed25519 or Secp256k1 issuer/verifier
   keys.
+- Refreshed the minimal `iroha_config` fixture snapshot so the Torii defaults
+  include `offline_issuer: None`.
 - Focused validation for this slice:
   - `cargo fmt --all`
   - `cargo check -p iroha_config -p iroha_torii --features app_api`
   - `cargo test -p iroha_torii offline_v2_issuer`
   - `cargo test -p iroha_config torii_offline_issuer`
+  - `cargo test -p iroha_config --test fixtures`
 
 ## 2026-05-01 20k post-cache tuned release gate rerun
 

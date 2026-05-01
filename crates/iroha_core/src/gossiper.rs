@@ -2541,7 +2541,7 @@ fn signed_hash_from_entrypoint_hash(
 fn decode_framed_transaction_entrypoint(
     framed: &[u8],
 ) -> Result<TransactionEntrypoint, ncore::Error> {
-    ncore::decode_from_bytes::<TransactionEntrypoint>(framed)
+    norito::decode_from_bytes::<TransactionEntrypoint>(framed)
 }
 
 fn decode_gossip_transaction_payload(
