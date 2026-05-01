@@ -32,7 +32,7 @@ Iroha.
 - `CONNECT_DEDUPE_CAP` (օգտագործում; լռելյայն՝ `8192`)
 - `CONNECT_RELAY_ENABLED` (բուլ; լռելյայն՝ `true`)
 - `CONNECT_RELAY_STRATEGY` (տող; լռելյայն՝ `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; լռելյայն՝ `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; լռելյայն՝ `8`)
 
 Նշումներ:
 

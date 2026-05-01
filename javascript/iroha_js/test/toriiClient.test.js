@@ -15676,6 +15676,12 @@ test("getConnectStatus normalizes payload", async () => {
           p2p_rebroadcast_skipped_total: 7,
           p2p_auth_failures_total: 8,
           p2p_ttl_drops_total: 9,
+          p2p_unknown_session_drops_total: 10,
+          p2p_session_claims_in_total: 11,
+          p2p_session_claims_installed_total: 12,
+          p2p_session_claim_conflicts_total: 13,
+          p2p_role_consumed_total: 14,
+          p2p_session_terminated_total: 15,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -15696,6 +15702,12 @@ test("getConnectStatus normalizes payload", async () => {
   assert.equal(status?.p2pRebroadcastSkippedTotal, 7);
   assert.equal(status?.p2pAuthFailuresTotal, 8);
   assert.equal(status?.p2pTtlDropsTotal, 9);
+  assert.equal(status?.p2pUnknownSessionDropsTotal, 10);
+  assert.equal(status?.p2pSessionClaimsInTotal, 11);
+  assert.equal(status?.p2pSessionClaimsInstalledTotal, 12);
+  assert.equal(status?.p2pSessionClaimConflictsTotal, 13);
+  assert.equal(status?.p2pRoleConsumedTotal, 14);
+  assert.equal(status?.p2pSessionTerminatedTotal, 15);
 });
 
 test("getConnectStatus preserves relay-disabled effective local-only fields", async () => {
@@ -15741,6 +15753,12 @@ test("getConnectStatus preserves relay-disabled effective local-only fields", as
           p2p_rebroadcast_skipped_total: 0,
           p2p_auth_failures_total: 0,
           p2p_ttl_drops_total: 0,
+          p2p_unknown_session_drops_total: 0,
+          p2p_session_claims_in_total: 0,
+          p2p_session_claims_installed_total: 0,
+          p2p_session_claim_conflicts_total: 0,
+          p2p_role_consumed_total: 0,
+          p2p_session_terminated_total: 0,
         },
         headers: { "content-type": "application/json" },
       }),
@@ -15756,6 +15774,12 @@ test("getConnectStatus preserves relay-disabled effective local-only fields", as
   assert.equal(status?.p2pRebroadcastSkippedTotal, 0);
   assert.equal(status?.p2pAuthFailuresTotal, 0);
   assert.equal(status?.p2pTtlDropsTotal, 0);
+  assert.equal(status?.p2pUnknownSessionDropsTotal, 0);
+  assert.equal(status?.p2pSessionClaimsInTotal, 0);
+  assert.equal(status?.p2pSessionClaimsInstalledTotal, 0);
+  assert.equal(status?.p2pSessionClaimConflictsTotal, 0);
+  assert.equal(status?.p2pRoleConsumedTotal, 0);
+  assert.equal(status?.p2pSessionTerminatedTotal, 0);
 });
 
 test("getConnectStatus rejects non-integer policy values", async () => {
@@ -15801,6 +15825,12 @@ test("getConnectStatus rejects non-integer policy values", async () => {
           p2p_rebroadcast_skipped_total: 0,
           p2p_auth_failures_total: 0,
           p2p_ttl_drops_total: 0,
+          p2p_unknown_session_drops_total: 0,
+          p2p_session_claims_in_total: 0,
+          p2p_session_claims_installed_total: 0,
+          p2p_session_claim_conflicts_total: 0,
+          p2p_role_consumed_total: 0,
+          p2p_session_terminated_total: 0,
         },
         headers: { "content-type": "application/json" },
       }),

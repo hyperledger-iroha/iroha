@@ -30536,12 +30536,13 @@ mod tests {
             reveal_deadline_height,
             nonce: None,
         };
-        let signed_commitment =
+        let sealed_entrypoint = TransactionEntrypoint::SealedCommitment(
             iroha_data_model::transaction::signed::SignedSealedTransactionCommitment::sign(
                 payload,
                 keypair.private_key(),
-            );
-        let sealed_hash = TransactionEntrypoint::SealedCommitment(signed_commitment.clone()).hash();
+            ),
+        );
+        let sealed_hash = sealed_entrypoint.hash();
         let time_trigger = iroha_data_model::trigger::TimeTriggerEntrypoint {
             id: "sealed-cleanup".parse().expect("trigger id"),
             instructions: ExecutionStep(ConstVec::new_empty()),
@@ -30550,16 +30551,24 @@ mod tests {
         let time_hash = time_trigger.hash_as_entrypoint();
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
-        builder.push_sealed_transaction_commitment(signed_commitment);
-        builder.push_time_trigger(time_trigger);
-        builder.push_result(TransactionResultInner::Ok(
-            iroha_data_model::trigger::DataTriggerSequence::default(),
-        ));
-        builder.push_result(TransactionResultInner::Ok(
-            iroha_data_model::trigger::DataTriggerSequence::default(),
-        ));
-        let block = builder.build_with_signature(0, keypair.private_key());
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, Vec::<SignedTransaction>::new());
+        block.set_external_entrypoints(vec![sealed_entrypoint]);
+        block.set_transaction_results(
+            vec![time_trigger],
+            &[sealed_hash, time_hash],
+            vec![
+                TransactionResultInner::Ok(
+                    iroha_data_model::trigger::DataTriggerSequence::default(),
+                ),
+                TransactionResultInner::Ok(
+                    iroha_data_model::trigger::DataTriggerSequence::default(),
+                ),
+            ],
+        );
         let block_arc = Arc::new(block);
         kura.store_block(Arc::clone(&block_arc))
             .expect("store block");

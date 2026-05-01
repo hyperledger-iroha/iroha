@@ -789,21 +789,81 @@ Last updated: 2026-05-01
 - Profile artifact:
   `dist/izanami-profile-20k-30s-20260430-185822`.
 
-## 2026-05-01 Sumeragi frontier formal corridor hardened
+## 2026-05-01 Iroha Connect default relay TTL restored
 
-- Strengthened the focused Taira frontier-recovery model with explicit
-  follow-through after payload recovery and quorum retransmit, plus a finite
-  future-frontier/new-view evidence abstraction that can reanchor the pending
-  frontier instead of leaving it behind stale local state.
+- Changed the default Connect P2P relay TTL from `0` to `8` hops so the
+  default `broadcast` relay strategy actually rebroadcasts over an attached
+  Iroha P2P handle. Operators can still set `CONNECT_P2P_TTL_HOPS=0` to
+  disable cross-node Connect rebroadcast explicitly.
+- Tightened Connect status so zero-TTL broadcast configuration reports an
+  effective `local_only` strategy while preserving the normalized configured
+  strategy.
+- Updated Connect configuration docs, translated default-value references, and
+  the config default fixture.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `git diff --check`
+  - `cargo test -p iroha_torii --test connect_gating --features ws_integration_tests connect_ws_broadcast -- --nocapture`
+  - `cargo test -p iroha_torii --lib broadcast_strategy_with_zero_ttl_reports_local_only_when_p2p_attached -- --nocapture`
+  - `cargo test -p iroha_config minimal_config_snapshot -- --nocapture`
+  - `cargo test -p iroha_torii --test connect_gating --features ws_integration_tests -- --nocapture`
+
+## 2026-05-01 Iroha Connect P2P rendezvous claims
+
+- Added versioned Connect P2P control messages for relay envelopes, session
+  claims, consumed-role notices, and session termination notices. Torii now
+  gossips session claims over authenticated Iroha P2P so app and wallet
+  WebSockets can rendezvous through different Torii nodes after one
+  `/v1/connect/session` response.
+- Replaced in-memory app, wallet, and management token storage with
+  domain-separated authentication hashes and constant-time comparisons. Claims
+  carry token hashes plus the relay MAC key, not raw app/wallet/management
+  tokens.
+- Added P2P claim, conflict, unknown-session relay drop, consumed-role, and
+  termination counters to Connect status and surfaced them in the JS, Python,
+  and Swift typed SDK status snapshots.
+- Added shared Connect session vectors for token hashes, relay MAC key, and
+  relay auth hash, with Rust/JS fixture coverage and Swift/Kotlin/Java relay
+  auth fixture assertions.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_torii`
+  - `cargo test -p iroha_torii_shared connect_sdk -- --nocapture`
+  - `cargo test -p iroha_torii --lib p2p_ -- --nocapture`
+  - `cargo test -p iroha_torii --lib register_tokens_stores_token_hashes -- --nocapture`
+  - `node --test test/connect.browser.test.js test/connectPreviewFlow.test.js test/toriiClient.test.js` from `javascript/iroha_js`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/client.py python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+- Validation blockers in this environment:
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k 'connect_status or connect_session'` could not run because `pytest` is not installed.
+  - Kotlin/JVM and Java Android Connect tests could not run because no Java runtime is available.
+  - Focused Swift Connect tests could not run because `IrohaSwift/dist/NoritoBridge.xcframework` is missing.
+
+## 2026-05-01 Sumeragi frontier formal gaps closed
+
+- Refactored the focused Taira frontier-recovery model from one active frontier
+  plus a Boolean future-evidence shortcut into one active frontier plus one
+  concrete future frontier slot. The future slot carries presence, contiguity,
+  vote counts, queued votes, payload state, and recovery owner, while
+  `FutureFrontierEvidence` is now derived from that slot.
+- Added the two-step future reanchor path: clear the stale/current pending
+  wrapper, then promote the future slot into the active slot with active
+  progress flags reset and `frontierSlot` advanced.
+- Strengthened liveness so an active vote-backed pending wrapper must
+  eventually clear. Payload recovery, quorum retransmit, future-slot reanchor,
+  and promoted second-slot behavior now have focused follow-through
+  properties.
 - Made Apalache bounds explicit in `scripts/formal/sumeragi_apalache.sh` for
-  every mode, added the manual `frontier-wide` profile, and kept the normal
-  CI gate to the cheaper `frontier-fast` / `frontier-deep` profiles.
-- Added expected-failure stale-owner and vote-queue mutation profiles outside
-  normal CI so model edits can prove that those hang-class assumptions are
-  still actually exercised.
-- Updated the Sumeragi formal README with the model-to-implementation
-  assumption map and refreshed all translated `docs/formal/sumeragi/README.*.md`
-  files so the formal docs pass the current-source metadata gate.
+  every mode, kept existing modes backward-compatible, added payload-recovery,
+  retransmit-follow-through, and future-promotion bug modes, and promoted
+  `frontier-wide` plus all expected-failure mutations into normal formal CI.
+- Updated the English Sumeragi formal README with the two-slot proof scope,
+  runner modes, CI behavior, and model-to-implementation assumption map.
+  Translated `docs/formal/sumeragi/README.*.md` bodies were intentionally not
+  refreshed in this slice, so they may remain source-current stale until a
+  separate translation refresh.
 - No runtime consensus code changed in this hardening pass.
 - Validation completed with local Apalache `0.52.2`:
   - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
@@ -815,7 +875,8 @@ Last updated: 2026-05-01
   - `cargo test -p iroha_core reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
   - `cargo test -p iroha_core reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
   - `cargo test -p iroha_core reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
-  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
+  - `cargo test -p iroha_core pacemaker_reanchors_frontier_when_future_new_view_quorum_exists -- --nocapture`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal`
 
 ## 2026-04-30 Sumeragi frontier recovery formal model
 

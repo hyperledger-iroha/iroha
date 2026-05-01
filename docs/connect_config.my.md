@@ -32,7 +32,7 @@ Iroha Torii သည် ရွေးချယ်နိုင်သော WalletCon
 - `CONNECT_DEDUPE_CAP` (အသုံးပြုမှု; မူရင်း- `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; မူရင်း- `true`)
 - `CONNECT_RELAY_STRATEGY` (string; မူရင်း- `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; မူရင်း- `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; မူရင်း- `8`)
 
 မှတ်စုများ-
 

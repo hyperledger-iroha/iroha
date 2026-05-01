@@ -2146,7 +2146,13 @@ final class ToriiClientTests: XCTestCase {
                 "p2p_rebroadcasts_total": 8,
                 "p2p_rebroadcast_skipped_total": 9,
                 "p2p_auth_failures_total": 10,
-                "p2p_ttl_drops_total": 11
+                "p2p_ttl_drops_total": 11,
+                "p2p_unknown_session_drops_total": 12,
+                "p2p_session_claims_in_total": 13,
+                "p2p_session_claims_installed_total": 14,
+                "p2p_session_claim_conflicts_total": 15,
+                "p2p_role_consumed_total": 16,
+                "p2p_session_terminated_total": 17
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
@@ -2163,6 +2169,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(status.policy?.p2pTtlHops, 2)
         XCTAssertEqual(status.sequenceViolationClosesTotal, 5)
         XCTAssertEqual(status.p2pAuthFailuresTotal, 10)
+        XCTAssertEqual(status.p2pSessionClaimsInstalledTotal, 14)
+        XCTAssertEqual(status.p2pSessionTerminatedTotal, 17)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

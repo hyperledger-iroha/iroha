@@ -66,7 +66,27 @@ public final class ConnectWalletRequestTests {
         : "relay auth hash mismatch";
   }
 
+  @Test
+  public void relayAuthHashMatchesSharedFixture() throws Exception {
+    final byte[] sid = new byte[32];
+    for (int i = 0; i < sid.length; i++) {
+      sid[i] = (byte) i;
+    }
+
+    assert "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f"
+            .equals(hex(ConnectCrypto.relayAuthHash(sid, "relay-token-vector")))
+        : "relay auth fixture mismatch";
+  }
+
   private static String sampleSid() {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[32]);
+  }
+
+  private static String hex(final byte[] bytes) {
+    final StringBuilder out = new StringBuilder(bytes.length * 2);
+    for (final byte b : bytes) {
+      out.append(String.format("%02x", b & 0xff));
+    }
+    return out.toString();
   }
 }
