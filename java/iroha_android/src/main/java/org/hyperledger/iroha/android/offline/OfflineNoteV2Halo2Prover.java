@@ -1212,7 +1212,9 @@ public final class OfflineNoteV2Halo2Prover {
       final F b = y.square();
       final F c = b.square();
       final F xPlusB = x.add(b);
-      final F d = xPlusB.square().sub(a).sub(c).add(xPlusB.square().sub(a).sub(c));
+      final F xPlusBSquared = xPlusB.square();
+      final F d0 = xPlusBSquared.sub(a).sub(c);
+      final F d = d0.add(d0);
       final F e = a.add(a).add(a);
       final F f = e.square();
       final F x3 = f.sub(d).sub(d);
