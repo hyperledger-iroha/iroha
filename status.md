@@ -2,6 +2,22 @@
 
 Last updated: 2026-05-01
 
+## 2026-05-01 Client submit rejection confirmation race
+
+- Transaction confirmation fallback polling now starts after the first poll
+  interval instead of immediately, so a submit endpoint rejection that arrives
+  just after listener setup preempts status polling and returns without racing
+  the configured status timeout.
+- Added regression coverage for a pending submit failure that must be observed
+  before the first status poll.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha tx_confirmation_stream_tests::pending_submit_failure_preempts_first_status_poll -- --nocapture`
+  - `cargo test -p iroha client::tests::submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout -- --nocapture`
+  - `cargo test -p iroha client::tests -- --nocapture`
+  - `cargo test -p iroha tx_confirmation_stream_tests -- --nocapture`
+  - `cargo test -p iroha --lib -- --nocapture`
+
 ## 2026-05-01 Live Taira faucet authority top-up
 
 - Submitted a live Taira mint from the configured faucet authority to itself
