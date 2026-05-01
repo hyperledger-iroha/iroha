@@ -14984,6 +14984,8 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
+    /// Optional Offline Notes V2 issuer configuration for app API endpoints.
+    pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
@@ -15456,6 +15458,7 @@ impl Torii {
             push,
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
             faucet: self.faucet.and_then(ToriiFaucet::parse),
+            offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
             app_api: actual::AppApi {
@@ -16161,6 +16164,76 @@ impl ToriiFaucet {
             pow_adaptive_max_extra_bits: self.pow_adaptive_max_extra_bits,
             pow_vrf_seed_enabled: self.pow_vrf_seed_enabled,
         })
+    }
+}
+
+/// Offline Notes V2 issuer configuration for app-facing wallet load helpers.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiOfflineIssuer {
+    /// Master enable switch (defaults to enabled when the section is present).
+    #[config(default = "true")]
+    pub enabled: bool,
+    /// Private key for the privileged Offline V2 issuer account.
+    #[config(env = "TORII_OFFLINE_ISSUER_PRIVATE_KEY")]
+    pub private_key: ExposedPrivateKey,
+    /// Maximum authorized offline balance per lineage.
+    #[config(default = "defaults::torii::offline_issuer::max_balance()")]
+    pub max_balance: String,
+    /// Maximum authorized value for one offline transaction.
+    #[config(default = "defaults::torii::offline_issuer::max_tx_value()")]
+    pub max_tx_value: String,
+    /// Certificate TTL in milliseconds.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::offline_issuer::CERTIFICATE_TTL_MS))"
+    )]
+    pub certificate_ttl_ms: DurationMs,
+    /// Authorization refresh interval in milliseconds.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::offline_issuer::AUTHORIZATION_REFRESH_MS))"
+    )]
+    pub authorization_refresh_ms: DurationMs,
+    /// Authorization TTL in milliseconds.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::offline_issuer::AUTHORIZATION_TTL_MS))"
+    )]
+    pub authorization_ttl_ms: DurationMs,
+}
+
+impl ToriiOfflineIssuer {
+    fn parse(self) -> Option<actual::ToriiOfflineIssuer> {
+        if !self.enabled {
+            return None;
+        }
+        let key_pair = KeyPair::from_private_key(self.private_key.0.clone())
+            .unwrap_or_else(|err| panic!("invalid torii.offline_issuer.private_key: {err}"));
+        if matches!(
+            key_pair.public_key().algorithm(),
+            Algorithm::BlsNormal | Algorithm::BlsSmall
+        ) {
+            panic!("torii.offline_issuer.private_key must not use BLS; use ed25519 or secp256k1");
+        }
+        let max_balance =
+            Self::parse_positive_amount("torii.offline_issuer.max_balance", &self.max_balance);
+        let max_tx_value =
+            Self::parse_positive_amount("torii.offline_issuer.max_tx_value", &self.max_tx_value);
+        Some(actual::ToriiOfflineIssuer {
+            authority: AccountId::new(key_pair.public_key().clone()),
+            key_pair,
+            max_balance,
+            max_tx_value,
+            certificate_ttl: self.certificate_ttl_ms.get().max(MIN_TIMER_INTERVAL),
+            authorization_refresh: self.authorization_refresh_ms.get().max(MIN_TIMER_INTERVAL),
+            authorization_ttl: self.authorization_ttl_ms.get().max(MIN_TIMER_INTERVAL),
+        })
+    }
+
+    fn parse_positive_amount(field: &'static str, raw: &str) -> Numeric {
+        let amount = Numeric::from_str(raw.trim())
+            .unwrap_or_else(|err| panic!("invalid {field} `{raw}`: {err}"));
+        if amount <= Numeric::zero() {
+            panic!("{field} must be greater than zero");
+        }
+        amount
     }
 }
 
