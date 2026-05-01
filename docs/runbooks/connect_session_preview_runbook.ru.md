@@ -87,7 +87,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **Удалите подготовленные сессии.** Всегда удаляйте превью-сессии, чтобы алерты глубины очереди оставались значимыми:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Для прогонов только Swift вызовите тот же endpoint через helper Rust/CLI.
 2. **Очистите журналы.** Удалите любые сохраненные журналы очереди (`ApplicationSupport/ConnectQueue/<sid>.to`, хранилища IndexedDB и т.д.), чтобы следующий прогон стартовал чисто. Зафиксируйте хэш файла перед удалением, если нужно отлаживать проблему replay.

@@ -323,6 +323,23 @@ pub fn decode_connect_envelope_framed(bytes: &[u8]) -> Result<EnvelopeV1, Error>
     view.decode::<EnvelopeV1>()
 }
 
+/// Authenticated P2P relay envelope for Connect frames.
+///
+/// The inner frame remains the canonical Connect frame; `ttl` bounds P2P
+/// rebroadcast, and `mac` authenticates `frame` plus `ttl` with the session
+/// relay key before Torii applies dedupe or sequence checks.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectRelayEnvelopeV1 {
+    /// Connect frame being relayed.
+    pub frame: ConnectFrameV1,
+    /// Remaining relay hops.
+    pub ttl: u8,
+    /// HMAC-SHA256 tag over the canonical relay transcript.
+    pub mac: [u8; 32],
+}
+
 #[cfg(test)]
 mod signature_tests {
     use super::*;
@@ -938,6 +955,8 @@ pub struct SignInProofV1 {
 pub type WalletSignature = WalletSignatureV1;
 /// Top-level Connect frame routed over transport channels.
 pub type ConnectFrame = ConnectFrameV1;
+/// Top-level authenticated Connect P2P relay envelope.
+pub type ConnectRelayEnvelope = ConnectRelayEnvelopeV1;
 /// Plaintext control channel payload used during session lifecycle.
 pub type ConnectControl = ConnectControlV1;
 /// Ciphertext envelope metadata carried in a frame.

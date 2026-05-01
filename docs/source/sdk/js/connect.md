@@ -104,7 +104,7 @@ console.log("p2p rebroadcasts skipped", status.p2pRebroadcastSkippedTotal);
 the Torii session registration call so you can generate deterministic previews
 and (optionally) register them with the node. The helper returns the preview
 payload (SID, URIs, invite metadata) and the Torii session result, including
-the wallet/app tokens referenced by the roadmap.
+the wallet/app role tokens plus the management and relay tokens.
 
 ```ts
 import { ToriiClient, bootstrapConnectPreviewSession } from "@iroha/iroha-js";
@@ -124,6 +124,7 @@ if (!session || !tokens) {
 console.log("share this SID", preview.sidBase64Url);
 console.log("wallet deeplink", session.wallet_uri);
 console.log("app token for Connect WS", tokens.app);
+console.log("relay token for approval binding", tokens.relay);
 ```
 
 Pass `register: false` when you only need the deterministic preview (for
@@ -152,6 +153,8 @@ alert on local `ws://` usage. Notes:
 
 - Ensure Connect URLs use the same host/scheme as the configured Torii base; absolute overrides with credentials are rejected.
 - Attach `insecureTransportTelemetryHook` to surface any ws:// dial attempts in logs/metrics during development.
+- Keep `token_management` for deletion and token-gated per-session status; do not put it in QR codes.
+- Wallet/app deep links include `relay=<token_relay>`, which is bound into approval signatures and authenticates P2P relay envelopes.
 
 ```ts
 import WebSocket from "ws";
@@ -202,6 +205,8 @@ Combine the primitives above to satisfy the JS4 roadmap gate:
    wallet/app URIs as QR codes.
 4. Open the WebSocket with the issued SID/tokens using the built-in helpers so
    retries, protocol selection, and URL shaping stay consistent across SDKs.
+5. Delete stale sessions with `token_management` and use public status only for
+   redacted aggregate telemetry.
 
 Because each helper mirrors the Rust APIs, parity suites (Jest +
 `npm run lint:test`) cover them automatically and the documentation above now

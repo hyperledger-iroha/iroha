@@ -48,6 +48,8 @@ struct SessionResp {
     sid: String,
     token_app: String,
     token_wallet: String,
+    token_management: String,
+    token_relay: String,
 }
 
 #[cfg(feature = "connect")]
@@ -78,9 +80,13 @@ async fn run_connect_app() -> anyhow::Result<()> {
         sid,
         token_app,
         token_wallet,
+        token_management,
+        token_relay,
         ..
     } = request_session(&client, &node).await?;
-    println!("sid={sid} token_app={token_app} token_wallet={token_wallet}");
+    println!(
+        "sid={sid} token_app={token_app} token_wallet={token_wallet} token_management={token_management} token_relay={token_relay}"
+    );
 
     let ws_url = format!(
         "{}/v1/connect/ws?sid={sid}&role={role}",

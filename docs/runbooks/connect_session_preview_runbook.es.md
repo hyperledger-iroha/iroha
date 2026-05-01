@@ -87,7 +87,7 @@ Este runbook documenta el procedimiento end-to-end para preparar, validar y desm
 
 1. **Borra sesiones en staging.** Siempre borra las sesiones de preview para que las alarmas de profundidad de cola sigan siendo significativas:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Para pruebas solo-Swift, llama el mismo endpoint mediante el helper Rust/CLI.
 2. **Purga journals.** Elimina cualquier journal de cola persistido (`ApplicationSupport/ConnectQueue/<sid>.to`, stores de IndexedDB, etc.) para que la siguiente corrida arranque limpia. Registra el hash del archivo antes de borrar si necesitas depurar un problema de replay.

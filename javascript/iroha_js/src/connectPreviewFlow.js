@@ -49,7 +49,7 @@ function requireNonEmptyString(value, name) {
  * @returns {Promise<{
  *   preview: import("./connectSession.js").ConnectSessionPreview;
  *   session: import("./toriiClient.js").ConnectSessionResponse | null;
- *   tokens: { wallet: string; app: string } | null;
+ *   tokens: { wallet: string; app: string; management: string; relay: string } | null;
  * }>}
  */
 export async function bootstrapConnectPreviewSession(toriiClient, options = {}) {
@@ -87,6 +87,8 @@ export async function bootstrapConnectPreviewSession(toriiClient, options = {}) 
     tokens: {
       wallet: session.token_wallet,
       app: session.token_app,
+      management: session.token_management,
+      relay: session.token_relay,
     },
   };
 }
