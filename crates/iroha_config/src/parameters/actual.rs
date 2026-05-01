@@ -7246,7 +7246,7 @@ pub struct Connect {
     pub relay_enabled: bool,
     /// Relay strategy string (`broadcast` or `local_only`).
     pub relay_strategy: &'static str,
-    /// Optional hop TTL for relay (0 = disabled).
+    /// Hop TTL for Connect relay envelopes (0 disables cross-node rebroadcast).
     pub p2p_ttl_hops: u8,
 }
 

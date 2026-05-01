@@ -32,7 +32,7 @@ Iroha Torii isteğe bağlı WalletConnect tipli WebSocket son nöqtələrini və
 - `CONNECT_DEDUPE_CAP` (istifadə; standart: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; default: `true`)
 - `CONNECT_RELAY_STRATEGY` (string; default: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8; defolt: `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8; defolt: `8`)
 
 Qeydlər:
 

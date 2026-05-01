@@ -2517,6 +2517,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn broadcast_strategy_with_zero_ttl_reports_local_only_when_p2p_attached() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        {
+            let mut p2p = bus.p2p.write().await;
+            *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
+        }
+
+        let status = bus.status().await;
+        assert_eq!(status.policy.relay_strategy, "broadcast");
+        assert!(status.policy.relay_p2p_attached);
+        assert_eq!(status.policy.p2p_ttl_hops, 0);
+        assert_eq!(status.policy.relay_effective_strategy, "local_only");
+    }
+
+    #[tokio::test]
     async fn broadcast_strategy_records_p2p_rebroadcast_when_network_attached() {
         let cfg = iroha_config::parameters::actual::Connect {
             enabled: true,
@@ -3333,7 +3365,7 @@ impl Default for Policy {
             heartbeat_interval: Duration::from_secs(30),
             heartbeat_miss_tolerance: 3,
             heartbeat_min_interval: Duration::from_secs(15),
-            p2p_ttl_hops: 0,
+            p2p_ttl_hops: iroha_config::parameters::defaults::connect::P2P_TTL_HOPS,
         }
     }
 }
@@ -3344,7 +3376,9 @@ impl Policy {
             return RelayStrategy::LocalOnly;
         }
         match self.relay_strategy {
-            RelayStrategy::Broadcast if relay_p2p_attached => RelayStrategy::Broadcast,
+            RelayStrategy::Broadcast if relay_p2p_attached && self.p2p_ttl_hops > 0 => {
+                RelayStrategy::Broadcast
+            }
             _ => RelayStrategy::LocalOnly,
         }
     }
