@@ -411,6 +411,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
             onboarding: None,
             faucet: None,
+            offline_issuer: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
