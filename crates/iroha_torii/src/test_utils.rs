@@ -548,6 +548,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             mcp: A::ToriiMcp::default(),
             ram_lfe: None,
             faucet: None,
+            offline_issuer: None,
             tx_history: None,
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
             zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
