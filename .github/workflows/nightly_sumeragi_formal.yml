@@ -1,0 +1,25 @@
+name: Nightly Sumeragi Formal
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  frontier-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned Apalache
+        run: bash scripts/formal/install_apalache.sh 0.52.2
+      - name: Sumeragi frontier nightly formal check
+        run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly

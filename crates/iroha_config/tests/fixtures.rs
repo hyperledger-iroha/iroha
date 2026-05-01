@@ -689,7 +689,7 @@ fn minimal_config_snapshot() {
                     dedupe_cap: 8192,
                     relay_enabled: true,
                     relay_strategy: "broadcast",
-                    p2p_ttl_hops: 0,
+                    p2p_ttl_hops: 8,
                 },
                 iso_bridge: IsoBridge {
                     enabled: false,

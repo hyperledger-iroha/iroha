@@ -105314,14 +105314,8 @@ async fn pacemaker_clamps_live_height_to_local_commit_horizon() {
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn pacemaker_reanchors_frontier_when_future_new_view_quorum_exists() {
+fn seed_future_new_view_frontier_reanchor_for_tests(actor: &mut Actor) -> (u64, QcHeaderRef) {
     use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    seed_genesis_block_for_state(&harness.actor.state);
-    while harness.background_rx.try_recv().is_ok() {}
-    let actor = &mut harness.actor;
 
     actor
         .queue
@@ -105359,6 +105353,17 @@ async fn pacemaker_reanchors_frontier_when_future_new_view_quorum_exists() {
         );
     }
 
+    (tracked_height, future_qc)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_reanchors_frontier_when_future_new_view_quorum_exists() {
+    let mut harness = test_actor_harness(4).await;
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+    let (tracked_height, future_qc) = seed_future_new_view_frontier_reanchor_for_tests(actor);
+
     let now = Instant::now();
     actor.phase_tracker.start_new_round(tracked_height, now);
     let proposed = actor.on_pacemaker_propose_ready(now);
@@ -105384,6 +105389,108 @@ async fn pacemaker_reanchors_frontier_when_future_new_view_quorum_exists() {
             .get_proposal(tracked_height, 0)
             .is_none(),
         "catch-up reanchor must not assemble a proposal at the stale frontier"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_reanchors_future_new_view_quorum_while_vote_queue_backlogged() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+    let (tracked_height, future_qc) = seed_future_new_view_frontier_reanchor_for_tests(actor);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    let proposed = actor.on_pacemaker_propose_ready(now);
+
+    assert!(
+        !proposed,
+        "future NEW_VIEW evidence should reanchor even while vote ingress is queued"
+    );
+    assert!(
+        !selected_reanchor_peers_for_height(actor, tracked_height).is_empty(),
+        "vote backlog must not hide future-frontier reanchor evidence"
+    );
+    assert_eq!(
+        actor.highest_qc,
+        Some(future_qc),
+        "future quorum should refresh highest-QC recovery evidence despite vote backlog"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 0)
+            .is_none(),
+        "catch-up reanchor must not assemble a proposal at the stale frontier"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_reanchors_future_new_view_quorum_over_stale_frontier_owner() {
+    let mut harness = test_actor_harness(4).await;
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+    let (tracked_height, future_qc) = seed_future_new_view_frontier_reanchor_for_tests(actor);
+
+    let now = Instant::now();
+    let stale_owner_at = now
+        .checked_sub(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: tracked_height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: stale_owner_at,
+        last_progress_at: stale_owner_at,
+        last_dependency_progress_at: None,
+        last_action_at: Some(stale_owner_at),
+        no_progress_windows: 1,
+        cleanup_done: false,
+        last_view: 0,
+        last_rotation_view: None,
+        last_cause: "missing_payload",
+    });
+
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    let proposed = actor.on_pacemaker_propose_ready(now);
+
+    assert!(
+        !proposed,
+        "future NEW_VIEW evidence should reanchor instead of preserving a stale local owner"
+    );
+    assert!(
+        !selected_reanchor_peers_for_height(actor, tracked_height).is_empty(),
+        "stale same-height recovery owner must not block future-frontier reanchor"
+    );
+    assert_eq!(
+        actor.highest_qc,
+        Some(future_qc),
+        "future quorum should refresh highest-QC recovery evidence over the stale owner"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 0)
+            .is_none(),
+        "catch-up reanchor must not assemble a proposal while stale owner is superseded"
     );
 
     harness.shutdown.send();
