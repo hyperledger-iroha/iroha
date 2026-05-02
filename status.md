@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-02
 
+## 2026-05-02 SoraFS pin registry metrics test isolation
+
+- The SoraFS pin registry metrics summary test now records its Prometheus
+  assertions against an isolated test metrics registry instead of the process
+  global registry, avoiding parallel-test interference from other telemetry
+  fixtures while keeping the summary assertions unchanged.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry sorafs::api::advert_tests::pin_registry_metrics_summary_tracks_counts -- --nocapture`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`
+
 ## 2026-05-02 Kotodama source analysis fixture refresh
 
 - Updated the reentrancy-analysis test snippets to call
