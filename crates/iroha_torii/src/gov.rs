@@ -787,6 +787,49 @@ pub struct CouncilCurrentResponse {
     pub derived_by: CouncilDerivationKind,
 }
 
+/// Citizenship status response for an account.
+#[derive(Debug, JsonSerialize)]
+pub struct CitizenStatusResponse {
+    pub account_id: String,
+    pub is_citizen: bool,
+    pub amount: Option<String>,
+    pub bonded_height: Option<u64>,
+    pub seats_in_epoch: Option<u32>,
+    pub last_epoch_seen: Option<u64>,
+    pub cooldown_until: Option<u64>,
+}
+
+/// GET /v1/gov/citizens/{account_id} — read the citizenship registry entry for an account.
+///
+/// # Errors
+/// Returns a conversion error when the account id path segment is invalid.
+pub async fn handle_gov_citizen_status(
+    state: Arc<iroha_core::state::State>,
+    account_id: axum::extract::Path<String>,
+    telemetry: MaybeTelemetry,
+) -> Result<JsonBody<CitizenStatusResponse>, crate::Error> {
+    let (account, canonical_account_id) = parse_account_literal_with_state(
+        state.as_ref(),
+        &account_id.0,
+        &telemetry,
+        "/v1/gov/citizens/{account_id}",
+    )
+    .map_err(|err| {
+        crate::routing::conversion_error(format!("invalid account_id: {}", err.reason()))
+    })?;
+    let world = state.world_view();
+    let record = world.citizens().get(&account).cloned();
+    Ok(JsonBody(CitizenStatusResponse {
+        account_id: canonical_account_id.to_string(),
+        is_citizen: record.is_some(),
+        amount: record.as_ref().map(|record| record.amount.to_string()),
+        bonded_height: record.as_ref().map(|record| record.bonded_height),
+        seats_in_epoch: record.as_ref().map(|record| record.seats_in_epoch),
+        last_epoch_seen: record.as_ref().map(|record| record.last_epoch_seen),
+        cooldown_until: record.as_ref().map(|record| record.cooldown_until),
+    }))
+}
+
 // --- VRF-backed council derivation (optional feature) ---
 #[cfg(feature = "gov_vrf")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2405,7 +2448,7 @@ pub async fn handle_gov_council_current(
         alternates,
         candidate_count: total_candidates,
         verified: 0,
-        derived_by: CouncilDerivationKind::Fallback,
+        derived_by: CouncilDerivationKind::Vrf,
     }))
 }
 
@@ -2827,6 +2870,7 @@ mod tests {
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::{Domain, DomainId},
+        isi::{InstructionBox, governance::RegisterCitizen},
         name::Name,
         permission::Permission,
         smart_contract::manifest::ContractManifest,
@@ -3228,6 +3272,53 @@ mod tests {
         crate::test_utils::finalize_committed_block(state, state_block, committed_block);
         errors
     }
+
+    #[tokio::test]
+    async fn citizen_status_reports_registered_record() {
+        let harness = mk_governance_harness(false);
+        let instruction = InstructionBox::from(RegisterCitizen {
+            owner: harness.authority.clone(),
+            amount: 0,
+        });
+        let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+            (*harness.chain_id).clone(),
+            harness.authority.clone(),
+        )
+        .with_instructions([instruction])
+        .sign(harness.authority_keypair.private_key());
+        let params = harness.state.view().world().parameters().clone();
+        let accepted = iroha_core::tx::AcceptedTransaction::accept(
+            tx,
+            harness.chain_id.as_ref(),
+            params.sumeragi().max_clock_drift(),
+            params.transaction(),
+            harness.state.crypto().as_ref(),
+        )
+        .expect("accepted register citizen transaction");
+        harness
+            .queue
+            .push(accepted, harness.state.view())
+            .expect("push register citizen transaction");
+        assert_eq!(
+            apply_queued_block_allow_errors(&harness.state, &harness.queue, 1),
+            vec![false]
+        );
+
+        let response = handle_gov_citizen_status(
+            harness.state.clone(),
+            axum::extract::Path(harness.authority.to_string()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("citizen status response")
+        .0;
+
+        assert!(response.is_citizen);
+        assert_eq!(response.account_id, harness.authority.to_string());
+        assert_eq!(response.amount.as_deref(), Some("0"));
+        assert_eq!(response.bonded_height, Some(1));
+    }
+
     #[test]
     fn serde_shapes_compile() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);

@@ -17483,6 +17483,9 @@ impl State {
             let view = s.world.governance_proposals.view();
             let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
             telemetry_seed.seed_governance_proposals(records);
+            let citizens_total =
+                u64::try_from(s.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+            telemetry_seed.record_citizens_total(citizens_total);
             {
                 let nexus = s.nexus.read();
                 telemetry_seed.set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
@@ -28688,6 +28691,9 @@ pub(crate) mod deserialize {
             let view = state.world.governance_proposals.view();
             let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
             telemetry_seed.seed_governance_proposals(records);
+            let citizens_total =
+                u64::try_from(state.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+            telemetry_seed.record_citizens_total(citizens_total);
         }
         let snapshot = state.kura.merge_ledger_snapshot();
         state.merge_ledger.replace(snapshot);
@@ -30931,6 +30937,25 @@ mod tests {
                 .get(),
             1
         );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn state_startup_telemetry_seeds_citizens_total() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let mut world = World::default();
+        world.citizens.insert(
+            account_id.clone(),
+            CitizenshipRecord::new(account_id, 10, 1),
+        );
+
+        let _state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+        assert_eq!(metrics.governance_citizens_total.get(), 1);
     }
 
     #[cfg(feature = "sm")]
