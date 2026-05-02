@@ -17,6 +17,7 @@ pub mod isi {
         InstructionType,
         error::{InvalidParameterError, MintabilityError, RepetitionError},
     };
+    use iroha_executor_data_model::isi::multisig::MultisigSpec;
 
     use super::*;
     use crate::{role::RoleIdWithOwner, state::StateTransaction};
@@ -32,6 +33,69 @@ pub mod isi {
 
     fn invalid_account_recovery(message: impl Into<std::string::String>) -> Error {
         Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+    }
+
+    fn multisig_spec_key() -> Name {
+        "multisig/spec"
+            .parse()
+            .expect("multisig spec key must be a valid name")
+    }
+
+    fn validate_multisig_spec_ttl_update(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        account_id: &AccountId,
+        key: &Name,
+        value: &Json,
+    ) -> Result<bool, Error> {
+        if key != &multisig_spec_key() {
+            return Ok(false);
+        }
+        if authority != account_id {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "account metadata key `{key}` may only be updated by the native multisig account itself"
+                )
+                .into(),
+            ));
+        }
+
+        let account = state_transaction
+            .world
+            .account(account_id)
+            .map_err(Error::from)?;
+        let current_value = account.metadata().get(key).ok_or_else(|| {
+            Error::InvariantViolation(
+                format!("account metadata key `{key}` is missing native multisig state").into(),
+            )
+        })?;
+        let current_spec = MultisigSpec::try_from(current_value).map_err(|err| {
+            Error::InvariantViolation(
+                format!(
+                    "account metadata key `{key}` contains invalid native multisig state: {err}"
+                )
+                .into(),
+            )
+        })?;
+        let next_spec = MultisigSpec::try_from(value).map_err(|err| {
+            Error::InvariantViolation(
+                format!("account metadata key `{key}` update contains invalid native multisig state: {err}")
+                    .into(),
+            )
+        })?;
+
+        if current_spec.signatories != next_spec.signatories
+            || current_spec.quorum != next_spec.quorum
+        {
+            return Err(Error::InvariantViolation(
+                format!(
+                    "account metadata key `{key}` update may only change native multisig transaction_ttl_ms"
+                )
+                .into(),
+            ));
+        }
+
+        Ok(true)
     }
 
     fn stable_recovery_alias(
@@ -172,7 +236,7 @@ pub mod isi {
         #[metrics(+"set_account_key_value")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             // Destructure to move key/value once; avoid duplicate clones.
@@ -182,10 +246,21 @@ pub mod isi {
                 value,
             } = self;
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(&key) {
-                return Err(Error::InvariantViolation(
-                    format!("account metadata key `{key}` is reserved for native multisig state")
+                let ttl_only_update = validate_multisig_spec_ttl_update(
+                    state_transaction,
+                    authority,
+                    &account_id,
+                    &key,
+                    &value,
+                )?;
+                if !ttl_only_update {
+                    return Err(Error::InvariantViolation(
+                        format!(
+                            "account metadata key `{key}` is reserved for native multisig state"
+                        )
                         .into(),
-                ));
+                    ));
+                }
             }
             // Enforce metadata value size limit (custom parameter or default)
             crate::smartcontracts::limits::enforce_json_size(
