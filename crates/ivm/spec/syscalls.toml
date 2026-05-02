@@ -224,19 +224,43 @@ gas = "-"
 number = "0x50"
 args = "r10=&Name"
 ret = "r10=ptr (&NoritoBytes) or 0"
-gas = "-"
+gas = "G_state_get + bytes"
 
 [[syscall]]
 number = "0x51"
 args = "r10=&Name, r11=&NoritoBytes"
 ret = "u64=0"
-gas = "-"
+gas = "G_state_set + bytes"
 
 [[syscall]]
 number = "0x52"
 args = "r10=&Name"
 ret = "u64=0"
-gas = "-"
+gas = "G_state_del"
+
+[[syscall]]
+number = "0x010030"
+args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64"
+ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64"
+gas = "G_state_keys + count + bytes"
+
+[[syscall]]
+number = "0x010031"
+args = "r10=&Name(path)"
+ret = "r10=present:u64"
+gas = "G_state_has"
+
+[[syscall]]
+number = "0x010032"
+args = "r10=&Name(path)"
+ret = "r10=len:u64, r11=found:u64"
+gas = "G_state_len + bytes"
+
+[[syscall]]
+number = "0x010033"
+args = "r10=&Name(prefix)"
+ret = "r10=total:u64"
+gas = "G_state_count + count"
 
 [[syscall]]
 number = "0x53"
@@ -302,19 +326,19 @@ gas = "G_name_decode"
 number = "0x5D"
 args = "r10=&PointerType<T>"
 ret = "ptr (&NoritoBytes(TLV envelope))"
-gas = "-"
+gas = "G_pointer + bytes"
 
 [[syscall]]
 number = "0x5E"
 args = "r10=&NoritoBytes(TLV envelope), r11=expected?:u16"
 ret = "ptr (&PointerType<T>)"
-gas = "-"
+gas = "G_pointer + bytes"
 
 [[syscall]]
 number = "0x5F"
 args = "r10=&Tlv, r11=&Tlv"
 ret = "r10=1/0"
-gas = "-"
+gas = "G_tlv_eq + bytes"
 
 [[syscall]]
 number = "0xE0"
@@ -382,85 +406,91 @@ gas = "G_verify"
 number = "0x69"
 args = "r10=value:i64"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x6A"
 args = "r10=&NoritoBytes(Numeric)"
 ret = "r10=value:i64"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x6B"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x6C"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x6D"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x6E"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x6F"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x70"
 args = "r10=&NoritoBytes(Numeric)"
 ret = "r10=ptr (&NoritoBytes(Numeric))"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x71"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=u64(0/1)"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x72"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=u64(0/1)"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x73"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=u64(0/1)"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x74"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=u64(0/1)"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x75"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=u64(0/1)"
-gas = "-"
+gas = "G_numeric"
 
 [[syscall]]
 number = "0x76"
 args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)"
 ret = "r10=u64(0/1)"
-gas = "-"
+gas = "G_numeric"
+
+[[syscall]]
+number = "0x77"
+args = "r10=&Tlv"
+ret = "r10=payload_len:u64"
+gas = "G_tlv_len + bytes"
 
 [[syscall]]
 number = "0x7E"
@@ -472,7 +502,7 @@ gas = "G_vote_get"
 number = "0x90"
 args = "r10=&Blob(message)"
 ret = "r10=ptr (&Blob(digest))"
-gas = "-"
+gas = "G_hash + bytes"
 
 [[syscall]]
 number = "0x91"
@@ -484,25 +514,55 @@ gas = "G_verify"
 number = "0x92"
 args = "r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext)"
 ret = "r10=ptr (&Blob(ciphertext || tag16))"
-gas = "-"
+gas = "G_sm4 + bytes"
 
 [[syscall]]
 number = "0x93"
 args = "r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag16)"
 ret = "r10=ptr (&Blob(plaintext)) or 0"
-gas = "-"
+gas = "G_sm4 + bytes"
 
 [[syscall]]
 number = "0x94"
 args = "r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(plaintext), r14=tag_len:u64"
 ret = "r10=ptr (&Blob(ciphertext || tag))"
-gas = "-"
+gas = "G_sm4 + bytes"
 
 [[syscall]]
 number = "0x95"
 args = "r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag), r14=tag_len:u64"
 ret = "r10=ptr (&Blob(plaintext)) or 0"
-gas = "-"
+gas = "G_sm4 + bytes"
+
+[[syscall]]
+number = "0x96"
+args = "r10=&Blob(message)"
+ret = "r10=ptr (&Blob(digest))"
+gas = "G_hash + bytes"
+
+[[syscall]]
+number = "0x97"
+args = "r10=&Blob(message)"
+ret = "r10=ptr (&Blob(digest))"
+gas = "G_hash + bytes"
+
+[[syscall]]
+number = "0x98"
+args = "r10=&Blob(message)"
+ret = "r10=ptr (&Blob(raw Blake2b-256 digest))"
+gas = "G_hash + bytes"
+
+[[syscall]]
+number = "0x99"
+args = "r10=&Blob(message)"
+ret = "r10=ptr (&Blob(Keccak-256 digest))"
+gas = "G_hash + bytes"
+
+[[syscall]]
+number = "0x9A"
+args = "r10=&Blob(message)"
+ret = "r10=ptr (&Blob(Iroha Hash::new digest))"
+gas = "G_hash + bytes"
 
 [[syscall]]
 number = "0xA0"
@@ -532,7 +592,7 @@ gas = "G_sc_depth"
 number = "0xA4"
 args = "-"
 ret = "ptr (AccountId in INPUT)"
-gas = "G_get_auth"
+gas = "G_get_auth + bytes"
 
 [[syscall]]
 number = "0xA5"
@@ -719,6 +779,96 @@ number = "0xFF"
 args = "r10=reg, r11=out, r12=depth_cap?, r13=root_out?"
 ret = "u64=depth"
 gas = "G_mpath + depth"
+
+[[syscall]]
+number = "0x010000"
+args = "r10=&NoritoBytes(QueryRequest)"
+ret = "r10=ptr (&NoritoBytes(QueryResponse))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010001"
+args = "r10=&NoritoBytes(AccountId)"
+ret = "r10=ptr (&NoritoBytes(Account))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010002"
+args = "r10=&NoritoBytes(AssetId)"
+ret = "r10=ptr (&NoritoBytes(Asset))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010003"
+args = "r10=&NoritoBytes(AssetDefinitionId)"
+ret = "r10=ptr (&NoritoBytes(AssetDefinition))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010004"
+args = "r10=&NoritoBytes(DomainId)"
+ret = "r10=ptr (&NoritoBytes(Domain))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010005"
+args = "r10=&NoritoBytes(NftId)"
+ret = "r10=ptr (&NoritoBytes(Nft))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010006"
+args = "r10=&NoritoBytes(Name)"
+ret = "r10=ptr (&NoritoBytes(Parameter))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010007"
+args = "r10=&NoritoBytes(ContractAddress | Hash)"
+ret = "r10=ptr (&NoritoBytes(ContractManifest))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010008"
+args = "r10=&NoritoBytes(ContractAddress | Name)"
+ret = "r10=ptr (&NoritoBytes(ContractInstance))"
+gas = "G_scq"
+
+[[syscall]]
+number = "0x010020"
+args = "-"
+ret = "r10=ptr (&Blob(chain_id)) or 0"
+gas = "G_sysvar + bytes"
+
+[[syscall]]
+number = "0x010021"
+args = "-"
+ret = "r10=height:u64"
+gas = "G_sysvar"
+
+[[syscall]]
+number = "0x010022"
+args = "-"
+ret = "r10=block_time_ms:u64"
+gas = "G_sysvar"
+
+[[syscall]]
+number = "0x010023"
+args = "-"
+ret = "r10=ptr (&AccountId)"
+gas = "G_get_auth + bytes"
+
+[[syscall]]
+number = "0x010024"
+args = "-"
+ret = "r10=ptr (&NoritoBytes(ContractAddress)) or 0"
+gas = "G_sysvar + bytes"
+
+[[syscall]]
+number = "0x010025"
+args = "-"
+ret = "r10=ptr (&Blob(entrypoint)) or 0"
+gas = "G_sysvar + bytes"
 
 [[syscall]]
 number = "0x00"

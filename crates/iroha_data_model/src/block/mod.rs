@@ -2292,8 +2292,8 @@ mod tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: crate::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: crate::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0xAA; Hash::LENGTH]);
         let transcript = TransferTranscript {
@@ -2364,8 +2364,8 @@ mod tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: crate::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: crate::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0xBB; Hash::LENGTH]);
         let transcript = TransferTranscript {

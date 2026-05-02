@@ -7,7 +7,6 @@ use std::sync::Once;
 use std::{
     collections::HashMap,
     convert::{TryFrom, TryInto},
-    env,
     ffi::c_void,
     iter::FusedIterator,
     mem,
@@ -38,6 +37,10 @@ use tracing::{debug, warn};
 use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
+    bn254_poseidon_params::{
+        BN254_LIMBS, BN254_POSEIDON_WIDTH, Bn254PoseidonWidth3Params, bn254_limbs_to_bytes,
+        bn254_poseidon_width3_params,
+    },
     gpu::GpuError,
     metal_config::{self, DeviceHints},
     overrides,
@@ -83,8 +86,6 @@ const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
-const BN254_LIMBS: usize = 4;
-const BN254_POSEIDON_WIDTH: usize = 3;
 const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
 const ADAPTIVE_BACKOFF_RATIO: f64 = 1.3;
@@ -98,10 +99,11 @@ fn debug_env_bool(name: &str) -> Option<bool> {
     overrides::guard_env_override(|| overrides::debug_env_bool(name))
 }
 
-// BN254 Metal pipelines are bundled to keep the host in sync with the metallib;
-// dispatchers stage twiddles/cosets and run a smoke test via `bn254_status()`
-// to ensure the kernels are reachable before enabling GPU paths.
+// BN254 Metal pipelines are bundled to keep the host in sync with the metallib.
+// Transcript hashing uses a narrow context so it does not have to compile the
+// full prover pipeline set before validating word-batch acceleration.
 static METAL_CONTEXT: OnceLock<MetalResult<MetalPipelines>> = OnceLock::new();
+static BN254_POSEIDON_CONTEXT: OnceLock<MetalResult<Bn254PoseidonMetalPipelines>> = OnceLock::new();
 static FFT_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static LDE_BATCH_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
 static LDE_TILE_OVERRIDE: OnceLock<Option<u32>> = OnceLock::new();
@@ -129,18 +131,14 @@ static MAX_IN_FLIGHT_ENV_OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
 static THREADGROUP_ENV_OVERRIDE: OnceLock<Option<u64>> = OnceLock::new();
 static DISPATCH_TRACE_ENV: OnceLock<bool> = OnceLock::new();
 
-/// Placeholder BN254 Metal entrypoint until kernels are implemented.
-///
-/// Returns `GpuError::Unsupported` when Metal is unavailable; otherwise loads
-/// the BN254 FFT/LDE pipelines and runs a minimal smoke test to prove the
-/// kernels are reachable.
+/// Return `GpuError::Unsupported` when Metal is unavailable; otherwise load
+/// the BN254 Poseidon word-batch pipeline used by FASTPQ transcript hashing.
 pub(crate) fn bn254_status() -> MetalResult<()> {
     if Device::system_default().is_none() {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     }
-    let ctx = metal_context()?;
-    let _ = (&ctx.bn254_fft, &ctx.bn254_lde, &ctx.bn254_poseidon_hash);
-    bn254_smoke_test()?;
+    let ctx = bn254_poseidon_context()?;
+    let _ = &ctx.bn254_poseidon_hash;
     Ok(())
 }
 
@@ -2172,8 +2170,21 @@ struct MetalPipelines {
     bn254_lde_twiddles: Mutex<HashMap<(u32, u32), Buffer>>,
 }
 
+struct Bn254PoseidonMetalPipelines {
+    device: Device,
+    queues: QueuePool,
+    bn254_poseidon_hash: ComputePipelineState,
+}
+
 fn metal_context() -> MetalResult<&'static MetalPipelines> {
     match METAL_CONTEXT.get_or_init(build_metal_context) {
+        Ok(context) => Ok(context),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+fn bn254_poseidon_context() -> MetalResult<&'static Bn254PoseidonMetalPipelines> {
+    match BN254_POSEIDON_CONTEXT.get_or_init(build_bn254_poseidon_context) {
         Ok(context) => Ok(context),
         Err(err) => Err(err.clone()),
     }
@@ -2348,10 +2359,7 @@ fn load_pipeline(
         })
 }
 
-fn build_metal_context() -> MetalResult<MetalPipelines> {
-    let Some(device) = Device::system_default() else {
-        return Err(GpuError::Unsupported(GpuBackend::Metal));
-    };
+fn register_metal_device_hints(device: &Device) {
     let location = device.location();
     let is_discrete = !device.is_low_power()
         || device.is_headless()
@@ -2373,16 +2381,49 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
         ),
         working_set,
     ));
+}
+
+fn load_metal_library(device: &Device) -> MetalResult<Library> {
     let library_path =
         resolve_metal_library_path().ok_or_else(|| GpuError::Unsupported(GpuBackend::Metal))?;
 
-    let library =
-        device
-            .new_library_with_file(&library_path)
-            .map_err(|err| GpuError::Execution {
-                backend: GpuBackend::Metal,
-                message: format!("failed to load Metal library: {err}"),
-            })?;
+    device
+        .new_library_with_file(&library_path)
+        .map_err(|err| GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: format!("failed to load Metal library: {err}"),
+        })
+}
+
+fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
+    let Some(device) = Device::system_default() else {
+        return Err(GpuError::Unsupported(GpuBackend::Metal));
+    };
+    register_metal_device_hints(&device);
+    let library = load_metal_library(&device)?;
+    let bn254_poseidon_hash = load_pipeline(&device, &library, BN254_POSEIDON_HASH_KERNEL)?;
+    let queue_policy = resolve_queue_policy(&device);
+    let queues = QueuePool::new(&device, queue_policy);
+    let manifest_sha = poseidon_manifest().sha256_hex();
+    debug!(
+        target: "fastpq::metal",
+        manifest_sha = manifest_sha,
+        "loaded BN254 Poseidon word-batch Metal pipeline"
+    );
+
+    Ok(Bn254PoseidonMetalPipelines {
+        device,
+        queues,
+        bn254_poseidon_hash,
+    })
+}
+
+fn build_metal_context() -> MetalResult<MetalPipelines> {
+    let Some(device) = Device::system_default() else {
+        return Err(GpuError::Unsupported(GpuBackend::Metal));
+    };
+    register_metal_device_hints(&device);
+    let library = load_metal_library(&device)?;
 
     let poseidon_permute = load_pipeline(&device, &library, POSEIDON_PERMUTE_KERNEL)?;
     let poseidon_hash = load_pipeline(&device, &library, POSEIDON_HASH_KERNEL)?;
@@ -2440,13 +2481,19 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
 }
 
 fn resolve_metal_library_path() -> Option<String> {
-    debug_env_var("FASTPQ_METAL_LIB").and_then(|path| {
-        if !path.is_empty() && Path::new(&path).exists() {
-            Some(path)
-        } else {
-            None
-        }
-    })
+    debug_env_var("FASTPQ_METAL_LIB")
+        .and_then(|path| {
+            if !path.is_empty() && Path::new(&path).exists() {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            option_env!("FASTPQ_METAL_LIB")
+                .filter(|path| !path.is_empty() && Path::new(path).exists())
+                .map(str::to_owned)
+        })
 }
 
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {
@@ -3394,7 +3441,7 @@ pub fn bn254_poseidon_hash_words(
         return Ok(Vec::new());
     }
 
-    let context = metal_context()?;
+    let context = bn254_poseidon_context()?;
     let batch_count = u32::try_from(slices.len())
         .map_err(|_| GpuError::InvalidInput("BN254 Poseidon batch exceeds u32::MAX inputs"))?;
     let mut metal_slices = Vec::with_capacity(slices.len());
@@ -3536,7 +3583,7 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
         columns: column_count,
     };
     let (queue, queue_index) = context.queues.select(column_count, 0);
-    let mut ticket = submit_compute_with_geometry(
+    let ticket = submit_compute_with_geometry(
         queue,
         queue_index,
         &context.poseidon_trace_fused,
@@ -3727,62 +3774,6 @@ fn poseidon_hash_bytes_per_batch(states: u32, padded_len: u32) -> u64 {
         .saturating_add(state)
         .saturating_add(descriptor_total);
     clamp_u128_to_u64(per_column.saturating_mul(u128::from(states)))
-}
-
-struct Bn254PoseidonWidth3Params {
-    round_constants: Box<[u64]>,
-    mds: Box<[u64]>,
-    round_count: u32,
-}
-
-fn bn254_poseidon_width3_params() -> &'static Bn254PoseidonWidth3Params {
-    static PARAMS: OnceLock<Bn254PoseidonWidth3Params> = OnceLock::new();
-    PARAMS.get_or_init(|| {
-        let params = iroha_zkp_halo2::poseidon::poseidon2_params_width3();
-        let mut round_constants = Vec::with_capacity(
-            params
-                .round_constants
-                .len()
-                .saturating_mul(BN254_POSEIDON_WIDTH)
-                .saturating_mul(BN254_LIMBS),
-        );
-        for round in &params.round_constants {
-            for word in round {
-                round_constants.extend_from_slice(&bn254_bytes_to_limbs(word));
-            }
-        }
-        let mut mds = Vec::with_capacity(BN254_POSEIDON_WIDTH * BN254_POSEIDON_WIDTH * BN254_LIMBS);
-        for row in &params.mds {
-            for coeff in row {
-                mds.extend_from_slice(&bn254_bytes_to_limbs(coeff));
-            }
-        }
-        Bn254PoseidonWidth3Params {
-            round_constants: round_constants.into_boxed_slice(),
-            mds: mds.into_boxed_slice(),
-            round_count: u32::try_from(params.round_constants.len())
-                .expect("Poseidon round count must fit into u32"),
-        }
-    })
-}
-
-fn bn254_bytes_to_limbs(bytes: &[u8; 32]) -> [u64; BN254_LIMBS] {
-    let mut limbs = [0u64; BN254_LIMBS];
-    for (index, limb) in limbs.iter_mut().enumerate() {
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(&bytes[index * 8..(index + 1) * 8]);
-        *limb = u64::from_le_bytes(buf);
-    }
-    limbs
-}
-
-fn bn254_limbs_to_bytes(limbs: &[u64]) -> [u8; 32] {
-    debug_assert_eq!(limbs.len(), BN254_LIMBS);
-    let mut out = [0u8; 32];
-    for (index, limb) in limbs.iter().enumerate() {
-        out[index * 8..(index + 1) * 8].copy_from_slice(&limb.to_le_bytes());
-    }
-    out
 }
 
 fn bn254_poseidon_hash_bytes(

@@ -15,6 +15,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FASTPQ_SKIP_GPU_BUILD");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
+    println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
+    println!("cargo:rerun-if-env-changed=SDKROOT");
     println!("cargo:rerun-if-changed=cuda/fastpq_cuda.cu");
     println!("cargo:rerun-if-changed=metal/include/params.h");
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
@@ -121,11 +123,11 @@ fn compile_metal_shaders() -> Result<(), String> {
     let modules_cache = out_dir.join("metal_modules");
     std::fs::create_dir_all(&modules_cache).map_err(|err| err.to_string())?;
 
+    let metal_exe = find_xcrun_tool("metal")?;
     let mut air_paths = Vec::new();
     for (name, source) in &kernels {
         let air_path = out_dir.join(format!("{name}.air"));
-        let status = Command::new("xcrun")
-            .arg("metal")
+        let status = Command::new(&metal_exe)
             .arg("-std=metal3.0")
             .arg("-O3")
             .arg("-c")
@@ -150,34 +152,14 @@ fn compile_metal_shaders() -> Result<(), String> {
         air_paths.push(air_path);
     }
 
-    let metallib_exe = Command::new("xcrun")
-        .arg("--find")
-        .arg("metallib")
-        .output()
-        .ok()
-        .and_then(|output| {
-            output.status.success().then(|| {
-                let path = String::from_utf8_lossy(&output.stdout);
-                PathBuf::from(path.trim())
-            })
-        })
-        .or_else(|| {
-            Command::new("xcrun")
-                .arg("--find")
-                .arg("metal")
-                .output()
-                .ok()
-                .and_then(|output| {
-                    output.status.success().then(|| {
-                        let path = String::from_utf8_lossy(&output.stdout);
-                        let mut candidate = PathBuf::from(path.trim());
-                        candidate.set_file_name("metallib");
-                        candidate
-                    })
-                })
-                .filter(|path| path.exists())
-        })
-        .ok_or_else(|| "failed to locate metallib binary".to_string())?;
+    let metallib_exe = find_xcrun_tool("metallib").or_else(|_| {
+        let mut candidate = metal_exe.clone();
+        candidate.set_file_name("metallib");
+        candidate
+            .exists()
+            .then_some(candidate)
+            .ok_or_else(|| "failed to locate metallib binary".to_string())
+    })?;
 
     let mut link_cmd = Command::new(metallib_exe);
     for air in &air_paths {
@@ -199,6 +181,33 @@ fn compile_metal_shaders() -> Result<(), String> {
     );
     println!("cargo:rustc-cfg=fastpq_metal_available");
     Ok(())
+}
+
+fn find_xcrun_tool(tool: &str) -> Result<PathBuf, String> {
+    find_xcrun_tool_with_args(&["-sdk", "macosx", "--find", tool])
+        .or_else(|_| find_xcrun_tool_with_args(&["--find", tool]))
+}
+
+fn find_xcrun_tool_with_args(args: &[&str]) -> Result<PathBuf, String> {
+    let output = Command::new("xcrun")
+        .args(args)
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(stderr.trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path = PathBuf::from(stdout.trim());
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "xcrun returned missing tool path: {}",
+            path.display()
+        ))
+    }
 }
 
 fn locate_cuda_root() -> Option<PathBuf> {

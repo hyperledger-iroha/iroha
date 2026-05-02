@@ -791,6 +791,7 @@ mod tests {
                 api_min_proof_version:
                     iroha_config::parameters::defaults::torii::api_min_proof_version(),
                 api_version_sunset_unix: iroha_torii_shared::API_VERSION_SUNSET_UNIX,
+                cors: iroha_config::parameters::actual::ToriiCors::default(),
                 max_content_len: 1_048_576u64.into(),
                 data_dir: iroha_config::parameters::defaults::torii::data_dir(),
                 receipt_signer: None,

@@ -172,6 +172,18 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractAddress(pub(super) ConstString);
+
+    /// Active smart-contract instance binding.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractInstance {
+        /// Canonical deployed contract address.
+        pub contract_address: ContractAddress,
+        /// Optional stable alias bound to the instance.
+        pub contract_alias: Option<ContractAlias>,
+        /// Code hash currently activated for this address.
+        pub code_hash: iroha_crypto::Hash,
+    }
 }
 
 struct ContractAliasSegments<'a> {
@@ -587,7 +599,9 @@ fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddres
 
 /// Re-export commonly used smart-contract types.
 pub mod prelude {
-    pub use super::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress, ContractAlias};
+    pub use super::{
+        CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress, ContractAlias, ContractInstance,
+    };
 }
 
 #[cfg(test)]

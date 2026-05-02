@@ -809,9 +809,9 @@ fn entrypoint_keys_state_only(entrypoint: &EntrypointDescriptor) -> bool {
         && entrypoint.write_keys.iter().all(|key| is_state_key(key))
 }
 
-fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
+fn is_entrypoint_hint_safe_syscall(number: u32) -> bool {
     matches!(
-        u32::from(number),
+        number,
         ivm::syscalls::SYSCALL_REGISTER_DOMAIN
             | ivm::syscalls::SYSCALL_UNREGISTER_DOMAIN
             | ivm::syscalls::SYSCALL_TRANSFER_DOMAIN
@@ -901,9 +901,9 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
     )
 }
 
-fn is_state_only_syscall(number: u8) -> bool {
+fn is_state_only_syscall(number: u32) -> bool {
     matches!(
-        u32::from(number),
+        number,
         ivm::syscalls::SYSCALL_DEBUG_PRINT
             | ivm::syscalls::SYSCALL_EXIT
             | ivm::syscalls::SYSCALL_ABORT
@@ -1971,6 +1971,16 @@ mod tests {
         assert!(set.read_keys.contains("state:counter"));
         assert!(set.read_keys.contains("state:already"));
         assert!(set.write_keys.contains("state:items/1"));
+    }
+
+    #[test]
+    fn syscall_hint_filters_accept_u32_numbers() {
+        assert!(is_entrypoint_hint_safe_syscall(
+            ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
+        ));
+        assert!(is_state_only_syscall(ivm::syscalls::SYSCALL_EXIT));
+        assert!(!is_entrypoint_hint_safe_syscall(0x1_0000));
+        assert!(!is_state_only_syscall(0x1_0000));
     }
 
     #[test]

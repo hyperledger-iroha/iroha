@@ -10,7 +10,7 @@ fn header_with_mode(mode: u8) -> Vec<u8> {
 
 #[test]
 fn gas_scales_with_setvl_for_vector_op() {
-    // SETVL=8 (clamped to host max lanes); VADD32; HALT under VECTOR mode
+    // SETVL=8; VADD32; HALT under VECTOR mode.
     let mut code = header_with_mode(ivm::ivm_mode::VECTOR);
     let setvl = encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, 8);
     let vadd = encoding::wide::encode_rr(instruction::wide::crypto::VADD32, 2, 0, 1);
@@ -22,7 +22,7 @@ fn gas_scales_with_setvl_for_vector_op() {
     vm.load_program(&code).unwrap();
     vm.run().unwrap();
 
-    // Sum expected with vector_len = clamped host max lanes for VADD32
+    // Sum expected with vector_len equal to the accepted SETVL value for VADD32.
     let vl = vm.vector_length();
     let used = 10_000 - vm.remaining_gas();
     let expected = cost_of_with_params(setvl, 1, 0).expect("valid opcode must have gas cost")
@@ -66,15 +66,20 @@ fn vector_op_gas_table_matches_under_various_setvl() {
         (instruction::wide::crypto::VAND, "VAND"),
         (instruction::wide::crypto::VXOR, "VXOR"),
         (instruction::wide::crypto::VOR, "VOR"),
+        (instruction::wide::crypto::VROT32, "VROT32"),
     ];
-    let setvls: &[i32] = &[1, 2, 4, 8, 16];
+    let setvls: &[i32] = &[1, 2, 4, 8, 16, 64];
     for &vl in setvls {
         for &(op, _name) in ops {
             // VECTOR mode header
             let mut code = header_with_mode(ivm::ivm_mode::VECTOR);
             // SETVL
             let setvl = encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, vl as u8);
-            let word = encoding::wide::encode_rr(op, 2, 0, 1);
+            let word = if op == instruction::wide::crypto::VROT32 {
+                encoding::wide::encode_ri(op, 2, 0, 1)
+            } else {
+                encoding::wide::encode_rr(op, 2, 0, 1)
+            };
             code.extend_from_slice(&setvl.to_le_bytes());
             code.extend_from_slice(&word.to_le_bytes());
             code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -92,5 +97,25 @@ fn vector_op_gas_table_matches_under_various_setvl() {
                     .expect("valid opcode must have gas cost");
             assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
         }
+    }
+
+    for &vl in &[2i32, 4, 8, 16, 64] {
+        let mut code = header_with_mode(ivm::ivm_mode::VECTOR);
+        let setvl = encoding::wide::encode_rr(instruction::wide::crypto::SETVL, 0, 0, vl as u8);
+        let word = encoding::wide::encode_rr(instruction::wide::crypto::VADD64, 2, 0, 1);
+        code.extend_from_slice(&setvl.to_le_bytes());
+        code.extend_from_slice(&word.to_le_bytes());
+        code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+
+        let mut vm = IVM::new(100_000);
+        vm.load_program(&code).unwrap();
+        vm.run().unwrap();
+        let vl = vm.vector_length();
+        let used = 100_000 - vm.remaining_gas();
+        let expected = cost_of_with_params(setvl, 1, 0).expect("valid opcode must have gas cost")
+            + cost_of_with_params(word, vl, 0).expect("valid opcode must have gas cost")
+            + cost_of_with_params(encoding::wide::encode_halt(), 4, 0)
+                .expect("valid opcode must have gas cost");
+        assert_eq!(used, expected, "vl={vl} used={used} expected={expected}");
     }
 }

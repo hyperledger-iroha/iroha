@@ -1310,14 +1310,22 @@ extension AccountAddress {
 
     private func noritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
-        let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
-        return OfflineNorito.encodeString(multihash)
+        var bytes = Data([algorithm.noritoDiscriminant])
+        bytes.append(publicKey)
+        return OfflineNorito.encodeConstVec(bytes)
     }
 
     private func compactNoritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
-        let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
-        return OfflineCompactNorito.encodeString(multihash)
+        var bytes = Data([algorithm.noritoDiscriminant])
+        bytes.append(publicKey)
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(bytes.count))
+        for byte in bytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
+        return writer.data
     }
 
     private func noritoMultisigPolicyPayload(

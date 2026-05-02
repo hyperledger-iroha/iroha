@@ -93,13 +93,40 @@ layout:
 - The plan returns element byte ranges in original sequence order and the total
   bytes consumed from the sequence payload. Semantic decode and validation still
   happen on CPU and must report failures in original index order.
-- Optional CPU/GPU helpers may compute the spans for large payloads, but helper
-  results are self-tested and validated against the scalar planner before use.
-  Any unavailable backend, helper error, malformed span output, or mismatch
-  falls back to the scalar planner and disables the helper for the process.
-  Helper use is performance-only: decoded values, rejection class, ordering,
-  hashes, and emitted bytes must remain identical. Future out-of-process or
-  asynchronous helper kernels must add bounded execution before CPU fallback.
+- Optional Metal/CUDA helpers may compute the spans for large payloads, but
+  helper results are self-tested and validated against the scalar planner before
+  use. An unavailable backend falls back to the scalar planner for that call.
+  Helper errors, malformed span output, or scalar mismatches fall back and
+  disable that helper for the process. GPU-named helper exports report
+  unavailable or backend failure instead of silently substituting CPU work; the
+  Norito caller owns deterministic scalar fallback.
+- Helper use is performance-only: decoded values, rejection class, ordering,
+  hashes, and emitted bytes must remain identical. Native helper waits are
+  bounded before CPU fallback.
+
+## Hardware Acceleration Validation
+
+Norito hardware acceleration is performance-only. Accelerated paths must either
+produce the same semantic result as the scalar path or fall back:
+
+- GPU CRC64 helpers must pass startup self-tests that include large payloads and
+  chunk-boundary sizes. Sampled production calls compare the GPU checksum to the
+  portable CRC64-XZ fallback; any mismatch marks the helper unavailable and the
+  call is recomputed on CPU.
+- CPU SIMD CRC64 candidates are selected only after startup parity checks against
+  the portable fallback. Targets with a broken local SIMD routine use
+  `crc64fast`'s runtime-selected implementation instead.
+- GPU zstd compression is validated by requiring sampled GPU output to be a
+  single zstd frame, decoding it on CPU, and comparing the uncompressed bytes to
+  the original payload. GPU helpers may emit different valid single-frame zstd
+  byte streams from CPU zstd; the canonical Norito payload remains the decoded
+  bytes plus the header `Payload length` and CRC64. A sampled frame-shape or
+  decode mismatch disables the GPU backend and falls back to CPU compression.
+  Consensus-critical code must not hash or sign public Norito compressed bytes
+  unless that callsite fixes its own compression implementation.
+- JSON Stage-1 and binary sequence helper output is validated against scalar
+  results before use so quote/string state, element ranges, and error ordering
+  remain hardware-independent.
 
 ## String Encoding
 

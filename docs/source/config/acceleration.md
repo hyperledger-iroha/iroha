@@ -28,6 +28,12 @@ variable that overrides each key.
 `enable_simd` also controls RS16 erasure coding (Torii DA ingest + tooling). Disable it to
 force scalar parity generation while keeping outputs deterministic across hardware.
 
+Norito's Metal/CUDA helper libraries expose GPU availability directly: JSON
+Stage-1 and CRC64 helper exports return unavailable or backend errors when the
+backend cannot run instead of completing the request with hidden CPU work. The
+Norito wrapper owns the deterministic scalar/SIMD fallback and validates helper
+outputs before keeping a backend enabled.
+
 Example configuration:
 
 ```toml
@@ -186,14 +192,12 @@ workspace builds, `gpuzstd_metal` is a target dependency of `norito`, so it is b
 automatically as part of normal Cargo builds (no separate helper build step). On
 Unix/Windows non-macOS hosts, the workspace now also ships a dedicated
 `gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces
-`libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree. Norito prefers that CUDA-named
-artifact, then accepts the compatible workspace-built fallback
-`libgpuzstd_metal.so` / `gpuzstd_metal.dll` when it is present next to the binary or
-on the loader path. Until dedicated CUDA match-finding kernels land, the CUDA helper
-now reports `gpu_unavailable` for compression so Norito can fall back cleanly to CPU
-encode while still distinguishing “no CUDA compression kernel” from parity failures in
-its helper self-tests. Decode still uses the deterministic shared frame-decoder path
-with a CPU zstd fallback for unsupported frames.
+`libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree. Norito loads only the CUDA-named
+artifact for CUDA mode. The helper must pass startup self-tests before registration,
+and sampled compression output must be a single zstd frame that CPU-decodes to the
+original payload; failures disable the backend and fall back cleanly to CPU encode.
+Decode still uses the deterministic shared frame-decoder path with a CPU zstd
+fallback for unsupported frames.
 
 | Field | Default | Purpose |
 |-------|---------|---------|

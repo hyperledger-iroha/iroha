@@ -8,8 +8,8 @@
 //!
 //! Scope
 //! - Includes extended vector/parallel and cryptographic instructions.
-//! - Vector length scaling and HTM retry penalties are supported; current VM uses
-//!   a fixed 128‑bit vector width and rarely incurs HTM retries.
+//! - Vector length scaling and HTM retry penalties are supported; vector costs
+//!   scale from the two-lane baseline by the active logical vector length.
 
 use iroha_crypto::Hash;
 
@@ -17,6 +17,14 @@ use crate::instruction::wide;
 
 /// Gas accounting treats two lanes as the baseline for vector operations.
 pub const VECTOR_BASE_LANES: usize = 2;
+
+/// Scale a vector opcode's base cost by the actual logical lane count.
+pub(crate) fn scaled_vector_cost(base_cost: u64, vector_len: usize) -> u64 {
+    let lanes = vector_len.max(1) as u64;
+    base_cost
+        .saturating_mul(lanes)
+        .div_ceil(VECTOR_BASE_LANES as u64)
+}
 
 /// Canonical opcode set covered by the gas schedule.
 ///
@@ -87,6 +95,7 @@ pub const SCHEDULE_OPCODES: &[u8] = &[
     // System
     wide::system::SCALL,
     wide::system::GETGAS,
+    wide::system::SYSTEM,
     // Crypto/vector
     wide::crypto::VADD32,
     wide::crypto::VADD64,
@@ -182,7 +191,7 @@ pub fn cost_of(instr: u32) -> Option<u64> {
         | wide::control::JMP
         | wide::control::JALS => Some(2),
         wide::control::HALT => Some(0),
-        wide::system::SCALL => Some(5),
+        wide::system::SCALL | wide::system::SYSTEM => Some(5),
         wide::system::GETGAS => Some(0),
         wide::crypto::VADD32 | wide::crypto::VADD64 => Some(2),
         wide::crypto::VAND | wide::crypto::VXOR | wide::crypto::VOR | wide::crypto::VROT32 => {
@@ -237,8 +246,7 @@ pub(crate) fn cost_from_parts(
             | wide::crypto::VOR
             | wide::crypto::VROT32
     ) {
-        let lanes = vector_len.clamp(1, VECTOR_BASE_LANES);
-        cost = (cost * lanes as u64).div_ceil(VECTOR_BASE_LANES as u64);
+        cost = scaled_vector_cost(cost, vector_len);
     }
     Some(cost.saturating_mul(htm_retries as u64 + 1))
 }

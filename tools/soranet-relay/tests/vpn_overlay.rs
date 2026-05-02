@@ -145,6 +145,49 @@ fn session_records_frame_ingress_and_egress() {
 }
 
 #[test]
+fn session_rejects_replayed_ingress_sequence() {
+    let metrics = Arc::new(Metrics::new());
+    metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+    let overlay = VpnOverlay::from_config(VpnConfig {
+        enabled: true,
+        padding_budget_ms: 5,
+        ..VpnConfig::default()
+    });
+    let session = overlay.start_session(metrics);
+    let header = VpnCellHeaderV1 {
+        version: 1,
+        class: VpnCellClassV1::Data,
+        flags: VpnCellFlagsV1::new(false, false, false, false),
+        circuit_id: [0x55; 16],
+        flow_label: VpnFlowLabelV1::from_u32(0x22).expect("flow"),
+        sequence: 10,
+        ack: 0,
+        padding_budget_ms: 5,
+        payload_len: 0,
+    };
+    let frame = VpnCellV1 {
+        header,
+        payload: vec![0xDE; 6],
+    }
+    .into_padded_frame()
+    .expect("frame");
+
+    session
+        .record_frame_ingress(&overlay, &frame.bytes)
+        .expect("first frame is accepted");
+    let err = session
+        .record_frame_ingress(&overlay, &frame.bytes)
+        .expect_err("duplicate sequence should be rejected");
+    assert!(matches!(
+        err,
+        VpnCellError::NonMonotonicSequence {
+            last: 10,
+            actual: 10
+        }
+    ));
+}
+
+#[test]
 fn overlay_rejects_padding_budget_mismatch() {
     let overlay = overlay();
     let mut frame = VpnCellV1 {

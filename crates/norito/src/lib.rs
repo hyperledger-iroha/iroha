@@ -5061,12 +5061,12 @@ pub mod json {
     mod accel_tape_validation_tests {
         use std::{ptr, slice};
 
+        #[cfg(feature = "parallel-stage1")]
+        use super::build_struct_index_parallel;
         use super::{
             StructIndex, build_struct_index_scalar, extend_struct_index_scalar,
             stage1_helper_self_test, try_build_struct_index_with_helper, validate_accel,
         };
-        #[cfg(feature = "parallel-stage1")]
-        use super::build_struct_index_parallel;
 
         #[test]
         fn validate_accel_rejects_out_of_bounds_offsets() {
@@ -5234,6 +5234,25 @@ pub mod json {
             let mut input = String::from("{\"s\":\"");
             input.push_str(&"a".repeat(300 * 1024));
             input.push_str("\",\"x\":1,\"tail\":[true,false,null]}");
+
+            let scalar = build_struct_index_scalar(&input);
+            let parallel =
+                build_struct_index_parallel(&input).expect("parallel stage1 should plan chunks");
+            assert_eq!(parallel.offsets, scalar.offsets);
+        }
+
+        #[cfg(feature = "parallel-stage1")]
+        #[test]
+        fn parallel_stage1_matches_scalar_when_chunk_splits_escaped_quote() {
+            let chunk_goal = 256usize * 1024;
+            let mut input = String::from("{\"s\":\"");
+            let filler = chunk_goal
+                .checked_sub(input.len() + 1)
+                .expect("test prefix shorter than first chunk");
+            input.push_str(&"a".repeat(filler));
+            input.push('\\');
+            input.push('"');
+            input.push_str("still in string\",\"x\":1}");
 
             let scalar = build_struct_index_scalar(&input);
             let parallel =

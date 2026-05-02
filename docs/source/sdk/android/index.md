@@ -34,6 +34,9 @@ layered on top via the keystore abstraction when running on devices.
   (`getUaidPortfolio`, `getUaidBindings`, `getUaidManifests`) reuse the same
   transport so wallets can query Space Directory bindings without reimplementing
   the REST surface (see [UAID portfolio & manifests](#uaid-portfolio--manifests)).
+  Sora VPN helpers use canonical request signatures to create XOR lease quotes,
+  open sessions only after the quote-bound native escrow transaction commits,
+  and parse native lease settlement instructions from operator receipts.
 - **Fixtures & tooling:** `scripts/android_fixture_regen.sh` regenerates the
   Norito fixtures from the shared Rust exporter, and
   `scripts/check_android_fixtures.py` guards parity during CI.
@@ -114,6 +117,10 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
 - `UaidLiteral.canonicalize(literal, context)` normalises user input with the
   `uaid:` prefix and 64‑hex (LSB=1) enforcement so controllers can be pasted in any
   casing.
+- Account onboarding requests must carry an explicit canonical UAID. Derive
+  the digest off-chain, set the final byte's low bit to `1`, and pass only
+  digest commitments such as `identity_commitment_hex`; raw identity metadata is
+  rejected by Torii.
 
 Example:
 
@@ -153,6 +160,42 @@ Errors bubble up through the returned `CompletableFuture` with the same taxonomy
 as Torii (invalid account literals, malformed UAIDs, etc.), so reuse the
 helpers before submitting values to ledger instructions. For the full JSON
 schema, see [`docs/source/torii/portfolio_api.md`](../../torii/portfolio_api.md).
+
+## Sora VPN native lease flow
+
+`HttpClientTransport` exposes the Torii VPN quote/session/receipt endpoints for
+Android and JVM wallets. Signed endpoints require `ToriiCanonicalRequestAuth`;
+the SDK signs the exact JSON body bytes and emits `X-Iroha-Account`,
+`X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce`.
+
+```java
+ToriiCanonicalRequestAuth auth =
+    new ToriiCanonicalRequestAuth("<account_i105>", keyPair.getPrivate());
+
+String meteringKeyHex = "<32-byte-ed25519-metering-public-key-hex>";
+VpnQuote quote = transport.createVpnQuote(
+    new VpnQuoteCreateRequest("standard", meteringKeyHex), auth).join();
+
+// Submit quote.openLeaseInstruction() / quote.txInstructions() as a normal
+// signed transaction, then pass the committed transaction hash back to Torii.
+VpnSession session = transport.createVpnSession(
+    new VpnSessionCreateRequest(
+        quote.exitClass(),
+        quote.quoteId(),
+        "<committed-open-lease-tx-hash>",
+        meteringKeyHex),
+    auth).join();
+
+ToriiCanonicalRequestAuth operatorAuth =
+    new ToriiCanonicalRequestAuth("<operator_i105>", operatorKeyPair.getPrivate());
+VpnReceipt receipt = transport.submitVpnReceipt(
+    new VpnReceiptSubmitRequest("<relay_receipt_hex>", "<client_voucher_hex>", quote.leaseIdHex()),
+    operatorAuth).join();
+```
+
+`VpnQuote.openLeaseInstruction()` is the wallet-submitted `OpenVpnLeaseEscrow`;
+`VpnReceipt.settleLeaseInstruction()` is the operator-submitted `SettleVpnLease`
+that pays earned XOR from escrow and refunds the unused lease amount.
 
 ## Build & Test
 

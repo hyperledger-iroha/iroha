@@ -177,18 +177,26 @@ struct PoseidonWorkspace {
     PoseidonSlice* slices;
     uint64_t* states;
     uint64_t* hashes;
+    uint64_t* bn254_round_constants;
+    uint64_t* bn254_mds;
     uint64_t* host_payloads;
     PoseidonSlice* host_slices;
     uint64_t* host_states;
     uint64_t* host_hashes;
+    uint64_t* host_bn254_round_constants;
+    uint64_t* host_bn254_mds;
     size_t payload_capacity_bytes;
     size_t slice_capacity_bytes;
     size_t state_capacity_bytes;
     size_t hash_capacity_bytes;
+    size_t bn254_round_capacity_bytes;
+    size_t bn254_mds_capacity_bytes;
     size_t host_payload_capacity_bytes;
     size_t host_slice_capacity_bytes;
     size_t host_state_capacity_bytes;
     size_t host_hash_capacity_bytes;
+    size_t host_bn254_round_capacity_bytes;
+    size_t host_bn254_mds_capacity_bytes;
     cudaStream_t stream;
     cudaEvent_t event;
     bool stream_ready;
@@ -199,18 +207,26 @@ struct PoseidonWorkspace {
           slices(nullptr),
           states(nullptr),
           hashes(nullptr),
+          bn254_round_constants(nullptr),
+          bn254_mds(nullptr),
           host_payloads(nullptr),
           host_slices(nullptr),
           host_states(nullptr),
           host_hashes(nullptr),
+          host_bn254_round_constants(nullptr),
+          host_bn254_mds(nullptr),
           payload_capacity_bytes(0),
           slice_capacity_bytes(0),
           state_capacity_bytes(0),
           hash_capacity_bytes(0),
+          bn254_round_capacity_bytes(0),
+          bn254_mds_capacity_bytes(0),
           host_payload_capacity_bytes(0),
           host_slice_capacity_bytes(0),
           host_state_capacity_bytes(0),
           host_hash_capacity_bytes(0),
+          host_bn254_round_capacity_bytes(0),
+          host_bn254_mds_capacity_bytes(0),
           stream(nullptr),
           event(nullptr),
           stream_ready(false),
@@ -449,20 +465,28 @@ static void abandon_poseidon_workspace(PoseidonWorkspace* workspace) {
     workspace->slices = nullptr;
     workspace->states = nullptr;
     workspace->hashes = nullptr;
+    workspace->bn254_round_constants = nullptr;
+    workspace->bn254_mds = nullptr;
     workspace->host_payloads = nullptr;
     workspace->host_slices = nullptr;
     workspace->host_states = nullptr;
     workspace->host_hashes = nullptr;
+    workspace->host_bn254_round_constants = nullptr;
+    workspace->host_bn254_mds = nullptr;
     workspace->stream = nullptr;
     workspace->event = nullptr;
     workspace->payload_capacity_bytes = 0;
     workspace->slice_capacity_bytes = 0;
     workspace->state_capacity_bytes = 0;
     workspace->hash_capacity_bytes = 0;
+    workspace->bn254_round_capacity_bytes = 0;
+    workspace->bn254_mds_capacity_bytes = 0;
     workspace->host_payload_capacity_bytes = 0;
     workspace->host_slice_capacity_bytes = 0;
     workspace->host_state_capacity_bytes = 0;
     workspace->host_hash_capacity_bytes = 0;
+    workspace->host_bn254_round_capacity_bytes = 0;
+    workspace->host_bn254_mds_capacity_bytes = 0;
     workspace->stream_ready = false;
     workspace->event_ready = false;
 }
@@ -1370,6 +1394,150 @@ __global__ void fastpq_poseidon_parent_kernel(
     state[1] = f_add(state[1], 1ull);
     poseidon_permute(state);
     parent_hashes[parent_idx] = state[0];
+}
+
+static constexpr unsigned int BN254_POSEIDON_WIDTH = 3u;
+static constexpr unsigned int BN254_POSEIDON_FULL_ROUNDS_HALF = 4u;
+static constexpr unsigned int BN254_POSEIDON_PARTIAL_ROUNDS = 56u;
+static constexpr unsigned int BN254_POSEIDON_TOTAL_ROUNDS =
+    BN254_POSEIDON_FULL_ROUNDS_HALF * 2u + BN254_POSEIDON_PARTIAL_ROUNDS;
+
+__device__ __forceinline__ Bn254Value bn254_from_u64(uint64_t value) {
+    Bn254Value raw = {{value, 0ull, 0ull, 0ull}};
+    return bn254_from_canonical(raw);
+}
+
+__device__ __forceinline__ Bn254Value bn254_one() {
+    return bn254_from_u64(1ull);
+}
+
+__device__ __forceinline__ Bn254Value bn254_pow5(const Bn254Value& value) {
+    Bn254Value squared = bn254_montgomery_mul(value, value);
+    Bn254Value fourth = bn254_montgomery_mul(squared, squared);
+    return bn254_montgomery_mul(fourth, value);
+}
+
+__device__ __forceinline__ Bn254Value bn254_poseidon_constant(
+    const uint64_t* constants,
+    unsigned int index
+) {
+    return bn254_from_canonical(bn254_load(constants + (size_t)index * BN254_LIMBS));
+}
+
+__device__ void bn254_poseidon_apply_mds(
+    Bn254Value state[BN254_POSEIDON_WIDTH],
+    const uint64_t* mds
+) {
+    Bn254Value next[BN254_POSEIDON_WIDTH] = {bn254_zero(), bn254_zero(), bn254_zero()};
+    for (unsigned int row = 0; row < BN254_POSEIDON_WIDTH; ++row) {
+        Bn254Value acc = bn254_zero();
+        for (unsigned int col = 0; col < BN254_POSEIDON_WIDTH; ++col) {
+            unsigned int index = row * BN254_POSEIDON_WIDTH + col;
+            Bn254Value coeff = bn254_poseidon_constant(mds, index);
+            acc = bn254_add(acc, bn254_montgomery_mul(coeff, state[col]));
+        }
+        next[row] = acc;
+    }
+    for (unsigned int idx = 0; idx < BN254_POSEIDON_WIDTH; ++idx) {
+        state[idx] = next[idx];
+    }
+}
+
+__device__ void bn254_poseidon_permute(
+    Bn254Value state[BN254_POSEIDON_WIDTH],
+    const uint64_t* round_constants,
+    const uint64_t* mds
+) {
+    for (unsigned int round = 0; round < BN254_POSEIDON_FULL_ROUNDS_HALF; ++round) {
+        for (unsigned int word = 0; word < BN254_POSEIDON_WIDTH; ++word) {
+            unsigned int index = round * BN254_POSEIDON_WIDTH + word;
+            state[word] = bn254_pow5(
+                bn254_add(state[word], bn254_poseidon_constant(round_constants, index))
+            );
+        }
+        bn254_poseidon_apply_mds(state, mds);
+    }
+
+    for (unsigned int idx = 0; idx < BN254_POSEIDON_PARTIAL_ROUNDS; ++idx) {
+        unsigned int round = BN254_POSEIDON_FULL_ROUNDS_HALF + idx;
+        for (unsigned int word = 0; word < BN254_POSEIDON_WIDTH; ++word) {
+            unsigned int index = round * BN254_POSEIDON_WIDTH + word;
+            state[word] = bn254_add(
+                state[word],
+                bn254_poseidon_constant(round_constants, index)
+            );
+        }
+        state[0] = bn254_pow5(state[0]);
+        bn254_poseidon_apply_mds(state, mds);
+    }
+
+    unsigned int tail_start = BN254_POSEIDON_FULL_ROUNDS_HALF + BN254_POSEIDON_PARTIAL_ROUNDS;
+    for (unsigned int idx = 0; idx < BN254_POSEIDON_FULL_ROUNDS_HALF; ++idx) {
+        unsigned int round = tail_start + idx;
+        for (unsigned int word = 0; word < BN254_POSEIDON_WIDTH; ++word) {
+            unsigned int index = round * BN254_POSEIDON_WIDTH + word;
+            state[word] = bn254_pow5(
+                bn254_add(state[word], bn254_poseidon_constant(round_constants, index))
+            );
+        }
+        bn254_poseidon_apply_mds(state, mds);
+    }
+}
+
+__device__ __forceinline__ void bn254_poseidon_absorb_pair(
+    Bn254Value state[BN254_POSEIDON_WIDTH],
+    const Bn254Value& first,
+    const Bn254Value& second,
+    const uint64_t* round_constants,
+    const uint64_t* mds
+) {
+    state[0] = bn254_add(state[0], first);
+    state[1] = bn254_add(state[1], second);
+    bn254_poseidon_permute(state, round_constants, mds);
+}
+
+__device__ Bn254Value bn254_poseidon_hash_slice(
+    const uint64_t* words,
+    PoseidonSlice slice,
+    const uint64_t* round_constants,
+    const uint64_t* mds
+) {
+    Bn254Value state[BN254_POSEIDON_WIDTH] = {bn254_zero(), bn254_zero(), bn254_zero()};
+    uint32_t cursor = 0u;
+    while (cursor + 1u < slice.len) {
+        Bn254Value first = bn254_from_u64(words[(size_t)slice.offset + cursor]);
+        Bn254Value second = bn254_from_u64(words[(size_t)slice.offset + cursor + 1u]);
+        bn254_poseidon_absorb_pair(state, first, second, round_constants, mds);
+        cursor += 2u;
+    }
+    if (cursor < slice.len) {
+        Bn254Value first = bn254_from_u64(words[(size_t)slice.offset + cursor]);
+        bn254_poseidon_absorb_pair(state, first, bn254_one(), round_constants, mds);
+    } else {
+        bn254_poseidon_absorb_pair(state, bn254_one(), bn254_zero(), round_constants, mds);
+    }
+    return bn254_to_canonical(state[0]);
+}
+
+__global__ void fastpq_bn254_poseidon_hash_words_kernel(
+    const uint64_t* words,
+    const PoseidonSlice* slices,
+    size_t batch_count,
+    const uint64_t* round_constants,
+    const uint64_t* mds,
+    uint64_t* out_hashes
+) {
+    size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= batch_count) {
+        return;
+    }
+    Bn254Value hash = bn254_poseidon_hash_slice(
+        words,
+        slices[index],
+        round_constants,
+        mds
+    );
+    bn254_store(out_hashes + index * BN254_LIMBS, hash);
 }
 
 // -----------------------------------------------------------------------------.
@@ -2624,6 +2792,207 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     }
     if (status == cudaSuccess) {
         memcpy(out_states, workspace->host_states, state_bytes);
+    }
+    return status;
+}
+
+extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
+    const uint64_t* words,
+    size_t word_count,
+    const PoseidonSlice* slices,
+    size_t batch_count,
+    const uint64_t* round_constants,
+    size_t round_constant_len,
+    const uint64_t* mds,
+    size_t mds_len,
+    uint64_t* out_hashes
+) {
+    if (
+        words == nullptr || slices == nullptr || round_constants == nullptr || mds == nullptr
+        || out_hashes == nullptr || batch_count == 0
+        || round_constant_len != (size_t)BN254_POSEIDON_TOTAL_ROUNDS * BN254_POSEIDON_WIDTH * BN254_LIMBS
+        || mds_len != (size_t)BN254_POSEIDON_WIDTH * BN254_POSEIDON_WIDTH * BN254_LIMBS
+    ) {
+        return cudaErrorInvalidValue;
+    }
+
+    size_t word_bytes = word_count * sizeof(uint64_t);
+    size_t slice_bytes = batch_count * sizeof(PoseidonSlice);
+    size_t round_bytes = round_constant_len * sizeof(uint64_t);
+    size_t mds_bytes = mds_len * sizeof(uint64_t);
+    size_t output_bytes = batch_count * (size_t)BN254_LIMBS * sizeof(uint64_t);
+
+    std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
+    PoseidonWorkspace* workspace = current_poseidon_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    cudaError_t status = ensure_workspace_buffer(
+        &workspace->payloads,
+        &workspace->payload_capacity_bytes,
+        word_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->slices,
+        &workspace->slice_capacity_bytes,
+        slice_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->bn254_round_constants,
+        &workspace->bn254_round_capacity_bytes,
+        round_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->bn254_mds,
+        &workspace->bn254_mds_capacity_bytes,
+        mds_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->hashes,
+        &workspace->hash_capacity_bytes,
+        output_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    status = ensure_pinned_workspace_buffer(
+        &workspace->host_payloads,
+        &workspace->host_payload_capacity_bytes,
+        word_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &workspace->host_slices,
+        &workspace->host_slice_capacity_bytes,
+        slice_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &workspace->host_bn254_round_constants,
+        &workspace->host_bn254_round_capacity_bytes,
+        round_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &workspace->host_bn254_mds,
+        &workspace->host_bn254_mds_capacity_bytes,
+        mds_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &workspace->host_hashes,
+        &workspace->host_hash_capacity_bytes,
+        output_bytes
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_poseidon_stream(workspace);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_poseidon_event(workspace);
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    memcpy(workspace->host_payloads, words, word_bytes);
+    memcpy(workspace->host_slices, slices, slice_bytes);
+    memcpy(workspace->host_bn254_round_constants, round_constants, round_bytes);
+    memcpy(workspace->host_bn254_mds, mds, mds_bytes);
+    status = cudaMemcpyAsync(
+        workspace->payloads,
+        workspace->host_payloads,
+        word_bytes,
+        cudaMemcpyHostToDevice,
+        workspace->stream
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpyAsync(
+        workspace->slices,
+        workspace->host_slices,
+        slice_bytes,
+        cudaMemcpyHostToDevice,
+        workspace->stream
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpyAsync(
+        workspace->bn254_round_constants,
+        workspace->host_bn254_round_constants,
+        round_bytes,
+        cudaMemcpyHostToDevice,
+        workspace->stream
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpyAsync(
+        workspace->bn254_mds,
+        workspace->host_bn254_mds,
+        mds_bytes,
+        cudaMemcpyHostToDevice,
+        workspace->stream
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    const unsigned int threads_per_block = 128u;
+    size_t grid_size_host = (batch_count + threads_per_block - 1u) / threads_per_block;
+    if (grid_size_host == 0) {
+        grid_size_host = 1;
+    }
+    if (grid_size_host > (size_t)UINT32_MAX) {
+        return cudaErrorInvalidValue;
+    }
+    fastpq_bn254_poseidon_hash_words_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, workspace->stream>>>(
+        workspace->payloads,
+        workspace->slices,
+        batch_count,
+        workspace->bn254_round_constants,
+        workspace->bn254_mds,
+        workspace->hashes
+    );
+    status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        status = cudaMemcpyAsync(
+            workspace->host_hashes,
+            workspace->hashes,
+            output_bytes,
+            cudaMemcpyDeviceToHost,
+            workspace->stream
+        );
+    }
+    if (status == cudaSuccess) {
+        status = wait_for_poseidon_event_after_copy(workspace);
+    }
+    if (status == cudaSuccess) {
+        memcpy(out_hashes, workspace->host_hashes, output_bytes);
     }
     return status;
 }

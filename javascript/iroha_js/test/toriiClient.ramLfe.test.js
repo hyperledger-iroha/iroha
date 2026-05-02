@@ -106,7 +106,6 @@ test("executeRamLfeProgram posts plaintext input and preserves raw receipt", asy
         program_id: PROGRAM_ID,
         opaque_hash: "opaque-hash-literal",
         receipt_hash: "receipt-hash-literal",
-        output_hex: "C0FFEE",
         output_hash: "output-hash-literal",
         associated_data_hash: "associated-data-hash-literal",
         executed_at_ms: 42,
@@ -122,7 +121,7 @@ test("executeRamLfeProgram posts plaintext input and preserves raw receipt", asy
     inputHex: "ABCD",
   });
   assert.equal(result.program_id, PROGRAM_ID);
-  assert.equal(result.output_hex, "C0FFEE");
+  assert.equal(result.output_hash, "output-hash-literal");
   assert.equal(result.verification_mode, "signed");
   assert.deepEqual(result.receipt, RECEIPT);
 });

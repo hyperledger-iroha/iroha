@@ -730,6 +730,43 @@ Map<String, String> headers =
 Signatures cover the canonical method/path/query/body layout plus freshness
 metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
+### Sora VPN native lease flow
+
+`HttpClientTransport` exposes the quote-first Sora VPN endpoints. Quotes bind
+the account, exit class, client metering key, XOR fee asset, escrow account, and
+operator account, then return native `OpenVpnLeaseEscrow` instructions. Session
+creation requires the committed hash of the exact quote-bound lease-open
+transaction, and operator receipt submission returns a native `SettleVpnLease`
+instruction with earned/refunded XOR amounts:
+
+```java
+ToriiCanonicalRequestAuth userAuth =
+    new ToriiCanonicalRequestAuth("<account_i105>", userKeyPair.getPrivate());
+
+VpnQuote quote = transport.createVpnQuote(
+    new VpnQuoteCreateRequest("standard", "<metering_public_key_hex>"),
+    userAuth).join();
+
+VpnSession session = transport.createVpnSession(
+    new VpnSessionCreateRequest(
+        quote.exitClass(),
+        quote.quoteId(),
+        "<committed_open_lease_tx_hash>",
+        quote.meteringPublicKeyHex()),
+    userAuth).join();
+
+ToriiCanonicalRequestAuth operatorAuth =
+    new ToriiCanonicalRequestAuth("<operator_i105>", operatorKeyPair.getPrivate());
+VpnReceipt settled = transport.submitVpnReceipt(
+    new VpnReceiptSubmitRequest("<relay_receipt_hex>", "<client_voucher_hex>", quote.leaseIdHex()),
+    operatorAuth).join();
+```
+
+Submit `quote.openLeaseInstruction()` and `settled.settleLeaseInstruction()` as
+normal signed native instruction transactions. This keeps prepaid VPN funds in
+XOR escrow until usage receipts and client vouchers prove the amount earned by
+the operator.
+
 ### Pipeline Hashes
 
 `HttpClientTransport.submitTransaction(...)` computes the canonical BLAKE2b-256

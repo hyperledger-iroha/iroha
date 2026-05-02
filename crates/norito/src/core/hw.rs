@@ -90,7 +90,7 @@ pub fn has_gpu_compression() -> bool {
         if !gpu_policy_allowed() {
             return false;
         }
-        detect().gpu_zstd
+        detect().gpu_zstd && super::gpu_zstd::available()
     }
     #[cfg(not(feature = "gpu-compression"))]
     {

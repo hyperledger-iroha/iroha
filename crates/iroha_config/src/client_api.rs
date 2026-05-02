@@ -155,6 +155,53 @@ impl FastJsonWrite for SoranetVpnSummary {
         out.push(',');
         out.push_str("\"meter_family\":");
         json::write_json_string(&self.meter_family, out);
+        out.push(',');
+        out.push_str("\"fee_asset_id\":");
+        json::write_json_string(&self.fee_asset_id, out);
+        out.push(',');
+        out.push_str("\"escrow_account_id\":");
+        json::write_json_string(&self.escrow_account_id, out);
+        out.push(',');
+        out.push_str("\"operator_account_id\":");
+        json::write_json_string(&self.operator_account_id, out);
+        out.push(',');
+        out.push_str("\"lease_fee_nanos\":");
+        let _ = write!(out, "{}", self.lease_fee_nanos);
+        out.push(',');
+        out.push_str("\"settlement_grace_secs\":");
+        let _ = write!(out, "{}", self.settlement_grace_secs);
+        out.push(',');
+        out.push_str("\"route_pushes\":[");
+        for (idx, route) in self.route_pushes.iter().enumerate() {
+            if idx != 0 {
+                out.push(',');
+            }
+            json::write_json_string(route, out);
+        }
+        out.push(']');
+        out.push(',');
+        out.push_str("\"excluded_routes\":[");
+        for (idx, route) in self.excluded_routes.iter().enumerate() {
+            if idx != 0 {
+                out.push(',');
+            }
+            json::write_json_string(route, out);
+        }
+        out.push(']');
+        out.push(',');
+        out.push_str("\"dns_servers\":[");
+        for (idx, server) in self.dns_servers.iter().enumerate() {
+            if idx != 0 {
+                out.push(',');
+            }
+            json::write_json_string(server, out);
+        }
+        out.push(']');
+        if let Some(pin) = &self.relay_tls_spki_sha256_hex {
+            out.push(',');
+            out.push_str("\"relay_tls_spki_sha256_hex\":");
+            json::write_json_string(pin, out);
+        }
         out.push('}');
     }
 }
@@ -1765,6 +1812,15 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let mut dns_push_interval_secs = None;
         let mut exit_class = None;
         let mut meter_family = None;
+        let mut fee_asset_id = None;
+        let mut escrow_account_id = None;
+        let mut operator_account_id = None;
+        let mut lease_fee_nanos = None;
+        let mut settlement_grace_secs = None;
+        let mut route_pushes = None;
+        let mut excluded_routes = None;
+        let mut dns_servers = None;
+        let mut relay_tls_spki_sha256_hex = None;
 
         let kh_enabled = norito::json::key_hash_const("enabled");
         let kh_cell = norito::json::key_hash_const("cell_size_bytes");
@@ -1779,6 +1835,15 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let kh_dns = norito::json::key_hash_const("dns_push_interval_secs");
         let kh_exit_class = norito::json::key_hash_const("exit_class");
         let kh_meter_family = norito::json::key_hash_const("meter_family");
+        let kh_fee_asset = norito::json::key_hash_const("fee_asset_id");
+        let kh_escrow = norito::json::key_hash_const("escrow_account_id");
+        let kh_operator = norito::json::key_hash_const("operator_account_id");
+        let kh_lease_fee = norito::json::key_hash_const("lease_fee_nanos");
+        let kh_settlement_grace = norito::json::key_hash_const("settlement_grace_secs");
+        let kh_route_pushes = norito::json::key_hash_const("route_pushes");
+        let kh_excluded_routes = norito::json::key_hash_const("excluded_routes");
+        let kh_dns_servers = norito::json::key_hash_const("dns_servers");
+        let kh_relay_tls_pin = norito::json::key_hash_const("relay_tls_spki_sha256_hex");
 
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
@@ -1844,6 +1909,48 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
                 x if x == kh_meter_family && w.last_key() == "meter_family" => {
                     meter_family = Some(w.parse_string_ref_inline(arena)?.to_string());
                 }
+                x if x == kh_fee_asset && w.last_key() == "fee_asset_id" => {
+                    fee_asset_id = Some(w.parse_string_ref_inline(arena)?.to_string());
+                }
+                x if x == kh_escrow && w.last_key() == "escrow_account_id" => {
+                    escrow_account_id = Some(w.parse_string_ref_inline(arena)?.to_string());
+                }
+                x if x == kh_operator && w.last_key() == "operator_account_id" => {
+                    operator_account_id = Some(w.parse_string_ref_inline(arena)?.to_string());
+                }
+                x if x == kh_lease_fee && w.last_key() == "lease_fee_nanos" => {
+                    lease_fee_nanos = Some(w.parse_u64_inline()?);
+                }
+                x if x == kh_settlement_grace && w.last_key() == "settlement_grace_secs" => {
+                    settlement_grace_secs = Some(w.parse_u64_inline()?);
+                }
+                x if x == kh_route_pushes && w.last_key() == "route_pushes" => {
+                    let s_in = w.input();
+                    let mut parser = norito::json::Parser::new_at(s_in, w.raw_pos());
+                    let vec: Vec<String> =
+                        norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+                    w.sync_to_raw(parser.position());
+                    route_pushes = Some(vec);
+                }
+                x if x == kh_excluded_routes && w.last_key() == "excluded_routes" => {
+                    let s_in = w.input();
+                    let mut parser = norito::json::Parser::new_at(s_in, w.raw_pos());
+                    let vec: Vec<String> =
+                        norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+                    w.sync_to_raw(parser.position());
+                    excluded_routes = Some(vec);
+                }
+                x if x == kh_dns_servers && w.last_key() == "dns_servers" => {
+                    let s_in = w.input();
+                    let mut parser = norito::json::Parser::new_at(s_in, w.raw_pos());
+                    let vec: Vec<String> =
+                        norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+                    w.sync_to_raw(parser.position());
+                    dns_servers = Some(vec);
+                }
+                x if x == kh_relay_tls_pin && w.last_key() == "relay_tls_spki_sha256_hex" => {
+                    relay_tls_spki_sha256_hex = Some(w.parse_string_ref_inline(arena)?.to_string());
+                }
                 _ => w.skip_value()?,
             }
             let _ = w.consume_comma_if_present()?;
@@ -1886,6 +1993,19 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
             exit_class,
             meter_family: meter_family
                 .unwrap_or_else(|| defaults::soranet::vpn::METER_FAMILY.to_string()),
+            fee_asset_id: fee_asset_id.unwrap_or_else(defaults::soranet::vpn::fee_asset_id),
+            escrow_account_id: escrow_account_id
+                .unwrap_or_else(defaults::soranet::vpn::escrow_account_id),
+            operator_account_id: operator_account_id
+                .unwrap_or_else(defaults::soranet::vpn::operator_account_id),
+            lease_fee_nanos: lease_fee_nanos.unwrap_or(defaults::soranet::vpn::LEASE_FEE_NANOS),
+            settlement_grace_secs: settlement_grace_secs
+                .unwrap_or(defaults::soranet::vpn::SETTLEMENT_GRACE_SECS),
+            route_pushes: route_pushes.unwrap_or_else(defaults::soranet::vpn::route_pushes),
+            excluded_routes: excluded_routes
+                .unwrap_or_else(defaults::soranet::vpn::excluded_routes),
+            dns_servers: dns_servers.unwrap_or_else(defaults::soranet::vpn::dns_servers),
+            relay_tls_spki_sha256_hex,
         })
     }
 }
@@ -2706,6 +2826,24 @@ pub struct SoranetVpnSummary {
     pub exit_class: String,
     /// Meter family identifier.
     pub meter_family: String,
+    /// XOR asset definition used for escrowed VPN fees.
+    pub fee_asset_id: String,
+    /// Account that receives escrowed VPN lease fees.
+    pub escrow_account_id: String,
+    /// Relay operator account eligible for receipt settlement.
+    pub operator_account_id: String,
+    /// Fixed prepaid lease fee in nano-XOR.
+    pub lease_fee_nanos: u64,
+    /// Grace window after disconnect before unearned escrow can be refunded.
+    pub settlement_grace_secs: u64,
+    /// Routes pushed to VPN clients.
+    pub route_pushes: Vec<String>,
+    /// Routes explicitly excluded from the VPN tunnel.
+    pub excluded_routes: Vec<String>,
+    /// DNS servers pushed to VPN clients.
+    pub dns_servers: Vec<String>,
+    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
+    pub relay_tls_spki_sha256_hex: Option<String>,
 }
 
 impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
@@ -2728,6 +2866,15 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
             dns_push_interval_secs: value.dns_push_interval.as_secs(),
             exit_class: exit_class.as_label().to_string(),
             meter_family: value.meter_family.clone(),
+            fee_asset_id: value.fee_asset_id.clone(),
+            escrow_account_id: value.escrow_account_id.to_string(),
+            operator_account_id: value.operator_account_id.to_string(),
+            lease_fee_nanos: value.lease_fee_nanos,
+            settlement_grace_secs: value.settlement_grace.as_secs(),
+            route_pushes: value.route_pushes.clone(),
+            excluded_routes: value.excluded_routes.clone(),
+            dns_servers: value.dns_servers.clone(),
+            relay_tls_spki_sha256_hex: value.relay_tls_spki_sha256_hex.clone(),
         }
     }
 }
@@ -3481,7 +3628,7 @@ mod test {
                   "event_buffer_capacity": 4096
                 },
                 "soranet_vpn": {
-                  "enabled": true,
+                  "enabled": false,
                   "cell_size_bytes": 1024,
                   "flow_label_bits": 24,
                   "cover_to_data_per_mille": 250,
@@ -3493,7 +3640,20 @@ mod test {
                   "lease_secs": 600,
                   "dns_push_interval_secs": 90,
                   "exit_class": "standard",
-                  "meter_family": "soranet.vpn.standard"
+                  "meter_family": "soranet.vpn.standard",
+                  "fee_asset_id": "xor#universal.universal",
+                  "escrow_account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                  "operator_account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                  "lease_fee_nanos": 1000000,
+                  "settlement_grace_secs": 60,
+                  "route_pushes": [
+                    "0.0.0.0/0",
+                    "::/0"
+                  ],
+                  "excluded_routes": [],
+                  "dns_servers": [
+                    "1.1.1.1"
+                  ]
                 },
                 "lane_profile": "core",
                 "require_sm_handshake_match": true,

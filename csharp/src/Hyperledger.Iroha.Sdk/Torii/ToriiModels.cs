@@ -164,17 +164,155 @@ public sealed record class ToriiVpnProfile
     [JsonPropertyName("route_pushes")]
     public IReadOnlyList<string> RoutePushes { get; init; } = Array.Empty<string>();
 
+    [JsonPropertyName("excluded_routes")]
+    public IReadOnlyList<string> ExcludedRoutes { get; init; } = Array.Empty<string>();
+
     [JsonPropertyName("dns_servers")]
     public IReadOnlyList<string> DnsServers { get; init; } = Array.Empty<string>();
 
+    [JsonPropertyName("tunnel_addresses")]
+    public IReadOnlyList<string> TunnelAddresses { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("mtu_bytes")]
+    public ulong MtuBytes { get; init; }
+
     [JsonPropertyName("display_billing_label")]
     public string DisplayBillingLabel { get; init; } = string.Empty;
+
+    [JsonPropertyName("fee_asset_id")]
+    public string FeeAssetId { get; init; } = string.Empty;
+
+    [JsonPropertyName("escrow_account_id")]
+    public string EscrowAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("operator_account_id")]
+    public string OperatorAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_fee_nanos")]
+    public ulong LeaseFeeNanos { get; init; }
+
+    [JsonPropertyName("settlement_grace_secs")]
+    public ulong SettlementGraceSeconds { get; init; }
+
+    [JsonPropertyName("flow_label_bits")]
+    public byte FlowLabelBits { get; init; }
+
+    [JsonPropertyName("padding_budget_ms")]
+    public ushort PaddingBudgetMilliseconds { get; init; }
+
+    [JsonPropertyName("relay_tls_spki_sha256_hex")]
+    public string? RelayTlsSpkiSha256Hex { get; init; }
+}
+
+public sealed record class ToriiVpnTxInstruction
+{
+    [JsonPropertyName("wire_id")]
+    public string WireId { get; init; } = string.Empty;
+
+    [JsonPropertyName("payload_hex")]
+    public string PayloadHex { get; init; } = string.Empty;
+}
+
+public sealed record class ToriiVpnQuoteCreateRequest
+{
+    [JsonPropertyName("exit_class")]
+    public string ExitClass { get; init; } = string.Empty;
+
+    [JsonPropertyName("metering_public_key_hex")]
+    public string MeteringPublicKeyHex { get; init; } = string.Empty;
+}
+
+public sealed record class ToriiVpnQuote
+{
+    [JsonPropertyName("quote_id")]
+    public string QuoteId { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_id_hex")]
+    public string LeaseIdHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("session_id_hex")]
+    public string SessionIdHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("payment_reference")]
+    public string PaymentReference { get; init; } = string.Empty;
+
+    [JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("exit_class")]
+    public string ExitClass { get; init; } = string.Empty;
+
+    [JsonPropertyName("relay_endpoint")]
+    public string RelayEndpoint { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_secs")]
+    public ulong LeaseSeconds { get; init; }
+
+    [JsonPropertyName("quote_expires_at_ms")]
+    public ulong QuoteExpiresAtMilliseconds { get; init; }
+
+    [JsonPropertyName("fee_asset_id")]
+    public string FeeAssetId { get; init; } = string.Empty;
+
+    [JsonPropertyName("escrow_account_id")]
+    public string EscrowAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("operator_account_id")]
+    public string OperatorAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_fee_nanos")]
+    public ulong LeaseFeeNanos { get; init; }
+
+    [JsonPropertyName("route_pushes")]
+    public IReadOnlyList<string> RoutePushes { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("excluded_routes")]
+    public IReadOnlyList<string> ExcludedRoutes { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("dns_servers")]
+    public IReadOnlyList<string> DnsServers { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("tunnel_addresses")]
+    public IReadOnlyList<string> TunnelAddresses { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("mtu_bytes")]
+    public ulong MtuBytes { get; init; }
+
+    [JsonPropertyName("meter_family")]
+    public string MeterFamily { get; init; } = string.Empty;
+
+    [JsonPropertyName("flow_label_bits")]
+    public byte FlowLabelBits { get; init; }
+
+    [JsonPropertyName("padding_budget_ms")]
+    public ushort PaddingBudgetMilliseconds { get; init; }
+
+    [JsonPropertyName("relay_tls_spki_sha256_hex")]
+    public string? RelayTlsSpkiSha256Hex { get; init; }
+
+    [JsonPropertyName("metering_public_key_hex")]
+    public string MeteringPublicKeyHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("open_lease_instruction")]
+    public ToriiVpnTxInstruction? OpenLeaseInstruction { get; init; }
+
+    [JsonPropertyName("tx_instructions")]
+    public IReadOnlyList<ToriiVpnTxInstruction> TxInstructions { get; init; } = Array.Empty<ToriiVpnTxInstruction>();
 }
 
 public sealed record class ToriiVpnSessionCreateRequest
 {
     [JsonPropertyName("exit_class")]
     public string ExitClass { get; init; } = string.Empty;
+
+    [JsonPropertyName("quote_id")]
+    public string QuoteId { get; init; } = string.Empty;
+
+    [JsonPropertyName("payment_tx_hash")]
+    public string PaymentTransactionHash { get; init; } = string.Empty;
+
+    [JsonPropertyName("metering_public_key_hex")]
+    public string MeteringPublicKeyHex { get; init; } = string.Empty;
 }
 
 public sealed record class ToriiVpnSession
@@ -197,32 +335,161 @@ public sealed record class ToriiVpnSession
     [JsonPropertyName("expires_at_ms")]
     public ulong ExpiresAtMilliseconds { get; init; }
 
+    [JsonPropertyName("connected_at_ms")]
+    public ulong ConnectedAtMilliseconds { get; init; }
+
     [JsonPropertyName("meter_family")]
     public string MeterFamily { get; init; } = string.Empty;
+
+    [JsonPropertyName("quote_id")]
+    public string QuoteId { get; init; } = string.Empty;
+
+    [JsonPropertyName("payment_reference")]
+    public string PaymentReference { get; init; } = string.Empty;
+
+    [JsonPropertyName("payment_tx_hash")]
+    public string PaymentTransactionHash { get; init; } = string.Empty;
+
+    [JsonPropertyName("fee_asset_id")]
+    public string FeeAssetId { get; init; } = string.Empty;
+
+    [JsonPropertyName("escrow_account_id")]
+    public string EscrowAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("operator_account_id")]
+    public string OperatorAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_fee_nanos")]
+    public ulong LeaseFeeNanos { get; init; }
+
+    [JsonPropertyName("flow_label_bits")]
+    public byte FlowLabelBits { get; init; }
+
+    [JsonPropertyName("padding_budget_ms")]
+    public ushort PaddingBudgetMilliseconds { get; init; }
+
+    [JsonPropertyName("relay_tls_spki_sha256_hex")]
+    public string? RelayTlsSpkiSha256Hex { get; init; }
 
     [JsonPropertyName("route_pushes")]
     public IReadOnlyList<string> RoutePushes { get; init; } = Array.Empty<string>();
 
+    [JsonPropertyName("excluded_routes")]
+    public IReadOnlyList<string> ExcludedRoutes { get; init; } = Array.Empty<string>();
+
     [JsonPropertyName("dns_servers")]
     public IReadOnlyList<string> DnsServers { get; init; } = Array.Empty<string>();
 
+    [JsonPropertyName("tunnel_addresses")]
+    public IReadOnlyList<string> TunnelAddresses { get; init; } = Array.Empty<string>();
+
+    [JsonPropertyName("mtu_bytes")]
+    public ulong MtuBytes { get; init; }
+
     [JsonPropertyName("helper_ticket_hex")]
     public string HelperTicketHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("bytes_in")]
+    public ulong BytesIn { get; init; }
+
+    [JsonPropertyName("bytes_out")]
+    public ulong BytesOut { get; init; }
 
     [JsonPropertyName("status")]
     public string Status { get; init; } = string.Empty;
 }
 
-public sealed record class ToriiVpnSessionDeleteResponse
+public sealed record class ToriiVpnReceiptSubmitRequest
+{
+    [JsonPropertyName("relay_receipt_hex")]
+    public string RelayReceiptHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("client_voucher_hex")]
+    public string ClientVoucherHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_id_hex")]
+    public string LeaseIdHex { get; init; } = string.Empty;
+}
+
+public sealed record class ToriiVpnReceipt
 {
     [JsonPropertyName("session_id")]
     public string SessionId { get; init; } = string.Empty;
 
-    [JsonPropertyName("status")]
-    public string Status { get; init; } = string.Empty;
+    [JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("exit_class")]
+    public string ExitClass { get; init; } = string.Empty;
+
+    [JsonPropertyName("relay_endpoint")]
+    public string RelayEndpoint { get; init; } = string.Empty;
+
+    [JsonPropertyName("meter_family")]
+    public string MeterFamily { get; init; } = string.Empty;
+
+    [JsonPropertyName("connected_at_ms")]
+    public ulong ConnectedAtMilliseconds { get; init; }
 
     [JsonPropertyName("disconnected_at_ms")]
     public ulong DisconnectedAtMilliseconds { get; init; }
+
+    [JsonPropertyName("duration_ms")]
+    public ulong DurationMilliseconds { get; init; }
+
+    [JsonPropertyName("bytes_in")]
+    public ulong BytesIn { get; init; }
+
+    [JsonPropertyName("bytes_out")]
+    public ulong BytesOut { get; init; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("receipt_source")]
+    public string ReceiptSource { get; init; } = string.Empty;
+
+    [JsonPropertyName("quote_id")]
+    public string QuoteId { get; init; } = string.Empty;
+
+    [JsonPropertyName("payment_tx_hash")]
+    public string PaymentTransactionHash { get; init; } = string.Empty;
+
+    [JsonPropertyName("fee_asset_id")]
+    public string FeeAssetId { get; init; } = string.Empty;
+
+    [JsonPropertyName("escrow_account_id")]
+    public string EscrowAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("operator_account_id")]
+    public string OperatorAccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("lease_fee_nanos")]
+    public ulong LeaseFeeNanos { get; init; }
+
+    [JsonPropertyName("earned_fee_nanos")]
+    public ulong EarnedFeeNanos { get; init; }
+
+    [JsonPropertyName("refunded_fee_nanos")]
+    public ulong RefundedFeeNanos { get; init; }
+
+    [JsonPropertyName("lease_id_hex")]
+    public string LeaseIdHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("settle_lease_instruction")]
+    public ToriiVpnTxInstruction? SettleLeaseInstruction { get; init; }
+
+    [JsonPropertyName("tx_instructions")]
+    public IReadOnlyList<ToriiVpnTxInstruction> TxInstructions { get; init; } = Array.Empty<ToriiVpnTxInstruction>();
+}
+
+public sealed record class ToriiVpnReceiptListResponse
+{
+    [JsonPropertyName("items")]
+    public IReadOnlyList<ToriiVpnReceipt> Items { get; init; } = Array.Empty<ToriiVpnReceipt>();
+
+    [JsonPropertyName("total")]
+    public ulong Total { get; init; }
 }
 
 public sealed record class ToriiMultisigAccountOnboardingRequest

@@ -4487,27 +4487,53 @@ export class ToriiClient {
   }
 
   /**
-   * Create a signed Sora VPN session (`POST /v1/vpn/sessions`).
-   * @param {{exitClass?: string}} request
+   * Create a signed Sora VPN quote (`POST /v1/vpn/quotes`).
+   * The returned `txInstructions` contain the native `OpenVpnLeaseEscrow` instruction
+   * that the wallet must submit before creating the session.
+   * @param {{exitClass?: string, meteringPublicKeyHex: string}} request
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @returns {Promise<ToriiVpnQuote>}
+   */
+  async createVpnQuote(request, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "createVpnQuote",
+    );
+    const response = await this._request("POST", "/v1/vpn/quotes", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(normalizeVpnQuoteCreateRequest(request)),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [201]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("vpn quote endpoint returned no payload");
+    }
+    return normalizeVpnQuoteResponse(payload);
+  }
+
+  /**
+   * Create a signed Sora VPN session after the quoted lease-open transaction commits
+   * (`POST /v1/vpn/sessions`).
+   * @param {{exitClass?: string, quoteId: string, paymentTxHash: string, meteringPublicKeyHex: string}} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiVpnSession>}
    */
   async createVpnSession(request = {}, options) {
-    const record = ensureRecord(request, "createVpnSession request");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "createVpnSession",
     );
-    const exitClass =
-      record.exitClass === undefined || record.exitClass === null
-        ? ""
-        : requireNonEmptyString(record.exitClass, "createVpnSession request.exitClass");
     const response = await this._request("POST", "/v1/vpn/sessions", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ exit_class: exitClass }),
+      body: JSON.stringify(normalizeVpnSessionCreateRequest(request)),
       signal,
       canonicalAuth,
     });
@@ -4583,6 +4609,35 @@ export class ToriiClient {
       throw new Error("vpn delete endpoint returned no payload");
     }
     return normalizeVpnReceiptResponse(payload, "vpn delete response");
+  }
+
+  /**
+   * Submit relay/client metering evidence for native VPN lease settlement
+   * (`POST /v1/vpn/receipts`).
+   * @param {{relayReceiptHex: string, clientVoucherHex: string, leaseIdHex?: string}} request
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @returns {Promise<ToriiVpnReceipt>}
+   */
+  async submitVpnReceipt(request, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "submitVpnReceipt",
+    );
+    const response = await this._request("POST", "/v1/vpn/receipts", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(normalizeVpnReceiptSubmitRequest(request)),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [201]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("vpn receipt submit endpoint returned no payload");
+    }
+    return normalizeVpnReceiptResponse(payload, "vpn receipt submit response");
   }
 
   /**
@@ -14508,6 +14563,228 @@ function normalizeVpnProfileResponse(payload) {
       record.display_billing_label ?? "",
       "vpn profile response.display_billing_label",
     ),
+    feeAssetId: requireNonEmptyString(
+      record.fee_asset_id ?? "",
+      "vpn profile response.fee_asset_id",
+    ),
+    escrowAccountId: requireNonEmptyString(
+      record.escrow_account_id ?? "",
+      "vpn profile response.escrow_account_id",
+    ),
+    operatorAccountId: requireNonEmptyString(
+      record.operator_account_id ?? "",
+      "vpn profile response.operator_account_id",
+    ),
+    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
+      record.lease_fee_nanos ?? 0,
+      "vpn profile response.lease_fee_nanos",
+      { allowZero: true },
+    ),
+    settlementGraceSecs: ToriiClient._normalizeUnsignedInteger(
+      record.settlement_grace_secs ?? 0,
+      "vpn profile response.settlement_grace_secs",
+      { allowZero: true },
+    ),
+    flowLabelBits: ToriiClient._normalizeUnsignedInteger(
+      record.flow_label_bits ?? 0,
+      "vpn profile response.flow_label_bits",
+      { allowZero: true },
+    ),
+    paddingBudgetMs: ToriiClient._normalizeUnsignedInteger(
+      record.padding_budget_ms ?? 0,
+      "vpn profile response.padding_budget_ms",
+      { allowZero: true },
+    ),
+    relayTlsSpkiSha256Hex: normalizeNullableHex32(
+      record.relay_tls_spki_sha256_hex,
+      "vpn profile response.relay_tls_spki_sha256_hex",
+    ),
+  };
+}
+
+function normalizeVpnQuoteCreateRequest(input) {
+  const record = ensureRecord(input, "createVpnQuote request");
+  const exitClass =
+    record.exitClass === undefined && record.exit_class === undefined
+      ? ""
+      : requireNonEmptyString(
+          record.exitClass ?? record.exit_class,
+          "createVpnQuote request.exitClass",
+        );
+  return {
+    exit_class: exitClass,
+    metering_public_key_hex: normalizeHex32String(
+      record.meteringPublicKeyHex ?? record.metering_public_key_hex,
+      "createVpnQuote request.meteringPublicKeyHex",
+    ),
+  };
+}
+
+function normalizeVpnSessionCreateRequest(input) {
+  const record = ensureRecord(input, "createVpnSession request");
+  const exitClass =
+    record.exitClass === undefined && record.exit_class === undefined
+      ? ""
+      : requireNonEmptyString(
+          record.exitClass ?? record.exit_class,
+          "createVpnSession request.exitClass",
+        );
+  return {
+    exit_class: exitClass,
+    quote_id: normalizeHex32String(
+      record.quoteId ?? record.quote_id,
+      "createVpnSession request.quoteId",
+    ),
+    payment_tx_hash: normalizeHex32String(
+      record.paymentTxHash ?? record.payment_tx_hash,
+      "createVpnSession request.paymentTxHash",
+    ),
+    metering_public_key_hex: normalizeHex32String(
+      record.meteringPublicKeyHex ?? record.metering_public_key_hex,
+      "createVpnSession request.meteringPublicKeyHex",
+    ),
+  };
+}
+
+function normalizeVpnReceiptSubmitRequest(input) {
+  const record = ensureRecord(input, "submitVpnReceipt request");
+  const payload = {
+    relay_receipt_hex: normalizeArbitraryHex(
+      record.relayReceiptHex ?? record.relay_receipt_hex,
+      "submitVpnReceipt request.relayReceiptHex",
+    ),
+    client_voucher_hex: normalizeArbitraryHex(
+      record.clientVoucherHex ?? record.client_voucher_hex,
+      "submitVpnReceipt request.clientVoucherHex",
+    ),
+  };
+  const leaseIdValue = record.leaseIdHex ?? record.lease_id_hex;
+  if (leaseIdValue !== undefined && leaseIdValue !== null) {
+    payload.lease_id_hex = normalizeHex32String(
+      leaseIdValue,
+      "submitVpnReceipt request.leaseIdHex",
+    );
+  }
+  return payload;
+}
+
+function normalizeVpnTxInstruction(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    wireId: requireNonEmptyString(record.wire_id ?? record.wireId, `${context}.wire_id`),
+    payloadHex: normalizeArbitraryHex(
+      record.payload_hex ?? record.payloadHex,
+      `${context}.payload_hex`,
+    ),
+  };
+}
+
+function normalizeVpnOptionalTxInstruction(payload, context) {
+  if (payload === undefined || payload === null) {
+    return null;
+  }
+  return normalizeVpnTxInstruction(payload, context);
+}
+
+function normalizeVpnTxInstructionList(payload, context) {
+  const instructions = payload ?? [];
+  if (!Array.isArray(instructions)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return instructions.map((entry, index) =>
+    normalizeVpnTxInstruction(entry, `${context}[${index}]`),
+  );
+}
+
+function normalizeNullableHex32(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return normalizeHex32String(value, context);
+}
+
+function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    quoteId: normalizeHex32String(record.quote_id, `${context}.quote_id`),
+    leaseIdHex: normalizeHex32String(record.lease_id_hex, `${context}.lease_id_hex`),
+    sessionIdHex: normalizeArbitraryHex(record.session_id_hex, `${context}.session_id_hex`),
+    paymentReference: requireNonEmptyString(
+      record.payment_reference ?? "",
+      `${context}.payment_reference`,
+    ),
+    accountId: requireNonEmptyString(record.account_id ?? "", `${context}.account_id`),
+    exitClass: requireNonEmptyString(record.exit_class ?? "", `${context}.exit_class`),
+    relayEndpoint: requireNonEmptyString(
+      record.relay_endpoint ?? "",
+      `${context}.relay_endpoint`,
+    ),
+    leaseSecs: ToriiClient._normalizeUnsignedInteger(
+      record.lease_secs ?? 0,
+      `${context}.lease_secs`,
+      { allowZero: true },
+    ),
+    quoteExpiresAtMs: ToriiClient._normalizeUnsignedInteger(
+      record.quote_expires_at_ms ?? 0,
+      `${context}.quote_expires_at_ms`,
+      { allowZero: true },
+    ),
+    feeAssetId: requireNonEmptyString(record.fee_asset_id ?? "", `${context}.fee_asset_id`),
+    escrowAccountId: requireNonEmptyString(
+      record.escrow_account_id ?? "",
+      `${context}.escrow_account_id`,
+    ),
+    operatorAccountId: requireNonEmptyString(
+      record.operator_account_id ?? "",
+      `${context}.operator_account_id`,
+    ),
+    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
+      record.lease_fee_nanos ?? 0,
+      `${context}.lease_fee_nanos`,
+      { allowZero: true },
+    ),
+    routePushes: requireStringArray(record.route_pushes ?? [], `${context}.route_pushes`),
+    excludedRoutes: requireStringArray(
+      record.excluded_routes ?? [],
+      `${context}.excluded_routes`,
+    ),
+    dnsServers: requireStringArray(record.dns_servers ?? [], `${context}.dns_servers`),
+    tunnelAddresses: requireStringArray(
+      record.tunnel_addresses ?? [],
+      `${context}.tunnel_addresses`,
+    ),
+    mtuBytes: ToriiClient._normalizeUnsignedInteger(
+      record.mtu_bytes ?? 0,
+      `${context}.mtu_bytes`,
+      { allowZero: true },
+    ),
+    meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
+    flowLabelBits: ToriiClient._normalizeUnsignedInteger(
+      record.flow_label_bits ?? 0,
+      `${context}.flow_label_bits`,
+      { allowZero: true },
+    ),
+    paddingBudgetMs: ToriiClient._normalizeUnsignedInteger(
+      record.padding_budget_ms ?? 0,
+      `${context}.padding_budget_ms`,
+      { allowZero: true },
+    ),
+    relayTlsSpkiSha256Hex: normalizeNullableHex32(
+      record.relay_tls_spki_sha256_hex,
+      `${context}.relay_tls_spki_sha256_hex`,
+    ),
+    meteringPublicKeyHex: normalizeHex32String(
+      record.metering_public_key_hex,
+      `${context}.metering_public_key_hex`,
+    ),
+    openLeaseInstruction: normalizeVpnOptionalTxInstruction(
+      record.open_lease_instruction,
+      `${context}.open_lease_instruction`,
+    ),
+    txInstructions: normalizeVpnTxInstructionList(
+      record.tx_instructions,
+      `${context}.tx_instructions`,
+    ),
   };
 }
 
@@ -14537,6 +14814,43 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       { allowZero: true },
     ),
     meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
+    quoteId: normalizeHex32String(record.quote_id, `${context}.quote_id`),
+    paymentReference: requireNonEmptyString(
+      record.payment_reference ?? "",
+      `${context}.payment_reference`,
+    ),
+    paymentTxHash: normalizeHex32String(
+      record.payment_tx_hash,
+      `${context}.payment_tx_hash`,
+    ),
+    feeAssetId: requireNonEmptyString(record.fee_asset_id ?? "", `${context}.fee_asset_id`),
+    escrowAccountId: requireNonEmptyString(
+      record.escrow_account_id ?? "",
+      `${context}.escrow_account_id`,
+    ),
+    operatorAccountId: requireNonEmptyString(
+      record.operator_account_id ?? "",
+      `${context}.operator_account_id`,
+    ),
+    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
+      record.lease_fee_nanos ?? 0,
+      `${context}.lease_fee_nanos`,
+      { allowZero: true },
+    ),
+    flowLabelBits: ToriiClient._normalizeUnsignedInteger(
+      record.flow_label_bits ?? 0,
+      `${context}.flow_label_bits`,
+      { allowZero: true },
+    ),
+    paddingBudgetMs: ToriiClient._normalizeUnsignedInteger(
+      record.padding_budget_ms ?? 0,
+      `${context}.padding_budget_ms`,
+      { allowZero: true },
+    ),
+    relayTlsSpkiSha256Hex: normalizeNullableHex32(
+      record.relay_tls_spki_sha256_hex,
+      `${context}.relay_tls_spki_sha256_hex`,
+    ),
     routePushes: requireStringArray(record.route_pushes ?? [], `${context}.route_pushes`),
     excludedRoutes: requireStringArray(
       record.excluded_routes ?? [],
@@ -14610,6 +14924,44 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
     receiptSource: requireNonEmptyString(
       record.receipt_source ?? "",
       `${context}.receipt_source`,
+    ),
+    quoteId: normalizeHex32String(record.quote_id, `${context}.quote_id`),
+    paymentTxHash: normalizeHex32String(
+      record.payment_tx_hash,
+      `${context}.payment_tx_hash`,
+    ),
+    feeAssetId: requireNonEmptyString(record.fee_asset_id ?? "", `${context}.fee_asset_id`),
+    escrowAccountId: requireNonEmptyString(
+      record.escrow_account_id ?? "",
+      `${context}.escrow_account_id`,
+    ),
+    operatorAccountId: requireNonEmptyString(
+      record.operator_account_id ?? "",
+      `${context}.operator_account_id`,
+    ),
+    leaseFeeNanos: ToriiClient._normalizeUnsignedInteger(
+      record.lease_fee_nanos ?? 0,
+      `${context}.lease_fee_nanos`,
+      { allowZero: true },
+    ),
+    earnedFeeNanos: ToriiClient._normalizeUnsignedInteger(
+      record.earned_fee_nanos ?? 0,
+      `${context}.earned_fee_nanos`,
+      { allowZero: true },
+    ),
+    refundedFeeNanos: ToriiClient._normalizeUnsignedInteger(
+      record.refunded_fee_nanos ?? 0,
+      `${context}.refunded_fee_nanos`,
+      { allowZero: true },
+    ),
+    leaseIdHex: normalizeHex32String(record.lease_id_hex, `${context}.lease_id_hex`),
+    settleLeaseInstruction: normalizeVpnOptionalTxInstruction(
+      record.settle_lease_instruction,
+      `${context}.settle_lease_instruction`,
+    ),
+    txInstructions: normalizeVpnTxInstructionList(
+      record.tx_instructions,
+      `${context}.tx_instructions`,
     ),
   };
 }
@@ -19578,13 +19930,11 @@ function crc64Ecma(payload) {
 }
 
 function noritoSchemaHash(typeName) {
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of Buffer.from(typeName, "utf8")) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
-  }
-  const part = u64ToLittleEndianBuffer(hash);
-  return Buffer.concat([part, part]);
+  return createHash("sha256")
+    .update(Buffer.from("norito:v1:type-name\0", "utf8"))
+    .update(Buffer.from(typeName, "utf8"))
+    .digest()
+    .subarray(0, 16);
 }
 
 function frameNoritoPayload(typeName, payload, flags = 0) {
@@ -20129,7 +20479,6 @@ function normalizeRamLfeExecuteResponse(
     program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
     opaque_hash: requireNonEmptyString(record.opaque_hash, `${context}.opaque_hash`),
     receipt_hash: requireNonEmptyString(record.receipt_hash, `${context}.receipt_hash`),
-    output_hex: requireHexString(record.output_hex, `${context}.output_hex`),
     output_hash: requireNonEmptyString(record.output_hash, `${context}.output_hash`),
     associated_data_hash: requireNonEmptyString(
       record.associated_data_hash,

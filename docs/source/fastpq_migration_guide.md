@@ -216,7 +216,7 @@ regression is understood.
 ## Hardware Baseline
 | Profile | CPU | GPU | Notes |
 | ------- | --- | --- | ----- |
-| Reference (Stage 6) | AMD EPYC 7B12 (32 cores), 256 GiB RAM | NVIDIA A100 40 GB (CUDA 12.2) | 20 000 row synthetic batches must complete ≤1 000 ms.【docs/source/fastpq_plan.md:131】 |
+| Reference (V1) | AMD EPYC 7B12 (32 cores), 256 GiB RAM | NVIDIA A100 40 GB (CUDA 12.2) | 20 000 row execution-captured V1 batches must complete ≤1 000 ms.【docs/source/fastpq_plan.md:131】 |
 | CPU-only | ≥32 physical cores, AVX2 | – | Expect ~0.9–1.2 s for 20 000 rows; keep `execution_mode = "cpu"` for determinism. |
 
 ## Regression Tests

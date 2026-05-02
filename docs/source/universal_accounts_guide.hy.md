@@ -111,7 +111,7 @@ UAID-ները այժմ հանդիսանում են երկրորդ ինքնութ
 Ներկայիս Torii երթուղիները.| Երթուղի | Նպատակը |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | Ցուցակում է ակտիվ և ոչ ակտիվ RAM-LFE ծրագրային քաղաքականությունները՝ գումարած դրանց հրապարակային կատարման մետատվյալները, ներառյալ կամընտիր BFV `input_encryption` պարամետրերը և ծրագրավորված `ram_fhe_profile`: |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | Ընդունում է `{ input_hex }` կամ `{ encrypted_input }`-ից ուղիղ մեկը և վերադարձնում է քաղաքացիություն չունեցող `RamLfeExecutionReceipt` գումարած `{ output_hex, output_hash, receipt_hash }` ընտրված ծրագրի համար: Ներկայիս Torii-ը թողարկում է անդորրագրեր ծրագրավորված BFV հետին պլանի համար: |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Ընդունում է `{ input_hex }` կամ `{ encrypted_input }`-ից ուղիղ մեկը և վերադարձնում է քաղաքացիություն չունեցող `RamLfeExecutionReceipt` գումարած `{ output_hash, receipt_hash }` ընտրված ծրագրի համար: Torii-ն չի վերադարձնում RAM-LFE-ի պարզ տեքստային ելքը: Ներկայիս Torii-ը թողարկում է անդորրագրեր ծրագրավորված BFV հետին պլանի համար: |
 | `POST /v1/ram-lfe/receipts/verify` | Առանց քաղաքացիության հաստատում է `RamLfeExecutionReceipt`-ը` ընդդեմ հրապարակված ցանցային ծրագրի քաղաքականության և ընտրովի ստուգում է, որ զանգահարողի կողմից մատակարարված `output_hex`-ը համընկնում է `output_hash` անդորրագրի հետ: |
 | `GET /v1/identifier-policies` | Ցուցակում է ակտիվ և ոչ ակտիվ թաքնված գործառույթների քաղաքականության անվանատարածքները՝ գումարած դրանց հանրային մետատվյալները, ներառյալ կամընտիր BFV `input_encryption` պարամետրերը, հաճախորդի կողմից գաղտնագրված մուտքագրման համար անհրաժեշտ `normalization` ռեժիմը և ծրագրավորված BFV քաղաքականության համար `ram_fhe_profile`: |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Ընդունում է հենց `{ input }` կամ `{ encrypted_input }`-ից մեկը: Պարզ տեքստ `input` նորմալացված է սերվերի կողմից; BFV `encrypted_input`-ն արդեն պետք է նորմալացվի՝ համաձայն հրապարակված քաղաքականության ռեժիմի: Այնուհետև վերջնակետը ստանում է `opaque:` բռնիչը և վերադարձնում է ստորագրված անդորրագիր, որը `ClaimIdentifier`-ը կարող է ներկայացնել շղթայում՝ ներառյալ հում `signature_payload_hex` և վերլուծված `signature_payload`: || `POST /v1/identifiers/resolve` | Ընդունում է ճիշտ `{ input }` կամ `{ encrypted_input }`-ից մեկը: Պարզ տեքստ `input` նորմալացված է սերվերի կողմից; BFV `encrypted_input`-ն արդեն պետք է նորմալացվի՝ համաձայն հրապարակված քաղաքականության ռեժիմի: Վերջնական կետը նույնացուցիչը լուծում է `{ opaque_id, receipt_hash, uaid, account_id, signature }`-ում, երբ առկա է ակտիվ պահանջ, ինչպես նաև վերադարձնում է կանոնական ստորագրված օգտակար բեռը որպես `{ signature_payload_hex, signature_payload }`: |
@@ -227,8 +227,9 @@ UAID ստանալու երեք աջակցվող եղանակ կա.
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```Միշտ պահեք բառացի բառը փոքրատառով և նորմալացրեք բացատը նախքան հեշելը:
 CLI օգնականներ, ինչպիսիք են `iroha app space-directory manifest scaffold`-ը և Android-ը
 `UaidLiteral` վերլուծիչը կիրառում է կրճատման նույն կանոնները, որպեսզի կառավարման վերանայումները կարողանան

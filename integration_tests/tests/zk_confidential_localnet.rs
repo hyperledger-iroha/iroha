@@ -41,6 +41,10 @@ const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
 const ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_ERROR_STREAK_FOR_MUTE: usize = 3;
 const MUTED_PEER_COOLDOWN_ATTEMPTS: usize = 5;
+const TORII_READY_TIMEOUT: Duration = Duration::from_secs(45);
+const TORII_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const TRANSACTION_SUBMIT_ATTEMPTS: usize = 12;
+const TRANSACTION_SUBMIT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(45);
 const RESTART_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PRESSURE_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -522,16 +526,17 @@ async fn wait_for_numeric_balance_quorum(
 }
 
 fn is_transient_client_error(err: &Report) -> bool {
-    const NEEDLES: [&str; 6] = [
-        "Failed to send http",
+    const NEEDLES: [&str; 7] = [
+        "failed to send http",
         "error sending request for url",
         "operation timed out",
-        "Connection refused",
+        "connection refused",
         "connection closed",
         "connection reset",
+        "tcp connect error",
     ];
     err.chain().any(|cause| {
-        let text = cause.to_string();
+        let text = cause.to_string().to_lowercase();
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
@@ -552,14 +557,15 @@ fn is_duplicate_tx_error(err: &Report) -> bool {
 }
 
 fn is_transient_localnet_startup_error(err: &Report) -> bool {
-    const NEEDLES: [&str; 4] = [
+    const NEEDLES: [&str; 5] = [
         "terminated within 5s post-genesis window",
         "error sending request for url",
-        "Connection refused",
+        "connection refused",
         "operation timed out",
+        "tcp connect error",
     ];
     err.chain().any(|cause| {
-        let text = cause.to_string();
+        let text = cause.to_string().to_lowercase();
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
@@ -586,19 +592,55 @@ fn submit_transaction_on_any_peer(
     context: &str,
 ) -> Result<()> {
     let mut accepted = false;
-    let mut transient_last_err = None;
     let mut fatal_last_err = None;
+    let mut transient_last_err = None;
 
-    for submitter in submitters {
-        match submitter.submit_transaction(tx) {
-            Ok(_) => accepted = true,
-            Err(err) if is_duplicate_tx_error(&err) => accepted = true,
-            Err(err) if is_transient_client_error(&err) => transient_last_err = Some(err),
-            Err(err) => fatal_last_err = Some(err),
+    for attempt in 0..TRANSACTION_SUBMIT_ATTEMPTS {
+        transient_last_err = None;
+
+        for submitter in submitters {
+            match submitter.submit_transaction(tx) {
+                Ok(_) => accepted = true,
+                Err(err) if is_duplicate_tx_error(&err) => accepted = true,
+                Err(err) if is_transient_client_error(&err) => transient_last_err = Some(err),
+                Err(err) => fatal_last_err = Some(err),
+            }
+        }
+
+        if accepted || fatal_last_err.is_some() {
+            break;
+        }
+
+        if transient_last_err.is_some() && attempt + 1 < TRANSACTION_SUBMIT_ATTEMPTS {
+            std::thread::sleep(TRANSACTION_SUBMIT_RETRY_DELAY);
         }
     }
 
     finish_submit_attempts(accepted, fatal_last_err, transient_last_err, context)
+}
+
+fn accepted_or_expected_rejection(
+    submit_result: Result<()>,
+    expected_rejection: impl Fn(&str) -> bool,
+    assertion_message: &str,
+) -> bool {
+    match submit_result {
+        Ok(()) => true,
+        Err(err) => {
+            assert!(
+                !is_transient_client_error(&err),
+                "{assertion_message}: transaction submission did not reach a live peer: {err:?}"
+            );
+            assert!(
+                err.chain().skip(1).any(|cause| {
+                    let text = cause.to_string().to_lowercase();
+                    expected_rejection(&text)
+                }),
+                "{assertion_message}: {err:?}"
+            );
+            false
+        }
+    }
 }
 
 async fn submit_and_wait_non_empty_block(
@@ -647,6 +689,9 @@ async fn submit_and_wait_non_empty_block(
                 )
             })?;
     }
+
+    let readiness_quorum = submitters.len().saturating_sub(1).max(1);
+    wait_for_torii_ready_quorum(submitters, readiness_quorum, context).await?;
 
     Ok(())
 }
@@ -745,6 +790,53 @@ fn count_non_empty_reached(heights: &[Option<u64>], target: u64) -> usize {
         .count()
 }
 
+async fn wait_for_torii_ready_quorum(
+    clients: &[Client],
+    quorum: usize,
+    context: &str,
+) -> Result<()> {
+    let started_at = tokio::time::Instant::now();
+    let mut last_statuses = Vec::new();
+    let mut last_errors = Vec::new();
+
+    loop {
+        let mut ready = 0_usize;
+        last_statuses.clear();
+        last_errors.clear();
+
+        for client in clients {
+            match client.get_status() {
+                Ok(status) if status.blocks_non_empty >= 1 => {
+                    ready = ready.saturating_add(1);
+                    last_statuses.push(format!(
+                        "ready:{}:{}",
+                        status.blocks, status.blocks_non_empty
+                    ));
+                }
+                Ok(status) => {
+                    last_statuses.push(format!(
+                        "not_ready:{}:{}",
+                        status.blocks, status.blocks_non_empty
+                    ));
+                }
+                Err(err) => last_errors.push(err.to_string()),
+            }
+        }
+
+        if ready >= quorum {
+            return Ok(());
+        }
+
+        if started_at.elapsed() >= TORII_READY_TIMEOUT {
+            return Err(eyre!(
+                "{context}: expected Torii readiness on quorum {quorum}, got {ready}; statuses {last_statuses:?}; errors {last_errors:?}"
+            ));
+        }
+
+        tokio::time::sleep(TORII_READY_POLL_INTERVAL).await;
+    }
+}
+
 struct ConfidentialLocalnetCtx {
     network: sandbox::SerializedNetwork,
     tx_builder_client: Client,
@@ -792,6 +884,12 @@ async fn start_confidential_localnet(test_name: &str) -> Result<Option<Confident
         if peer_clients.is_empty() {
             peer_clients.push(tx_builder_client.clone());
         }
+        wait_for_torii_ready_quorum(
+            &peer_clients,
+            peer_clients.len(),
+            "confidential localnet startup",
+        )
+        .await?;
 
         return Ok(Some(ConfidentialLocalnetCtx {
             network,
@@ -1952,34 +2050,34 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
         &denied_tx,
         "corrupted-proof-bytes unshield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("proof")
-                    || text.contains("verify")
-                    || text.contains("invalid")
-                    || text.contains("envelope")
-            }),
-            "expected corrupted-proof rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| {
+            text.contains("proof")
+                || text.contains("verify")
+                || text.contains("invalid")
+                || text.contains("envelope")
+        },
+        "expected corrupted-proof rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post corrupted-proof-bytes rejected unshield barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post corrupted-proof-bytes barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post corrupted-proof-bytes rejected unshield barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post corrupted-proof-bytes barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance(
         &tx_builder_client,
@@ -2079,34 +2177,34 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
         &denied_tx,
         "corrupted-vk-bytes unshield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("vk")
-                    || text.contains("key")
-                    || text.contains("verify")
-                    || text.contains("invalid")
-            }),
-            "expected corrupted-vk rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| {
+            text.contains("vk")
+                || text.contains("key")
+                || text.contains("verify")
+                || text.contains("invalid")
+        },
+        "expected corrupted-vk rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post corrupted-vk-bytes rejected unshield barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post corrupted-vk-bytes barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post corrupted-vk-bytes rejected unshield barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post corrupted-vk-bytes barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance(
         &tx_builder_client,
@@ -2206,34 +2304,34 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
         &denied_tx,
         "wrong-statement unshield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("root")
-                    || text.contains("statement")
-                    || text.contains("stale")
-                    || text.contains("invalid")
-            }),
-            "expected wrong-statement rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| {
+            text.contains("root")
+                || text.contains("statement")
+                || text.contains("stale")
+                || text.contains("invalid")
+        },
+        "expected wrong-statement rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post wrong-statement rejected unshield barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post wrong-statement barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post wrong-statement rejected unshield barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post wrong-statement barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance(
         &tx_builder_client,
@@ -2476,33 +2574,33 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
         &denied_transfer_tx,
         "zknative transparent transfer unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("transparent transfer")
-                    || text.contains("shielded")
-                    || text.contains("not permitted")
-            }),
-            "expected transparent transfer rejection for zknative mode, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| {
+            text.contains("transparent transfer")
+                || text.contains("shielded")
+                || text.contains("not permitted")
+        },
+        "expected transparent transfer rejection for zknative mode, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post denied zknative transparent transfer barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post denied zknative transparent transfer barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post denied zknative transparent transfer barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post denied zknative transparent transfer barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance_quorum(
         &peer_clients,
@@ -2621,25 +2719,23 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
         &denied_unshield_tx,
         "disabled unshield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("unshield") || text.contains("disabled") || text.contains("forbidden")
-            }),
-            "expected unshield-disabled rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| text.contains("unshield") || text.contains("disabled") || text.contains("forbidden"),
+        "expected unshield-disabled rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![Log::new(Level::INFO, "post denied unshield barrier".to_owned()).into()],
-        &mut non_empty_target,
-        "post denied unshield barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![Log::new(Level::INFO, "post denied unshield barrier".to_owned()).into()],
+            &mut non_empty_target,
+            "post denied unshield barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance_quorum(
         &peer_clients,
@@ -2725,25 +2821,23 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
         &denied_shield_tx,
         "disabled shield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("shield") || text.contains("disabled") || text.contains("forbidden")
-            }),
-            "expected shield-disabled rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| text.contains("shield") || text.contains("disabled") || text.contains("forbidden"),
+        "expected shield-disabled rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![Log::new(Level::INFO, "post denied shield barrier".to_owned()).into()],
-        &mut non_empty_target,
-        "post denied shield barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![Log::new(Level::INFO, "post denied shield barrier".to_owned()).into()],
+            &mut non_empty_target,
+            "post denied shield barrier failed",
+        )
+        .await?;
+    }
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
     assert_eq!(after_balance, Numeric::from(300_u32));
@@ -2815,31 +2909,29 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
         &denied_shield_tx,
         "shield without zk registration unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("shield") || text.contains("policy") || text.contains("permitted")
-            }),
-            "expected policy rejection for non-zk shield, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| text.contains("shield") || text.contains("policy") || text.contains("permitted"),
+        "expected policy rejection for non-zk shield, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post denied shield without registration barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post denied shield without registration barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post denied shield without registration barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post denied shield without registration barrier failed",
+        )
+        .await?;
+    }
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
     assert_eq!(after_balance, Numeric::from(300_u32));
@@ -2943,25 +3035,23 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
         &stale_root_unshield_tx,
         "stale-root unshield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("root") || text.contains("stale") || text.contains("unknown")
-            }),
-            "expected stale-root rejection signal, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| text.contains("root") || text.contains("stale") || text.contains("unknown"),
+        "expected stale-root rejection signal, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![Log::new(Level::INFO, "post stale-root unshield barrier".to_owned()).into()],
-        &mut non_empty_target,
-        "post stale-root unshield barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![Log::new(Level::INFO, "post stale-root unshield barrier".to_owned()).into()],
+            &mut non_empty_target,
+            "post stale-root unshield barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance(
         &tx_builder_client,
@@ -3039,31 +3129,29 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
         &denied_unshield_tx,
         "unshield without zk registration unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("unshield") || text.contains("policy") || text.contains("permitted")
-            }),
-            "expected policy rejection for non-zk unshield, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| text.contains("unshield") || text.contains("policy") || text.contains("permitted"),
+        "expected policy rejection for non-zk unshield, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post denied unshield without registration barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post denied unshield without registration barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post denied unshield without registration barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post denied unshield without registration barrier failed",
+        )
+        .await?;
+    }
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
     assert_eq!(after_balance, Numeric::from(300_u32));
@@ -3187,31 +3275,29 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
         &duplicate_unshield_tx,
         "duplicate-nullifier unshield unexpectedly accepted",
     );
-    if let Err(err) = submit_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("duplicate") || text.contains("nullifier")
-            }),
-            "expected duplicate-nullifier rejection signal, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        submit_result,
+        |text| text.contains("duplicate") || text.contains("nullifier"),
+        "expected duplicate-nullifier rejection signal, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post duplicate-nullifier unshield barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post duplicate-nullifier unshield barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post duplicate-nullifier unshield barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post duplicate-nullifier unshield barrier failed",
+        )
+        .await?;
+    }
 
     wait_for_numeric_balance(
         &tx_builder_client,
@@ -3296,31 +3382,29 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
         &denied_shield_tx,
         "transparent-only shield unexpectedly accepted",
     );
-    if let Err(err) = shield_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("policy") || text.contains("permitted")
-            }),
-            "expected transparent-only shield policy rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        shield_result,
+        |text| text.contains("policy") || text.contains("permitted"),
+        "expected transparent-only shield policy rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post transparent-only denied shield barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post transparent-only denied shield barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post transparent-only denied shield barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post transparent-only denied shield barrier failed",
+        )
+        .await?;
+    }
 
     let after_denied_shield = numeric_balance_any(
         &peer_clients,
@@ -3346,31 +3430,29 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
         &denied_unshield_tx,
         "transparent-only unshield unexpectedly accepted",
     );
-    if let Err(err) = unshield_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("policy") || text.contains("permitted")
-            }),
-            "expected transparent-only unshield policy rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        unshield_result,
+        |text| text.contains("policy") || text.contains("permitted"),
+        "expected transparent-only unshield policy rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post transparent-only denied unshield barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post transparent-only denied unshield barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post transparent-only denied unshield barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post transparent-only denied unshield barrier failed",
+        )
+        .await?;
+    }
 
     let after_denied_unshield =
         numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
@@ -3452,31 +3534,29 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
         &denied_transfer_tx,
         "transparent-only transfer unexpectedly accepted",
     );
-    if let Err(err) = transfer_result {
-        assert!(
-            err.chain().any(|cause| {
-                let text = cause.to_string().to_lowercase();
-                text.contains("transfer") || text.contains("policy") || text.contains("permitted")
-            }),
-            "expected transparent-only transfer policy rejection, got: {err:?}"
-        );
-    }
+    let denied_was_accepted = accepted_or_expected_rejection(
+        transfer_result,
+        |text| text.contains("transfer") || text.contains("policy") || text.contains("permitted"),
+        "expected transparent-only transfer policy rejection, got",
+    );
 
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &peer_clients,
-        vec![
-            Log::new(
-                Level::INFO,
-                "post transparent-only denied transfer barrier".to_owned(),
-            )
-            .into(),
-        ],
-        &mut non_empty_target,
-        "post transparent-only denied transfer barrier failed",
-    )
-    .await?;
+    if denied_was_accepted {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &peer_clients,
+            vec![
+                Log::new(
+                    Level::INFO,
+                    "post transparent-only denied transfer barrier".to_owned(),
+                )
+                .into(),
+            ],
+            &mut non_empty_target,
+            "post transparent-only denied transfer barrier failed",
+        )
+        .await?;
+    }
 
     let after_denied_transfer =
         numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
@@ -3492,6 +3572,7 @@ fn transient_client_error_detector_matches_expected_messages() {
         "error sending request for url",
         "operation timed out",
         "Connection refused",
+        "tcp connect error",
         "connection closed by peer",
         "connection reset by peer",
     ] {
@@ -3560,8 +3641,14 @@ fn finish_submit_attempts_prefers_fatal_error_when_no_peer_accepts() {
     assert!(err.to_string().contains("submit flow"));
     assert!(
         err.chain()
-            .any(|cause| cause.to_string().contains("fatal peer error"))
+        .any(|cause| cause.to_string().contains("fatal peer error"))
     );
+}
+
+#[test]
+fn submit_retry_budget_covers_localnet_startup_jitter() {
+    assert!(TRANSACTION_SUBMIT_ATTEMPTS >= 12);
+    assert!(TRANSACTION_SUBMIT_RETRY_DELAY >= Duration::from_millis(500));
 }
 
 #[test]
@@ -3570,6 +3657,7 @@ fn transient_localnet_startup_error_detector_matches_expected_messages() {
         "terminated within 5s post-genesis window",
         "error sending request for url",
         "Connection refused",
+        "tcp connect error",
         "operation timed out",
     ] {
         assert!(is_transient_localnet_startup_error(&eyre!(message)));

@@ -179,6 +179,69 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
   assert.equal(entry?.signed, false);
 });
 
+test('syncOpenApi does not advertise stale manifest signatures when unsigned sync is allowed', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-stale-manifest-'));
+  const outputDir = join(tempRoot, 'static', 'openapi');
+  const versionsDir = join(outputDir, 'versions');
+  const versionDir = join(versionsDir, '2025-q4');
+  await mkdir(versionDir, {recursive: true});
+
+  const staleSpec = JSON.stringify({generated: 'old'}, null, 2);
+  const freshSpec = JSON.stringify({generated: 'new'}, null, 2);
+  const staleSha = createHash('sha256').update(Buffer.from(staleSpec, 'utf8')).digest('hex');
+  await writeFile(
+    join(versionDir, 'manifest.json'),
+    JSON.stringify(
+      {
+        version: 1,
+        generated_unix_ms: 123,
+        generator_commit: 'abc',
+        artifact: {
+          path: 'versions/2025-q4/torii.json',
+          bytes: Buffer.byteLength(staleSpec),
+          sha256_hex: staleSha,
+          blake3_hex: 'deadbeef',
+          signature: {
+            algorithm: 'ed25519',
+            public_key_hex: '00',
+            signature_hex: '11',
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  await syncOpenApi(
+    {
+      version: '2025-q4',
+      latest: false,
+      mirrors: [],
+      requireSigned: false,
+    },
+    {
+      repoRoot: tempRoot,
+      outputDir,
+      versionsDir,
+      async generateSpec(_, outputFile) {
+        await mkdir(dirname(outputFile), {recursive: true});
+        await writeFile(outputFile, freshSpec, 'utf8');
+      },
+    },
+  );
+
+  const versionsManifest = JSON.parse(await readFile(join(outputDir, 'versions.json'), 'utf8'));
+  const entry = versionsManifest.entries.find((candidate) => candidate.label === '2025-q4');
+  assert.equal(entry?.signed, false);
+  assert.equal(entry?.manifestPath, null);
+  assert.equal(entry?.signatureAlgorithm, null);
+  assert.equal(entry?.signaturePublicKeyHex, null);
+  assert.equal(entry?.signatureHex, null);
+  assert.equal(entry?.blake3, null);
+});
+
 async function pathExists(path) {
   try {
     await access(path);

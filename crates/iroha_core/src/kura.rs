@@ -858,8 +858,9 @@ impl Kura {
 
     /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///
-    /// Local sidecar payloads count toward the same budget as canonical block files.
-    /// Use [`Self::refresh_disk_usage_bytes`] to resync the cached value.
+    /// Local sidecar payloads are tracked in the total usage counter, while the enforced
+    /// Kura budget follows canonical block-store bytes. Use [`Self::refresh_disk_usage_bytes`]
+    /// to resync the cached value.
     pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
         self.maybe_refresh_total_disk_usage_bytes()?;
         Ok(self.disk_usage_total.load(Ordering::Relaxed))
@@ -915,6 +916,17 @@ impl Kura {
             self.add_disk_usage_bytes(after - before);
         } else {
             self.sub_disk_usage_bytes(before - after);
+        }
+    }
+
+    fn update_total_disk_usage_delta(&self, before: u64, after: u64) {
+        if before == after {
+            return;
+        }
+        if after > before {
+            self.add_total_disk_usage_bytes(after - before);
+        } else {
+            self.sub_total_disk_usage_bytes(before - after);
         }
     }
 
@@ -1043,6 +1055,9 @@ impl Kura {
         }
 
         let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
+        let mut da_added = 0u64;
+
+        block_store.ensure_da_blocks_dir()?;
         let mut buffer = Vec::new();
         for idx in 1..evict_limit {
             if !evict_mask[idx] {
@@ -1054,15 +1069,28 @@ impl Kura {
             }
             let height = idx.saturating_add(1) as u64;
             let path = block_store.da_block_path(height);
-            match std::fs::remove_file(&path) {
-                Ok(()) => {
-                    if let Some(parent) = path.parent() {
-                        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-                    }
-                }
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => return Err(Error::IO(err, path)),
+            let da_before = Self::file_len_or_zero(&path)?;
+            if da_before == entry.length {
+                continue;
             }
+            let length: usize = entry.length.try_into()?;
+            buffer.resize(length, 0);
+            block_store.read_block_data(entry.start, &mut buffer)?;
+            let tmp_path = path.with_extension("norito.tmp");
+            let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+                opts.write(true).create(true).truncate(true);
+            })?;
+            tmp_file.try_io(|file| {
+                file.write_all(&buffer)?;
+                file.flush()?;
+                file.sync_data()
+            })?;
+            std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+            if let Some(parent) = path.parent() {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            let da_after = Self::file_len_or_zero(&path)?;
+            da_added = da_added.saturating_add(da_after.saturating_sub(da_before));
         }
 
         let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
@@ -1125,6 +1153,7 @@ impl Kura {
         block_store.drop_cached_handles();
         let after_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
+        self.add_total_disk_usage_bytes(da_added);
 
         if freed > 0 {
             if let Some(telemetry) = self.telemetry.get() {
@@ -2037,11 +2066,12 @@ impl Kura {
                 data_len: index.length,
             });
         }
-        let before = Self::block_store_tracked_bytes(&mut store)?;
+        let path = store.da_block_path(height);
+        let before = Self::file_len_or_zero(&path)?;
         store.write_da_block_bytes(height, &frame)?;
-        let after = Self::block_store_tracked_bytes(&mut store)?;
+        let after = Self::file_len_or_zero(&path)?;
         drop(store);
-        self.update_disk_usage_delta(before, after);
+        self.update_total_disk_usage_delta(before, after);
         Ok(())
     }
 
@@ -2238,6 +2268,17 @@ impl Kura {
                 None
             }
         };
+        let da_before = if self.disk_usage_total_initialized.load(Ordering::Relaxed) {
+            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    warn!(?err, "failed to measure DA payload bytes before append");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         block_store.append_block_batch_at(
             start_height,
             std::slice::from_ref(block),
@@ -2249,6 +2290,12 @@ impl Kura {
             match Self::block_store_tracked_bytes(&mut block_store) {
                 Ok(after_bytes) => self.update_disk_usage_delta(block_store_before, after_bytes),
                 Err(err) => warn!(?err, "failed to measure block store bytes after append"),
+            }
+        }
+        if let Some(da_before) = da_before {
+            match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
+                Ok(da_after) => self.update_total_disk_usage_delta(da_before, da_after),
+                Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
             }
         }
         Ok(())
@@ -2423,7 +2470,6 @@ impl Kura {
                 .path_to_blockchain
                 .join(format!("{HASHES_FILE_NAME}.tmp")),
         )?;
-        let da_len = Self::dir_file_bytes(&block_store.da_blocks_dir)?;
         Ok(data_len
             .saturating_add(index_len)
             .saturating_add(hashes_len)
@@ -2431,8 +2477,24 @@ impl Kura {
             .saturating_add(marker_tmp_len)
             .saturating_add(data_tmp_len)
             .saturating_add(index_tmp_len)
-            .saturating_add(hashes_tmp_len)
-            .saturating_add(da_len))
+            .saturating_add(hashes_tmp_len))
+    }
+
+    fn da_payload_bytes_for_range(
+        block_store: &BlockStore,
+        start_height: u64,
+        count: usize,
+    ) -> Result<u64> {
+        if block_store.da_blocks_dir.as_os_str().is_empty() || count == 0 {
+            return Ok(0);
+        }
+        let mut total = 0u64;
+        for offset in 0..count {
+            let height = start_height.saturating_add(offset as u64).saturating_add(1);
+            let path = block_store.da_block_path(height);
+            total = total.saturating_add(Self::file_len_or_zero(&path)?);
+        }
+        Ok(total)
     }
 
     fn merge_log_tracked_bytes(&self) -> Result<u64> {
@@ -2659,9 +2721,9 @@ impl Kura {
         let retired_merge_root = retired_root.join("merge_ledger");
 
         let mut used = 0u64;
-        used = used.saturating_add(Self::blocks_root_total_bytes(&blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_bytes(&blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
-        used = used.saturating_add(Self::blocks_root_total_bytes(&retired_blocks_root)?);
+        used = used.saturating_add(Self::blocks_root_bytes(&retired_blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
         used = used.saturating_add(Self::file_len_or_zero(&roster_journal)?);
@@ -6200,7 +6262,7 @@ impl BlockStore {
         &mut self,
         start_height: u64,
         blocks: &[Arc<SignedBlock>],
-        _max_disk_usage_bytes: u64,
+        max_disk_usage_bytes: u64,
     ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
@@ -6242,7 +6304,6 @@ impl BlockStore {
         let mut lengths = Vec::with_capacity(blocks.len());
         let mut offsets = Vec::with_capacity(blocks.len());
         let mut hashes = Vec::with_capacity(blocks.len());
-        let mut evicted = Vec::with_capacity(blocks.len());
 
         for (idx, block) in blocks.iter().enumerate() {
             debug!(
@@ -6253,20 +6314,14 @@ impl BlockStore {
             let wire = block.canonical_wire()?;
             let (frame, versioned) = wire.into_parts();
             let frame_len = u64::try_from(frame.len())?;
-            let _required = frame_len
-                .saturating_add(BlockIndex::SIZE)
-                .saturating_add(SIZE_OF_BLOCK_HASH);
-            let evict = false;
             frames.push(frame);
             lengths.push(frame_len);
             hashes.push(block.hash());
-            evicted.push(evict);
             self.encode_scratch = versioned;
             debug!(
                 start_height,
                 block_idx = idx,
                 frame_len,
-                evict,
                 "append_block_batch encoded block"
             );
         }
@@ -6277,9 +6332,26 @@ impl BlockStore {
             "append_block_batch prepared frames"
         );
         let mut cursor = start_location_in_data_file;
-        for (len, evict) in lengths.iter().zip(evicted.iter()) {
-            if *evict {
+        let mut evicted = Vec::with_capacity(blocks.len());
+        for (idx, len) in lengths.iter().enumerate() {
+            let block_count_after = start_height
+                .saturating_add(u64::try_from(idx)?)
+                .saturating_add(1);
+            let metadata_bytes =
+                block_count_after.saturating_mul(BlockIndex::SIZE + SIZE_OF_BLOCK_HASH);
+            let projected_inline_bytes = cursor.saturating_add(*len).saturating_add(metadata_bytes);
+            let evict = max_disk_usage_bytes > 0 && projected_inline_bytes > max_disk_usage_bytes;
+            evicted.push(evict);
+            if evict {
                 offsets.push(EVICTED_BLOCK_START);
+                debug!(
+                    start_height,
+                    block_idx = idx,
+                    frame_len = *len,
+                    projected_inline_bytes,
+                    max_disk_usage_bytes,
+                    "append_block_batch sidecarring block body"
+                );
                 continue;
             }
             offsets.push(cursor);
@@ -8063,12 +8135,12 @@ mod tests {
         };
         assert!(index.is_evicted());
         assert!(
-            !da_path.exists(),
-            "budget eviction should not create a local sidecar cache"
+            da_path.exists(),
+            "budget eviction should create a DA sidecar"
         );
         assert!(
-            kura.get_block(nonzero!(2_usize)).is_none(),
-            "evicted remote-only body should not be locally readable"
+            kura.get_block(nonzero!(2_usize)).is_some(),
+            "DA-sidecar-backed body should remain locally readable"
         );
     }
 
@@ -8814,6 +8886,60 @@ mod tests {
     }
 
     #[test]
+    fn append_block_batch_sidecars_block_when_inline_budget_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut block_store = BlockStore::new(dir.path());
+        block_store.create_files_if_they_do_not_exist().unwrap();
+
+        let leader = KeyPair::random();
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+
+        let (block1_len, _) = block1.canonical_wire().expect("block1 wire").into_parts();
+        let (block2_frame, _) = block2.canonical_wire().expect("block2 wire").into_parts();
+        let block1_len = u64::try_from(block1_len.len()).expect("block1 length");
+        let block2_len = u64::try_from(block2_frame.len()).expect("block2 length");
+
+        block_store
+            .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
+            .expect("append first block");
+        let inline_budget = block1_len.saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
+
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&block2), inline_budget)
+            .expect("append sidecar block");
+
+        assert_eq!(block_store.read_index_count().unwrap(), 2);
+        assert_eq!(block_store.read_hashes_count().unwrap(), 2);
+        assert_eq!(
+            block_store.data_file_len().expect("data length"),
+            block1_len,
+            "sidecar append must not grow blocks.data"
+        );
+
+        let block2_index = block_store.read_block_index(1).expect("block2 index");
+        assert!(block2_index.is_evicted());
+        assert_eq!(block2_index.length, block2_len);
+
+        let sidecar_path = block_store.da_block_path(2);
+        assert!(sidecar_path.exists(), "sidecar body should be written");
+        let sidecar = block_store
+            .read_da_block_bytes(2, block2_len)
+            .expect("read sidecar body");
+        let decoded = decode_framed_signed_block(&sidecar).expect("decode sidecar block");
+        assert_eq!(decoded.hash(), block2.hash());
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![block2.hash()]
+        );
+    }
+
+    #[test]
     fn append_block_batch_at_rewrites_tail() {
         let dir = tempfile::tempdir().unwrap();
         let mut block_store = BlockStore::new(dir.path());
@@ -9412,6 +9538,12 @@ mod tests {
             .evict_block_bodies(payload_len)
             .expect("evict block body");
         assert!(freed >= payload_len);
+        {
+            let store = kura.block_store.lock();
+            store
+                .remove_da_block_file(height.get() as u64)
+                .expect("remove sidecar to exercise remote-only status");
+        }
         kura.replica_registry.lock().clear();
         assert_eq!(
             kura.block_body_status_by_hash(block_hash),
@@ -9625,24 +9757,17 @@ mod tests {
         };
         assert!(evicted_index.is_evicted());
         assert!(
-            !da_path.exists(),
-            "eviction should not create a local sidecar without rehydration"
+            da_path.exists(),
+            "eviction should create a local DA sidecar"
         );
 
         assert_eq!(
             kura.block_body_status_by_hash(block_hash),
-            Some(BlockBodyStatus::RemoteOnly {
-                replicas: EVICTION_REQUIRED_REPLICAS.get()
-            })
-        );
-        assert!(
-            kura.get_block(height).is_none(),
-            "remote-only bodies are not available until fetched and cached"
+            Some(BlockBodyStatus::LocalSidecar)
         );
 
         kura.cache_block_body(block.as_ref())
-            .expect("cache rehydrated block");
-        assert!(da_path.exists(), "expected local cache after rehydration");
+            .expect("recache sidecar block");
         let rehydrated = kura.get_block(height).expect("rehydrated block");
         assert_eq!(rehydrated.hash(), block_hash);
     }
@@ -9668,14 +9793,12 @@ mod tests {
         assert!(freed >= payload_len);
         assert_eq!(
             kura.block_body_status_by_hash(block_hash),
-            Some(BlockBodyStatus::RemoteOnly {
-                replicas: EVICTION_REQUIRED_REPLICAS.get()
-            })
+            Some(BlockBodyStatus::LocalSidecar)
         );
         assert_eq!(
             kura.durable_block_payload_len_by_hash(block_hash),
             Some((height.get() as u64, payload_len)),
-            "durable metadata must still expose payload length for remote-only bodies"
+            "durable metadata must still expose payload length for sidecar bodies"
         );
 
         kura.cache_block_body(block.as_ref())
@@ -9754,6 +9877,9 @@ mod tests {
         assert!(freed >= payload_len);
         {
             let mut store = kura.block_store.lock();
+            store
+                .remove_da_block_file(height.get() as u64)
+                .expect("remove sidecar to isolate missing hash metadata");
             store
                 .truncate_hashes_to_count(1)
                 .expect("remove hash metadata for evicted body");
@@ -9949,12 +10075,12 @@ mod tests {
             store.da_block_path(2)
         };
         assert!(
-            !da_path.exists(),
-            "rejected remote body must not be cached locally"
+            da_path.exists(),
+            "rejecting a conflicting body must not remove the existing DA sidecar"
         );
         assert!(
-            kura.get_block(height).is_none(),
-            "wrong remote body must not make the evicted block readable"
+            kura.get_block(height).is_some(),
+            "the canonical sidecar should remain readable after rejecting the wrong body"
         );
     }
 
@@ -10029,8 +10155,8 @@ mod tests {
             store.da_block_path(2)
         };
         assert!(
-            !da_path.exists(),
-            "length-mismatched body must not be cached locally"
+            da_path.exists(),
+            "length-mismatched recache must not remove the existing DA sidecar"
         );
     }
 
@@ -10052,6 +10178,12 @@ mod tests {
             };
             kura.evict_block_bodies(evict_len)
                 .expect("evict block bodies");
+            {
+                let store = kura.block_store.lock();
+                store
+                    .remove_da_block_file(height.get() as u64)
+                    .expect("remove sidecar to exercise remote-only restart");
+            }
             assert!(
                 kura.get_block(height).is_none(),
                 "evicted remote body should not be readable before rehydrate"
@@ -10103,6 +10235,12 @@ mod tests {
             };
             kura.evict_block_bodies(evict_len)
                 .expect("evict block bodies");
+            {
+                let store = kura.block_store.lock();
+                store
+                    .remove_da_block_file(height.get() as u64)
+                    .expect("remove sidecar to preserve remote-only fixture");
+            }
             block_hash
         };
 
@@ -10137,6 +10275,12 @@ mod tests {
             };
             kura.evict_block_bodies(evict_len)
                 .expect("evict block bodies");
+            {
+                let store = kura.block_store.lock();
+                store
+                    .remove_da_block_file(height.get() as u64)
+                    .expect("remove sidecar to preserve remote-only fixture");
+            }
             assert_eq!(kura.get_durable_block_hash(height), Some(block_hash));
             block_hash
         };
@@ -10376,13 +10520,10 @@ mod tests {
             store.da_block_path(2)
         };
 
+        assert!(da_path.exists(), "eviction should create a DA sidecar");
         assert!(
-            !da_path.exists(),
-            "local sidecar cache should be absent immediately after eviction"
-        );
-        assert!(
-            !kura.block_payload_available_by_hash(block_hash),
-            "remote-only payloads are not locally available"
+            kura.block_payload_available_by_hash(block_hash),
+            "DA-sidecar-backed payloads are locally available"
         );
 
         kura.cache_block_body(block.as_ref())

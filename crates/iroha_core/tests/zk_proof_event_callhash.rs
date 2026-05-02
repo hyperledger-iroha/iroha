@@ -39,11 +39,14 @@ fn proof_event_includes_call_hash() {
         }
     };
 
-    // Build a tx with a VerifyProof instruction that deterministically rejects
-    let pr = iroha_data_model::proof::ProofBox::new("debug/reject".into(), vec![1, 2, 3]);
-    let vk = iroha_data_model::proof::VerifyingKeyBox::new("debug/reject".into(), vec![]);
-    let attach =
-        iroha_data_model::proof::ProofAttachment::new_inline("debug/reject".into(), pr.clone(), vk);
+    // Build a tx with a VerifyProof instruction for an unsupported real backend.
+    let pr = iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![1, 2, 3]);
+    let vk = iroha_data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![]);
+    let attach = iroha_data_model::proof::ProofAttachment::new_inline(
+        "groth16/bn254".into(),
+        pr.clone(),
+        vk,
+    );
     let verify = iroha_data_model::isi::zk::VerifyProof::new(attach);
     let tx = TransactionBuilder::new(ChainId::from("chain"), authority_id.clone())
         .with_instructions([InstructionBox::from(verify)])

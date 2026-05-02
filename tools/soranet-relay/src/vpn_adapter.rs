@@ -144,6 +144,9 @@ impl VpnAdapter {
         reader: &mut R,
     ) -> Result<VpnCellV1, VpnFrameIoError> {
         let cell = read_padded_frame(&self.overlay, reader).await?;
+        self.session
+            .record_ingress_sequence(cell.header.sequence)
+            .map_err(VpnFrameIoError::Parse)?;
         self.session.record_parsed_ingress(&cell);
         Ok(cell)
     }

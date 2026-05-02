@@ -62,7 +62,7 @@ pub struct MemoryAccesses {
 /// Syscall usage summary sorted by syscall number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyscallUsage {
-    pub number: u8,
+    pub number: u32,
     pub count: u64,
 }
 
@@ -219,7 +219,7 @@ struct ProgramAnalysisBuilder {
     registers: RegisterUsage,
     memory: MemoryAccesses,
     instruction_count: usize,
-    syscall_table: BTreeMap<u8, u64>,
+    syscall_table: BTreeMap<u32, u64>,
 }
 
 impl ProgramAnalysisBuilder {
@@ -363,16 +363,17 @@ impl ProgramAnalysisBuilder {
                 self.write(rd);
             }
             wide::system::SCALL => {
-                let number = wide::imm8(op.inst) as u8;
+                let number = u32::from(wide::imm8(op.inst).to_ne_bytes()[0]);
                 *self.syscall_table.entry(number).or_default() += 1;
             }
-            wide::system::SYSTEM => {}
+            wide::system::SYSTEM => {
+                let number = crate::encoding::wide::decode_syscallx(op.inst);
+                *self.syscall_table.entry(number).or_default() += 1;
+            }
             // Vector configuration.
             wide::crypto::SETVL => {
-                let reg = u8::try_from(wide::rs2(op.inst)).expect("register index fits in u8");
-                if reg != 0 {
-                    self.read(reg);
-                }
+                // SETVL carries its lane count in the rs2/immediate field; it
+                // does not consume a vector or scalar register operand.
             }
             wide::crypto::PARBEGIN | wide::crypto::PAREND => {}
             // All remaining opcodes (crypto, ISO20022, ZK, vector ALU, etc.)
@@ -475,10 +476,40 @@ mod tests {
     }
 
     #[test]
+    fn analysis_reports_extended_syscall_numbers() {
+        let syscall = crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
+        let words = [wide_enc::encode_syscallx(syscall), wide_enc::encode_halt()];
+        let program = build_program(&words);
+        let report = analyze_program(&program).expect("analysis succeeds");
+        assert_eq!(
+            report.syscalls,
+            vec![SyscallUsage {
+                number: syscall,
+                count: 1
+            }]
+        );
+    }
+
+    #[test]
     fn analysis_rejects_truncated_program() {
         let bytes = vec![0u8; 4];
         let err = analyze_program(&bytes).expect_err("metadata parse should fail");
         assert!(matches!(err, ProgramAnalysisError::Metadata(_)));
+    }
+
+    #[test]
+    fn analysis_treats_setvl_operand_as_immediate() {
+        let words = [
+            wide_enc::encode_rr(wide::crypto::SETVL, 0, 0, 8),
+            wide_enc::encode_halt(),
+        ];
+        let program = build_program(&words);
+        let report = analyze_program(&program).expect("analysis succeeds");
+        assert_eq!(report.instruction_count, words.len());
+        assert_eq!(
+            report.registers.reads[8], 0,
+            "SETVL immediate must not be reported as a register read"
+        );
     }
 
     #[test]

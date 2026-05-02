@@ -111,7 +111,7 @@ UAIDs הם כעת העוגן לשכבת זהות שנייה:- `IdentifierPolicyI
 מסלולי Torii נוכחיים:| מסלול | מטרה |
 |-------|--------|
 | `GET /v1/ram-lfe/program-policies` | מפרט מדיניות תוכנית RAM-LFE פעילה ולא פעילה בתוספת מטא-נתוני הביצוע הציבוריים שלהן, כולל פרמטרים אופציונליים של BFV `input_encryption` וה-backend המתוכנת `ram_fhe_profile`. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | מקבל בדיוק אחד מ-`{ input_hex }` או `{ encrypted_input }` ומחזיר את `RamLfeExecutionReceipt` חסר המדינה בתוספת `{ output_hex, output_hash, receipt_hash }` עבור התוכנית הנבחרת. זמן הריצה הנוכחי של Torii מנפיק קבלות עבור ה-BFV האחורי המתוכנת. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | מקבל בדיוק אחד מ-`{ input_hex }` או `{ encrypted_input }` ומחזיר את `RamLfeExecutionReceipt` חסר המדינה בתוספת `{ output_hash, receipt_hash }` עבור התוכנית הנבחרת. Torii אינו מחזיר את פלט ה-RAM-LFE בטקסט גלוי. זמן הריצה הנוכחי של Torii מנפיק קבלות עבור ה-BFV האחורי המתוכנת. |
 | `POST /v1/ram-lfe/receipts/verify` | מאמת ללא מדינה `RamLfeExecutionReceipt` כנגד מדיניות התוכנית ברשת המפורסמת ובודק באופן אופציונלי ש-`output_hex` שסופק על ידי המתקשר תואם את הקבלה `output_hash`. |
 | `GET /v1/identifier-policies` | מפרט מרחבי שמות פעילים ולא פעילים של פונקציות נסתרות בתוספת המטא-נתונים הציבוריים שלהם, כולל פרמטרים אופציונליים של BFV `input_encryption`, מצב `normalization` הנדרש עבור קלט מוצפן בצד הלקוח ו-`ram_fhe_profile` עבור מדיניות BFV מתוכנתת. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | מקבל בדיוק אחד מ-`{ input }` או `{ encrypted_input }`. טקסט פשוט `input` הוא מנורמל בצד השרת; BFV `encrypted_input` כבר חייב להיות מנורמל בהתאם למצב המדיניות שפורסם. לאחר מכן, נקודת הקצה גוזרת את הידית `opaque:` ומחזירה קבלה חתומה ש-`ClaimIdentifier` יכולה להגיש על השרשרת, כולל גם את ה-`signature_payload_hex` הגולמי וגם את ה-`signature_payload` המנתח. || `POST /v1/identifiers/resolve` | מקבל בדיוק אחד מ-`{ input }` או `{ encrypted_input }`. טקסט רגיל `input` מנורמל בצד השרת; BFV `encrypted_input` כבר חייב להיות מנורמל בהתאם למצב המדיניות שפורסם. נקודת הקצה פותרת את המזהה ל-`{ opaque_id, receipt_hash, uaid, account_id, signature }` כאשר קיימת תביעה פעילה, וגם מחזירה את המטען החתום הקנוני כ-`{ signature_payload_hex, signature_payload }`. |
@@ -227,8 +227,9 @@ UAIDs הם כעת העוגן לשכבת זהות שנייה:- `IdentifierPolicyI
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```אחסן תמיד את המילולי באותיות קטנות ונרמל את הרווח הלבן לפני הגיבוב.
 עוזרי CLI כגון `iroha app space-directory manifest scaffold` והאנדרואיד
 מנתח `UaidLiteral` מיישם את אותם כללי חיתוך כדי שביקורות ניהול יכולות

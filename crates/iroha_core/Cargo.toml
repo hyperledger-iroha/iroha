@@ -217,6 +217,11 @@ harness = false
 required-features = ["zk-halo2", "zk-halo2-ipa", "zk-halo2-ipa-poseidon"]
 
 [[bench]]
+name = "crypto_hotpaths"
+harness = false
+required-features = ["zk-halo2", "zk-halo2-ipa"]
+
+[[bench]]
 name = "isi_gas_calibration"
 path = "benches/isi_gas_calibration.rs"
 harness = false

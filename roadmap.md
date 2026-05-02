@@ -6,6 +6,242 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Validation corridor
 
+- Carry the Sumeragi NPoS/permissioned QC and VRF hardening through the next
+  full workspace corridor.
+  - Focused commit, block-sync, VRF, QC-validation, roster-selection, Torii VRF
+    OpenAPI/parser, and data-model consensus roundtrip tests are green as of
+    2026-05-02 with `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-verify`.
+  - Focused `cargo clippy -p iroha_core -p iroha_data_model -p iroha_torii -p
+    irohad --all-targets -- -D warnings` is green as of 2026-05-02 with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-clippy`.
+  - Full workspace all-target clippy is green as of 2026-05-02 with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor`.
+  - Broader `cargo test --workspace` remains for an uncontended validation
+    window.
+- Carry the RAM-LFE API/proof hardening through the remaining signing and clean
+  full-workspace Cargo corridor.
+  - Focused OpenAPI detached-envelope tests, crypto RAM-LFE tests, the new
+    state-deserialization policy regression, Torii RAM-LFE handler tests,
+    JavaScript RAM-LFE tests, Swift execute-response parsing, the focused
+    `iroha_core` RAM-LFE gate, the workspace all-target compile corridor,
+    focused strict clippy over the repaired tool/SDK/Mochi/CoreHost/proof
+    targets, JavaScript/Kotlin/JVM/Java Android identifier BFV parity,
+    JavaScript Connect Norito schema-hash parity, Android Norito schema-manifest
+    verification, C# SDK tests on macOS with a temporary .NET 8 SDK, full Swift
+    package tests, full workspace all-target clippy, `scripts/check_no_scale.sh`,
+    formatting, and diff whitespace checks are green as of 2026-05-02.
+  - Remaining validation: run `cargo test --workspace` in an uncontended
+    validation window.
+  - Windows C# follow-up: on a Windows box with .NET 8, run
+    `dotnet restore csharp/Hyperledger.Iroha.Sdk.sln`, then
+    `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj`.
+    Confirm the canonical Norito schema-hash test, transaction-builder goldens,
+    faucet PoW vectors, and URL escaping expectations pass unchanged; record the
+    Windows result in `status.md`.
+  - Focused Kotlin/JVM and Java Android RAM-LFE parser/transport tests are
+    green as of 2026-05-02 with Homebrew OpenJDK 21 pinned via `JAVA_HOME`; the
+    same harnesses also cover the canonical BFV identifier schema-hash vector.
+  - An operator still needs to provide either the OpenAPI signing key or a
+    detached Ed25519 signature envelope for the exact canonical `torii.json`
+    bytes so the static OpenAPI manifest can be regenerated and verified.
+- Carry the FastPQ V1 verifier/AXT binding hardening through the next clean
+  validation corridor.
+  - `cargo test -p fastpq_prover --lib`,
+    `cargo check -p fastpq_prover --bins --lib`, and
+    `cargo check -p iroha_core --lib` are green as of 2026-05-02.
+    Focused verifier slices `verify_rejects`, `verify_limits`, and
+    `verify_fri_query_chain` are also green.
+  - The V1 verifier now applies a proof-size ceiling before canonical replay
+    work, rejects batch/proof parameter mismatch, enforces the exact FRI layer
+    schedule for the proof domain and arity, and requires arity-sized sampled
+    FRI round openings. It also checks canonical LDE chunk lengths,
+    LDE/AIR/FRI Merkle path depths, and terminal FRI leaf shapes before replay.
+  - AXT proof envelopes now require FastPQ V1 verifier labels at both the
+    production FastPQ binding layer and the standalone IVM host envelope-shape
+    layer. DefaultHost, CoreHost, and WSVHost reject raw proof bytes and
+    synthetic/non-V1 proof labels during diagnostic preflight. Because
+    standalone IVM does not link a real FastPQ verifier, proof-consuming AXT
+    calls fail closed after preflight; the production AXT verifier rejects oversized
+    encoded proof payloads before Norito decode. The descriptor-derived
+    synthetic AXT batch builder and CLI fallback have been removed; proof
+    generation and measurement require an execution-captured `batch_base64`
+    request field. Core state no longer synthesizes FastPQ batch hashes for
+    ad-hoc transcript/RWA contexts; those paths require transaction call-hash
+    context or a trigger-specific call hash. The shared preflight checks also
+    require concrete binding fields,
+    supported FastPQ claim types, 32-byte hex digests, and nonempty
+    duplicate-free target dataspace sets. DefaultHost also binds handles to the
+    manifest root carried by inline, recorded, or late proof envelopes before
+    failing closed without a verifier. The focused `fastpq_prover` AXT binding slice,
+    `iroha_data_model` `proof_matches_manifest` slice, `ivm_abi`
+    `preflight_fastpq_v1_proof_envelope` test, `ivm` `axt_host_flow` target, and
+    `ivm` `host_unknown_syscall`/`core_host_policy` targets are green as of
+    2026-05-02.
+  - CoreHost raw-root rejection and real FastPQ proof-envelope validation is
+    covered by the focused `ivm_corehost_axt` proof-binding test with
+    `iroha-core-tests,app_api`.
+  - Block-level app-API AXT validation and host proof-cache success fixtures now
+    use reusable FastPQ-backed proof envelopes. The full
+    `axt_validation_tests` module and focused `axt_verify_ds_proof` host sweep
+    are green as of 2026-05-02.
+  - Shared `ProofBlob` matching, standalone `ivm` CoreHost/WSV tests, state
+    replay-ledger fixtures, ISI lane-relay registration, and data-model AXT
+    fixtures now reject raw manifest roots and binding-less success envelopes;
+    only malformed-negative tests keep those payloads.
+  - Lane relay proof metadata has no legacy deterministic digest helper and
+    carries a required `verified_at_height` field. Verified lane-relay
+    registration binds the envelope digest to the submitted proof blob payload
+    hash; the data-model proof-material tests and core `lane_relay` slice are
+    green as of 2026-05-02.
+  - Replace the current prover-scale canonical replay verifier with a succinct
+    quotient-only verifier once the V1 quotient commitment/opening API lands;
+    this is a performance follow-up, not permission to accept synthetic AXT or
+    placeholder proofs.
+- Carry the SoraNet VPN escrow hardening through the remaining ledger and
+  deployment corridor.
+  - The Torii/relay/helper control plane now requires XOR quote payments,
+    non-operator escrow custody, client usage vouchers, one-use helper tickets,
+    and relay TLS pinning.
+  - Native lease escrow ISIs, WSV lease records, verified tariff settlement,
+    relay/helper streaming voucher debt-window enforcement, Torii native
+    `OpenVpnLeaseEscrow` quote skeletons, and Torii native `SettleVpnLease`
+    receipt skeleton responses through the generic `tx_instructions`
+    tooling convention are implemented.
+  - Relay operators can set `vpn.receipt_spool_dir` to persist the exact
+    `/v1/vpn/receipts` request body for voucher-backed sessions, so settlement
+    no longer depends on reconstructing receipt bytes from logs.
+  - `soranet-vpn-settlement` consumes those artifacts and signs deterministic
+    Torii receipt headers/body, or renders curl, using runtime-only operator seed
+    material.
+  - The JavaScript, C#, Swift, Python, Kotlin/JVM, and Java Android Torii
+    clients now expose the quote-first open flow and operator receipt
+    submission helpers with native instruction skeletons.
+  - Next, run a public relay/helper/Torii canary that opens a native XOR VPN
+    lease from the wallet flow, submits a spooled operator receipt, and signs the
+    returned `SettleVpnLease` transaction.
+- Carry the IVM/Kotodama vector and syscall hardening through the next clean
+  validation corridor.
+  - `cargo test -p ivm_abi`,
+    `cargo test -p ivm --test vector_execution_regression`, and
+    `cargo test -p kotodama_lang vector_length` are green as of 2026-05-02.
+  - The updated IVM gas/metadata/pointer window is also green as of
+    2026-05-02:
+    `cargo test -p ivm --test gas_conformance --test gas_golden --test metadata --test metadata_roundtrip --test pointer_tlv_neg`.
+  - The focused analyzer regression
+    `cargo test -p ivm analysis_treats_setvl_operand_as_immediate --lib` is
+    green as of 2026-05-02.
+  - The SCALLX ABI expansion is green as of 2026-05-02 for
+    `cargo test -p ivm --lib ivm_is_send_sync_for_state_sharing`,
+    `cargo test -p ivm --lib scallx_dispatches_extended_syscall_id`,
+    `cargo test -p ivm --test abi_hash_versions --test gas_schedule_hash --test syscalls_doc_sync --test ivm_abi_doc_sync`, and
+    `cargo test -p ivm_abi --lib syscallx_roundtrips_24_bit_number`, all with
+    `CARGO_TARGET_DIR=target/codex-ivm-scallx`; the core admission regression
+    `cargo test -p iroha_core validate_ivm_unknown_scallx_rejected_at_admission --lib`
+    is green with `CARGO_TARGET_DIR=target/codex-core-scallx`.
+    Follow-up host-bound coverage
+    `cargo test -p ivm --lib ivm_is_send_sync_for_state_sharing`,
+    `cargo test -p ivm --lib run_with_host_accepts_non_sync_host`, and
+    `cargo test -p ivm --lib block_height_syscall_uses_configured_deterministic_value`
+    is green with `CARGO_TARGET_DIR=target/codex-ivm-scallx`. Core host
+    coverage for `dedicated_query_syscalls_return_norito_payloads`,
+    `block_height_sysvar_uses_attached_transaction_context`, and scoped
+    durable-state `STATE_KEYS`/`STATE_HAS`/`STATE_LEN`/`STATE_COUNT`
+    tombstone resolution is
+    green with `CARGO_TARGET_DIR=target/codex-core-scallx`.
+    Broader IVM validation is also green with
+    `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib` plus
+    targeted integration batches for gas/opcode/vector, metadata/pointer ABI,
+    predecoder/doc sync, syscalls, WSV-host flows, VRF, and ZK verifier gates.
+  - Dedicated `QUERY_GET_ACCOUNT`, `QUERY_GET_ASSET`,
+    `QUERY_GET_ASSET_DEFINITION`, `QUERY_GET_DOMAIN`,
+    `QUERY_GET_CONTRACT_MANIFEST`, `QUERY_GET_NFT`, `QUERY_GET_PARAMETER`,
+    and `QUERY_GET_CONTRACT_INSTANCE` are implemented. The helpers either use
+    the validated query engine or deterministic attached-state snapshots, and
+    all charge the singular query gas model in code and generated docs.
+    `SYSVAR_BLOCK_HEIGHT` is threaded through default hosts and attached core
+    query-state contexts. `STATE_KEYS` now provides deterministic durable-state
+    prefix enumeration with pagination and contract-scope prefix stripping.
+    `STATE_HAS`/`STATE_LEN` provide cheap presence and payload-length probes,
+    and `STATE_COUNT` counts matching durable-state keys without returning the
+    key list over the same scoped durable-state resolution. Classic `STATE_GET`,
+    `STATE_SET`, and `STATE_DEL` now charge documented deterministic state gas
+    instead of returning zero. `GET_ACCOUNT_BALANCE` and
+    `RESOLVE_ACCOUNT_ALIAS` also return deterministic nonzero query-style gas.
+    `TLV_EQ` and `TLV_LEN` now charge deterministic byte-counted codec-helper
+    gas costs instead of inspecting potentially large payloads for free.
+    Numeric helpers now charge the fixed `G_numeric` cost across default, WSV,
+    standalone codec, and real-host forwarding paths. `POINTER_TO_NORITO` and
+    `POINTER_FROM_NORITO` now charge `G_pointer + bytes` across the default,
+    WSV, and standalone codec hosts, with the byte component tied to the
+    canonical TLV envelope copied or validated. `SM4_GCM_*` and `SM4_CCM_*`
+    now charge `G_sm4 + bytes` through the shared default-host implementation,
+    preserving deterministic vector output while charging AAD and
+    plaintext/ciphertext bytes. Deterministic sysvar reads now charge
+    `G_sysvar` or `G_sysvar + bytes`, and authority reads charge
+    `G_get_auth + bytes`, across default, WSV, standalone codec, and real-host
+    paths; the real-host focused rerun is pending an unrelated dirty-tree
+    `fastpq_prover` compile repair.
+    The classic hash helper surface now includes gas-charged SHA-256,
+    SHA3-256, raw Blake2b-256, Keccak-256, and Iroha `Hash::new` syscalls
+    routed through the real smart-contract host with byte-identical CPU or
+    byte-equivalent accelerated output requirements.
+  - `VERIFY_PROOF` now has a CoreHost implementation for
+    `NoritoBytes(OpenVerifyEnvelope)` payloads backed by on-chain verifying-key
+    registry prechecks and deterministic status-code returns; standalone IVM
+    hosts continue to reject it without registry context. Acceleration status
+    reporting now only marks CUDA parity as OK when the backend is usable after
+    policy, hardware detection, and self-tests.
+  - `PROVE_EXECUTION` now returns `NoritoBytes(ExecutionProof)` instead of a
+    reserved stub. The proof summary commits to deterministic trace/log/root
+    material with SHA-256 and is stable across repeated identical runs, while
+    leaving room for later cryptographic prover backends to bind to the same
+    public material. Focused unit, syscall, doc-sync, gas-doc, and `ivm_abi`
+    regression checks are green with `CARGO_TARGET_DIR=target/codex-ivm-scallx`.
+  - The broader `cargo test -p ivm` corridor is green as of 2026-05-02 after
+    repairing the data-model compile blocker, refreshing the AXT fixture
+    headers, and moving Kotodama test helpers to host-private SCALLX numbers.
+    The optimized `cargo test -p ivm --test shifts_prop` focused rerun is also
+    green.
+  - Follow-up widened checks are green as of 2026-05-02:
+    `cargo test -p ivm_abi`, `cargo test -p kotodama_lang`,
+    `cargo clippy -p ivm_abi -p kotodama_lang --all-targets -- -D warnings`,
+    and `cargo clippy -p ivm --all-targets -- -D warnings`.
+- Carry the UAID onboarding hardening through the next workspace validation
+  corridor.
+  - Focused formatting, Python syntax checks, Torii UAID parser tests, Torii
+    MCP shortcut/raw-body tests, Torii HTTP onboarding negative-contract tests,
+    the full Torii onboarding integration target, Torii onboarding
+    error-metadata tests, Swift register-account tests, focused IVM host
+    thread-safety tests, the OpenAPI sync/version/signature script tests, the
+    focused core UAID portfolio grouping test, the DA manifest fixture sweep,
+    `cargo test -p iroha_torii --lib --features app_api`, and
+    `cargo check --workspace --all-targets` are green as of 2026-05-02. The
+    full workspace all-target clippy corridor is also green as of 2026-05-02
+    with `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target`.
+  - The Rust implementation is in place for explicit UAID-only onboarding,
+    digest-only identity commitments, MCP/OpenAPI request contracts, Swift
+    request canonicalization, asset-scope-aware UAID portfolio grouping, and
+    stale OpenAPI manifest-signature suppression in generated version indexes;
+    `versions.json` has been refreshed in explicit unsigned mode pending the
+    operator signature.
+  - Keep the broader `cargo test --workspace` corridor open. The static
+    OpenAPI JSON and version index are refreshed in explicit unsigned mode; an
+    operator still needs to regenerate the manifest with the OpenAPI signing
+    key or detached signature envelope.
+- Carry the Torii exposure-hardening slice through the next clean Cargo
+  validation corridor.
+  - `cargo fmt --all` and `cargo check -p iroha_config -p iroha_torii` are
+    green as of 2026-05-02 for the CORS/pre-auth, MCP tool-effect,
+    protected-namespace, route-catchall, mixed-content extractor, and router
+    composition changes.
+  - `cargo test -p iroha_config torii_cors_parse --lib` and
+    `cargo test -p iroha_torii tool_effects --lib` are green as of
+    2026-05-02. The follow-up MCP effect audit is also green for
+    `cargo test -p iroha_torii get_tools_are_declared_read_effect --lib`,
+    `cargo test -p iroha_torii manual_sumeragi_snapshot_tools_remain_read_only --lib`,
+    and `cargo test -p iroha_torii tool_effects --lib` with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-continue`. Fold the slice into the
+    next workspace clippy/test corridor when validation budget allows.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - P2P session claims, hashed token storage, focused Rust checks, JavaScript
@@ -92,6 +328,44 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Rerun the stepped single-host sweep.
   - Repeat permissioned and NPoS passes on the same hardware envelope and compare against the archived `25-50 TPS` / `75-100 TPS` baselines.
   - Record the new knee points and any regressions in `status.md`.
+- Carry the 2026-05-02 Norito/Crypto scalar hot-path slice through the remaining
+  release validation corridor.
+  - The Ed25519 admission follow-up now caches deterministic 32-byte invalid
+    public-key parse outcomes, expands the direct parse cache to 256 slots,
+    routes compact/full conversion through the cached parse path, skips
+    signature parsing and dalek batch setup for all-cached exact verify tuples,
+    and preserves lowest-original-index failure reporting for mixed batches.
+    Focused crypto/Torii checks and the `ed25519_hotpaths` Criterion bench are
+    recorded in `status.md`.
+  - Remaining local benchmark baselines: `cargo bench -p iroha_data_model
+    --bench chain_wire`, `cargo bench -p iroha_data_model --bench
+    decode_registry`, and `cargo bench -p iroha_core --bench crypto_hotpaths`.
+  - The latest 120s release gate rerun exists at
+    `dist/izanami-prebuilt-20k-rerun-release-ed25519-cache-120s-20260502-180614`
+    and is recorded in `status.md`; the wrapper exited `0`, but it is not a
+    clean all-accepted ingress gate. It offered all `2,400,000` planned
+    submissions, accepted `2,364,756`, reported `35,244` failures, and reached
+    strict approved transactions `20,582` at strict height `7`, with the queue
+    still saturated. Active build/gate process lines were captured before and
+    after the run, so it remains diagnostic evidence only.
+  - The latest contended 30s sampled profile exists at
+    `dist/izanami-profile-20k-ed25519-cache-sampled3-30s-20260502-182524`
+    and is recorded in `status.md`. It submitted and accepted all `600,000`
+    planned ingress attempts but only reached strict approved transactions
+    `4,113` at strict height `3`, with the queue still saturated. The next
+    bottleneck focus remains peer CPU: FASTPQ transcript finalization over
+    Norito account/numeric/array serialization into Poseidon byte hashing;
+    Ed25519/Curve25519 batch-verifier miss work and public-key parse/decode
+    misses; Norito transaction/signature decode and compact-length work; and
+    smaller allocation/copy/CRC64 costs. It is not a clean comparable baseline
+    because workspace `cargo test`/rustc and another debug test network were
+    active before and after the run.
+  - Rerun the 30s sampled Izanami 20k profile and a clean 120s release gate in
+    an uncontended host window after benchmark wins are recorded.
+  - Keep broader trait-wide parallel decode, deeper GPU decode materialization,
+    deeper dalek backend experimentation, deterministic hardware-specific
+    Ed25519/Curve25519 acceleration, and FASTPQ GPU hook retuning as follow-up
+    work until the scalar changes have clean before/after evidence.
 - Continue the 20k post-cache throughput tuning corridor.
   - The first post-cache 4-peer no-fault prebuilt `20k TPS` / `120s` release
     gate at `dist/izanami-prebuilt-20k-hotpath-120s-20260501-142015` improved
@@ -219,12 +493,19 @@ Completed history lives in `status.md`. This file should only track unfinished w
     30s sampled 20k profile and a 120s gate with `--fastpq-poseidon-mode gpu`
     against the latest scalar release artifacts.
   - Carry the Norito sequence span planner through the remaining acceleration
-    corridor: replace the helper ABI's deterministic CPU reference bodies with
-    tuned Metal/CUDA kernels, add bounded execution for asynchronous helper
-    kernels before CPU fallback, wire `decode_planned_sequence_parallel` into
-    specific typed transaction/admission/block-validation call sites that can
-    prove `T: Send` and lowest-index error ordering, then rerun the 30s sampled
-    20k profile and 120s gate with the target host's acceleration features.
+    corridor: validate the CUDA sequence planner with the real `cuda-kernel`
+    feature on a GPU host, replace the length-prefixed helper's serial device
+    parser with a tuned prefix-scan/chunked planner if profiling shows it is on
+    the hot path, wire `decode_planned_sequence_parallel` into specific typed
+    transaction/admission/block-validation call sites that can prove `T: Send`
+    and lowest-index error ordering, then rerun the 30s sampled 20k profile and
+    120s gate with the target host's acceleration features. CUDA host validation
+    commands to run when hardware is available: `JSONSTAGE1_CUDA_REQUIRE=1 cargo
+    test -p jsonstage1_cuda --features cuda-kernel binary_sequence_plan`,
+    `JSONSTAGE1_CUDA_REQUIRE=1 cargo test -p norito sequence_plan --features
+    codec-gpu-cuda`, `GPUZSTD_CUDA_REQUIRE=1 cargo test -p norito gpu_zstd
+    --features gpu-compression`, and a Norito CRC64 pass with `cuda-crc64`
+    enabled after building the CUDA helper.
   - The latest scalar release 4-peer no-fault prebuilt `20k TPS` / `120s` gate
     after the Norito span-planner pass is
     `dist/izanami-prebuilt-20k-rerun-release-norito-span-120s-20260502-015557`;
@@ -276,6 +557,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Targeted follow-ups
 
+- Migrate the remaining operator VPN workflows to submit the Torii-returned
+  native `OpenVpnLeaseEscrow` and `SettleVpnLease` transactions, then retire
+  the legacy in-memory receipt endpoint after a public relay/helper/Torii
+  canary.
 - Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.
   - Add an integration test proving a user-signed enable/disable update can mutate the subscription NFT created by onboarding.
   - If a non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.

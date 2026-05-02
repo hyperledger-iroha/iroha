@@ -10,7 +10,6 @@ public final class RamLfeExecuteResponse {
   private final String programId;
   private final String opaqueHash;
   private final String receiptHash;
-  private final String outputHex;
   private final String outputHash;
   private final String associatedDataHash;
   private final long executedAtMs;
@@ -23,7 +22,6 @@ public final class RamLfeExecuteResponse {
       final String programId,
       final String opaqueHash,
       final String receiptHash,
-      final String outputHex,
       final String outputHash,
       final String associatedDataHash,
       final long executedAtMs,
@@ -34,7 +32,6 @@ public final class RamLfeExecuteResponse {
     this.programId = Objects.requireNonNull(programId, "programId");
     this.opaqueHash = Objects.requireNonNull(opaqueHash, "opaqueHash");
     this.receiptHash = Objects.requireNonNull(receiptHash, "receiptHash");
-    this.outputHex = Objects.requireNonNull(outputHex, "outputHex");
     this.outputHash = Objects.requireNonNull(outputHash, "outputHash");
     this.associatedDataHash = Objects.requireNonNull(associatedDataHash, "associatedDataHash");
     this.executedAtMs = executedAtMs;
@@ -55,10 +52,6 @@ public final class RamLfeExecuteResponse {
 
   public String receiptHash() {
     return receiptHash;
-  }
-
-  public String outputHex() {
-    return outputHex;
   }
 
   public String outputHash() {

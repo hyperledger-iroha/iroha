@@ -425,6 +425,94 @@ public final class HttpClientTransport implements IrohaClient {
     return verifyRamLfeReceipt(new RamLfeReceiptVerifyRequest(receipt, outputHex));
   }
 
+  /** Fetches the public Sora VPN profile. */
+  public CompletableFuture<VpnProfile> getVpnProfile() {
+    final TransportRequest request = buildJsonGetRequest("/v1/vpn/profile", Map.of());
+    return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile");
+  }
+
+  /** Creates a signed quote for a native XOR VPN lease escrow. */
+  public CompletableFuture<VpnQuote> createVpnQuote(
+      final VpnQuoteCreateRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildVpnQuoteCreatePayload(
+                requestBody.exitClass(), requestBody.meteringPublicKeyHex()));
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth);
+    return fetchJson(request, VpnJsonParser::parseQuote, "vpn quote create");
+  }
+
+  /** Opens a VPN session after the exact quote-bound native lease transaction commits. */
+  public CompletableFuture<VpnSession> createVpnSession(
+      final VpnSessionCreateRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildVpnSessionCreatePayload(
+                requestBody.exitClass(),
+                requestBody.quoteId(),
+                requestBody.paymentTxHash(),
+                requestBody.meteringPublicKeyHex()));
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/vpn/sessions", body, canonicalAuth);
+    return fetchJson(request, VpnJsonParser::parseSession, "vpn session create");
+  }
+
+  /** Fetches an active VPN session owned by the signed account. */
+  public CompletableFuture<Optional<VpnSession>> getVpnSession(
+      final String sessionId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final String normalizedSessionId = normalizeHex32(sessionId, "sessionId");
+    final TransportRequest request =
+        buildVpnRequest(
+            "GET",
+            "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
+            null,
+            canonicalAuth);
+    return fetchJsonAllowingNotFound(request, VpnJsonParser::parseSession, "vpn session lookup");
+  }
+
+  /** Deletes an active VPN session and returns Torii's disconnect receipt when present. */
+  public CompletableFuture<Optional<VpnReceipt>> deleteVpnSession(
+      final String sessionId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final String normalizedSessionId = normalizeHex32(sessionId, "sessionId");
+    final TransportRequest request =
+        buildVpnRequest(
+            "DELETE",
+            "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
+            null,
+            canonicalAuth);
+    return fetchJsonAllowingNotFound(request, VpnJsonParser::parseReceipt, "vpn session delete");
+  }
+
+  /** Submits an operator receipt and returns the native lease settlement instruction. */
+  public CompletableFuture<VpnReceipt> submitVpnReceipt(
+      final VpnReceiptSubmitRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildVpnReceiptSubmitPayload(
+                requestBody.relayReceiptHex(),
+                requestBody.clientVoucherHex(),
+                requestBody.leaseIdHex()));
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/vpn/receipts", body, canonicalAuth);
+    return fetchJson(request, VpnJsonParser::parseReceipt, "vpn receipt submit");
+  }
+
+  /** Lists VPN receipts for the signed account. */
+  public CompletableFuture<VpnReceiptListResponse> listVpnReceipts(
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final TransportRequest request = buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth);
+    return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list");
+  }
+
   /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
   public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
       final String authority,
@@ -1431,6 +1519,50 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildVpnRequest(
+      final String method,
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final URI target = resolvePath(path);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod(method)
+            .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout());
+    if (body != null) {
+      builder.setBody(body).addHeader("Content-Type", "application/json");
+    }
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    for (final Map.Entry<String, String> entry :
+        buildCanonicalHeaders(method, target, body, canonicalAuth).entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
+  private static Map<String, String> buildCanonicalHeaders(
+      final String method,
+      final URI target,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final Long timestampMs = canonicalAuth.timestampMs();
+    final String nonce = canonicalAuth.nonce();
+    if ((timestampMs == null) != (nonce == null)) {
+      throw new IllegalArgumentException("timestampMs and nonce must be provided together");
+    }
+    if (timestampMs == null) {
+      return CanonicalRequestSigner.buildHeaders(
+          method, target, body, canonicalAuth.accountId(), canonicalAuth.privateKey());
+    }
+    return CanonicalRequestSigner.buildHeaders(
+        method, target, body, canonicalAuth.accountId(), canonicalAuth.privateKey(), timestampMs, nonce);
+  }
+
   private URI resolvePath(final String path) {
     if (path == null || path.isBlank()) {
       return config.baseUri();
@@ -1725,6 +1857,43 @@ public final class HttpClientTransport implements IrohaClient {
     payload.put("receipt", new LinkedHashMap<>(Objects.requireNonNull(receipt, "receipt")));
     if (outputHex != null) {
       payload.put("output_hex", normalizeEvenLengthHex(outputHex, "outputHex"));
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildVpnQuoteCreatePayload(
+      final String exitClass,
+      final String meteringPublicKeyHex) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    final String normalizedExitClass = normalizeOptionalNonBlank(exitClass, "exitClass");
+    payload.put("exit_class", normalizedExitClass == null ? "" : normalizedExitClass);
+    payload.put("metering_public_key_hex", normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex"));
+    return payload;
+  }
+
+  static Map<String, Object> buildVpnSessionCreatePayload(
+      final String exitClass,
+      final String quoteId,
+      final String paymentTxHash,
+      final String meteringPublicKeyHex) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    final String normalizedExitClass = normalizeOptionalNonBlank(exitClass, "exitClass");
+    payload.put("exit_class", normalizedExitClass == null ? "" : normalizedExitClass);
+    payload.put("quote_id", normalizeHex32(quoteId, "quoteId"));
+    payload.put("payment_tx_hash", normalizeHex32(paymentTxHash, "paymentTxHash"));
+    payload.put("metering_public_key_hex", normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex"));
+    return payload;
+  }
+
+  static Map<String, Object> buildVpnReceiptSubmitPayload(
+      final String relayReceiptHex,
+      final String clientVoucherHex,
+      final String leaseIdHex) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("relay_receipt_hex", normalizeEvenLengthHex(relayReceiptHex, "relayReceiptHex"));
+    payload.put("client_voucher_hex", normalizeEvenLengthHex(clientVoucherHex, "clientVoucherHex"));
+    if (leaseIdHex != null) {
+      payload.put("lease_id_hex", normalizeHex32(leaseIdHex, "leaseIdHex"));
     }
     return payload;
   }

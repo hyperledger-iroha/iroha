@@ -397,3 +397,125 @@ fn wsv_host_overlay_set_overrides_and_persists_base_value() {
     assert_eq!(after_finish.type_id, PointerType::NoritoBytes);
     assert_eq!(after_finish.payload, b"overlay");
 }
+
+#[test]
+fn wsv_host_state_count_uses_overlay_and_tombstones() {
+    let mut wsv = MockWorldStateView::new();
+    wsv.sc_set("orders/1", make_tlv(PointerType::NoritoBytes, b"one"))
+        .expect("seed first order");
+    wsv.sc_set("orders/2", make_tlv(PointerType::NoritoBytes, b"two"))
+        .expect("seed second order");
+    wsv.sc_set("accounts/1", make_tlv(PointerType::NoritoBytes, b"account"))
+        .expect("seed unrelated state");
+    let caller = account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
+    let mut vm = IVM::new(u64::MAX);
+
+    let deleted_tlv = make_tlv(PointerType::Name, b"orders/1");
+    let added_tlv = make_tlv(PointerType::Name, b"orders/3");
+    let prefix_tlv = make_tlv(PointerType::Name, b"orders");
+    let value_tlv = make_tlv(PointerType::NoritoBytes, b"three");
+    let deleted_ptr = vm.alloc_input_tlv(&deleted_tlv).expect("alloc deleted key");
+    let added_ptr = vm.alloc_input_tlv(&added_tlv).expect("alloc added key");
+    let prefix_ptr = vm.alloc_input_tlv(&prefix_tlv).expect("alloc prefix");
+    let value_ptr = vm.alloc_input_tlv(&value_tlv).expect("alloc value");
+
+    IVMHost::begin_tx(&mut host, &Default::default()).expect("begin overlay tx");
+    vm.set_register(10, deleted_ptr);
+    IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_DEL, &mut vm).expect("stage delete");
+    vm.set_register(10, added_ptr);
+    vm.set_register(11, value_ptr);
+    IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_SET, &mut vm).expect("stage set");
+
+    vm.set_register(10, prefix_ptr);
+    assert_eq!(
+        IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_COUNT, &mut vm),
+        Ok(16 + 2)
+    );
+    assert_eq!(vm.register(10), 2);
+}
+
+#[test]
+fn wsv_host_pointer_helpers_charge_envelope_bytes() {
+    let caller = account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut vm = IVM::new(u64::MAX);
+    let payload = b"deterministic";
+    let ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Blob, payload))
+        .expect("alloc blob");
+    let envelope_len = 2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH;
+
+    vm.set_register(10, ptr);
+    assert_eq!(
+        IVMHost::syscall(&mut host, syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm),
+        Ok(16 + u64::try_from(envelope_len).expect("test envelope length"))
+    );
+    let wrapped_ptr = vm.register(10);
+    let wrapped = vm.memory.validate_tlv(wrapped_ptr).expect("wrapped tlv");
+    assert_eq!(wrapped.type_id, PointerType::NoritoBytes);
+    assert_eq!(wrapped.payload.len(), envelope_len);
+
+    vm.set_register(10, wrapped_ptr);
+    vm.set_register(11, PointerType::Blob as u64);
+    assert_eq!(
+        IVMHost::syscall(&mut host, syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+        Ok(16 + u64::try_from(envelope_len).expect("test envelope length"))
+    );
+    let roundtrip = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("roundtrip tlv");
+    assert_eq!(roundtrip.type_id, PointerType::Blob);
+    assert_eq!(roundtrip.payload, payload);
+}
+
+#[test]
+fn wsv_host_tlv_eq_charges_payload_bytes() {
+    let caller = account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut vm = IVM::new(u64::MAX);
+    let left = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Blob, b"same"))
+        .expect("alloc left");
+    let right = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Blob, b"same"))
+        .expect("alloc right");
+
+    vm.set_register(10, left);
+    vm.set_register(11, right);
+    assert_eq!(
+        IVMHost::syscall(&mut host, syscalls::SYSCALL_TLV_EQ, &mut vm),
+        Ok(16 + 4 + 4)
+    );
+    assert_eq!(vm.register(10), 1);
+}
+
+#[test]
+fn wsv_host_tlv_len_charges_payload_bytes() {
+    let caller = account(
+        "wonderland",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
+    let mut vm = IVM::new(u64::MAX);
+    let ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Blob, b"length"))
+        .expect("alloc tlv");
+
+    vm.set_register(10, ptr);
+    assert_eq!(
+        IVMHost::syscall(&mut host, syscalls::SYSCALL_TLV_LEN, &mut vm),
+        Ok(16 + 6)
+    );
+    assert_eq!(vm.register(10), 6);
+}

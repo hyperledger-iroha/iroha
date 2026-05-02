@@ -60,7 +60,7 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
 - **Padding:** introduce `s_active`. Multiply all row constraints by `s_active` and enforce a contiguous prefix: `s_active[i] ≥ s_active[i+1]`. Padding rows (`s_active=0`) must keep constant values but are otherwise unconstrained.
 - **Ordering hash:** Poseidon2 hash (domain `fastpq:v1:ordering`) over row encodings; stored in Public IO for auditability.
 
-## Stage 2 — STARK Prover Core
+## V1 — STARK Prover Core
 
 ### Objectives
 - Build Poseidon2 Merkle commitments over trace and lookup evaluation vectors. Parameters: rate=2, capacity=1, full rounds=8, partial rounds=57, constants pinned to `ark-poseidon2` commit `3f2b7fe` (v0.3.0).
@@ -209,7 +209,7 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
   - Ordering hash recorded in PublicIO and verified via fixtures.
   - SMT/lookup witness generation implemented with membership & non-membership vectors.
   - Conservation tests cover transfer, mint, burn, and mixed batches.
-- **Stage 2 DoD**
+- **V1 Prover DoD**
   - Transcript spec implemented; golden transcript (`tests/fixtures/transcript_v1.json`) and domain tags verified.
   - Poseidon2 parameter commit `3f2b7fe` pinned in prover and verifier with endianness tests across architectures.
   - Soundness CI guard active; proof size/RAM/latency SLOs recorded.
@@ -297,18 +297,9 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
    (wraps `ci/check_fastpq_row_usage.sh`), and CI runs the same script via `.github/workflows/fastpq-row-usage.yml` to compare the committed
    `artifacts/fastpq_benchmarks/fastpq_row_usage_*.json` snapshots so the evidence bundle fails fast whenever
    transfer rows creep back up. Pass `--summary-out <path>` if you want a machine-readable diff (the CI job uploads `fastpq_row_usage_summary.json`).
-   When an ExecWitness isn’t handy, synthesize a regression sample with `fastpq_row_bench`
-   (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), which emits the exact same `row_usage`
-   object for configurable selector counts (e.g., a 65 536 row stress test):
-
-   ```bash
-   cargo run -p fastpq_prover --bin fastpq_row_bench -- \
-     --transfer-rows 65536 \
-     --mint-rows 256 \
-     --burn-rows 128 \
-     --pretty \
-     --output artifacts/fastpq_benchmarks/fastpq_row_usage_65k.json
-   ```
+   Row-usage regression inputs must come from execution-captured V1 batches with
+   real transfer SMT witnesses. The old standalone synthetic row generator has
+   been removed because it could not validate the sender/receiver root chain.
 
    Stage 7-3 rollout bundles must also pass `scripts/fastpq/validate_row_usage_snapshot.py`, which
    enforces that every `row_usage` entry contains the selector counts and that

@@ -3,7 +3,7 @@
 
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode,
-    fastpq::TransferDeltaTranscript,
+    fastpq::{TransferDeltaTranscript, TransferSmtWitness},
     isi::error::{InstructionExecutionError, MathError, Mismatch, TypeError},
     prelude::*,
     query::error::FindError,
@@ -925,8 +925,8 @@ pub mod isi {
             from_balance_after,
             to_balance_before,
             to_balance_after,
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
         Ok((source_id, destination_id, delta))
     }
@@ -1103,7 +1103,7 @@ pub mod isi {
             if let Some(record) = control_update {
                 update_control_record(state_transaction, source_id.account(), record)?;
             }
-            state_transaction.record_transfer_transcript(authority, delta);
+            state_transaction.record_transfer_transcript(authority, delta)?;
 
             #[allow(clippy::float_arithmetic)]
             #[cfg(feature = "telemetry")]
@@ -1290,7 +1290,7 @@ pub mod isi {
                     }),
                 ]);
             }
-            state_transaction.record_transfer_transcripts(authority, deltas);
+            state_transaction.record_transfer_transcripts(authority, deltas)?;
             Ok(())
         }
     }

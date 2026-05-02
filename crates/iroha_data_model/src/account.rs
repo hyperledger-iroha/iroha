@@ -1,6 +1,8 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
-use std::{format, io::Write, str::FromStr, string::String, vec::Vec};
+use std::{
+    cell::RefCell, collections::BTreeMap, format, io::Write, str::FromStr, string::String, vec::Vec,
+};
 
 pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
@@ -39,6 +41,41 @@ use crate::{
     name::Name,
     nexus::UniversalAccountId,
 };
+
+const ACCOUNT_I105_CACHE_LIMIT: usize = 4096;
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AccountI105CacheKey {
+    discriminant: u16,
+    controller: Vec<u8>,
+}
+
+struct AccountI105Cache {
+    map: BTreeMap<AccountI105CacheKey, String>,
+}
+
+impl AccountI105Cache {
+    fn new() -> Self {
+        Self {
+            map: BTreeMap::new(),
+        }
+    }
+
+    fn get(&self, key: &AccountI105CacheKey) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: AccountI105CacheKey, value: String) {
+        if self.map.len() >= ACCOUNT_I105_CACHE_LIMIT {
+            self.map.clear();
+        }
+        self.map.insert(key, value);
+    }
+}
+
+thread_local! {
+    static ACCOUNT_I105_CACHE: RefCell<AccountI105Cache> = RefCell::new(AccountI105Cache::new());
+}
 
 #[model]
 mod model {
@@ -361,6 +398,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
     }
 }
 
+fn account_i105_cache_key(account: &AccountId, discriminant: u16) -> AccountI105CacheKey {
+    AccountI105CacheKey {
+        discriminant,
+        controller: account.controller.encode(),
+    }
+}
+
 /// Read-only reference to [`Account`].
 /// Used in query filters to avoid copying.
 pub type AccountEntry<'world> = Ref<'world, AccountId, AccountValue>;
@@ -598,7 +642,15 @@ impl AccountId {
     #[inline]
     pub fn canonical_i105(&self) -> Result<String, AccountAddressError> {
         let prefix = address::chain_discriminant();
-        self.to_account_address()?.to_i105_for_discriminant(prefix)
+        let key = crate::account::account_i105_cache_key(self, prefix);
+        if let Some(cached) = ACCOUNT_I105_CACHE.with(|cache| cache.borrow().get(&key)) {
+            return Ok(cached);
+        }
+        let encoded = self
+            .to_account_address()?
+            .to_i105_for_discriminant(prefix)?;
+        ACCOUNT_I105_CACHE.with(|cache| cache.borrow_mut().insert(key, encoded.clone()));
+        Ok(encoded)
     }
 
     /// Encode the account as canonical lowercase hexadecimal.
@@ -1225,6 +1277,28 @@ mod account_id_parsing_tests {
             parsed.to_account_id().expect("decode account id"),
             account,
             "rendered address should roundtrip to the same account"
+        );
+    }
+
+    #[test]
+    fn canonical_i105_cache_is_chain_discriminant_scoped() {
+        let key_pair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+
+        let first = {
+            let _guard = address::ChainDiscriminantGuard::enter(73);
+            let encoded = account.canonical_i105().expect("encode i105");
+            assert_eq!(encoded, account.canonical_i105().expect("cached i105"));
+            encoded
+        };
+        let second = {
+            let _guard = address::ChainDiscriminantGuard::enter(74);
+            account.canonical_i105().expect("encode i105")
+        };
+
+        assert_ne!(
+            first, second,
+            "canonical I105 cache key must include chain discriminant"
         );
     }
 }

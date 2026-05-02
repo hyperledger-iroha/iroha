@@ -40,7 +40,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 
 ### Account
 - `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical I105.
-- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` is an optional primary `AccountAlias` used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md), and `opaque_ids` tracks hidden identifiers bound to that UAID. Stored account state no longer carries any linked-domain field.
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` is an optional primary `AccountAlias` used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md), and `opaque_ids` tracks hidden identifiers bound to that UAID. A canonical UAID is always a Blake2b-256 digest with the final-byte LSB set to `1`; account onboarding must provide it explicitly. Stored account state no longer carries any linked-domain field.
 - Builders:
   - `NewAccount` via `Account::new(id)` registers the canonical domainless account subject.
 - Alias model:

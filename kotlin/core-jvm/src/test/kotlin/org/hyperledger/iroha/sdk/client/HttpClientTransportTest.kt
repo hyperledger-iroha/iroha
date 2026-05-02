@@ -2,6 +2,9 @@ package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -224,6 +227,337 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun listRamLfeProgramPoliciesParsesResponse() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "total": 1,
+                  "items": [
+                    {
+                      "program_id": "identifier_lookup_retail",
+                      "owner": "sorau1NpOwner",
+                      "active": true,
+                      "resolver_public_key": "ed25519:resolver-key",
+                      "backend": "bfv-programmed-sha3-256-v1",
+                      "verification_mode": "signed",
+                      "input_encryption": "bfv-v1",
+                      "input_encryption_public_parameters": "ABCD",
+                      "input_encryption_public_parameters_decoded": {
+                        "parameters": {
+                          "polynomial_degree": 64,
+                          "plaintext_modulus": 257,
+                          "ciphertext_modulus": 1099511627776,
+                          "decomposition_base_log": 12
+                        },
+                        "public_key": {
+                          "b": [1, 2, 3],
+                          "a": [4, 5, 6]
+                        },
+                        "max_input_bytes": 32
+                      },
+                      "note": "retail programmed policy",
+                      "proof_verifier": {
+                        "proof_backend": "halo2-ipa",
+                        "circuit_id": "ram-lfe-v1",
+                        "public_inputs_schema_hash": "${"44".repeat(32)}",
+                        "verifying_key_bytes_b64": "AQID"
+                      }
+                    }
+                  ]
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        val response = transport.listRamLfeProgramPolicies().join()
+
+        assertEquals(1L, response.total)
+        assertEquals(1, response.items.size)
+        val item = response.items.first()
+        assertEquals("identifier_lookup_retail", item.programId)
+        assertEquals("sorau1NpOwner", item.owner)
+        assertTrue(item.active)
+        assertEquals("signed", item.verificationMode)
+        assertEquals("bfv-v1", item.inputEncryption)
+        val decodedParameters = assertNotNull(item.inputEncryptionPublicParametersDecoded)
+        assertEquals(64L, decodedParameters.parameters.polynomialDegree)
+        val proofVerifier = assertNotNull(item.proofVerifier)
+        assertEquals("halo2-ipa", proofVerifier.proofBackend)
+
+        val request = executor.lastRequest
+        assertNotNull(request)
+        assertEquals("GET", request.method)
+        assertEquals("https://torii.example/v1/ram-lfe/program-policies", request.uri.toString())
+        assertTrue(request.headers["Accept"]?.contains("application/json") == true)
+    }
+
+    @Test
+    fun executeRamLfeProgramParsesResponseAndPostsPlaintextHex() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "program_id": "identifier_lookup_retail",
+                  "opaque_hash": "opaque-hash-literal",
+                  "receipt_hash": "receipt-hash-literal",
+                  "output_hash": "output-hash-literal",
+                  "associated_data_hash": "associated-data-hash-literal",
+                  "executed_at_ms": 42,
+                  "expires_at_ms": 142,
+                  "backend": "bfv-programmed-sha3-256-v1",
+                  "verification_mode": "signed",
+                  "receipt": {
+                    "payload": {
+                      "program_id": {"name": "identifier_lookup_retail"},
+                      "program_digest": "hash:${"11".repeat(32).uppercase()}#ABCD",
+                      "backend": "bfv-programmed-sha3-256-v1",
+                      "verification_mode": {"mode": "Signed", "value": null},
+                      "output_hash": "hash:${"22".repeat(32).uppercase()}#BCDE",
+                      "associated_data_hash": "hash:${"33".repeat(32).uppercase()}#CDEF",
+                      "executed_at_ms": 42,
+                      "expires_at_ms": 142
+                    },
+                    "signature": "${"aa".repeat(64)}"
+                  }
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        val response = transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD", null).join()
+
+        assertTrue(response.isPresent)
+        val execute = response.get()
+        assertEquals("identifier_lookup_retail", execute.programId)
+        assertEquals("output-hash-literal", execute.outputHash)
+        assertEquals("signed", execute.verificationMode)
+        assertTrue(execute.receipt.containsKey("payload"))
+
+        val request = executor.lastRequest
+        assertNotNull(request)
+        assertEquals("POST", request.method)
+        assertEquals(
+            "https://torii.example/v1/ram-lfe/programs/identifier_lookup_retail/execute",
+            request.uri.toString(),
+        )
+        assertEquals("""{"input_hex":"abcd"}""", readBody(request))
+    }
+
+    @Test
+    fun executeRamLfeProgramReturnsEmptyOnNotFoundAndPostsEncryptedHex() {
+        val executor = StubResponseExecutor(
+            statusCode = 404,
+            body = byteArrayOf(),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        val response = transport.executeRamLfeProgram("identifier_lookup_retail", null, "ABCD").join()
+
+        assertFalse(response.isPresent)
+        val request = executor.lastRequest
+        assertNotNull(request)
+        assertEquals("""{"encrypted_input":"abcd"}""", readBody(request))
+    }
+
+    @Test
+    fun verifyRamLfeReceiptPostsRawReceiptAndParsesResponse() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "valid": true,
+                  "program_id": "identifier_lookup_retail",
+                  "backend": "bfv-programmed-sha3-256-v1",
+                  "verification_mode": "signed",
+                  "output_hash": "output-hash-literal",
+                  "associated_data_hash": "associated-data-hash-literal",
+                  "output_hash_matches": true
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val receipt = linkedMapOf<String, Any>(
+            "payload" to linkedMapOf<String, Any?>(
+                "program_id" to mapOf("name" to "identifier_lookup_retail"),
+                "backend" to "bfv-programmed-sha3-256-v1",
+                "verification_mode" to mapOf("mode" to "Signed", "value" to null),
+                "program_digest" to "hash:${"11".repeat(32).uppercase()}#ABCD",
+                "output_hash" to "hash:${"22".repeat(32).uppercase()}#BCDE",
+                "associated_data_hash" to "hash:${"33".repeat(32).uppercase()}#CDEF",
+                "executed_at_ms" to 42L,
+                "expires_at_ms" to 142L,
+            ),
+            "signature" to "aa".repeat(64),
+        )
+
+        val response = transport.verifyRamLfeReceipt(receipt, "C0FFEE").join()
+
+        assertTrue(response.valid)
+        assertEquals("identifier_lookup_retail", response.programId)
+        assertEquals(true, response.outputHashMatches)
+
+        val request = executor.lastRequest
+        assertNotNull(request)
+        assertEquals("https://torii.example/api/v1/ram-lfe/receipts/verify", request.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
+        assertEquals("c0ffee", payload["output_hex"])
+        assertTrue(payload["receipt"] is Map<*, *>)
+    }
+
+    @Test
+    fun getVpnProfileDeserializesNativeLeaseFields() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "available": true,
+                  "relay_endpoint": "/dns/relay.example/udp/9443/quic",
+                  "supported_exit_classes": ["standard", "low-latency"],
+                  "default_exit_class": "standard",
+                  "lease_secs": 600,
+                  "dns_push_interval_secs": 60,
+                  "meter_family": "soranet.vpn.standard",
+                  "route_pushes": ["0.0.0.0/0"],
+                  "excluded_routes": ["10.0.0.0/8"],
+                  "dns_servers": ["1.1.1.1"],
+                  "tunnel_addresses": ["10.208.0.2/32"],
+                  "mtu_bytes": 1024,
+                  "display_billing_label": "standard XOR",
+                  "fee_asset_id": "xor#universal.universal",
+                  "escrow_account_id": "sorauEscrow",
+                  "operator_account_id": "sorauOperator",
+                  "lease_fee_nanos": 1000000,
+                  "settlement_grace_secs": 120,
+                  "flow_label_bits": 24,
+                  "padding_budget_ms": 15,
+                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        val profile = transport.getVpnProfile().join()
+
+        assertTrue(profile.available)
+        assertEquals("xor#universal.universal", profile.feeAssetId)
+        assertEquals("sorauEscrow", profile.escrowAccountId)
+        assertEquals("sorauOperator", profile.operatorAccountId)
+        assertEquals(1_000_000L, profile.leaseFeeNanos)
+        assertEquals(120L, profile.settlementGraceSecs)
+        assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
+        assertEquals("GET", executor.lastRequest.method)
+        assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
+    }
+
+    @Test
+    fun createVpnQuoteSignsCanonicalBodyAndParsesOpenLeaseInstruction() {
+        val quoteId = "11".repeat(32)
+        val meteringKey = "22".repeat(32)
+        val executor = StubResponseExecutor(
+            statusCode = 201,
+            body = vpnQuoteJson(quoteId, meteringKey).toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_000L, "vpn-nonce-1")
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val quote = transport.createVpnQuote(
+            VpnQuoteCreateRequest("low-latency", "0x$meteringKey"),
+            auth,
+        ).join()
+
+        assertEquals(quoteId, quote.quoteId)
+        assertEquals(quoteId, quote.leaseIdHex)
+        assertEquals(meteringKey, quote.meteringPublicKeyHex)
+        assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction?.wireId)
+        assertEquals(1, quote.txInstructions.size)
+        assertEquals(quote.openLeaseInstruction?.payloadHex, quote.txInstructions.first().payloadHex)
+
+        val request = executor.lastRequest
+        assertEquals("POST", request.method)
+        assertEquals("https://torii.example/api/v1/vpn/quotes", request.uri.toString())
+        assertEquals("""{"exit_class":"low-latency","metering_public_key_hex":"$meteringKey"}""", readBody(request))
+        assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
+        assertEquals("vpn-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "vpn-nonce-1")
+    }
+
+    @Test
+    fun vpnSessionAndReceiptMethodsUseNativeLeaseDtos() {
+        val sessionId = "33".repeat(32)
+        val paymentTxHash = "44".repeat(32)
+        val meteringKey = "55".repeat(32)
+        val receiptJson = vpnReceiptJson(sessionId, paymentTxHash, settled = true)
+        val executor = QueueResponseExecutor(
+            listOf(
+                201 to vpnSessionJson(sessionId, paymentTxHash),
+                200 to vpnSessionJson(sessionId, paymentTxHash),
+                200 to vpnReceiptJson(sessionId, paymentTxHash, settled = false),
+                201 to receiptJson,
+                200 to """{"items":[$receiptJson],"total":1}""",
+            )
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_001L, "vpn-nonce-2")
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        val session = transport.createVpnSession(
+            VpnSessionCreateRequest("standard", sessionId, "0x$paymentTxHash", meteringKey),
+            auth,
+        ).join()
+        val fetched = transport.getVpnSession(sessionId, auth).join()
+        val deleted = transport.deleteVpnSession("0x$sessionId", auth).join()
+        val submitted = transport.submitVpnReceipt(
+            VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$sessionId"),
+            auth,
+        ).join()
+        val receipts = transport.listVpnReceipts(auth).join()
+
+        assertEquals(sessionId, session.sessionId)
+        assertTrue(fetched.isPresent)
+        assertEquals(sessionId, fetched.get().quoteId)
+        assertTrue(deleted.isPresent)
+        assertEquals("disconnected", deleted.get().status)
+        assertEquals("settled", submitted.status)
+        assertEquals(750_000L, submitted.earnedFeeNanos)
+        assertEquals(250_000L, submitted.refundedFeeNanos)
+        assertEquals("iroha_data_model::isi::vpn::SettleVpnLease", submitted.settleLeaseInstruction?.wireId)
+        assertEquals(1L, receipts.total)
+        assertEquals(sessionId, receipts.items.first().leaseIdHex)
+
+        assertEquals("""{"exit_class":"standard","metering_public_key_hex":"$meteringKey","payment_tx_hash":"$paymentTxHash","quote_id":"$sessionId"}""", readBody(executor.requests[0]))
+        assertEquals("GET", executor.requests[1].method)
+        assertEquals("https://torii.example/v1/vpn/sessions/$sessionId", executor.requests[1].uri.toString())
+        assertEquals("DELETE", executor.requests[2].method)
+        assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$sessionId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[3]))
+        assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[4].uri.toString())
+    }
+
+    @Test
     fun resolveAccountAliasParsesSuccessfulResponse() {
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -376,6 +710,148 @@ class HttpClientTransportTest {
     private fun readBody(request: TransportRequest): String =
         String(request.body, StandardCharsets.UTF_8)
 
+    private fun assertCanonicalSignature(
+        request: TransportRequest,
+        publicKey: java.security.PublicKey,
+        timestampMs: Long,
+        nonce: String,
+    ) {
+        val encodedSignature = assertNotNull(request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.first())
+        val signature = Base64.getDecoder().decode(encodedSignature)
+        val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            request.method,
+            request.uri,
+            request.body,
+            timestampMs,
+            nonce,
+        )
+        val verifier = Signature.getInstance("Ed25519")
+        verifier.initVerify(publicKey)
+        verifier.update(message)
+        assertTrue(verifier.verify(signature))
+    }
+
+    private fun vpnQuoteJson(quoteId: String, meteringKey: String): String =
+        """
+            {
+              "quote_id": "$quoteId",
+              "lease_id_hex": "$quoteId",
+              "session_id_hex": "${"aa".repeat(16)}",
+              "payment_reference": "$quoteId",
+              "account_id": "alice",
+              "exit_class": "low-latency",
+              "relay_endpoint": "/dns/relay.example/udp/9443/quic",
+              "lease_secs": 600,
+              "quote_expires_at_ms": 1700000600000,
+              "fee_asset_id": "xor#universal.universal",
+              "escrow_account_id": "sorauEscrow",
+              "operator_account_id": "sorauOperator",
+              "lease_fee_nanos": 1000000,
+              "route_pushes": ["0.0.0.0/0"],
+              "excluded_routes": [],
+              "dns_servers": ["1.1.1.1"],
+              "tunnel_addresses": ["10.208.0.2/32"],
+              "mtu_bytes": 1024,
+              "meter_family": "soranet.vpn.standard",
+              "flow_label_bits": 24,
+              "padding_budget_ms": 15,
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "metering_public_key_hex": "$meteringKey",
+              "open_lease_instruction": {
+                "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
+                "payload_hex": "cafe"
+              },
+              "tx_instructions": [
+                {
+                  "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
+                  "payload_hex": "cafe"
+                }
+              ]
+            }
+        """.trimIndent()
+
+    private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
+        """
+            {
+              "session_id": "$sessionId",
+              "account_id": "alice",
+              "exit_class": "standard",
+              "relay_endpoint": "/dns/relay.example/udp/9443/quic",
+              "lease_secs": 600,
+              "expires_at_ms": 1700000600000,
+              "connected_at_ms": 1700000000000,
+              "meter_family": "soranet.vpn.standard",
+              "quote_id": "$sessionId",
+              "payment_reference": "$sessionId",
+              "payment_tx_hash": "$paymentTxHash",
+              "fee_asset_id": "xor#universal.universal",
+              "escrow_account_id": "sorauEscrow",
+              "operator_account_id": "sorauOperator",
+              "lease_fee_nanos": 1000000,
+              "flow_label_bits": 24,
+              "padding_budget_ms": 15,
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "route_pushes": ["0.0.0.0/0"],
+              "excluded_routes": [],
+              "dns_servers": ["1.1.1.1"],
+              "tunnel_addresses": ["10.208.0.2/32"],
+              "mtu_bytes": 1024,
+              "helper_ticket_hex": "cafe",
+              "bytes_in": 0,
+              "bytes_out": 0,
+              "status": "active"
+            }
+        """.trimIndent()
+
+    private fun vpnReceiptJson(sessionId: String, paymentTxHash: String, settled: Boolean): String {
+        val status = if (settled) "settled" else "disconnected"
+        val source = if (settled) "relay" else "torii"
+        val earned = if (settled) 750_000L else 0L
+        val refunded = if (settled) 250_000L else 1_000_000L
+        val settle = if (settled) {
+            """,
+              "settle_lease_instruction": {
+                "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
+                "payload_hex": "f00d"
+              },
+              "tx_instructions": [
+                {
+                  "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
+                  "payload_hex": "f00d"
+                }
+              ]"""
+        } else {
+            """,
+              "settle_lease_instruction": null,
+              "tx_instructions": []"""
+        }
+        return """
+            {
+              "session_id": "$sessionId",
+              "account_id": "alice",
+              "exit_class": "standard",
+              "relay_endpoint": "/dns/relay.example/udp/9443/quic",
+              "meter_family": "soranet.vpn.standard",
+              "connected_at_ms": 1700000000000,
+              "disconnected_at_ms": 1700000010000,
+              "duration_ms": 10000,
+              "bytes_in": 1024,
+              "bytes_out": 2048,
+              "status": "$status",
+              "receipt_source": "$source",
+              "quote_id": "$sessionId",
+              "payment_tx_hash": "$paymentTxHash",
+              "fee_asset_id": "xor#universal.universal",
+              "escrow_account_id": "sorauEscrow",
+              "operator_account_id": "sorauOperator",
+              "lease_fee_nanos": 1000000,
+              "earned_fee_nanos": $earned,
+              "refunded_fee_nanos": $refunded,
+              "lease_id_hex": "$sessionId"$settle
+            }
+        """.trimIndent()
+    }
+
     private fun sampleTransaction(seed: Int): SignedTransaction {
         val codec = NoritoJavaCodecAdapter()
         val encoded = codec.encodeTransaction(
@@ -416,6 +892,24 @@ class HttpClientTransportTest {
             lastRequest = request
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(statusCode).setBody(body).build(),
+            )
+        }
+    }
+
+    private class QueueResponseExecutor(
+        responses: List<Pair<Int, String>>,
+    ) : HttpTransportExecutor {
+        val requests = mutableListOf<TransportRequest>()
+        private val responses = java.util.ArrayDeque(responses)
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requests.add(request)
+            val (statusCode, body) = responses.removeFirst()
+            return CompletableFuture.completedFuture(
+                TransportResponse.builder()
+                    .setStatusCode(statusCode)
+                    .setBody(body.toByteArray(StandardCharsets.UTF_8))
+                    .build(),
             )
         }
     }

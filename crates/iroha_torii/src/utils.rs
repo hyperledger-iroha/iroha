@@ -682,26 +682,30 @@ pub mod extractors {
         body: &Bytes,
         declared: Option<&str>,
     ) -> Result<T, Response> {
-        if let Some(ct) = declared {
-            if super::is_norito_media_type(ct) {
-                return decode_as_norito::<T>(body);
-            }
-            if super::is_json_media_type(ct) {
-                return decode_as_json::<T>(body);
-            }
-            if !ct.eq_ignore_ascii_case("application/octet-stream") {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "unsupported Content-Type `{ct}`; use application/json or {}",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            }
+        let Some(ct) = declared else {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                format!(
+                    "missing Content-Type; use application/json or {}",
+                    super::NORITO_MIME_TYPE
+                ),
+            )
+                .into_response());
+        };
+        if super::is_norito_media_type(ct) {
+            return decode_as_norito::<T>(body);
         }
-
-        decode_as_norito::<T>(body).or_else(|_| decode_as_json::<T>(body))
+        if super::is_json_media_type(ct) {
+            return decode_as_json::<T>(body);
+        }
+        Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            format!(
+                "unsupported Content-Type `{ct}`; use application/json or {}",
+                super::NORITO_MIME_TYPE
+            ),
+        )
+            .into_response())
     }
 
     /// Extractor for request bodies supporting both Norito and JSON payloads.
@@ -1206,6 +1210,52 @@ pub mod extractors {
             let err = NoritoJson::<Payload>::from_request(req, &())
                 .await
                 .expect_err("unsupported content-type");
+            assert_eq!(err.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+
+        #[tokio::test]
+        async fn norito_json_rejects_missing_content_type() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            let req = Request::builder()
+                .method("POST")
+                .body(Body::from("{}"))
+                .expect("build request");
+            let err = NoritoJson::<Payload>::from_request(req, &())
+                .await
+                .expect_err("missing content-type");
+            assert_eq!(err.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+
+        #[tokio::test]
+        async fn norito_json_rejects_octet_stream_fallback() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            let body = norito::to_bytes(&Payload).expect("encode norito payload");
+            let req = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(body))
+                .expect("build request");
+            let err = NoritoJson::<Payload>::from_request(req, &())
+                .await
+                .expect_err("octet-stream content-type");
             assert_eq!(err.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
 

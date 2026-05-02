@@ -291,18 +291,17 @@ fn error_message_from_body(body: &[u8]) -> Option<String> {
         return Some(envelope.summary());
     }
 
-    if let Ok(value) = norito::json::from_slice::<json::Value>(body) {
-        if let Some(message) = value
+    if let Ok(value) = norito::json::from_slice::<json::Value>(body)
+        && let Some(message) = value
             .get("message")
             .or_else(|| value.get("error"))
             .and_then(json::Value::as_str)
-        {
-            let code = value.get("code").and_then(json::Value::as_str);
-            return Some(match code {
-                Some(code) if !code.is_empty() => format!("{code}: {message}"),
-                _ => message.to_owned(),
-            });
-        }
+    {
+        let code = value.get("code").and_then(json::Value::as_str);
+        return Some(match code {
+            Some(code) if !code.is_empty() => format!("{code}: {message}"),
+            _ => message.to_owned(),
+        });
     }
 
     let text = String::from_utf8_lossy(body).trim().to_owned();
@@ -4155,25 +4154,40 @@ fn nft_event_summary(event: &NftEvent) -> (String, String) {
     }
 }
 
-fn offline_event_summary(event: &offline::OfflineTransferEvent) -> (String, String) {
+fn offline_event_summary(event: &offline::OfflineNoteEvent) -> (String, String) {
     match event {
-        offline::OfflineTransferEvent::RevocationImported(payload) => (
-            "Offline revocation imported".to_owned(),
-            format!("{payload:?}"),
+        offline::OfflineNoteEvent::NoteIssued(payload) => (
+            "Offline note issued".to_owned(),
+            format!(
+                "note={:?} account={} asset={} amount={} recorded_at_ms={}",
+                payload.note_commitment,
+                payload.account,
+                payload.asset,
+                payload.amount,
+                payload.recorded_at_ms
+            ),
         ),
-        offline::OfflineTransferEvent::Settled(payload) => {
-            ("Offline bundle settled".to_owned(), format!("{payload:?}"))
-        }
-        offline::OfflineTransferEvent::AllowanceReclaimed(payload) => (
-            "Offline allowance reclaimed".to_owned(),
-            format!("{payload:?}"),
+        offline::OfflineNoteEvent::NoteRedeemed(payload) => (
+            "Offline note redeemed".to_owned(),
+            format!(
+                "source_note={:?} recipient={} asset={} amount={} recorded_at_ms={}",
+                payload.source_note_commitment,
+                payload.recipient,
+                payload.asset,
+                payload.amount,
+                payload.recorded_at_ms
+            ),
         ),
-        offline::OfflineTransferEvent::Archived(payload) => {
-            ("Offline bundle archived".to_owned(), format!("{payload:?}"))
-        }
-        offline::OfflineTransferEvent::Pruned(payload) => {
-            ("Offline bundle pruned".to_owned(), format!("{payload:?}"))
-        }
+        offline::OfflineNoteEvent::AuditRecorded(payload) => (
+            "Offline audit recorded".to_owned(),
+            format!(
+                "token={:?} account={} public_inputs={:?} recorded_at_ms={}",
+                payload.token_id,
+                payload.account,
+                payload.public_inputs_hash,
+                payload.recorded_at_ms
+            ),
+        ),
     }
 }
 
@@ -9494,23 +9508,27 @@ state_tiered_cold_entries 2
     }
 
     #[test]
-    fn offline_settled_summary_includes_bundle_and_amount() {
-        let payload = iroha_data_model::offline::OfflineVerdictRevocation {
-            verdict_id: Hash::prehashed([1_u8; Hash::LENGTH]),
-            issuer: ALICE_ID.clone(),
-            revoked_at_ms: 1_234,
-            reason: iroha_data_model::offline::OfflineVerdictRevocationReason::IssuerRequest,
-            note: Some("bundle_id=demo amount=42".to_owned()),
-            metadata: iroha_data_model::metadata::Metadata::default(),
+    fn offline_note_issued_summary_includes_note_and_amount() {
+        let definition = iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::prelude::DomainId::try_new("offline", "universal")
+                .expect("domain id"),
+            "usd".parse().expect("asset name"),
+        );
+        let payload = offline::OfflineNoteIssued {
+            note_commitment: Hash::prehashed([1_u8; Hash::LENGTH]),
+            account: ALICE_ID.clone(),
+            asset: iroha_data_model::asset::AssetId::new(definition, ALICE_ID.clone()),
+            amount: iroha_data_model::prelude::Numeric::from(42_u32),
+            recorded_at_ms: 1_234,
         };
-        let offline_event = offline::OfflineTransferEvent::RevocationImported(payload);
+        let offline_event = offline::OfflineNoteEvent::NoteIssued(payload);
         let event_box = EventBox::Data(DataEvent::Offline(offline_event).into());
         let summary = EventSummary::from_event(&event_box);
-        assert_eq!(summary.label, "Offline revocation imported");
+        assert_eq!(summary.label, "Offline note issued");
         let detail = summary.detail.expect("detail");
         assert!(
-            detail.contains("bundle_id") && detail.contains("amount"),
-            "detail `{detail}` should include bundle id and amount markers"
+            detail.contains("note") && detail.contains("amount=42"),
+            "detail `{detail}` should include note and amount markers"
         );
     }
 

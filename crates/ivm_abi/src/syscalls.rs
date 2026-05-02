@@ -78,6 +78,26 @@ pub const SYSCALL_NFT_BURN_ASSET: u32 = 0x28;
 pub const SYSCALL_STATE_GET: u32 = 0x50;
 pub const SYSCALL_STATE_SET: u32 = 0x51;
 pub const SYSCALL_STATE_DEL: u32 = 0x52;
+/// Enumerate durable-state keys under a prefix.
+///
+/// Args: r10 = &Name prefix, r11 = offset, r12 = limit (0 = unbounded)
+/// Ret:  r10 = &NoritoBytes(Vec<Name>), r11 = total matching keys, r12 = returned keys
+pub const SYSCALL_STATE_KEYS: u32 = 0x01_0030;
+/// Test whether a durable-state key is currently present.
+///
+/// Args: r10 = &Name path
+/// Ret:  r10 = 1 when present, 0 when absent
+pub const SYSCALL_STATE_HAS: u32 = 0x01_0031;
+/// Return the byte length of a durable-state value without copying the value.
+///
+/// Args: r10 = &Name path
+/// Ret:  r10 = value payload length, r11 = 1 when present, 0 when absent
+pub const SYSCALL_STATE_LEN: u32 = 0x01_0032;
+/// Count durable-state keys under a prefix without copying the key list.
+///
+/// Args: r10 = &Name prefix
+/// Ret:  r10 = total matching keys
+pub const SYSCALL_STATE_COUNT: u32 = 0x01_0033;
 /// Decode a NoritoBytes value containing a signed decimal ASCII integer and return
 /// the value in `x10` as a 64-bit signed integer (two's complement).
 ///
@@ -352,10 +372,11 @@ pub const SYSCALL_VRF_VERIFY_BATCH: u32 = 0x67;
 pub const SYSCALL_VRF_EPOCH_SEED: u32 = 0x7E;
 
 /// Hardware and proof generation helpers.
+/// Return a deterministic Norito-encoded execution-proof summary.
 pub const SYSCALL_PROVE_EXECUTION: u32 = 0xF4;
 /// Increase heap size by the number of bytes in `x10`.
 pub const SYSCALL_GROW_HEAP: u32 = 0xF5;
-/// Verify the collected execution proof.
+/// Verify a Norito-encoded OpenVerifyEnvelope against the on-chain verifying-key registry.
 pub const SYSCALL_VERIFY_PROOF: u32 = 0xF6;
 /// Write the Merkle path for address `x10` to memory at `x11`.
 /// Optional: if `x12 != 0`, write the current Merkle root to the 32-byte
@@ -387,6 +408,12 @@ pub const SYSCALL_SM4_CCM_OPEN: u32 = 0x95;
 pub const SYSCALL_SHA256_HASH: u32 = 0x96;
 /// Compute SHA3-256 hash of a blob (`&Blob` -> `&Blob`).
 pub const SYSCALL_SHA3_HASH: u32 = 0x97;
+/// Compute raw Blake2b-256 hash of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_BLAKE2B256_HASH: u32 = 0x98;
+/// Compute Keccak-256 hash of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_KECCAK256_HASH: u32 = 0x99;
+/// Compute Iroha's canonical ledger hash (`Hash::new`) of a blob (`&Blob` -> `&Blob`).
+pub const SYSCALL_IROHA_HASH: u32 = 0x9A;
 /// Developer helper: copy a TLV from program memory into the INPUT region and return its pointer.
 ///
 /// Expects `x10` to hold a pointer to a valid TLV in program memory (data/heap). The host validates
@@ -477,6 +504,65 @@ pub const SYSCALL_SORACLOUD_EGRESS_FETCH: u32 = 0xC7;
 pub const SYSCALL_SORACLOUD_READ_CONFIG: u32 = 0xC8;
 /// Read authoritative service secret envelopes exposed through the Soracloud host.
 pub const SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE: u32 = 0xC9;
+
+/// Execute an arbitrary Norito-encoded read-only query request.
+pub const SYSCALL_QUERY_EXECUTE_NORITO: u32 = 0x01_0000;
+/// Read one account by id.
+pub const SYSCALL_QUERY_GET_ACCOUNT: u32 = 0x01_0001;
+/// Read one asset by id.
+pub const SYSCALL_QUERY_GET_ASSET: u32 = 0x01_0002;
+/// Read one asset definition by id.
+pub const SYSCALL_QUERY_GET_ASSET_DEFINITION: u32 = 0x01_0003;
+/// Read one domain by id.
+pub const SYSCALL_QUERY_GET_DOMAIN: u32 = 0x01_0004;
+/// Read one NFT by id.
+pub const SYSCALL_QUERY_GET_NFT: u32 = 0x01_0005;
+/// Read one runtime/system/custom parameter by canonical name.
+pub const SYSCALL_QUERY_GET_PARAMETER: u32 = 0x01_0006;
+/// Read one contract manifest by code hash.
+pub const SYSCALL_QUERY_GET_CONTRACT_MANIFEST: u32 = 0x01_0007;
+/// Read one contract instance by address/alias.
+pub const SYSCALL_QUERY_GET_CONTRACT_INSTANCE: u32 = 0x01_0008;
+
+/// Return the current chain id as a pointer-ABI `Blob` TLV.
+pub const SYSCALL_SYSVAR_CHAIN_ID: u32 = 0x01_0020;
+/// Return the current block height in `r10`.
+pub const SYSCALL_SYSVAR_BLOCK_HEIGHT: u32 = 0x01_0021;
+/// Return the current block timestamp in milliseconds in `r10`.
+pub const SYSCALL_SYSVAR_BLOCK_TIME_MS: u32 = 0x01_0022;
+/// Return the current authority as an `AccountId` TLV.
+pub const SYSCALL_SYSVAR_AUTHORITY: u32 = 0x01_0023;
+/// Return the current contract address as a NoritoBytes TLV, or zero when not in a contract scope.
+pub const SYSCALL_SYSVAR_CONTRACT_ADDRESS: u32 = 0x01_0024;
+/// Return the current contract entrypoint name as a `Blob` TLV, or zero when not in a contract scope.
+pub const SYSCALL_SYSVAR_ENTRYPOINT: u32 = 0x01_0025;
+
+/// Kotodama test-runner helper: resolve a fixture actor alias to an `AccountId` TLV.
+///
+/// These host-private helpers are intentionally outside [`abi_syscall_list`].
+/// Production hosts reject them, while `koto_test` opts in explicitly when it
+/// executes test-mode bytecode.
+pub const SYSCALL_KOTO_TEST_ACTOR_ACCOUNT: u32 = 0x00FE_0001;
+/// Kotodama test-runner helper: return a fixture actor public key as a `Blob` TLV.
+pub const SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY: u32 = 0x00FE_0002;
+/// Kotodama test-runner helper: sign a message with a fixture actor seed.
+pub const SYSCALL_KOTO_TEST_ACTOR_SIGN: u32 = 0x00FE_0003;
+/// Kotodama test-runner helper: invoke a contract entrypoint as a fixture actor.
+pub const SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS: u32 = 0x00FE_0004;
+/// Kotodama test-runner helper: assert that an actor entrypoint invocation rejects.
+pub const SYSCALL_KOTO_TEST_EXPECT_REJECT_AS: u32 = 0x00FE_0005;
+
+/// Return whether `number` belongs to the host-private Kotodama test surface.
+pub const fn is_koto_test_syscall(number: u32) -> bool {
+    matches!(
+        number,
+        SYSCALL_KOTO_TEST_ACTOR_ACCOUNT
+            | SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY
+            | SYSCALL_KOTO_TEST_ACTOR_SIGN
+            | SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
+            | SYSCALL_KOTO_TEST_EXPECT_REJECT_AS
+    )
+}
 
 /// Map direct helper syscall aliases onto their canonical helper numbers.
 ///
@@ -571,6 +657,9 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SM4_CCM_OPEN,
             SYSCALL_SHA256_HASH,
             SYSCALL_SHA3_HASH,
+            SYSCALL_BLAKE2B256_HASH,
+            SYSCALL_KECCAK256_HASH,
+            SYSCALL_IROHA_HASH,
         ]);
         // Codec helpers
         v.push(SYSCALL_JSON_ENCODE);
@@ -669,6 +758,10 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_STATE_GET);
         v.push(SYSCALL_STATE_SET);
         v.push(SYSCALL_STATE_DEL);
+        v.push(SYSCALL_STATE_KEYS);
+        v.push(SYSCALL_STATE_HAS);
+        v.push(SYSCALL_STATE_LEN);
+        v.push(SYSCALL_STATE_COUNT);
         v.push(SYSCALL_BUILD_PATH_MAP_KEY);
         v.push(SYSCALL_BUILD_PATH_KEY_NORITO);
         v.push(SYSCALL_ENCODE_INT);
@@ -714,11 +807,26 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.extend_from_slice(&[
             SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
             SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+            SYSCALL_QUERY_EXECUTE_NORITO,
+            SYSCALL_QUERY_GET_ACCOUNT,
+            SYSCALL_QUERY_GET_ASSET,
+            SYSCALL_QUERY_GET_ASSET_DEFINITION,
+            SYSCALL_QUERY_GET_DOMAIN,
+            SYSCALL_QUERY_GET_NFT,
+            SYSCALL_QUERY_GET_PARAMETER,
+            SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+            SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
             SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
             SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
             SYSCALL_GET_AUTHORITY,
             SYSCALL_CALL_CONTRACT,
             SYSCALL_CURRENT_TIME_MS,
+            SYSCALL_SYSVAR_CHAIN_ID,
+            SYSCALL_SYSVAR_BLOCK_HEIGHT,
+            SYSCALL_SYSVAR_BLOCK_TIME_MS,
+            SYSCALL_SYSVAR_AUTHORITY,
+            SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+            SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
@@ -805,6 +913,9 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SM4_CCM_OPEN => "SM4_CCM_OPEN",
         SYSCALL_SHA256_HASH => "SHA256_HASH",
         SYSCALL_SHA3_HASH => "SHA3_HASH",
+        SYSCALL_BLAKE2B256_HASH => "BLAKE2B256_HASH",
+        SYSCALL_KECCAK256_HASH => "KECCAK256_HASH",
+        SYSCALL_IROHA_HASH => "IROHA_HASH",
         // Hardware / helpers
         SYSCALL_PROVE_EXECUTION => "PROVE_EXECUTION",
         SYSCALL_VERIFY_PROOF => "VERIFY_PROOF",
@@ -839,6 +950,10 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_STATE_GET => "STATE_GET",
         SYSCALL_STATE_SET => "STATE_SET",
         SYSCALL_STATE_DEL => "STATE_DEL",
+        SYSCALL_STATE_KEYS => "STATE_KEYS",
+        SYSCALL_STATE_HAS => "STATE_HAS",
+        SYSCALL_STATE_LEN => "STATE_LEN",
+        SYSCALL_STATE_COUNT => "STATE_COUNT",
         SYSCALL_DECODE_INT => "DECODE_INT",
         SYSCALL_BUILD_PATH_MAP_KEY => "BUILD_PATH_MAP_KEY",
         SYSCALL_ENCODE_INT => "ENCODE_INT",
@@ -938,11 +1053,26 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         // Dev/vendor helpers
         SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => "SMARTCONTRACT_EXECUTE_INSTRUCTION",
         SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => "SMARTCONTRACT_EXECUTE_QUERY",
+        SYSCALL_QUERY_EXECUTE_NORITO => "QUERY_EXECUTE_NORITO",
+        SYSCALL_QUERY_GET_ACCOUNT => "QUERY_GET_ACCOUNT",
+        SYSCALL_QUERY_GET_ASSET => "QUERY_GET_ASSET",
+        SYSCALL_QUERY_GET_ASSET_DEFINITION => "QUERY_GET_ASSET_DEFINITION",
+        SYSCALL_QUERY_GET_DOMAIN => "QUERY_GET_DOMAIN",
+        SYSCALL_QUERY_GET_NFT => "QUERY_GET_NFT",
+        SYSCALL_QUERY_GET_PARAMETER => "QUERY_GET_PARAMETER",
+        SYSCALL_QUERY_GET_CONTRACT_MANIFEST => "QUERY_GET_CONTRACT_MANIFEST",
+        SYSCALL_QUERY_GET_CONTRACT_INSTANCE => "QUERY_GET_CONTRACT_INSTANCE",
         SYSCALL_CREATE_NFTS_FOR_ALL_USERS => "CREATE_NFTS_FOR_ALL_USERS",
         SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => "SET_SMARTCONTRACT_EXECUTION_DEPTH",
         SYSCALL_GET_AUTHORITY => "GET_AUTHORITY",
         SYSCALL_CALL_CONTRACT => "CALL_CONTRACT",
         SYSCALL_CURRENT_TIME_MS => "CURRENT_TIME_MS",
+        SYSCALL_SYSVAR_CHAIN_ID => "SYSVAR_CHAIN_ID",
+        SYSCALL_SYSVAR_BLOCK_HEIGHT => "SYSVAR_BLOCK_HEIGHT",
+        SYSCALL_SYSVAR_BLOCK_TIME_MS => "SYSVAR_BLOCK_TIME_MS",
+        SYSCALL_SYSVAR_AUTHORITY => "SYSVAR_AUTHORITY",
+        SYSCALL_SYSVAR_CONTRACT_ADDRESS => "SYSVAR_CONTRACT_ADDRESS",
+        SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
@@ -1149,5 +1279,22 @@ mod tests {
             canonical_helper_syscall(SYSCALL_STATE_GET),
             SYSCALL_STATE_GET
         );
+    }
+
+    #[test]
+    fn koto_test_syscalls_are_host_private() {
+        let private = [
+            SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+            SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY,
+            SYSCALL_KOTO_TEST_ACTOR_SIGN,
+            SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
+            SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
+        ];
+
+        for syscall in private {
+            assert!(is_koto_test_syscall(syscall));
+            assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
+            assert!(syscall > u8::MAX as u32);
+        }
     }
 }

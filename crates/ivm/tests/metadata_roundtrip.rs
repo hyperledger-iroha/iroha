@@ -59,13 +59,10 @@ fn metadata_parse_rejects_bad_magic_and_short() {
         Err(VMError::InvalidMetadata)
     ));
 
-    // Corrupt only a header byte to ensure parser still consumes fixed size and returns values
+    // Corrupt vector_length above the ABI maximum and ensure parser rejects it.
     m[7] ^= 0xFF; // vector_length flipped
-    let parsed = ProgramMetadata::parse(&m).expect("parse ok despite flip");
-    assert_eq!(parsed.header_len, 17);
-    // Value should reflect the flip
-    assert_ne!(
-        parsed.metadata.vector_length,
-        ProgramMetadata::default().vector_length
-    );
+    assert!(matches!(
+        ProgramMetadata::parse(&m),
+        Err(VMError::InvalidMetadata)
+    ));
 }

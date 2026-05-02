@@ -221,14 +221,15 @@ pub struct AxtTouchFragment {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ProofBlob {
-    /// Raw proof bytes.
+    /// Norito-encoded AXT proof envelope bytes.
     pub payload: Vec<u8>,
     /// Optional expiry slot advertised by the prover.
     #[norito(default)]
     pub expiry_slot: Option<u64>,
 }
 
-/// Check whether the proof payload binds to the expected dataspace and manifest root.
+/// Check whether the proof envelope binds to the expected dataspace, manifest root,
+/// and V1 `FastPQ` verifier binding.
 #[must_use]
 pub fn proof_matches_manifest(
     proof: &ProofBlob,
@@ -239,11 +240,54 @@ pub fn proof_matches_manifest(
         return false;
     }
     if let Ok(envelope) = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload) {
+        let Some(binding) = envelope.fastpq_binding.as_ref() else {
+            return false;
+        };
         return envelope.dsid == dsid
             && envelope.manifest_root == manifest_root
-            && envelope.manifest_root.iter().any(|byte| *byte != 0);
+            && envelope.manifest_root.iter().any(|byte| *byte != 0)
+            && !envelope.proof.is_empty()
+            && binding.source_dsid == dsid.as_u64()
+            && binding.verifier_id == "fastpq"
+            && binding.verifier_version == "v1"
+            && fastpq_binding_shape_is_concrete(binding);
     }
-    proof.payload.as_slice() == manifest_root
+    false
+}
+
+fn fastpq_binding_shape_is_concrete(binding: &AxtFastpqBinding) -> bool {
+    binding_string_is_present(&binding.parameter)
+        && binding_string_is_present(&binding.source_dataspace)
+        && binding_string_is_present(&binding.source_receipt_id)
+        && binding_hex_digest_is_present(&binding.source_tx_commitment)
+        && fastpq_claim_type_is_supported(&binding.claim_type)
+        && binding_hex_digest_is_present(&binding.claim_digest)
+        && binding_hex_digest_is_present(&binding.witness_commitment)
+        && binding_hex_digest_is_present(&binding.policy_commitment)
+        && binding_string_is_present(&binding.verified_effect_type)
+        && !binding.target_dsids.is_empty()
+        && binding
+            .target_dsids
+            .iter()
+            .enumerate()
+            .all(|(idx, value)| !binding.target_dsids[..idx].contains(value))
+}
+
+fn binding_string_is_present(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+fn binding_hex_digest_is_present(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn fastpq_claim_type_is_supported(value: &str) -> bool {
+    let value = value.trim();
+    value.eq_ignore_ascii_case("authorization")
+        || value.eq_ignore_ascii_case("compliance")
+        || value.eq_ignore_ascii_case("tx_predicate")
+        || value.eq_ignore_ascii_case("value_conservation")
 }
 
 /// Norito envelope used to bind dataspace proofs to manifest roots and DA state.
@@ -875,6 +919,26 @@ mod tests {
         }
     }
 
+    fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
+        AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_string(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: format!("test-dataspace-{}", dsid.as_u64()),
+            source_receipt_id: format!("receipt-{}", dsid.as_u64()),
+            source_tx_commitment: "aa".repeat(32),
+            claim_type: "authorization".to_string(),
+            claim_digest: "bb".repeat(32),
+            witness_commitment: "cc".repeat(32),
+            policy_commitment: "dd".repeat(32),
+            verified_effect_type: "test_effect".to_string(),
+            corridor: "test-corridor".to_string(),
+            verifier_id: "fastpq".to_string(),
+            verifier_version: "v1".to_string(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }
+    }
+
     #[test]
     fn descriptor_validation_rejects_duplicates_and_missing() {
         let empty = AxtDescriptor {
@@ -1050,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_matches_manifest_accepts_envelope_and_raw_root() {
+    fn proof_matches_manifest_accepts_envelope_and_rejects_raw_root() {
         let dsid = DataSpaceId::new(17);
         let manifest_root = [0xA5; 32];
         let envelope = AxtProofEnvelope {
@@ -1058,7 +1122,7 @@ mod tests {
             manifest_root,
             da_commitment: None,
             proof: vec![0xCC],
-            fastpq_binding: None,
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
             committed_amount: None,
             amount_commitment: None,
         };
@@ -1069,11 +1133,86 @@ mod tests {
         };
         assert!(proof_matches_manifest(&proof, dsid, manifest_root));
 
+        let missing_binding = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0xCC],
+            fastpq_binding: None,
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        let missing_binding_proof = ProofBlob {
+            payload: norito::to_bytes(&missing_binding).expect("encode envelope"),
+            expiry_slot: None,
+        };
+        assert!(!proof_matches_manifest(
+            &missing_binding_proof,
+            dsid,
+            manifest_root
+        ));
+
         let raw_proof = ProofBlob {
             payload: manifest_root.to_vec(),
             expiry_slot: Some(5),
         };
-        assert!(proof_matches_manifest(&raw_proof, dsid, manifest_root));
+        assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
+    }
+
+    #[test]
+    fn proof_matches_manifest_rejects_synthetic_binding_shape() {
+        let dsid = DataSpaceId::new(20);
+        let manifest_root = [0xC1; 32];
+        let mut binding = sample_fastpq_binding(dsid);
+        binding.claim_digest.clear();
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0xCC],
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        let proof = ProofBlob {
+            payload: norito::to_bytes(&envelope).expect("encode envelope"),
+            expiry_slot: None,
+        };
+        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
+
+        let mut binding = sample_fastpq_binding(dsid);
+        binding.claim_type = "synthetic".to_string();
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0xCC],
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        let proof = ProofBlob {
+            payload: norito::to_bytes(&envelope).expect("encode envelope"),
+            expiry_slot: None,
+        };
+        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
+
+        let mut binding = sample_fastpq_binding(dsid);
+        binding.target_dsids.clear();
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0xCC],
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        let proof = ProofBlob {
+            payload: norito::to_bytes(&envelope).expect("encode envelope"),
+            expiry_slot: None,
+        };
+        assert!(!proof_matches_manifest(&proof, dsid, manifest_root));
     }
 
     #[test]
@@ -1087,7 +1226,7 @@ mod tests {
             manifest_root: bad_root,
             da_commitment: None,
             proof: vec![0xCC],
-            fastpq_binding: None,
+            fastpq_binding: Some(sample_fastpq_binding(other)),
             committed_amount: None,
             amount_commitment: None,
         };

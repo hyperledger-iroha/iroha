@@ -61,6 +61,9 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
 test("ToriiClient canonical auth uses raw Node transport for UTF-8 account headers", async (t) => {
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
+  const quoteId = "12".repeat(32);
+  const paymentTxHash = "34".repeat(32);
+  const meteringPublicKeyHex = "56".repeat(32);
   const requests = [];
   const server = createServer({ allowHalfOpen: true }, (socket) => {
     const chunks = [];
@@ -93,6 +96,16 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
           expires_at_ms: 1_700_000_000_000,
           connected_at_ms: 1_699_999_400_000,
           meter_family: "soranet.vpn.standard",
+          quote_id: quoteId,
+          payment_reference: quoteId,
+          payment_tx_hash: paymentTxHash,
+          fee_asset_id: "xor#universal.universal",
+          escrow_account_id: "vpn_escrow",
+          operator_account_id: accountId,
+          lease_fee_nanos: "1000000",
+          flow_label_bits: 20,
+          padding_budget_ms: 80,
+          relay_tls_spki_sha256_hex: "78".repeat(32),
           route_pushes: [],
           excluded_routes: [],
           dns_servers: ["1.1.1.1"],
@@ -151,7 +164,7 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
   });
 
   const session = await client.createVpnSession(
-    { exitClass: "standard" },
+    { exitClass: "standard", quoteId, paymentTxHash, meteringPublicKeyHex },
     { canonicalAuth: { accountId, privateKey } },
   );
 
@@ -170,7 +183,12 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
   assert.notEqual(headerTerminator, -1);
   assert.deepEqual(
     JSON.parse(request.subarray(headerTerminator + 4).toString("utf8")),
-    { exit_class: "standard" },
+    {
+      exit_class: "standard",
+      quote_id: quoteId,
+      payment_tx_hash: paymentTxHash,
+      metering_public_key_hex: meteringPublicKeyHex,
+    },
   );
   assert.equal(session.sessionId, "sess_utf8");
   assert.equal(session.accountId, accountId);

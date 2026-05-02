@@ -958,7 +958,7 @@ public sealed class ToriiClientTests
         Assert.Equal("Transfer", page.Items[0].Kind);
         Assert.Equal("tx-ins", page.Items[0].TransactionHash);
         Assert.Equal(
-            "page=3&per_page=10&authority=sorau%E3%83%AD1Nauthority&account=sorau%E3%83%AD1Naccount&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
+            "page=3&per_page=10&authority=sorau%EF%BE%9B1Nauthority&account=sorau%E3%83%AD1Naccount&transaction_hash=tx-ins&transaction_status=committed&block=12&kind=transfer&asset_id=rose%23wonderland.paynet",
             handler.LastRequest!.RequestUri!.Query.TrimStart('?'));
     }
 
@@ -1248,8 +1248,19 @@ public sealed class ToriiClientTests
                   "dns_push_interval_secs": 30,
                   "meter_family": "vpn-standard",
                   "route_pushes": ["10.0.0.0/8"],
+                  "excluded_routes": ["127.0.0.0/8"],
                   "dns_servers": ["1.1.1.1", "8.8.8.8"],
-                  "display_billing_label": "standard · vpn-standard"
+                  "tunnel_addresses": ["10.208.0.2/32"],
+                  "mtu_bytes": 1280,
+                  "display_billing_label": "standard · vpn-standard · 1000000 nano-XOR",
+                  "fee_asset_id": "xor#universal.universal",
+                  "escrow_account_id": "vpn_escrow",
+                  "operator_account_id": "sorauロ1Noperator",
+                  "lease_fee_nanos": 1000000,
+                  "settlement_grace_secs": 120,
+                  "flow_label_bits": 20,
+                  "padding_budget_ms": 80,
+                  "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111"
                 }
                 """),
         });
@@ -1261,21 +1272,99 @@ public sealed class ToriiClientTests
         Assert.Equal("standard", profile.DefaultExitClass);
         Assert.Equal((ulong)3600, profile.LeaseSeconds);
         Assert.Equal(3, profile.SupportedExitClasses.Count);
+        Assert.Equal("xor#universal.universal", profile.FeeAssetId);
+        Assert.Equal((ulong)1000000, profile.LeaseFeeNanos);
+        Assert.Equal((ushort)80, profile.PaddingBudgetMilliseconds);
         Assert.Equal("/v1/vpn/profile", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     [Fact]
-    public async Task CreateVpnSessionAsyncPostsExitClassAndDeserializesSession()
+    public async Task CreateVpnQuoteAsyncPostsMeteringKeyAndDeserializesNativeInstruction()
     {
+        const string quoteId = "1212121212121212121212121212121212121212121212121212121212121212";
+        const string meteringPublicKeyHex = "3434343434343434343434343434343434343434343434343434343434343434";
+
+        using var handler = new RecordingHandler(request =>
+        {
+            var payload = ReadBodyAsJson(request);
+            Assert.Equal("/v1/vpn/quotes", request.RequestUri!.AbsolutePath);
+            Assert.Equal("low-latency", payload.RootElement.GetProperty("exit_class").GetString());
+            Assert.Equal(meteringPublicKeyHex, payload.RootElement.GetProperty("metering_public_key_hex").GetString());
+
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent($$"""
+                    {
+                      "quote_id": "{{quoteId}}",
+                      "lease_id_hex": "{{quoteId}}",
+                      "session_id_hex": "56565656565656565656565656565656",
+                      "payment_reference": "{{quoteId}}",
+                      "account_id": "sorauロ1Nholder",
+                      "exit_class": "low-latency",
+                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "lease_secs": 3600,
+                      "quote_expires_at_ms": 1700000000000,
+                      "fee_asset_id": "xor#universal.universal",
+                      "escrow_account_id": "vpn_escrow",
+                      "operator_account_id": "sorauロ1Noperator",
+                      "lease_fee_nanos": 1000000,
+                      "route_pushes": ["10.0.0.0/8"],
+                      "excluded_routes": ["127.0.0.0/8"],
+                      "dns_servers": ["1.1.1.1"],
+                      "tunnel_addresses": ["10.208.0.2/32"],
+                      "mtu_bytes": 1280,
+                      "meter_family": "vpn-standard",
+                      "flow_label_bits": 20,
+                      "padding_budget_ms": 80,
+                      "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
+                      "metering_public_key_hex": "{{meteringPublicKeyHex}}",
+                      "open_lease_instruction": {
+                        "wire_id": "OpenVpnLeaseEscrow",
+                        "payload_hex": "abcd"
+                      },
+                      "tx_instructions": [
+                        {
+                          "wire_id": "OpenVpnLeaseEscrow",
+                          "payload_hex": "abcd"
+                        }
+                      ]
+                    }
+                    """),
+            };
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var quote = await client.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
+        {
+            ExitClass = "low-latency",
+            MeteringPublicKeyHex = meteringPublicKeyHex,
+        });
+
+        Assert.Equal(quoteId, quote.QuoteId);
+        Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction?.WireId);
+        Assert.Single(quote.TxInstructions);
+        Assert.Equal("xor#universal.universal", quote.FeeAssetId);
+    }
+
+    [Fact]
+    public async Task CreateVpnSessionAsyncPostsQuotePaymentAndDeserializesSession()
+    {
+        const string quoteId = "abababababababababababababababababababababababababababababababab";
+        const string paymentTxHash = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+        const string meteringPublicKeyHex = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef";
+
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/vpn/sessions", request.RequestUri!.AbsolutePath);
             Assert.Equal("low-latency", payload.RootElement.GetProperty("exit_class").GetString());
+            Assert.Equal(quoteId, payload.RootElement.GetProperty("quote_id").GetString());
+            Assert.Equal(paymentTxHash, payload.RootElement.GetProperty("payment_tx_hash").GetString());
+            Assert.Equal(meteringPublicKeyHex, payload.RootElement.GetProperty("metering_public_key_hex").GetString());
 
             return new HttpResponseMessage(HttpStatusCode.Created)
             {
-                Content = new StringContent("""
+                Content = new StringContent($$"""
                     {
                       "session_id": "session-1",
                       "account_id": "sorauロ1Nholder",
@@ -1283,10 +1372,26 @@ public sealed class ToriiClientTests
                       "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
                       "lease_secs": 3600,
                       "expires_at_ms": 1700000000000,
+                      "connected_at_ms": 1699999400000,
                       "meter_family": "vpn-standard",
+                      "quote_id": "{{quoteId}}",
+                      "payment_reference": "{{quoteId}}",
+                      "payment_tx_hash": "{{paymentTxHash}}",
+                      "fee_asset_id": "xor#universal.universal",
+                      "escrow_account_id": "vpn_escrow",
+                      "operator_account_id": "sorauロ1Noperator",
+                      "lease_fee_nanos": 1000000,
+                      "flow_label_bits": 20,
+                      "padding_budget_ms": 80,
+                      "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
                       "route_pushes": ["10.0.0.0/8"],
+                      "excluded_routes": ["127.0.0.0/8"],
                       "dns_servers": ["1.1.1.1"],
+                      "tunnel_addresses": ["10.208.0.2/32"],
+                      "mtu_bytes": 1280,
                       "helper_ticket_hex": "deadbeef",
+                      "bytes_in": 123,
+                      "bytes_out": 456,
                       "status": "active"
                     }
                     """),
@@ -1297,40 +1402,268 @@ public sealed class ToriiClientTests
         var session = await client.CreateVpnSessionAsync(new ToriiVpnSessionCreateRequest
         {
             ExitClass = "low-latency",
+            QuoteId = quoteId,
+            PaymentTransactionHash = paymentTxHash,
+            MeteringPublicKeyHex = meteringPublicKeyHex,
         });
 
         Assert.Equal("session-1", session.SessionId);
         Assert.Equal("low-latency", session.ExitClass);
         Assert.Equal("active", session.Status);
         Assert.Equal((ulong)1700000000000, session.ExpiresAtMilliseconds);
+        Assert.Equal(quoteId, session.QuoteId);
+        Assert.Equal(paymentTxHash, session.PaymentTransactionHash);
+        Assert.Equal((ulong)1000000, session.LeaseFeeNanos);
     }
 
     [Fact]
-    public async Task DeleteVpnSessionAsyncAllowsNotFoundAndDeserializesResponse()
+    public async Task GetVpnSessionAsyncReturnsNullOnNotFoundAndDeserializesActiveSession()
     {
+        const string quoteId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        var calls = 0;
         using var handler = new RecordingHandler(request =>
         {
-            Assert.Equal(HttpMethod.Delete, request.Method);
-            Assert.Equal("/v1/vpn/sessions/session-404", request.RequestUri!.AbsolutePath);
-
-            return new HttpResponseMessage(HttpStatusCode.NotFound)
+            calls += 1;
+            if (calls == 1)
             {
-                Content = new StringContent("""
+                Assert.Equal("/v1/vpn/sessions/missing", request.RequestUri!.AbsolutePath);
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+
+            Assert.Equal("/v1/vpn/sessions/session-1", request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent($$"""
                     {
-                      "session_id": "session-404",
-                      "status": "not_found",
-                      "disconnected_at_ms": 1700000000500
+                      "session_id": "session-1",
+                      "account_id": "sorauロ1Nholder",
+                      "exit_class": "standard",
+                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "lease_secs": 3600,
+                      "expires_at_ms": 1700000000000,
+                      "connected_at_ms": 1699999400000,
+                      "meter_family": "vpn-standard",
+                      "quote_id": "{{quoteId}}",
+                      "payment_reference": "{{quoteId}}",
+                      "payment_tx_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                      "fee_asset_id": "xor#universal.universal",
+                      "escrow_account_id": "vpn_escrow",
+                      "operator_account_id": "sorauロ1Noperator",
+                      "lease_fee_nanos": 1000000,
+                      "flow_label_bits": 20,
+                      "padding_budget_ms": 80,
+                      "relay_tls_spki_sha256_hex": null,
+                      "route_pushes": [],
+                      "excluded_routes": [],
+                      "dns_servers": [],
+                      "tunnel_addresses": [],
+                      "mtu_bytes": 1280,
+                      "helper_ticket_hex": "deadbeef",
+                      "bytes_in": 0,
+                      "bytes_out": 0,
+                      "status": "active"
                     }
                     """),
             };
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var missing = await client.GetVpnSessionAsync("missing");
+        var active = await client.GetVpnSessionAsync("session-1");
+
+        Assert.Null(missing);
+        Assert.NotNull(active);
+        Assert.Equal(quoteId, active.QuoteId);
+    }
+
+    [Fact]
+    public async Task SubmitVpnReceiptAsyncPostsEvidenceAndDeserializesSettlementInstruction()
+    {
+        const string quoteId = "1111111111111111111111111111111111111111111111111111111111111111";
+
+        using var handler = new RecordingHandler(request =>
+        {
+            var payload = ReadBodyAsJson(request);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/v1/vpn/receipts", request.RequestUri!.AbsolutePath);
+            Assert.Equal("abcd", payload.RootElement.GetProperty("relay_receipt_hex").GetString());
+            Assert.Equal("beef", payload.RootElement.GetProperty("client_voucher_hex").GetString());
+            Assert.Equal(quoteId, payload.RootElement.GetProperty("lease_id_hex").GetString());
+
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent($$"""
+                    {
+                      "session_id": "session-1",
+                      "account_id": "sorauロ1Nholder",
+                      "exit_class": "standard",
+                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "meter_family": "vpn-standard",
+                      "connected_at_ms": 1699999400000,
+                      "disconnected_at_ms": 1700000000000,
+                      "duration_ms": 600000,
+                      "bytes_in": 123,
+                      "bytes_out": 456,
+                      "status": "settled",
+                      "receipt_source": "relay",
+                      "quote_id": "{{quoteId}}",
+                      "payment_tx_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+                      "fee_asset_id": "xor#universal.universal",
+                      "escrow_account_id": "vpn_escrow",
+                      "operator_account_id": "sorauロ1Noperator",
+                      "lease_fee_nanos": 1000000,
+                      "earned_fee_nanos": 500000,
+                      "refunded_fee_nanos": 500000,
+                      "lease_id_hex": "{{quoteId}}",
+                      "settle_lease_instruction": {
+                        "wire_id": "SettleVpnLease",
+                        "payload_hex": "cafe"
+                      },
+                      "tx_instructions": [
+                        {
+                          "wire_id": "SettleVpnLease",
+                          "payload_hex": "cafe"
+                        }
+                      ]
+                    }
+                    """),
+            };
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var receipt = await client.SubmitVpnReceiptAsync(new ToriiVpnReceiptSubmitRequest
+        {
+            RelayReceiptHex = "abcd",
+            ClientVoucherHex = "beef",
+            LeaseIdHex = quoteId,
+        });
+
+        Assert.Equal("settled", receipt.Status);
+        Assert.Equal("SettleVpnLease", receipt.SettleLeaseInstruction?.WireId);
+        Assert.Single(receipt.TxInstructions);
+        Assert.Equal((ulong)500000, receipt.EarnedFeeNanos);
+    }
+
+    [Fact]
+    public async Task ListVpnReceiptsAsyncDeserializesNativeSettlementItems()
+    {
+        const string quoteId = "3333333333333333333333333333333333333333333333333333333333333333";
+
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/v1/vpn/receipts", request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent($$"""
+                    {
+                      "items": [
+                        {
+                          "session_id": "session-1",
+                          "account_id": "sorauロ1Nholder",
+                          "exit_class": "standard",
+                          "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                          "meter_family": "vpn-standard",
+                          "connected_at_ms": 1699999400000,
+                          "disconnected_at_ms": 1700000000000,
+                          "duration_ms": 600000,
+                          "bytes_in": 123,
+                          "bytes_out": 456,
+                          "status": "settled",
+                          "receipt_source": "relay",
+                          "quote_id": "{{quoteId}}",
+                          "payment_tx_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+                          "fee_asset_id": "xor#universal.universal",
+                          "escrow_account_id": "vpn_escrow",
+                          "operator_account_id": "sorauロ1Noperator",
+                          "lease_fee_nanos": 1000000,
+                          "earned_fee_nanos": 500000,
+                          "refunded_fee_nanos": 500000,
+                          "lease_id_hex": "{{quoteId}}",
+                          "settle_lease_instruction": {
+                            "wire_id": "SettleVpnLease",
+                            "payload_hex": "cafe"
+                          },
+                          "tx_instructions": []
+                        }
+                      ],
+                      "total": 1
+                    }
+                    """),
+            };
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var receipts = await client.ListVpnReceiptsAsync();
+
+        Assert.Equal((ulong)1, receipts.Total);
+        Assert.Single(receipts.Items);
+        Assert.Equal(quoteId, receipts.Items[0].LeaseIdHex);
+    }
+
+    [Fact]
+    public async Task DeleteVpnSessionAsyncReturnsNullForNotFound()
+    {
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Delete, request.Method);
+            Assert.Equal("/v1/vpn/sessions/session-404", request.RequestUri!.AbsolutePath);
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.DeleteVpnSessionAsync(" session-404 ");
 
-        Assert.Equal("session-404", response.SessionId);
-        Assert.Equal("not_found", response.Status);
-        Assert.Equal((ulong)1700000000500, response.DisconnectedAtMilliseconds);
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public async Task DeleteVpnSessionAsyncDeserializesDisconnectedReceipt()
+    {
+        var quoteId = new string('6', 64);
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Delete, request.Method);
+            Assert.Equal("/v1/vpn/sessions/session-1", request.RequestUri!.AbsolutePath);
+
+            return JsonResponse("""
+                {
+                  "session_id": "session-1",
+                  "account_id": "sorauAlice",
+                  "exit_class": "standard",
+                  "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                  "meter_family": "vpn-standard",
+                  "connected_at_ms": 1700000000000,
+                  "disconnected_at_ms": 1700000000500,
+                  "duration_ms": 500,
+                  "bytes_in": 10,
+                  "bytes_out": 20,
+                  "status": "disconnected",
+                  "receipt_source": "torii",
+                  "quote_id": "{{quoteId}}",
+                  "payment_tx_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+                  "fee_asset_id": "xor#universal.universal",
+                  "escrow_account_id": "vpn_escrow",
+                  "operator_account_id": "vpn_operator",
+                  "lease_fee_nanos": 1000000,
+                  "earned_fee_nanos": 0,
+                  "refunded_fee_nanos": 1000000,
+                  "lease_id_hex": "{{quoteId}}",
+                  "settle_lease_instruction": null,
+                  "tx_instructions": []
+                }
+                """.Replace("{{quoteId}}", quoteId));
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var response = await client.DeleteVpnSessionAsync(" session-1 ");
+
+        Assert.NotNull(response);
+        Assert.Equal("session-1", response.SessionId);
+        Assert.Equal("disconnected", response.Status);
+        Assert.Equal((ulong)1000000, response.RefundedFeeNanos);
     }
 
     [Fact]
@@ -2340,7 +2673,7 @@ public sealed class ToriiClientTests
             "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef");
 
         Assert.Equal(
-            "8fedfb3e73b08653203dfedc046fe38e523503453d0efb639cfa0e9870550adf",
+            "0ea18a1c23d3d8d323fed2ebbcb5a5372d96c81a3383c138dbfbe7c6562a8f81",
             Convert.ToHexString(challenge).ToLowerInvariant());
     }
 
@@ -2381,10 +2714,10 @@ public sealed class ToriiClientTests
                 MaxAttempts = 200,
             });
 
-        Assert.Equal("000000000000008c", solution.NonceHex);
-        Assert.Equal("00ddc37a0c89354df654f5a0f09a591d6bcd343ce23f5b621049be4ebac8f559", solution.DigestHex);
-        Assert.Equal(8, solution.LeadingZeroBits);
-        Assert.Equal(141, solution.Attempts);
+        Assert.Equal("00000000000000c0", solution.NonceHex);
+        Assert.Equal("005bbe67022aa322d672010caed4df8de6eca7c3204139bcb8ef409883ab2dbb", solution.DigestHex);
+        Assert.Equal(9, solution.LeadingZeroBits);
+        Assert.Equal(193, solution.Attempts);
     }
 
     [Fact]
@@ -2456,7 +2789,7 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var solution = await client.SolveAccountFaucetAsync("sorauﾛ1Nmerchant", new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 });
 
-        Assert.Equal("000000000000008c", solution.NonceHex);
+        Assert.Equal("00000000000000c0", solution.NonceHex);
         Assert.Equal("sorauﾛ1Nmerchant", solution.AccountId);
         Assert.Equal((ulong)68, solution.AnchorHeight);
     }
@@ -2492,7 +2825,7 @@ public sealed class ToriiClientTests
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/faucet", request.RequestUri!.AbsolutePath);
             Assert.Equal("sorauﾛ1Nmerchant", payload.RootElement.GetProperty("account_id").GetString());
-            Assert.Equal("000000000000008c", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
+            Assert.Equal("00000000000000c0", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
             Assert.Equal<ulong>(68, payload.RootElement.GetProperty("pow_anchor_height").GetUInt64());
 
             return new HttpResponseMessage(HttpStatusCode.Accepted)
@@ -3293,6 +3626,14 @@ public sealed class ToriiClientTests
     {
         var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
         return JsonDocument.Parse(body);
+    }
+
+    private static HttpResponseMessage JsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK)
+    {
+        return new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        };
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

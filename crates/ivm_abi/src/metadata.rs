@@ -432,7 +432,7 @@ pub struct ProgramMetadata {
     pub version_major: u8,
     pub version_minor: u8,
     pub mode: u8,
-    /// Logical vector length in lanes. `0` selects the maximum supported value.
+    /// Logical vector length in lanes. `0` selects the runtime default.
     pub vector_length: u8,
     pub max_cycles: u64,
     /// ABI version for syscall table and pointer-ABI schema.
@@ -490,7 +490,7 @@ impl ProgramMetadata {
         // - Self-describing contract artifacts remain a 1.1-only concept and are
         //   validated by higher-level artifact verification.
         // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
-        // - `vector_length` is advisory and may be set regardless of the VECTOR bit.
+        // - `vector_length` is either 0 (use runtime default) or 1..=64.
         // - ABI version is carried as-is; admission enforces allowed values.
         const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR | mode::HTM;
         if version_major != 1 {
@@ -502,8 +502,11 @@ impl ProgramMetadata {
         if mode & !KNOWN_MODE_BITS != 0 {
             return Err(VMError::InvalidMetadata);
         }
+        if vector_length > VECTOR_LENGTH_MAX {
+            return Err(VMError::InvalidMetadata);
+        }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
-        // host/runtime may clamp or ignore it depending on policy.
+        // host/runtime may ignore it depending on policy.
         let mut code_offset = header_len;
         let mut contract_interface = None;
         let mut contract_debug = None;

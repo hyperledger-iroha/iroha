@@ -5,12 +5,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
-use halo2curves::bn256::Fr as Bn254Fr;
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[cfg(feature = "fastpq-gpu")]
 use tracing::warn;
 
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[cfg(feature = "fastpq-gpu")]
 use crate::backend::{self, GpuBackend};
 
 /// Offset metadata for one BN254 Poseidon word-hash input inside a flattened word buffer.
@@ -65,6 +63,9 @@ pub fn try_hash_bn254_poseidon_word_batches(
     if BN254_POSEIDON_GPU_DISABLED.load(Ordering::Acquire) {
         return None;
     }
+    if !bn254_poseidon_backend_available() {
+        return None;
+    }
     if !bn254_poseidon_self_test_passed() {
         return None;
     }
@@ -75,28 +76,42 @@ pub fn try_hash_bn254_poseidon_word_batches(
     })
 }
 
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[cfg(feature = "fastpq-gpu")]
 fn try_hash_bn254_poseidon_word_batches_impl(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
 ) -> Option<Vec<[u8; 32]>> {
-    if backend::current_gpu_backend() != Some(GpuBackend::Metal) {
-        return None;
-    }
-    match crate::metal::bn254_poseidon_hash_words(words, slices) {
-        Ok(result) => Some(result),
-        Err(error) => {
-            warn!(
-                target: "fastpq::bn254_poseidon",
-                %error,
-                "BN254 Poseidon Metal batch failed; falling back to scalar hashing"
-            );
-            None
+    match backend::current_gpu_backend() {
+        Some(GpuBackend::Cuda) => {
+            match crate::fastpq_cuda::fastpq_bn254_poseidon_hash_words(words, slices) {
+                Ok(result) => Some(result),
+                Err(error) => {
+                    warn!(
+                        target: "fastpq::bn254_poseidon",
+                        %error,
+                        "BN254 Poseidon CUDA batch failed; falling back to scalar hashing"
+                    );
+                    None
+                }
+            }
         }
+        #[cfg(target_os = "macos")]
+        Some(GpuBackend::Metal) => match crate::metal::bn254_poseidon_hash_words(words, slices) {
+            Ok(result) => Some(result),
+            Err(error) => {
+                warn!(
+                    target: "fastpq::bn254_poseidon",
+                    %error,
+                    "BN254 Poseidon Metal batch failed; falling back to scalar hashing"
+                );
+                None
+            }
+        },
+        _ => None,
     }
 }
 
-#[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
+#[cfg(not(feature = "fastpq-gpu"))]
 fn try_hash_bn254_poseidon_word_batches_impl(
     _words: &[u64],
     _slices: &[Bn254PoseidonBatchSlice],
@@ -104,15 +119,30 @@ fn try_hash_bn254_poseidon_word_batches_impl(
     None
 }
 
+#[cfg(feature = "fastpq-gpu")]
+fn bn254_poseidon_backend_available() -> bool {
+    match backend::current_gpu_backend() {
+        Some(GpuBackend::Cuda) => true,
+        #[cfg(target_os = "macos")]
+        Some(GpuBackend::Metal) => true,
+        _ => false,
+    }
+}
+
+#[cfg(not(feature = "fastpq-gpu"))]
+fn bn254_poseidon_backend_available() -> bool {
+    false
+}
+
 fn bn254_poseidon_self_test_passed() -> bool {
     *BN254_POSEIDON_SELF_TEST.get_or_init(run_bn254_poseidon_self_test)
 }
 
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[cfg(feature = "fastpq-gpu")]
 fn run_bn254_poseidon_self_test() -> bool {
-    if backend::current_gpu_backend() != Some(GpuBackend::Metal) {
+    let Some(backend) = backend::current_gpu_backend() else {
         return false;
-    }
+    };
 
     let cases: [&[u64]; 6] = [
         &[],
@@ -130,7 +160,22 @@ fn run_bn254_poseidon_self_test() -> bool {
         slices.push(Bn254PoseidonBatchSlice::new(offset, case.len()));
     }
 
-    match crate::metal::bn254_poseidon_hash_words(&words, &slices) {
+    let actual = match backend {
+        GpuBackend::Cuda => crate::fastpq_cuda::fastpq_bn254_poseidon_hash_words(&words, &slices)
+            .map_err(|error| error.to_string()),
+        #[cfg(target_os = "macos")]
+        GpuBackend::Metal => crate::metal::bn254_poseidon_hash_words(&words, &slices)
+            .map_err(|error| error.to_string()),
+        other => {
+            warn!(
+                target: "fastpq::bn254_poseidon",
+                backend = other.as_str(),
+                "BN254 Poseidon GPU self-test skipped for unsupported backend"
+            );
+            return false;
+        }
+    };
+    match actual {
         Ok(actual) => {
             let expected = slices
                 .iter()
@@ -140,7 +185,8 @@ fn run_bn254_poseidon_self_test() -> bool {
             if !passed {
                 warn!(
                     target: "fastpq::bn254_poseidon",
-                    "BN254 Poseidon Metal self-test mismatch; falling back to scalar hashing"
+                    backend = backend.as_str(),
+                    "BN254 Poseidon GPU self-test mismatch; falling back to scalar hashing"
                 );
             }
             passed
@@ -149,27 +195,28 @@ fn run_bn254_poseidon_self_test() -> bool {
             warn!(
                 target: "fastpq::bn254_poseidon",
                 %error,
-                "BN254 Poseidon Metal self-test failed; falling back to scalar hashing"
+                backend = backend.as_str(),
+                "BN254 Poseidon GPU self-test failed; falling back to scalar hashing"
             );
             false
         }
     }
 }
 
-#[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
+#[cfg(not(feature = "fastpq-gpu"))]
 fn run_bn254_poseidon_self_test() -> bool {
     false
 }
 
-#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
+#[cfg(any(test, feature = "fastpq-gpu"))]
 fn scalar_hash_words_u64(words: &[u64]) -> [u8; 32] {
-    let words = words.iter().copied().map(Bn254Fr::from).collect::<Vec<_>>();
-    iroha_zkp_halo2::poseidon::hash_words_bytes(&words)
+    iroha_zkp_halo2::poseidon::hash_u64_words_bytes(words)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use halo2curves::bn256::Fr as Bn254Fr;
 
     #[test]
     fn batch_slice_reports_offsets_and_lengths() {

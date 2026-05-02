@@ -33,7 +33,7 @@ fn length_prefixed_compact_spans_include_multibyte_lengths() {
     bytes.push(1);
     bytes.push(b'a');
     bytes.extend_from_slice(&[0x82, 0x01]);
-    bytes.extend(std::iter::repeat(0x55).take(130));
+    bytes.extend(std::iter::repeat_n(0x55, 130));
 
     let plan = plan_binary_sequence(
         &bytes,

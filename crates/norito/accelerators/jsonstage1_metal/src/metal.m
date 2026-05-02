@@ -234,10 +234,10 @@ static BOOL wait_for_command_buffer(id<MTLCommandBuffer> command) {
     }
 }
 
-// CPU finalize: combine masks into tape offsets with correct escape + quote parity across blocks.
-static void finalize_tape_from_masks(const uint8_t* in, size_t n, const uint32_t* s, const uint32_t* q, const uint32_t* b, size_t blocks, uint32_t* out, size_t out_cap, size_t* out_len) {
+// Host finalize: combine masks into tape offsets with correct escape + quote parity across blocks.
+static int finalize_tape_from_masks(const uint8_t* in, size_t n, const uint32_t* s, const uint32_t* q, const uint32_t* b, size_t blocks, uint32_t* out, size_t out_cap, size_t* out_len) {
     (void)in; // suppress unused-parameter warning; masks provide all needed info
-    size_t outi = 0;
+    size_t need = 0;
     size_t bs_carry = 0; // backslash run length carry into current block
     bool in_string = false;
     for (size_t blk = 0; blk < blocks; ++blk) {
@@ -260,7 +260,8 @@ static void finalize_tape_from_masks(const uint8_t* in, size_t n, const uint32_t
                 if (!escaped) {
                     // Unescaped quote toggles string state and is recorded.
                     in_string = !in_string;
-                    if (outi < out_cap) { out[outi++] = (uint32_t)pos; }
+                    if (need < out_cap) { out[need] = (uint32_t)pos; }
+                    need += 1;
                 }
                 bs_carry = 0;
                 continue;
@@ -268,11 +269,13 @@ static void finalize_tape_from_masks(const uint8_t* in, size_t n, const uint32_t
             // Non-backslash, non-quote: reset run
             bs_carry = 0;
             if (!in_string && is_struct) {
-                if (outi < out_cap) { out[outi++] = (uint32_t)pos; }
+                if (need < out_cap) { out[need] = (uint32_t)pos; }
+                need += 1;
             }
         }
     }
-    *out_len = outi;
+    *out_len = need;
+    return need > out_cap ? 2 : 0;
 }
 
 int json_stage1_build_tape_metal_impl(const uint8_t* input_ptr,
@@ -280,6 +283,13 @@ int json_stage1_build_tape_metal_impl(const uint8_t* input_ptr,
                                       uint32_t* out_offsets,
                                       size_t out_capacity,
                                       size_t* out_len) {
+    if (!input_ptr || !out_offsets || !out_len) { return 1; }
+    if (input_len > UINT32_MAX) { return 1; }
+    if (input_len == 0) {
+        *out_len = 0;
+        return 0;
+    }
+
     @autoreleasepool {
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         if (!dev) return 3;
@@ -324,13 +334,11 @@ int json_stage1_build_tape_metal_impl(const uint8_t* input_ptr,
         [cb commit];
         if (!wait_for_command_buffer(cb)) { return 3; }
 
-        // CPU finalize using masks
+        // Host finalize using masks.
         const uint32_t* s = (const uint32_t*)[sBuf contents];
         const uint32_t* qmask = (const uint32_t*)[qBuf contents];
         const uint32_t* b = (const uint32_t*)[bBuf contents];
-        finalize_tape_from_masks(input_ptr, (size_t)n, s, qmask, b, (size_t)blocks, out_offsets, out_capacity, out_len);
-
-        return 0;
+        return finalize_tape_from_masks(input_ptr, (size_t)n, s, qmask, b, (size_t)blocks, out_offsets, out_capacity, out_len);
     }
 }
 
@@ -473,7 +481,12 @@ int norito_sequence_plan_metal_impl(const uint8_t* input_ptr,
 int norito_crc64_metal_impl(const uint8_t* input_ptr,
                             size_t input_len,
                             uint64_t* out_crc) {
-    if (!out_crc) { return 1; }
+    if (!input_ptr || !out_crc) { return 1; }
+    if (input_len == 0) {
+        *out_crc = 0;
+        return 0;
+    }
+
     @autoreleasepool {
         id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
         if (!dev) return 3;

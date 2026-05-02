@@ -64,8 +64,8 @@ pub enum Instruction {
     SetVL {
         new_vl: u16,
     },
-    /// Vector addition over `vector_length` lanes.
-    Vadd {
+    /// 32-bit lane-wise vector addition over `vector_length` lanes.
+    Vadd32 {
         rd: u16,
         rs: u16,
         rt: u16,

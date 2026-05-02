@@ -49,14 +49,17 @@ fn shifts_rtype_property_random() {
 
     // Deterministic seed for reproducibility
     let mut rng = SplitMix64::new(0xDEAD_BEEF_CAFE_BABE);
+    let mut vm = IVM::new(50_000);
+    vm.memory.load_code(&code);
+
     // Cover a decent set of random values and shifts
     for _ in 0..512 {
         let val = rng.next();
         let shamt_rand = rng.next() & 0x7F; // up to 127 to exercise masking
         let shamt_masked = (shamt_rand & 0x3F) as u32; // VM masks to low 6 bits
 
-        let mut vm = IVM::new(50_000);
-        vm.memory.load_code(&code);
+        vm.reset();
+        vm.set_gas_limit(50_000);
         vm.registers.set(1, val);
         vm.registers.set(3, shamt_rand);
         vm.run().unwrap();

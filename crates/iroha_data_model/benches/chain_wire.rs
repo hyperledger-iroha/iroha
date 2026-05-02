@@ -6,14 +6,17 @@ use criterion::Criterion;
 use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
     ChainId, Level,
-    account::AccountId,
+    account::{AccountController, AccountId, NewAccount},
+    asset::{AssetDefinitionId, AssetId},
     block::{BlockHeader, SignedBlock, decode_framed_signed_block},
-    isi::{InstructionBox, Log},
+    domain::DomainId,
+    isi::{InstructionBox, Log, Register, Transfer},
     transaction::signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
+use iroha_primitives::{const_vec::ConstVec, numeric::Numeric};
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use nonzero_ext::nonzero;
-use norito::core::{DecodeFlagsGuard, header_flags};
+use norito::core::{self as ncore, DecodeFlagsGuard, header_flags};
 
 #[derive(Clone, Copy)]
 struct LayoutCandidate {
@@ -57,14 +60,31 @@ fn fixed_private_key() -> PrivateKey {
         .expect("fixed private key")
 }
 
+fn sample_asset_definition_id() -> AssetDefinitionId {
+    let domain = DomainId::try_new("bench", "universal").expect("bench domain id");
+    AssetDefinitionId::new(domain, "xor".parse().expect("asset name"))
+}
+
+fn sample_instruction_box(kind: usize) -> InstructionBox {
+    let authority = AccountId::new(fixed_public_key());
+    let recipient = AccountId::new(fixed_public_key());
+    match kind % 3 {
+        0 => InstructionBox::from(Log::new(Level::INFO, format!("bench instruction {kind}"))),
+        1 => InstructionBox::from(Transfer::asset_numeric(
+            AssetId::new(sample_asset_definition_id(), authority),
+            Numeric::new(i64::try_from(1_000 + kind).expect("kind fits i64"), 0),
+            recipient,
+        )),
+        _ => InstructionBox::from(Register::account(NewAccount::new(recipient))),
+    }
+}
+
 fn sample_transaction(instruction_count: usize) -> SignedTransaction {
     let private_key = fixed_private_key();
     let authority = AccountId::new(fixed_public_key());
     let chain: ChainId = "norito-chain-wire-bench".parse().expect("chain id");
     let instructions = (0..instruction_count)
-        .map(|index| {
-            InstructionBox::from(Log::new(Level::INFO, format!("bench instruction {index}")))
-        })
+        .map(sample_instruction_box)
         .collect::<Vec<_>>();
 
     TransactionBuilder::new(chain, authority)
@@ -146,6 +166,143 @@ where
             b.iter(|| black_box(decode_framed_with_layout::<T>(black_box(&framed))))
         });
     }
+}
+
+fn bench_instruction_codec(c: &mut Criterion) {
+    for (label, instruction) in [
+        ("log", sample_instruction_box(0)),
+        ("transfer_asset", sample_instruction_box(1)),
+        ("register_account", sample_instruction_box(2)),
+    ] {
+        let bare = norito::codec::encode_adaptive(&instruction);
+        report_size(&format!("instruction_box/{label}/bare"), &bare);
+        c.bench_function(&format!("chain_wire/instruction_box/{label}/encode"), |b| {
+            b.iter(|| black_box(norito::codec::encode_adaptive(black_box(&instruction))))
+        });
+        c.bench_function(&format!("chain_wire/instruction_box/{label}/decode"), |b| {
+            b.iter(|| {
+                black_box(
+                    norito::codec::decode_exact_from_slice::<InstructionBox>(black_box(&bare))
+                        .expect("decode instruction box"),
+                )
+            })
+        });
+        bench_layout_candidates(c, &format!("instruction_box_{label}"), &instruction);
+    }
+}
+
+fn bench_const_vec_instruction_box(c: &mut Criterion) {
+    for &count in &[8usize, 32, 128] {
+        let instructions = (0..count).map(sample_instruction_box).collect::<Vec<_>>();
+        let value = ConstVec::from(instructions);
+        let candidate = LayoutCandidate {
+            name: "packed_all",
+            flags: header_flags::COMPACT_LEN
+                | header_flags::PACKED_STRUCT
+                | header_flags::FIELD_BITSET
+                | header_flags::PACKED_SEQ,
+        };
+        let (bare, actual_flags) = encode_with_layout(&value, candidate);
+        let framed =
+            ncore::frame_bare_with_header_flags::<ConstVec<InstructionBox>>(&bare, actual_flags)
+                .expect("frame const vec instruction box");
+        report_layout_size(
+            &format!("const_vec_instruction_box_{count}"),
+            candidate,
+            &bare,
+            &framed,
+            actual_flags,
+        );
+        c.bench_function(
+            &format!("chain_wire/const_vec_instruction_box/{count}/encode_packed_all"),
+            |b| b.iter(|| black_box(encode_with_layout(black_box(&value), candidate))),
+        );
+        c.bench_function(
+            &format!("chain_wire/const_vec_instruction_box/{count}/decode_packed_all"),
+            |b| {
+                b.iter(|| {
+                    black_box(
+                        norito::decode_from_bytes::<ConstVec<InstructionBox>>(black_box(&framed))
+                            .expect("decode const vec instruction box"),
+                    )
+                })
+            },
+        );
+    }
+}
+
+fn bench_public_key_and_account_decode(c: &mut Criterion) {
+    let public_key = fixed_public_key();
+    let public_key_bare = norito::codec::encode_adaptive(&public_key);
+    let controller = AccountController::single(public_key.clone());
+    let controller_framed = norito::to_bytes(&controller).expect("encode account controller");
+
+    report_size("public_key/bare", &public_key_bare);
+    report_size("account_controller_single/framed", &controller_framed);
+
+    c.bench_function("chain_wire/public_key/decode", |b| {
+        b.iter(|| {
+            black_box(
+                norito::codec::decode_exact_from_slice::<PublicKey>(black_box(&public_key_bare))
+                    .expect("decode public key"),
+            )
+        })
+    });
+    c.bench_function(
+        "chain_wire/account_controller/single_public_key/decode",
+        |b| {
+            b.iter(|| {
+                black_box(
+                    norito::decode_from_bytes::<AccountController>(black_box(&controller_framed))
+                        .expect("decode account controller"),
+                )
+            })
+        },
+    );
+}
+
+fn bench_compact_lengths(c: &mut Criterion) {
+    let values = [
+        0_u64,
+        1,
+        63,
+        127,
+        128,
+        255,
+        16_383,
+        16_384,
+        1_048_576,
+        u64::from(u32::MAX),
+    ];
+    let flags = header_flags::COMPACT_LEN;
+    let encoded = values
+        .iter()
+        .map(|&value| {
+            let mut bytes = Vec::new();
+            ncore::write_len_to_vec_with_flags(&mut bytes, value, flags);
+            bytes
+        })
+        .collect::<Vec<_>>();
+
+    c.bench_function("chain_wire/compact_len/write_len_to_vec", |b| {
+        b.iter(|| {
+            let mut out = Vec::with_capacity(encoded.iter().map(Vec::len).sum());
+            for &value in &values {
+                ncore::write_len_to_vec_with_flags(&mut out, black_box(value), flags);
+            }
+            black_box(out);
+        })
+    });
+    c.bench_function("chain_wire/compact_len/read_len_from_slice", |b| {
+        b.iter(|| {
+            for bytes in &encoded {
+                black_box(
+                    ncore::read_len_from_slice_with_flags(black_box(bytes), flags)
+                        .expect("read compact length"),
+                );
+            }
+        })
+    });
 }
 
 fn bench_signed_transaction(c: &mut Criterion) {
@@ -331,6 +488,10 @@ fn bench_empty_block_header(c: &mut Criterion) {
 
 fn main() {
     let mut c = Criterion::default().configure_from_args();
+    bench_compact_lengths(&mut c);
+    bench_public_key_and_account_decode(&mut c);
+    bench_instruction_codec(&mut c);
+    bench_const_vec_instruction_box(&mut c);
     bench_signed_transaction(&mut c);
     bench_signed_transaction_large(&mut c);
     bench_transaction_entrypoint(&mut c);

@@ -34,6 +34,19 @@ final class ConfidentialEncryptedPayloadTests: XCTestCase {
         XCTAssertEqual(decoded, original)
     }
 
+    func testSerializedPayloadEncodesMultibyteCiphertextLength() throws {
+        let ciphertext = Data((0..<300).map { UInt8($0 & 0xFF) })
+        let payload = try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x33, count: 32),
+                                                       nonce: Data(repeating: 0x44, count: 24),
+                                                       ciphertext: ciphertext)
+
+        let encoded = try payload.serializedPayload()
+        XCTAssertEqual(encoded[57], 0xAC)
+        XCTAssertEqual(encoded[58], 0x02)
+        XCTAssertEqual(Data(encoded.dropFirst(59)), ciphertext)
+        XCTAssertEqual(try ConfidentialEncryptedPayload.deserialize(from: encoded), payload)
+    }
+
     func testDeserializeRejectsTrailingBytes() throws {
         let payload = try ConfidentialEncryptedPayload(ephemeralPublicKey: Data(repeating: 0x01, count: 32),
                                                        nonce: Data(repeating: 0x02, count: 24),

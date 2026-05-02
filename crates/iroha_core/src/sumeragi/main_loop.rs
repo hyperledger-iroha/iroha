@@ -76,7 +76,7 @@ use super::{
     consensus::{
         ExecWitness, ExecWitnessMsg, NPOS_TAG, PERMISSIONED_TAG, RbcChunkRequest, RbcDeliver,
         RbcInit, RbcInitRequest, RbcReady, ValidatorIndex, qc_signer_count, rbc_deliver_preimage,
-        rbc_ready_preimage, vote_preimage,
+        rbc_ready_preimage, vote_preimage, vrf_commit_preimage, vrf_reveal_preimage,
     },
     da::{GateReason, ManifestGateKind},
     election,
@@ -2124,11 +2124,7 @@ fn derive_block_sync_qc_from_signers(
     }
     match consensus_mode {
         ConsensusMode::Permissioned => {
-            let min_votes = if roster_len > 3 {
-                ((roster_len.saturating_sub(1)) / 3) * 2 + 1
-            } else {
-                roster_len
-            };
+            let min_votes = super::network_topology::commit_quorum_from_len(roster_len).max(1);
             if block_signers.len() < min_votes {
                 warn!(
                     incoming_hash = %block_hash,
@@ -2140,46 +2136,37 @@ fn derive_block_sync_qc_from_signers(
             }
         }
         ConsensusMode::Npos => {
-            if let Some(snapshot) = stake_snapshot {
-                let mut signer_peers = BTreeSet::new();
-                for signer in block_signers {
-                    let Ok(idx) = usize::try_from(*signer) else {
-                        return None;
-                    };
-                    let peer = commit_topology.get(idx)?;
-                    signer_peers.insert(peer.clone());
-                }
-                match stake_quorum_reached_for_snapshot(snapshot, commit_topology, &signer_peers) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        warn!(
-                            incoming_hash = %block_hash,
-                            block_signers = block_signers.len(),
-                            "dropping derived block sync QC: insufficient stake quorum"
-                        );
-                        return None;
-                    }
-                    Err(_) => {
-                        warn!(
-                            incoming_hash = %block_hash,
-                            block_signers = block_signers.len(),
-                            "dropping derived block sync QC: stake snapshot unavailable"
-                        );
-                        return None;
-                    }
-                }
-            } else {
-                let min_votes = if roster_len > 3 {
-                    ((roster_len.saturating_sub(1)) / 3) * 2 + 1
-                } else {
-                    roster_len
+            let Some(snapshot) = stake_snapshot else {
+                warn!(
+                    incoming_hash = %block_hash,
+                    block_signers = block_signers.len(),
+                    "dropping derived block sync QC: stake snapshot unavailable"
+                );
+                return None;
+            };
+            let mut signer_peers = BTreeSet::new();
+            for signer in block_signers {
+                let Ok(idx) = usize::try_from(*signer) else {
+                    return None;
                 };
-                if block_signers.len() < min_votes {
+                let peer = commit_topology.get(idx)?;
+                signer_peers.insert(peer.clone());
+            }
+            match stake_quorum_reached_for_snapshot(snapshot, commit_topology, &signer_peers) {
+                Ok(true) => {}
+                Ok(false) => {
                     warn!(
                         incoming_hash = %block_hash,
                         block_signers = block_signers.len(),
-                        min_votes,
-                        "dropping derived block sync QC: insufficient fallback quorum"
+                        "dropping derived block sync QC: insufficient stake quorum"
+                    );
+                    return None;
+                }
+                Err(_) => {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        block_signers = block_signers.len(),
+                        "dropping derived block sync QC: stake snapshot unavailable"
                     );
                     return None;
                 }
@@ -2634,7 +2621,7 @@ pub(super) fn vote_signature_check(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct StateRoots {
+pub(in crate::sumeragi::main_loop) struct StateRoots {
     parent_state_root: Hash,
     post_state_root: Hash,
 }

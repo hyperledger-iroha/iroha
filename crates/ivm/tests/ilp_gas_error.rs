@@ -32,7 +32,7 @@ fn ilp_reports_first_error_in_index_order() {
     vm.registers.set_tag(1, true);
 
     let block = [
-        Instruction::Vadd {
+        Instruction::Vadd32 {
             rd: 1,
             rs: 2,
             rt: 3,

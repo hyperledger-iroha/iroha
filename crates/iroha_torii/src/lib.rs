@@ -332,7 +332,7 @@ use tokio::{
 };
 use tower::ServiceExt as _;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use utils::extractors::{NoritoVersioned, NoritoVersionedBytes};
@@ -1575,6 +1575,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
+    vpn_quotes: Arc<DashMap<String, vpn::VpnQuoteRecord>>,
+    vpn_used_payments: Arc<DashMap<String, ()>>,
     vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
     vpn_receipts: Arc<DashMap<String, Vec<vpn::VpnReceiptRecord>>>,
     vpn_state_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1594,6 +1596,13 @@ struct AppState {
 }
 
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
+
+struct DaRuntimeServices {
+    replay_cache: Arc<iroha_core::da::ReplayCache>,
+    replay_store: Arc<da::ReplayCursorStore>,
+    receipt_log: Arc<da::DaReceiptLog>,
+    spooler: Option<Arc<da::DaSpooler>>,
+}
 
 #[cfg(feature = "app_api")]
 struct PendingSoracloudProxyRequest {
@@ -4545,14 +4554,9 @@ async fn handler_proof_tags(
         return routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await;
     }
 
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
         if !ok {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -6043,7 +6047,6 @@ fn ram_lfe_execute_response(
         program_id: receipt.payload.program_id.to_string(),
         opaque_hash: draft.opaque_hash.to_string(),
         receipt_hash: draft.receipt_hash.to_string(),
-        output_hex: hex::encode_upper(&draft.output),
         output_hash: draft.output_hash.to_string(),
         associated_data_hash: draft.associated_data_hash.to_string(),
         executed_at_ms: draft.executed_at_ms,
@@ -7337,21 +7340,18 @@ async fn handler_confidential_relay_submit(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::ConfidentialRelaySubmitRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
         if !ok {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             )));
         }
     }
-    let key = token_hdr.unwrap_or_else(|| remote.ip().to_string());
+    let key = token_hdr
+        .map(str::to_owned)
+        .unwrap_or_else(|| remote.ip().to_string());
     if !app.tx_rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -8375,6 +8375,20 @@ async fn handler_get_vpn_profile(
 }
 
 /// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
+async fn handler_create_vpn_quote(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/vpn/quotes").await?;
+    vpn::handle_create_vpn_quote(app, &method, &uri, &headers, body.as_ref()).await
+}
+
+/// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
 async fn handler_create_vpn_session(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -8439,6 +8453,20 @@ async fn handler_list_vpn_receipts(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
     vpn::handle_list_vpn_receipts(app, &method, &uri, &headers).await
+}
+
+/// POST /v1/vpn/receipts — settle an active VPN session from relay/client evidence.
+async fn handler_submit_vpn_receipt(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
+    vpn::handle_submit_vpn_receipt(app, &method, &uri, &headers, body.as_ref()).await
 }
 
 /// POST /v1/configuration — wrapper that enforces Torii access policy, then delegates.
@@ -8532,14 +8560,9 @@ async fn handler_schema(
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
         return Ok(routing::handle_schema().await);
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
         if !ok {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -20390,10 +20413,11 @@ async fn execute_incoming_torii_proxy_request(
                             )
                             .await
                         } else {
-                            match routing::push_accepted_transaction_for_ingress(
+                            match routing::push_accepted_transaction_for_ingress_with_routing(
                                 app.queue.clone(),
                                 app.state.clone(),
                                 accepted_tx,
+                                Some(routing_decision),
                             ) {
                                 Ok(_) => transaction_submission_response(
                                     app.as_ref(),
@@ -28518,25 +28542,28 @@ async fn handler_post_transaction(
             code: "invalid_transaction_payload",
             message: format!("transaction payload could not be decoded: {error}"),
         })?;
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
         if !ok {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             )));
         }
     }
-    let key = token_hdr.unwrap_or_else(|| transaction.authority().to_string());
-    if !app.tx_rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
+    if let Some(token) = token_hdr {
+        if !app.tx_rate_limiter.allow(token).await {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    } else {
+        let key = transaction.authority().to_string();
+        if !app.tx_rate_limiter.allow(&key).await {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
     }
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let signed_transaction_hash = Some(transaction.hash());
@@ -28572,10 +28599,11 @@ async fn handler_post_transaction(
         )
         .await);
     }
-    let routing_decision = routing::push_accepted_transaction_for_ingress(
+    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing(
         app.queue.clone(),
         app.state.clone(),
         accepted_tx,
+        Some(routing_decision),
     )?;
     let response = transaction_submission_response(
         app.as_ref(),
@@ -28593,43 +28621,38 @@ async fn handler_post_transaction_entrypoint(
     headers: axum::http::HeaderMap,
     NoritoVersioned(transaction): NoritoVersioned<TransactionEntrypoint>,
 ) -> Result<impl IntoResponse, Error> {
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
         if !ok {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             )));
         }
     }
-    let key = token_hdr.unwrap_or_else(|| {
-        transaction
+    if let Some(token) = token_hdr {
+        if !app.tx_rate_limiter.allow(token).await {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    } else {
+        let key = transaction
             .authority_opt()
             .map(ToString::to_string)
-            .unwrap_or_else(|| transaction.hash().to_string())
-    });
-    if !app.tx_rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
+            .unwrap_or_else(|| transaction.hash().to_string());
+        if !app.tx_rate_limiter.allow(&key).await {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
     }
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
-        let transaction_for_admission = transaction.clone();
         let telemetry = app.telemetry.clone();
         tokio::task::spawn_blocking(move || {
-            routing::accept_transaction_for_ingress(
-                chain_id,
-                state,
-                transaction_for_admission,
-                &telemetry,
-            )
+            routing::accept_transaction_for_ingress(chain_id, state, transaction, &telemetry)
         })
         .await
         .map_err(|error| Error::AppServiceUnavailable {
@@ -28646,12 +28669,18 @@ async fn handler_post_transaction_entrypoint(
         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if !should_execute_route_locally(app.as_ref(), routing_decision) {
-        return Ok(execute_torii_transaction_via_proxy(&app, transaction, routing_decision).await);
+        return Ok(execute_torii_transaction_via_proxy(
+            &app,
+            accepted_tx.entrypoint().clone(),
+            routing_decision,
+        )
+        .await);
     }
-    let routing_decision = routing::push_accepted_transaction_for_ingress(
+    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing(
         app.queue.clone(),
         app.state.clone(),
         accepted_tx,
+        Some(routing_decision),
     )?;
     let response = transaction_submission_response(
         app.as_ref(),
@@ -28724,41 +28753,6 @@ fn precheck_transaction_batch_ed25519(
         )
     }
 
-    fn first_bad_ed25519_slice(
-        messages: &[&[u8]],
-        signatures: &[&[u8]],
-        public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
-        scratch: &mut iroha_crypto::Ed25519BatchScratch,
-    ) -> Option<(usize, String)> {
-        if messages.is_empty()
-            || verify_ed25519_batch_slices(messages, signatures, public_keys, scratch).is_ok()
-        {
-            return None;
-        }
-        if messages.len() == 1 {
-            let detail = verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
-                .expect_err("single invalid Ed25519 item must fail")
-                .to_string();
-            return Some((0, detail));
-        }
-
-        let split = messages.len() / 2;
-        let (left_messages, right_messages) = messages.split_at(split);
-        let (left_signatures, right_signatures) = signatures.split_at(split);
-        let (left_public_keys, right_public_keys) = public_keys.split_at(split);
-        first_bad_ed25519_slice(left_messages, left_signatures, left_public_keys, scratch).or_else(
-            || {
-                first_bad_ed25519_slice(
-                    right_messages,
-                    right_signatures,
-                    right_public_keys,
-                    scratch,
-                )
-                .map(|(idx, detail)| (idx + split, detail))
-            },
-        )
-    }
-
     fn signature_error(
         tx: &DecodedVersionedSignedTransaction,
         detail: String,
@@ -28804,8 +28798,14 @@ fn precheck_transaction_batch_ed25519(
 
             verify_ed25519_batch_slices(&messages, &signatures, &public_keys, &mut scratch).map_err(
                 |err| {
-                    first_bad_ed25519_slice(&messages, &signatures, &public_keys, &mut scratch)
-                        .map_or_else(|| (0, err.to_string()), |bad| bad)
+                    iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                        &messages,
+                        &signatures,
+                        &public_keys,
+                        [0; 32],
+                        &mut scratch,
+                    )
+                    .map_or_else(|| (0, err.to_string()), |bad| bad)
                 },
             )
         };
@@ -28844,6 +28844,17 @@ mod transaction_ingress_decode_tests {
     fn signed_transaction_for_test_with_message(message: &str) -> SignedTransaction {
         let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
         let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(keypair.private_key())
+    }
+
+    fn signed_transaction_for_test_with_keypair(
+        chain: ChainId,
+        keypair: &KeyPair,
+        message: &str,
+    ) -> SignedTransaction {
         let authority = AccountId::new(keypair.public_key().clone());
         TransactionBuilder::new(chain, authority)
             .with_instructions([Log::new(Level::INFO, message.to_owned())])
@@ -28917,6 +28928,31 @@ mod transaction_ingress_decode_tests {
     }
 
     #[test]
+    fn transaction_batch_ed25519_precheck_accepts_repeated_authority_batch() {
+        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let tx1 = signed_transaction_for_test_with_keypair(
+            chain.clone(),
+            &keypair,
+            "ed25519-precheck-repeat-1",
+        );
+        let tx2 =
+            signed_transaction_for_test_with_keypair(chain, &keypair, "ed25519-precheck-repeat-2");
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&tx1),
+            versioned_signed_transaction(&tx2),
+        ])
+        .expect("valid repeated-authority batch decodes");
+
+        let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+        assert_eq!(prechecks.len(), 2);
+        assert!(prechecks.iter().all(|precheck| {
+            precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
+        }));
+    }
+
+    #[test]
     fn transaction_batch_ed25519_precheck_identifies_first_invalid_signature() {
         let valid = signed_transaction_for_test_with_message("ed25519-precheck-valid");
         let invalid = transaction_with_invalid_signature("ed25519-precheck-invalid");
@@ -28944,6 +28980,25 @@ mod transaction_ingress_decode_tests {
     }
 
     #[test]
+    fn transaction_batch_ed25519_precheck_matches_single_signature_verification() {
+        let valid = signed_transaction_for_test_with_message("ed25519-precheck-equivalence-valid");
+        let invalid = transaction_with_invalid_signature("ed25519-precheck-equivalence-invalid");
+
+        for signed in [valid, invalid] {
+            let decoded =
+                decode_transaction_batch_payloads(vec![versioned_signed_transaction(&signed)])
+                    .expect("singleton transaction decodes");
+            let single_ok = decoded[0].signed().verify_signature().is_ok();
+            let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+            let precheck_ok =
+                prechecks[0].single_ed25519_prechecked && prechecks[0].precheck_rejection.is_none();
+
+            assert_eq!(precheck_ok, single_ok);
+            assert_eq!(prechecks[0].precheck_rejection.is_some(), !single_ok);
+        }
+    }
+
+    #[test]
     fn transaction_batch_non_ed25519_bypasses_ed25519_precheck() {
         let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
         let keypair = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Secp256k1);
@@ -28960,6 +29015,70 @@ mod transaction_ingress_decode_tests {
         assert_eq!(prechecks.len(), 1);
         assert!(!prechecks[0].single_ed25519_prechecked);
         assert!(prechecks[0].precheck_rejection.is_none());
+    }
+
+    #[tokio::test]
+    async fn transaction_batch_rate_limit_collapses_same_authority_run() {
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let decoded = decode_transaction_batch_payloads(
+            (0..3)
+                .map(|index| {
+                    let signed = TransactionBuilder::new(chain.clone(), authority.clone())
+                        .with_instructions([Log::new(
+                            Level::INFO,
+                            format!("same-authority-rate-limit-{index}"),
+                        )])
+                        .sign(keypair.private_key());
+                    versioned_signed_transaction(&signed)
+                })
+                .collect(),
+        )
+        .expect("same-authority batch decodes");
+        let limiter = crate::limits::RateLimiter::new(Some(1), Some(2));
+        let authority_key = authority.to_string();
+
+        assert!(!allow_transaction_batch_rate_limit(&limiter, None, &decoded).await);
+        assert!(
+            !limiter.allow(&authority_key).await,
+            "failed same-authority run should consume the accepted prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_batch_rate_limit_preserves_authority_ordering() {
+        let keypair_a = KeyPair::random();
+        let keypair_b = KeyPair::random();
+        let authority_a = AccountId::new(keypair_a.public_key().clone());
+        let authority_b = AccountId::new(keypair_b.public_key().clone());
+        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let signed_a1 = TransactionBuilder::new(chain.clone(), authority_a.clone())
+            .with_instructions([Log::new(Level::INFO, "authority-a-1".to_owned())])
+            .sign(keypair_a.private_key());
+        let signed_b = TransactionBuilder::new(chain.clone(), authority_b.clone())
+            .with_instructions([Log::new(Level::INFO, "authority-b".to_owned())])
+            .sign(keypair_b.private_key());
+        let signed_a2 = TransactionBuilder::new(chain, authority_a.clone())
+            .with_instructions([Log::new(Level::INFO, "authority-a-2".to_owned())])
+            .sign(keypair_a.private_key());
+        let decoded = decode_transaction_batch_payloads(vec![
+            versioned_signed_transaction(&signed_a1),
+            versioned_signed_transaction(&signed_b),
+            versioned_signed_transaction(&signed_a2),
+        ])
+        .expect("mixed-authority batch decodes");
+        let limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
+
+        assert!(!allow_transaction_batch_rate_limit(&limiter, None, &decoded).await);
+        assert!(
+            !limiter.allow(&authority_a.to_string()).await,
+            "authority A should fail after its first transaction consumed the only token"
+        );
+        assert!(
+            !limiter.allow(&authority_b.to_string()).await,
+            "authority B should have been consumed before the later authority A rejection"
+        );
     }
 }
 
@@ -28979,6 +29098,31 @@ fn transaction_batch_submission_response(accepted_count: usize) -> Response {
     response
 }
 
+async fn allow_transaction_batch_rate_limit(
+    limiter: &limits::RateLimiter,
+    api_token: Option<&str>,
+    transactions: &[DecodedVersionedSignedTransaction],
+) -> bool {
+    if let Some(token) = api_token {
+        return limiter.allow_repeated(token, transactions.len()).await;
+    }
+
+    let mut index = 0;
+    while index < transactions.len() {
+        let authority = transactions[index].authority();
+        let start = index;
+        index += 1;
+        while index < transactions.len() && transactions[index].authority() == authority {
+            index += 1;
+        }
+        let key = authority.to_string();
+        if !limiter.allow_repeated(&key, index - start).await {
+            return false;
+        }
+    }
+    true
+}
+
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -28991,14 +29135,9 @@ async fn handler_post_transactions_batch(
         });
     }
 
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
+    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
     if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
+        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
         if !ok {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -29014,15 +29153,10 @@ async fn handler_post_transactions_batch(
                 message: error.to_string(),
             })??;
 
-    for transaction in &transactions {
-        let key = token_hdr
-            .clone()
-            .unwrap_or_else(|| transaction.authority().to_string());
-        if !app.tx_rate_limiter.allow(&key).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, token_hdr, &transactions).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
     }
 
     let accepted_count = {
@@ -30870,9 +31004,18 @@ async fn handler_ram_lfe_receipt_verify(
             )),
         ));
     };
-    let validation = iroha_core::smartcontracts::isi::ram_lfe::validate_execution_receipt(
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| {
+            identifier_internal_error(format!("system clock is before UNIX_EPOCH: {err}"))
+        })?
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let validation = iroha_core::smartcontracts::isi::ram_lfe::validate_execution_receipt_at(
         &request.receipt,
         &program_policy,
+        now_ms,
     )
     .err();
     let validation = match (validation, output_hash_matches) {
@@ -32018,6 +32161,7 @@ pub struct Torii {
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     mcp: iroha_config::parameters::actual::ToriiMcp,
+    cors: iroha_config::parameters::actual::ToriiCors,
     mcp_rate_limiter: limits::RateLimiter,
     require_api_token: bool,
     api_tokens_set: std::sync::Arc<std::collections::HashSet<String>>,
@@ -32550,8 +32694,12 @@ impl Torii {
                 .route(uri::PEERS, get(handler_peers))
                 .route(uri::HEALTH, get(handler_health))
                 .route("/v1/vpn/profile", get(handler_get_vpn_profile))
+                .route("/v1/vpn/quotes", post(handler_create_vpn_quote))
                 .route("/v1/vpn/sessions", post(handler_create_vpn_session))
-                .route("/v1/vpn/receipts", get(handler_list_vpn_receipts))
+                .route(
+                    "/v1/vpn/receipts",
+                    get(handler_list_vpn_receipts).post(handler_submit_vpn_receipt),
+                )
                 .route(
                     "/v1/vpn/sessions/{session_id}",
                     get(handler_get_vpn_session).delete(handler_delete_vpn_session),
@@ -33848,7 +33996,6 @@ impl Torii {
                 )
                 .route("/api", any(handler_soracloud_public_local_read))
                 .route("/api/{*tail}", any(handler_soracloud_public_local_read))
-                .fallback(any(handler_soracloud_public_local_read))
         });
     }
 
@@ -33996,14 +34143,6 @@ impl Torii {
                         "/sorafs/cid/{cid}/{*path}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_cid_path),
                     )
-                    .route(
-                        "/",
-                        axum::routing::get(sorafs::api::handle_get_sorafs_site_root),
-                    )
-                    .route(
-                        "/{*path}",
-                        axum::routing::get(sorafs::api::handle_get_sorafs_site_path),
-                    )
                     // Storage pin uploads send the full staged site as JSON (`payload_b64`), so
                     // the route must honor the configured Torii body budget rather than Axum's
                     // small default extractor limit.
@@ -34039,7 +34178,11 @@ impl Torii {
 
     fn add_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
         let zk_attachments_enabled = self.zk_attachments_enabled;
-        builder.apply(|router| {
+        builder.apply_with_state(|router, state| {
+            let operator_layer = axum::middleware::from_fn_with_state(
+                state,
+                operator_signatures::enforce_operator_access,
+            );
             let mut zk_router = Router::new()
                 .route("/v1/zk/roots", post(handler_zk_roots))
                 .route("/v1/zk/verify", post(handler_zk_verify))
@@ -34228,7 +34371,7 @@ impl Torii {
                 )
                 .route(
                     iroha_torii_shared::uri::GOV_PROTECTED_SET,
-                    post(handler_gov_protected_set),
+                    post(handler_gov_protected_set).layer(operator_layer.clone()),
                 )
                 .route(
                     iroha_torii_shared::uri::GOV_PROTECTED_SET,
@@ -34871,6 +35014,7 @@ impl Torii {
             fee_policy,
             norito_rpc: config.transport.norito_rpc.clone(),
             mcp: config.mcp,
+            cors: config.cors,
             mcp_rate_limiter,
             require_api_token: config.require_api_token,
             api_tokens_set: api_tokens_set.clone(),
@@ -34982,10 +35126,172 @@ impl Torii {
         self
     }
 
+    fn parse_cors_origins(origins: &[String]) -> Vec<HeaderValue> {
+        origins
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(|origin| {
+                if origin == "*" {
+                    panic!(
+                        "invalid torii.cors.allowed_origins entry `*`; configure explicit origins"
+                    )
+                }
+                HeaderValue::from_str(origin).unwrap_or_else(|err| {
+                    panic!("invalid torii.cors.allowed_origins entry `{origin}`: {err}")
+                })
+            })
+            .collect()
+    }
+
+    fn parse_cors_methods(methods: &[String]) -> Vec<HttpMethod> {
+        methods
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|method| !method.is_empty())
+            .map(|method| {
+                HttpMethod::from_bytes(method.as_bytes()).unwrap_or_else(|err| {
+                    panic!("invalid torii.cors.allowed_methods entry `{method}`: {err}")
+                })
+            })
+            .collect()
+    }
+
+    fn parse_cors_headers(config_path: &str, headers: &[String]) -> Vec<HeaderName> {
+        headers
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|header| !header.is_empty())
+            .map(|header| {
+                HeaderName::from_bytes(header.as_bytes())
+                    .unwrap_or_else(|err| panic!("invalid {config_path} entry `{header}`: {err}"))
+            })
+            .collect()
+    }
+
+    fn build_cors_layer(&self) -> Option<CorsLayer> {
+        if !self.cors.enabled {
+            return None;
+        }
+
+        let origins = Self::parse_cors_origins(&self.cors.allowed_origins);
+        if origins.is_empty() {
+            panic!(
+                "torii.cors.enabled=true requires at least one torii.cors.allowed_origins entry"
+            );
+        }
+
+        let methods = Self::parse_cors_methods(&self.cors.allowed_methods);
+        if methods.is_empty() {
+            panic!(
+                "torii.cors.enabled=true requires at least one torii.cors.allowed_methods entry"
+            );
+        }
+        let allowed_headers =
+            Self::parse_cors_headers("torii.cors.allowed_headers", &self.cors.allowed_headers);
+        if allowed_headers.is_empty() {
+            panic!(
+                "torii.cors.enabled=true requires at least one torii.cors.allowed_headers entry"
+            );
+        }
+        let exposed_headers =
+            Self::parse_cors_headers("torii.cors.exposed_headers", &self.cors.exposed_headers);
+        let mut layer = CorsLayer::new()
+            .allow_origin(origins)
+            .max_age(Duration::from_secs(self.cors.max_age_secs));
+        if !methods.is_empty() {
+            layer = layer.allow_methods(methods);
+        }
+        if !allowed_headers.is_empty() {
+            layer = layer.allow_headers(allowed_headers);
+        }
+        if !exposed_headers.is_empty() {
+            layer = layer.expose_headers(exposed_headers);
+        }
+        Some(layer)
+    }
+
     /// Attach the RBC persistence directory so sampling endpoints can read disk state.
     pub fn with_rbc_store_dir(mut self, dir: PathBuf) -> Self {
         self.rbc_store_dir = Some(dir);
         self
+    }
+
+    fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
+        let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
+        let replay_cursor_store = match da::ReplayCursorStore::open(replay_store_dir.clone()) {
+            Ok(store) => store,
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    dir = ?replay_store_dir,
+                    "failed to load DA replay cursor snapshot; starting with empty cache"
+                );
+                match da::ReplayCursorStore::empty(replay_store_dir.clone()) {
+                    Ok(store) => store,
+                    Err(io_err) => {
+                        iroha_logger::error!(
+                            ?io_err,
+                            dir = ?replay_store_dir,
+                            "failed to prepare DA replay cursor directory; DA replay persistence disabled"
+                        );
+                        da::ReplayCursorStore::in_memory()
+                    }
+                }
+            }
+        };
+        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
+            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
+            .with_ttl(self.da_ingest.replay_cache_ttl)
+            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
+        let replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
+        for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
+            replay_cache.prime_lane_epoch(lane_epoch, highest);
+        }
+        let replay_store = Arc::new(replay_cursor_store);
+        let receipt_log = match da::DaReceiptLog::open(
+            self.da_ingest.manifest_store_dir.clone(),
+            Arc::clone(&replay_store),
+            self.da_receipt_signer.public_key().clone(),
+        ) {
+            Ok(log) => Arc::new(log),
+            Err(err) => {
+                iroha_logger::error!(
+                    ?err,
+                    dir = ?self.da_ingest.manifest_store_dir,
+                    "failed to open DA receipt log; falling back to in-memory log"
+                );
+                Arc::new(da::DaReceiptLog::in_memory(
+                    Arc::clone(&replay_store),
+                    self.da_receipt_signer.public_key().clone(),
+                ))
+            }
+        };
+        #[cfg(feature = "telemetry")]
+        self.telemetry.with_metrics(|metrics| {
+            for (lane_epoch, highest) in replay_store.highest_sequences() {
+                metrics.set_da_receipt_cursor(
+                    lane_epoch.lane_id.as_u32(),
+                    lane_epoch.epoch,
+                    highest,
+                );
+            }
+        });
+        let spooler = Some(da::DaSpooler::spawn(
+            self.da_ingest.spool_queue_capacity,
+            self.da_ingest.spool_batch_max,
+            self.telemetry.clone(),
+        ));
+
+        DaRuntimeServices {
+            replay_cache,
+            replay_store,
+            receipt_log,
+            spooler,
+        }
     }
 
     /// Helper function to create router. This router can be tested without starting up an HTTP server
@@ -35030,70 +35336,7 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let gateway_components = self.sorafs_gateway_security.clone();
 
-        let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
-        let replay_cursor_store = match da::ReplayCursorStore::open(replay_store_dir.clone()) {
-            Ok(store) => store,
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    dir = ?replay_store_dir,
-                    "failed to load DA replay cursor snapshot; starting with empty cache"
-                );
-                match da::ReplayCursorStore::empty(replay_store_dir.clone()) {
-                    Ok(store) => store,
-                    Err(io_err) => {
-                        iroha_logger::error!(
-                            ?io_err,
-                            dir = ?replay_store_dir,
-                            "failed to prepare DA replay cursor directory; DA replay persistence disabled"
-                        );
-                        da::ReplayCursorStore::in_memory()
-                    }
-                }
-            }
-        };
-        let replay_cache_config = iroha_core::da::ReplayCacheConfig::new()
-            .with_max_entries_per_lane(self.da_ingest.replay_cache_capacity)
-            .with_ttl(self.da_ingest.replay_cache_ttl)
-            .with_max_sequence_lag(self.da_ingest.replay_cache_max_sequence_lag);
-        let da_replay_cache = Arc::new(iroha_core::da::ReplayCache::new(replay_cache_config));
-        for (lane_epoch, highest) in replay_cursor_store.highest_sequences() {
-            da_replay_cache.prime_lane_epoch(lane_epoch, highest);
-        }
-        let da_replay_store = Arc::new(replay_cursor_store);
-        let da_receipt_log = match da::DaReceiptLog::open(
-            self.da_ingest.manifest_store_dir.clone(),
-            Arc::clone(&da_replay_store),
-            self.da_receipt_signer.public_key().clone(),
-        ) {
-            Ok(log) => Arc::new(log),
-            Err(err) => {
-                iroha_logger::error!(
-                    ?err,
-                    dir = ?self.da_ingest.manifest_store_dir,
-                    "failed to open DA receipt log; falling back to in-memory log"
-                );
-                Arc::new(da::DaReceiptLog::in_memory(
-                    Arc::clone(&da_replay_store),
-                    self.da_receipt_signer.public_key().clone(),
-                ))
-            }
-        };
-        #[cfg(feature = "telemetry")]
-        self.telemetry.with_metrics(|metrics| {
-            for (lane_epoch, highest) in da_replay_store.highest_sequences() {
-                metrics.set_da_receipt_cursor(
-                    lane_epoch.lane_id.as_u32(),
-                    lane_epoch.epoch,
-                    highest,
-                );
-            }
-        });
-        let da_spooler = Some(da::DaSpooler::spawn(
-            self.da_ingest.spool_queue_capacity,
-            self.da_ingest.spool_batch_max,
-            self.telemetry.clone(),
-        ));
+        let da_runtime = self.prepare_da_runtime_services();
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
@@ -35206,15 +35449,15 @@ impl Torii {
             rbc_sampling_budget,
             rbc_sampling_manifest,
             rbc_chain_hash,
-            da_replay_cache,
-            da_replay_store,
-            da_receipt_log,
+            da_replay_cache: da_runtime.replay_cache,
+            da_replay_store: da_runtime.replay_store,
+            da_receipt_log: da_runtime.receipt_log,
             da_receipt_signer: self.da_receipt_signer.clone(),
             torii_proxy_bridge_signer: self.torii_proxy_bridge_signer.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             da_ingest: self.da_ingest.clone(),
-            da_spooler,
+            da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: self.p2p.clone(),
@@ -35281,6 +35524,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
+            vpn_quotes: Arc::new(DashMap::new()),
+            vpn_used_payments: Arc::new(DashMap::new()),
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
             vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -35367,6 +35612,12 @@ impl Torii {
             attach_torii_proxy_network(app_state.clone(), network);
         }
 
+        self.compose_api_router(app_state)
+    }
+
+    /// Compose the HTTP router from prepared runtime state.
+    #[allow(clippy::too_many_lines)]
+    fn compose_api_router(&self, app_state: SharedAppState) -> axum::Router {
         let base_router: Router<SharedAppState> = Router::new().without_v07_checks();
         let mut builder = RouterBuilder::from_router(base_router, app_state.clone());
 
@@ -35412,19 +35663,7 @@ impl Torii {
         #[cfg(feature = "app_api")]
         self.add_soracloud_public_runtime_routes(&mut builder);
 
-        let cors_layer = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods([
-                HttpMethod::GET,
-                HttpMethod::POST,
-                HttpMethod::DELETE,
-                HttpMethod::OPTIONS,
-            ])
-            .allow_headers(Any)
-            .expose_headers(Any)
-            .max_age(Duration::from_secs(60 * 60));
-
-        let router = builder
+        let mut router = builder
             .finish()
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
             .layer(axum::middleware::from_fn(enforce_route_timeout))
@@ -35452,8 +35691,10 @@ impl Torii {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 record_http_metrics,
-            ))
-            .layer(cors_layer);
+            ));
+        if let Some(cors_layer) = self.build_cors_layer() {
+            router = router.layer(cors_layer);
+        }
 
         let router = router.with_state(app_state.clone());
 
@@ -37388,7 +37629,10 @@ pub(crate) mod tests_runtime_handlers {
         collections::HashSet,
         net::SocketAddr,
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        sync::{Arc, LazyLock, Mutex, MutexGuard},
+        sync::{
+            Arc, LazyLock, Mutex, MutexGuard,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -37410,7 +37654,7 @@ pub(crate) mod tests_runtime_handlers {
         kiso::KisoHandle,
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::Queue,
+        queue::{LaneRouter, Queue, RoutingDecision, RoutingResolveError},
         smartcontracts::Execute,
         state::{State as IrohaState, World},
         sumeragi::{
@@ -38044,11 +38288,15 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     fn ensure_runtime_peer_binding_for_test(
-        state: &IrohaState,
+        state: &mut IrohaState,
         validator: &AccountId,
         peer_keypair: &KeyPair,
         consensus_label: &str,
     ) {
+        let mut sumeragi_params = state.view().world().parameters().sumeragi().clone();
+        sumeragi_params.key_activation_lead_blocks = 0;
+        state.set_sumeragi_parameters(&sumeragi_params);
+
         let next_height = state
             .latest_block_header_fast()
             .map_or(1, |header| header.height().get().saturating_add(1));
@@ -39016,6 +39264,8 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             vpn_helper_ticket_secret: None,
+            vpn_quotes: Arc::new(DashMap::new()),
+            vpn_used_payments: Arc::new(DashMap::new()),
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
             vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -39311,6 +39561,47 @@ pub(crate) mod tests_runtime_handlers {
         ))
     }
 
+    struct CountingRouteRouter {
+        route_calls: Arc<AtomicUsize>,
+    }
+
+    impl LaneRouter for CountingRouteRouter {
+        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        }
+
+        fn try_route_without_state(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+        ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+            Ok(None)
+        }
+
+        fn try_route_with_state(
+            &self,
+            tx: &AcceptedTransaction<'_>,
+            _state: &IrohaState,
+        ) -> Result<RoutingDecision, RoutingResolveError> {
+            self.route_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.route(tx))
+        }
+    }
+
+    fn install_counting_route_queue(app: &mut SharedAppState) -> Arc<AtomicUsize> {
+        let route_calls = Arc::new(AtomicUsize::new(0));
+        let router: Arc<dyn LaneRouter> = Arc::new(CountingRouteRouter {
+            route_calls: Arc::clone(&route_calls),
+        });
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        app_mut.queue = Arc::new(Queue::from_config_with_router(
+            iroha_config::parameters::actual::Queue::default(),
+            app_mut.events.clone(),
+            router,
+        ));
+        app_mut.high_load_tx_threshold = usize::MAX;
+        route_calls
+    }
+
     fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> SignedTransaction {
         let mut signature = tx.signature().payload().payload().to_vec();
         let last = signature
@@ -39393,6 +39684,84 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn handler_post_transaction_uses_api_token_rate_limit_key() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.high_load_tx_threshold = usize::MAX;
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+
+        let first_keypair = KeyPair::random();
+        let second_keypair = KeyPair::random();
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            AccountId::new(first_keypair.public_key().clone()),
+        )
+        .with_instructions([Log::new(Level::INFO, "token-rate-limit-1".to_string())])
+        .sign(first_keypair.private_key());
+        let tx2 =
+            TransactionBuilder::new(chain, AccountId::new(second_keypair.public_key().clone()))
+                .with_instructions([Log::new(Level::INFO, "token-rate-limit-2".to_string())])
+                .sign(second_keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("shared-token"));
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            headers.clone(),
+            versioned_signed_bytes_for_test(&tx1),
+        )
+        .await
+        .expect("first token-keyed transaction accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction(
+            State(app),
+            headers,
+            versioned_signed_bytes_for_test(&tx2),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected shared token rate limit"),
+            Err(err) => err,
+        };
+        assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_reuses_resolved_route_for_enqueue() {
+        let mut app = mk_app_state_for_tests();
+        let route_calls = install_counting_route_queue(&mut app);
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "route-cache-submit".to_string())])
+            .sign(keypair.private_key());
+
+        let response = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            versioned_signed_bytes_for_test(&transaction),
+        )
+        .await
+        .expect("accepted")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
+        assert_eq!(
+            route_calls.load(Ordering::Relaxed),
+            1,
+            "handler should route once and pass the resolved decision into queue push"
+        );
+    }
+
+    #[tokio::test]
     async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
@@ -39405,9 +39774,6 @@ pub(crate) mod tests_runtime_handlers {
             .with_instructions([Log::new(Level::INFO, "entrypoint-submit".to_string())])
             .sign(keypair.private_key());
         let entrypoint = TransactionEntrypoint::External(transaction);
-        let submitted_hash =
-            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
-                .to_string();
 
         let response = super::handler_post_transaction_entrypoint(
             State(app.clone()),
@@ -39419,14 +39785,106 @@ pub(crate) mod tests_runtime_handlers {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-transaction-hash")
-                .and_then(|value| value.to_str().ok()),
-            Some(submitted_hash.as_str())
-        );
+        let entrypoint_hash = response
+            .headers()
+            .get("x-iroha-entrypoint-hash")
+            .and_then(|value| value.to_str().ok())
+            .expect("entrypoint hash header must be present");
+        let tx_hash = response
+            .headers()
+            .get("x-iroha-transaction-hash")
+            .and_then(|value| value.to_str().ok())
+            .expect("transaction hash header must be present");
+        assert_eq!(tx_hash, entrypoint_hash);
         assert_eq!(app.queue.active_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue() {
+        let mut app = mk_app_state_for_tests();
+        let route_calls = install_counting_route_queue(&mut app);
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-route-cache-submit".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let entrypoint = TransactionEntrypoint::External(transaction);
+
+        let response = super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(entrypoint),
+        )
+        .await
+        .expect("accepted")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
+        assert_eq!(
+            route_calls.load(Ordering::Relaxed),
+            1,
+            "entrypoint handler should route once and pass the resolved decision into queue push"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_entrypoint_uses_api_token_rate_limit_key() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.high_load_tx_threshold = usize::MAX;
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+
+        let first_keypair = KeyPair::random();
+        let second_keypair = KeyPair::random();
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            AccountId::new(first_keypair.public_key().clone()),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "entrypoint-token-rate-limit-1".to_string(),
+        )])
+        .sign(first_keypair.private_key());
+        let tx2 =
+            TransactionBuilder::new(chain, AccountId::new(second_keypair.public_key().clone()))
+                .with_instructions([Log::new(
+                    Level::INFO,
+                    "entrypoint-token-rate-limit-2".to_string(),
+                )])
+                .sign(second_keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("entrypoint-token"));
+
+        let first = super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers.clone(),
+            NoritoVersioned(TransactionEntrypoint::External(tx1)),
+        )
+        .await
+        .expect("first token-keyed entrypoint accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction_entrypoint(
+            State(app),
+            headers,
+            NoritoVersioned(TransactionEntrypoint::External(tx2)),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected shared token rate limit"),
+            Err(err) => err,
+        };
+        assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -39517,6 +39975,102 @@ pub(crate) mod tests_runtime_handlers {
             Some("2")
         );
         assert_eq!(app.queue.active_len(), 2);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_batch() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.high_load_tx_threshold = usize::MAX;
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+        }
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let payloads = (0..3)
+            .map(|index| {
+                let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                    .with_instructions([Log::new(
+                        Level::INFO,
+                        format!("batch-token-rate-limit-{index}"),
+                    )])
+                    .sign(keypair.private_key());
+                iroha_version::codec::EncodeVersioned::encode_versioned(&tx)
+            })
+            .collect();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::HeaderName::from_static("x-api-token"),
+            HeaderValue::from_static("batch-token"),
+        );
+
+        let err = match super::handler_post_transactions_batch(
+            State(app.clone()),
+            headers,
+            Norito(payloads),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected token rate limit"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(app.queue.active_len(), 0);
+        assert!(
+            !app.tx_rate_limiter.allow("batch-token").await,
+            "failed same-key batch should consume the token prefix that would have passed"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_post_transactions_batch_uses_api_token_key_for_distinct_authorities() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.high_load_tx_threshold = usize::MAX;
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+        }
+
+        let chain = (*app.chain_id).clone();
+        let payloads = (0..3)
+            .map(|index| {
+                let keypair = KeyPair::random();
+                let authority = AccountId::new(keypair.public_key().clone());
+                let tx = TransactionBuilder::new(chain.clone(), authority)
+                    .with_instructions([Log::new(
+                        Level::INFO,
+                        format!("batch-token-distinct-authority-{index}"),
+                    )])
+                    .sign(keypair.private_key());
+                iroha_version::codec::EncodeVersioned::encode_versioned(&tx)
+            })
+            .collect();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::HeaderName::from_static("x-api-token"),
+            HeaderValue::from_static("batch-distinct-token"),
+        );
+
+        let err = match super::handler_post_transactions_batch(
+            State(app.clone()),
+            headers,
+            Norito(payloads),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected token rate limit"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(app.queue.active_len(), 0);
+        assert!(
+            !app.tx_rate_limiter.allow("batch-distinct-token").await,
+            "distinct authorities should still consume the shared API-token key"
+        );
     }
 
     #[tokio::test]
@@ -39633,6 +40187,65 @@ pub(crate) mod tests_runtime_handlers {
         .await
         .expect("explorer detail response");
         assert_eq!(explorer.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_rejects_confidential_policy_before_enqueue() {
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let asset_def_id = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "zkdeny".parse().expect("asset name"),
+        );
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let asset_definition =
+            iroha_data_model::asset::AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string())
+                .confidential_policy(
+                    iroha_data_model::asset::definition::AssetConfidentialPolicy::transparent(),
+                )
+                .build(&authority);
+        let app =
+            mk_app_state_for_tests_with_world(World::with([domain], [account], [asset_definition]));
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority.clone())
+            .with_instructions([iroha_data_model::isi::zk::Shield::new(
+                asset_def_id,
+                authority,
+                10,
+                [7; 32],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            )])
+            .sign(keypair.private_key());
+
+        let response = match super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            versioned_signed_bytes_for_test(&tx),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected confidential policy admission rejection"),
+            Err(err) => err.into_response(),
+        };
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:CONFIDENTIAL_POLICY_REJECTED")
+        );
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("response body")
+            .to_bytes();
+        let payload =
+            norito::decode_from_bytes::<QueueErrorEnvelope>(&body).expect("queue error envelope");
+        assert_eq!(payload.code(), "queue_confidential_policy_rejected");
+        assert_eq!(app.queue.active_len(), 0);
     }
 
     #[tokio::test]
@@ -43180,6 +43793,7 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(|height| app.kura.get_block(height))
                 .map(|block| block.hash());
         let mut block_hashes = app.state.block_hashes.block();
+        let mut latest_header = None;
         for next_height in durable_height.saturating_add(1)..=height {
             let timestamp = if next_height == height {
                 creation_time_ms
@@ -43187,11 +43801,15 @@ pub(crate) mod tests_runtime_handlers {
                 0
             };
             let block = make_empty_signed_block(next_height, prev_hash, timestamp);
+            latest_header = Some(block.header());
             let hash = store_block(app, block);
             block_hashes.push_for_tests(hash);
             prev_hash = Some(hash);
         }
         block_hashes.commit_for_tests();
+        if let Some(header) = latest_header {
+            app.state.update_latest_block_header_cache_for_tests(header);
+        }
     }
 
     #[test]
@@ -54049,6 +54667,7 @@ impl Error {
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::FORBIDDEN,
+            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -54101,6 +54720,10 @@ impl Error {
             queue::Error::NexusFeeAdmissionRejected { .. } => (
                 "queue_nexus_fee_rejected",
                 "transaction cannot cover the Nexus fee admission bound",
+            ),
+            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => (
+                "queue_confidential_policy_rejected",
+                "confidential policy rejected the transaction",
             ),
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => (
                 "queue_nexus_fee_config_invalid",
@@ -54215,6 +54838,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::NexusFeeAdmissionRejected { reason } => (
             "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
             format!("transaction rejected by Nexus fee admission: {reason}"),
+        ),
+        queue::Error::ConfidentialPolicyAdmissionRejected { detail, .. } => (
+            "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
+            format!("transaction rejected by confidential policy admission: {detail}"),
         ),
         queue::Error::NexusFeeAdmissionConfigInvalid { reason } => (
             "PRTRY:NEXUS_FEE_ADMISSION_CONFIG_INVALID",
@@ -56477,12 +57104,18 @@ mod tests {
             .await
             .expect("collect body")
             .to_bytes();
+        let raw: norito::json::Value = norito::json::from_slice(&body).expect("raw json decode");
+        assert!(
+            raw.as_object()
+                .expect("execute response object")
+                .get("output_hex")
+                .is_none()
+        );
         let dto: routing::RamLfeExecuteResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.program_id, program_policy.program_id.to_string());
         assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
         assert_eq!(dto.verification_mode, "signed");
-        assert!(!dto.output_hex.is_empty());
         assert_eq!(dto.receipt.payload.program_id, dto.program_id);
         assert_eq!(dto.receipt.payload.output_hash, dto.output_hash);
         assert_eq!(
@@ -56554,6 +57187,72 @@ mod tests {
         assert_eq!(dto.verification_mode, "signed");
         assert_eq!(dto.output_hash_matches, Some(true));
         assert!(dto.error.is_none());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let draft = resolver
+            .execute(&program_policy, b"receipt-verify-input")
+            .expect("execute program");
+        let mut receipt = resolver
+            .issue_execution_receipt(&program_policy, &draft)
+            .expect("issue RAM-LFE receipt");
+        receipt.payload.executed_at_ms = 1;
+        receipt.payload.expires_at_ms = Some(2);
+
+        let response = handler_ram_lfe_receipt_verify(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(routing::RamLfeReceiptVerifyRequestDto {
+                receipt,
+                output_hex: None,
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeReceiptVerifyResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert!(!dto.valid);
+        assert!(
+            dto.error
+                .as_deref()
+                .expect("expiry error")
+                .contains("is expired")
+        );
     }
 
     #[cfg(feature = "app_api")]

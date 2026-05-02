@@ -2543,7 +2543,6 @@ pub struct RamLfeExecuteResponseDto {
     pub program_id: String,
     pub opaque_hash: String,
     pub receipt_hash: String,
-    pub output_hex: String,
     pub output_hash: String,
     pub associated_data_hash: String,
     pub executed_at_ms: u64,
@@ -10541,18 +10540,14 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing(
         queue.refresh_pressure_budget_from_block_time(block_time)
     };
     if pressure.saturated_by_age {
-        iroha_logger::warn!(
+        iroha_logger::debug!(
             tx_hash = %accepted_tx.hash(),
             queued = pressure.queued_tx_count,
             tracked = pressure.tracked_tx_count,
             capacity = pressure.capacity.get(),
             oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-            "rejecting transaction ingress while local queue is latency-saturated"
+            "local queue is latency-saturated; keeping ingress open until capacity is exhausted"
         );
-        return Err(Error::PushIntoQueue {
-            source: Box::new(queue::Error::LatencySaturated),
-            backpressure: pressure.into_backpressure(),
-        });
     }
 
     let result = match routing_decision {
@@ -33853,8 +33848,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                     .as_ref()
                     .is_none_or(|expected| tx_matches_asset_selector(tx, expected))
             })
-            .map(tx_to_query_row)
-            .collect::<Vec<_>>();
+            .map(tx_to_query_row);
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ACCOUNT_TRANSACTIONS,
@@ -41798,14 +41792,13 @@ mod query_endpoint_tests {
         use iroha_data_model::proof;
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
-        let backend: Ident = "debug/ok".into();
+        let backend: Ident = "groth16/bn254".into();
         let bytes = b"torii_proof_smoke".to_vec();
         let proof = proof::ProofBox::new(backend.clone(), bytes.clone());
         let attachment = proof::ProofAttachment {
             backend: backend.clone(),
             proof: proof.clone(),
-            // Inline a minimal verifying key so the attachment passes validation
-            // (exact contents are opaque to the debug backend).
+            // Inline a minimal verifying key so the attachment passes validation.
             vk_ref: None,
             vk_inline: Some(proof::VerifyingKeyBox::new(
                 backend.clone(),
@@ -47967,6 +47960,7 @@ pub struct VrfCommitRequestDto {
     pub epoch: u64,
     pub signer: u32,
     pub commitment_hex: String,
+    pub bls_sig_hex: String,
 }
 
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
@@ -47974,6 +47968,7 @@ pub struct VrfRevealRequestDto {
     pub epoch: u64,
     pub signer: u32,
     pub reveal_hex: String,
+    pub bls_sig_hex: String,
 }
 
 fn parse_hex32(value: &str, field: &'static str) -> Result<[u8; 32], Error> {
@@ -47999,15 +47994,38 @@ fn parse_hex32(value: &str, field: &'static str) -> Result<[u8; 32], Error> {
     Ok(out)
 }
 
+fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Error> {
+    let trimmed = value.trim();
+    let body = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(body).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!("{field}: {e}")),
+        ))
+    })?;
+    if bytes.is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "{field}: expected non-empty hex value"
+            )),
+        )));
+    }
+    Ok(bytes)
+}
+
 pub fn handle_post_sumeragi_vrf_commit(
     sumeragi: SumeragiHandle,
     request: VrfCommitRequestDto,
 ) -> Result<axum::response::Response, Error> {
     let commitment = parse_hex32(&request.commitment_hex, "commitment_hex")?;
+    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
     let commit = iroha_data_model::block::consensus::VrfCommit {
         epoch: request.epoch,
         commitment,
         signer: request.signer,
+        bls_sig,
     };
     sumeragi.incoming_block_message(BlockMessage::VrfCommit(commit));
     Ok(StatusCode::ACCEPTED.into_response())
@@ -48018,13 +48036,32 @@ pub fn handle_post_sumeragi_vrf_reveal(
     request: VrfRevealRequestDto,
 ) -> Result<axum::response::Response, Error> {
     let reveal = parse_hex32(&request.reveal_hex, "reveal_hex")?;
+    let bls_sig = parse_hex_bytes(&request.bls_sig_hex, "bls_sig_hex")?;
     let msg = iroha_data_model::block::consensus::VrfReveal {
         epoch: request.epoch,
         reveal,
         signer: request.signer,
+        bls_sig,
     };
     sumeragi.incoming_block_message(BlockMessage::VrfReveal(msg));
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+#[cfg(test)]
+mod sumeragi_vrf_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn vrf_signature_hex_parser_accepts_prefixed_payloads() {
+        let parsed = parse_hex_bytes(" 0x0a0B ", "bls_sig_hex").expect("valid signature hex");
+        assert_eq!(parsed, vec![0x0a, 0x0b]);
+    }
+
+    #[test]
+    fn vrf_signature_hex_parser_rejects_empty_payloads() {
+        assert!(parse_hex_bytes("", "bls_sig_hex").is_err());
+        assert!(parse_hex_bytes("0x", "bls_sig_hex").is_err());
+    }
 }
 
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
@@ -49374,7 +49411,7 @@ mod transaction_ingress_overload_tests {
     }
 
     #[tokio::test]
-    async fn transaction_ingress_rejects_latency_saturated_queue_before_capacity() {
+    async fn transaction_ingress_allows_latency_saturated_queue_before_capacity() {
         let state = Arc::new(State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -49404,29 +49441,21 @@ mod transaction_ingress_overload_tests {
         queue.backdate_queued_transactions_for_tests(Duration::from_secs(3));
 
         let second = signed_log_transaction(&chain_id, &KeyPair::random(), "second");
-        let err = handle_transaction(
+        handle_transaction(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
             Arc::clone(&state),
             second,
         )
         .await
-        .expect_err("latency-saturated queue should reject fresh ingress");
-        assert!(matches!(
-            err,
-            Error::PushIntoQueue {
-                source,
-                backpressure,
-            } if matches!(source.as_ref(), queue::Error::LatencySaturated)
-                && backpressure.is_saturated()
-        ));
+        .expect("latency-saturated queue should accept fresh ingress until capacity is exhausted");
 
         let backpressure = queue.current_backpressure();
         assert!(
             backpressure.is_saturated(),
             "latency saturation must remain visible as backpressure telemetry"
         );
-        assert_eq!(backpressure.queued(), 1);
+        assert_eq!(backpressure.queued(), 2);
         assert_eq!(backpressure.capacity().get(), 32);
     }
 }
@@ -53341,13 +53370,10 @@ pub async fn handle_v1_repo_agreements_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if generic_mode {
-        let rows = agreements
-            .into_iter()
-            .map(|agreement| {
-                let projection = RepoAgreementProjection::from_agreement(&agreement);
-                repo_agreement_projection_to_query_row(&projection)
-            })
-            .collect::<Vec<_>>();
+        let rows = agreements.into_iter().map(|agreement| {
+            let projection = RepoAgreementProjection::from_agreement(&agreement);
+            repo_agreement_projection_to_query_row(&projection)
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_REPO_AGREEMENTS,
@@ -53849,14 +53875,11 @@ pub async fn handle_v1_domains_query(
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if generic_mode {
-        let rows = domains
-            .into_iter()
-            .map(|dom| {
-                let mut row = Map::new();
-                row.insert("id".into(), Value::from(dom.id().to_string()));
-                row
-            })
-            .collect::<Vec<_>>();
+        let rows = domains.into_iter().map(|dom| {
+            let mut row = Map::new();
+            row.insert("id".into(), Value::from(dom.id().to_string()));
+            row
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_DOMAINS,
@@ -54659,6 +54682,22 @@ fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     Ok(UniversalAccountId::from_hash(hash))
 }
 
+#[cfg(feature = "app_api")]
+fn canonicalize_identity_commitment_hex(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() != Hash::LENGTH * 2 {
+        return Err(onboarding_invalid_request(
+            "identity_commitment_hex must be a 64-character hex digest",
+        ));
+    }
+    if !trimmed.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Err(onboarding_invalid_request(
+            "identity_commitment_hex must contain only hex characters",
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod uaid_parsing_tests {
     use core::str::FromStr;
@@ -54702,6 +54741,19 @@ mod uaid_parsing_tests {
         assert!(parse_uaid_literal("uaid:1234").is_err());
         let invalid_hex = format!("{}g", "0".repeat(63));
         assert!(parse_uaid_literal(&invalid_hex).is_err());
+        assert!(parse_uaid_literal(&"0".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn identity_commitment_hex_is_digest_only_and_canonical() {
+        let canonical = canonicalize_identity_commitment_hex(
+            "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  ",
+        )
+        .expect("canonical identity commitment");
+        assert_eq!(canonical, "a".repeat(64));
+        assert!(canonicalize_identity_commitment_hex("abcd").is_err());
+        let invalid_hex = format!("{}g", "0".repeat(63));
+        assert!(canonicalize_identity_commitment_hex(&invalid_hex).is_err());
     }
 }
 
@@ -54715,6 +54767,8 @@ pub struct AccountOnboardingRequestDto {
     pub public_key_hex: Option<String>,
     #[norito(default)]
     pub identity: Option<Map>,
+    #[norito(default)]
+    pub identity_commitment_hex: Option<String>,
     #[norito(default)]
     pub uaid: Option<String>,
     #[norito(default)]
@@ -54934,6 +54988,35 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
         (
             "alias_dataspace_not_registered",
             Some("Register the alias dataspace before accepting public onboarding requests."),
+        )
+    } else if normalized.contains("uaid is required") {
+        (
+            "missing_uaid",
+            Some("Provide an explicit canonical UAID literal (`uaid:<hex>` or raw 64-hex)."),
+        )
+    } else if normalized.contains("invalid uaid") || normalized.contains("uaid literal") {
+        (
+            "invalid_uaid",
+            Some(
+                "Provide a 64-hex UAID digest with the canonical low bit set, optionally prefixed by `uaid:`.",
+            ),
+        )
+    } else if normalized.contains("raw identity metadata") {
+        (
+            "raw_identity_not_allowed",
+            Some(
+                "Do not submit raw identity metadata; submit only `identity_commitment_hex` when an audit commitment is needed.",
+            ),
+        )
+    } else if normalized.contains("identity_commitment_hex") {
+        (
+            "invalid_identity_commitment",
+            Some("Provide `identity_commitment_hex` as a plain 64-character hex digest."),
+        )
+    } else if normalized.contains("exactly one of account_id or public_key_hex") {
+        (
+            "ambiguous_account_material",
+            Some("Provide exactly one of `account_id` or `public_key_hex`."),
         )
     } else if normalized.contains("public key hex") {
         (
@@ -55309,6 +55392,14 @@ mod faucet_pow_tests {
     }
 
     #[test]
+    fn onboarding_error_metadata_classifies_ambiguous_account_material() {
+        let (code, hint) =
+            super::onboarding_error_metadata("provide exactly one of account_id or public_key_hex");
+        assert_eq!(code, "ambiguous_account_material");
+        assert!(hint.is_some());
+    }
+
+    #[test]
     fn onboarding_invalid_request_preserves_structured_code() {
         let err = super::onboarding_invalid_request("account already exists");
         match err {
@@ -55631,23 +55722,6 @@ mod confidential_notes_tests {
 }
 
 #[cfg(feature = "app_api")]
-fn derive_onboarding_uaid(
-    alias: &str,
-    account_id: &AccountId,
-    identity: Option<&Map>,
-) -> UniversalAccountId {
-    let mut seed = Map::new();
-    seed.insert("alias".into(), Value::String(alias.trim().to_lowercase()));
-    seed.insert("account_id".into(), Value::String(account_id.to_string()));
-    if let Some(extra) = identity {
-        seed.insert("identity".into(), Value::Object(extra.clone()));
-    }
-    let canonical = norito::json::to_string(&Value::Object(seed))
-        .expect("UAID seed serialization should succeed");
-    UniversalAccountId::from_hash(Hash::new(canonical.as_bytes()))
-}
-
-#[cfg(feature = "app_api")]
 fn onboarding_manifest_issued_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -55795,6 +55869,7 @@ pub async fn handle_v1_accounts_onboard(
         account_id,
         public_key_hex,
         identity,
+        identity_commitment_hex,
         uaid,
         permissions,
     } = req;
@@ -55813,19 +55888,25 @@ pub async fn handle_v1_accounts_onboard(
         .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let (alias_dataspace, alias_domain) =
         account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
-    let account_id = if let Some(account_literal) = account_id
+    let account_id_literal = account_id
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+        .filter(|value| !value.is_empty());
+    let public_key_hex_literal = public_key_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if account_id_literal.is_some() && public_key_hex_literal.is_some() {
+        return Err(onboarding_invalid_request(
+            "provide exactly one of account_id or public_key_hex",
+        ));
+    }
+
+    let account_id = if let Some(account_literal) = account_id_literal {
         AccountId::parse_encoded(account_literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|_| onboarding_invalid_request("invalid account id literal"))?
-    } else if let Some(public_key_hex) = public_key_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    } else if let Some(public_key_hex) = public_key_hex_literal {
         let bytes = hex::decode(public_key_hex)
             .map_err(|_| onboarding_invalid_request("invalid public key hex"))?;
         let public_key =
@@ -55837,6 +55918,25 @@ pub async fn handle_v1_accounts_onboard(
             "either account_id or public_key_hex is required",
         ));
     };
+
+    if identity.is_some() {
+        return Err(onboarding_invalid_request(
+            "raw identity metadata is not allowed; provide identity_commitment_hex",
+        ));
+    }
+    let identity_commitment_hex = identity_commitment_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(canonicalize_identity_commitment_hex)
+        .transpose()?;
+    let uaid_literal = uaid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| onboarding_invalid_request("uaid is required"))?;
+    let uaid = parse_uaid_literal(uaid_literal)
+        .map_err(|_| onboarding_invalid_request("invalid uaid literal"))?;
 
     if app.state.world_view().account(&account_id).is_ok() {
         return Err(onboarding_invalid_request("account already exists"));
@@ -55855,11 +55955,6 @@ pub async fn handle_v1_accounts_onboard(
     )
     .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
 
-    let uaid = if let Some(literal) = uaid {
-        parse_uaid_literal(&literal)?
-    } else {
-        derive_onboarding_uaid(&canonical_alias, &account_id, identity.as_ref())
-    };
     let dataspace = alias_label.dataspace;
     let should_publish_manifest = {
         let world = app.state.world_view();
@@ -55872,12 +55967,9 @@ pub async fn handle_v1_accounts_onboard(
     let mut metadata = Metadata::default();
     let alias_key = Name::from_str("display_name").expect("static metadata key");
     metadata.insert(alias_key, IrohaJson::new(canonical_alias.clone()));
-    if let Some(identity_payload) = identity.clone() {
-        let identity_key = Name::from_str("identity").expect("static metadata key");
-        metadata.insert(
-            identity_key,
-            IrohaJson::from(Value::Object(identity_payload)),
-        );
+    if let Some(commitment_hex) = identity_commitment_hex {
+        let identity_key = Name::from_str("identity_commitment_hex").expect("static metadata key");
+        metadata.insert(identity_key, IrohaJson::new(commitment_hex));
     }
 
     let register_builder = dm::Account::new(account_id.clone());
@@ -56983,20 +57075,18 @@ pub async fn handle_v1_accounts_query(
     let accounts = collect_subject_accounts(&world);
     drop(world);
     if envelope.select.is_some() || envelope.aggregate.is_some() {
-        let rows = accounts
-            .into_iter()
-            .map(|account| {
-                let projected = AccountListItem {
-                    canonical_id: account.id().to_string(),
-                    display_id: crate::account_literal::display_literal(account.id()),
-                    primary_alias: primary_alias_projection_for_account_id(
-                        state.as_ref(),
-                        account.id(),
-                    ),
-                };
-                account_list_item_to_query_row(&projected)
-            })
-            .collect::<Vec<_>>();
+        let state_for_alias = state.clone();
+        let rows = accounts.into_iter().map(move |account| {
+            let projected = AccountListItem {
+                canonical_id: account.id().to_string(),
+                display_id: crate::account_literal::display_literal(account.id()),
+                primary_alias: primary_alias_projection_for_account_id(
+                    state_for_alias.as_ref(),
+                    account.id(),
+                ),
+            };
+            account_list_item_to_query_row(&projected)
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ACCOUNTS,
@@ -57137,13 +57227,13 @@ fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
     asset_id: &AssetId,
 ) {
-    let mut accounts = 0u64;
+    let mut accounts = BTreeSet::new();
     let mut positions = 0u64;
     for dataspace in &mut snapshot.dataspaces {
         for account in &mut dataspace.accounts {
             account.assets.retain(|asset| asset.asset_id == *asset_id);
             if !account.assets.is_empty() {
-                accounts = accounts.saturating_add(1);
+                accounts.insert(account.account_id.clone());
                 positions = positions.saturating_add(account.assets.len() as u64);
             }
         }
@@ -57154,7 +57244,7 @@ fn filter_portfolio_by_asset_id(
     snapshot
         .dataspaces
         .retain(|dataspace| !dataspace.accounts.is_empty());
-    snapshot.totals.accounts = accounts;
+    snapshot.totals.accounts = u64::try_from(accounts.len()).unwrap_or(u64::MAX);
     snapshot.totals.positions = positions;
 }
 
@@ -64230,7 +64320,7 @@ pub async fn handle_v1_nfts_query(
     }
 
     if generic_mode {
-        let rows = nfts.iter().map(nft_to_query_row).collect::<Vec<_>>();
+        let rows = nfts.iter().map(nft_to_query_row);
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_NFTS,
@@ -64507,14 +64597,11 @@ pub async fn handle_v1_rwas_query(
     }
 
     if generic_mode {
-        let rows = items
-            .iter()
-            .map(|item| {
-                let mut row = Map::new();
-                row.insert("id".into(), Value::from(item.id.clone()));
-                row
-            })
-            .collect::<Vec<_>>();
+        let rows = items.iter().map(|item| {
+            let mut row = Map::new();
+            row.insert("id".into(), Value::from(item.id.clone()));
+            row
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_RWAS,
@@ -67723,8 +67810,7 @@ pub async fn handle_v1_account_assets_query_with_policy(
     if generic_mode {
         let rows = projected_assets
             .into_iter()
-            .map(|item| account_asset_item_to_query_row(&item))
-            .collect::<Vec<_>>();
+            .map(|item| account_asset_item_to_query_row(&item));
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ACCOUNT_ASSETS,
@@ -68379,23 +68465,20 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     drop(world);
 
     if generic_mode {
-        let rows = map
-            .into_iter()
-            .map(|((account_id, scope), quantity)| {
-                let canonical_id = account_id.to_string();
-                let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-                let projected = AssetHolderListItem {
-                    account_id,
-                    canonical_id,
-                    asset: def_id.to_string(),
-                    asset_alias: asset_alias.clone(),
-                    scope: asset_balance_scope_literal(&scope),
-                    quantity,
-                    primary_alias,
-                };
-                asset_holder_item_to_query_row(&projected)
-            })
-            .collect::<Vec<_>>();
+        let rows = map.into_iter().map(|((account_id, scope), quantity)| {
+            let canonical_id = account_id.to_string();
+            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
+            let projected = AssetHolderListItem {
+                account_id,
+                canonical_id,
+                asset: def_id.to_string(),
+                asset_alias: asset_alias.clone(),
+                scope: asset_balance_scope_literal(&scope),
+                quantity,
+                primary_alias,
+            };
+            asset_holder_item_to_query_row(&projected)
+        });
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ASSET_HOLDERS,
@@ -69006,13 +69089,16 @@ fn generic_query_snapshot(
 }
 
 #[cfg(feature = "app_api")]
-fn execute_generic_resource_query(
+fn execute_generic_resource_query<I>(
     state: &CoreState,
     resource_id: &str,
     envelope: crate::filter::QueryEnvelope,
-    rows: Vec<norito::json::Map>,
+    rows: I,
     query_source: &'static str,
-) -> Result<Response, Error> {
+) -> Result<Response, Error>
+where
+    I: IntoIterator<Item = norito::json::Map>,
+{
     let resource = crate::generic_query::registered_resource(resource_id).ok_or_else(|| {
         Error::AppQueryValidation {
             code: "unsupported_query_resource",

@@ -507,6 +507,18 @@ public sealed class ToriiClient : IDisposable
         return GetAsync<ToriiVpnProfile>("/v1/vpn/profile", cancellationToken: cancellationToken);
     }
 
+    public Task<ToriiVpnQuote> CreateVpnQuoteAsync(
+        ToriiVpnQuoteCreateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return PostAsync<ToriiVpnQuoteCreateRequest, ToriiVpnQuote>(
+            "/v1/vpn/quotes",
+            request,
+            cancellationToken: cancellationToken);
+    }
+
     public Task<ToriiVpnSession> CreateVpnSessionAsync(
         ToriiVpnSessionCreateRequest request,
         CancellationToken cancellationToken = default)
@@ -519,23 +531,63 @@ public sealed class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
-    public Task<ToriiVpnSession> CreateVpnSessionAsync(CancellationToken cancellationToken = default)
-    {
-        return CreateVpnSessionAsync(new ToriiVpnSessionCreateRequest(), cancellationToken);
-    }
-
-    public Task<ToriiVpnSessionDeleteResponse> DeleteVpnSessionAsync(
+    public async Task<ToriiVpnSession?> GetVpnSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default)
     {
         var normalizedSessionId = NormalizeRequiredValue(sessionId, nameof(sessionId));
-        return SendAllowingStatusAndDeserializeAsync<ToriiVpnSessionDeleteResponse>(
+        using var response = await SendAllowingStatusAsync(
+            HttpMethod.Get,
+            $"/v1/vpn/sessions/{EncodePathSegment(normalizedSessionId)}",
+            query: null,
+            content: null,
+            HttpStatusCode.NotFound,
+            cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        return await DeserializeAsync<ToriiVpnSession>(response, cancellationToken);
+    }
+
+    public async Task<ToriiVpnReceipt?> DeleteVpnSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSessionId = NormalizeRequiredValue(sessionId, nameof(sessionId));
+        using var response = await SendAllowingStatusAsync(
             HttpMethod.Delete,
             $"/v1/vpn/sessions/{EncodePathSegment(normalizedSessionId)}",
             query: null,
             content: null,
             HttpStatusCode.NotFound,
             cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        return await DeserializeAsync<ToriiVpnReceipt>(response, cancellationToken);
+    }
+
+    public Task<ToriiVpnReceipt> SubmitVpnReceiptAsync(
+        ToriiVpnReceiptSubmitRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return PostAsync<ToriiVpnReceiptSubmitRequest, ToriiVpnReceipt>(
+            "/v1/vpn/receipts",
+            request,
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<ToriiVpnReceiptListResponse> ListVpnReceiptsAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAsync<ToriiVpnReceiptListResponse>("/v1/vpn/receipts", cancellationToken: cancellationToken);
     }
 
     public Task<ToriiMultisigAccountOnboardingResponse> RegisterMultisigAccountAsync(

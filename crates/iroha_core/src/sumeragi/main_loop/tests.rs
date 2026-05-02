@@ -765,8 +765,15 @@ fn sample_lane_relay_envelope_with_bitmap(
     };
     let envelope =
         LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");
-    let verified_at_height = Some(height);
-    let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+    let verified_at_height = height;
+    let proof_digest = iroha_crypto::Hash::new(
+        format!(
+            "main-loop-test-fastpq-proof:{}:{}:{height}:{verified_at_height}",
+            lane_id.as_u32(),
+            DataSpaceId::UNIVERSAL.as_u64()
+        )
+        .as_bytes(),
+    );
     envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
         proof_digest,
         verified_at_height,
@@ -13713,9 +13720,16 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn block_sync_update_known_kura_only_block_applies_commit_qc() {
-    let mut harness = test_actor_harness(4).await;
+#[test]
+fn block_sync_update_known_kura_only_block_applies_commit_qc() {
+    crate::sumeragi::sumeragi_thread_builder("sumeragi-block-sync-test")
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio test runtime");
+            runtime.block_on(async {
+                let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
     let committed_hash = seed_genesis_block_for_state(actor.state.as_ref());
@@ -13790,7 +13804,12 @@ async fn block_sync_update_known_kura_only_block_applies_commit_qc() {
         inflight.is_some_and(|inflight| inflight.block_hash == block_hash),
     );
 
-    harness.shutdown.send();
+                harness.shutdown.send();
+            });
+        })
+        .expect("spawn block-sync test worker")
+        .join()
+        .expect("block-sync test worker should not panic");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -50733,9 +50752,9 @@ fn block_sync_update_uses_activation_height_mode_tag() {
 #[test]
 fn block_sync_update_uses_active_roster_for_checkpoint() {
     let (peer_a, pop_a, kp_a) = bls_peer("127.0.0.1:7101");
-    let (peer_b, pop_b, _kp_b) = bls_peer("127.0.0.1:7102");
-    let (peer_c, pop_c, _kp_c) = bls_peer("127.0.0.1:7103");
-    let (peer_d, _pop_d, _kp_d) = bls_peer("127.0.0.1:7104");
+    let (peer_b, pop_b, kp_b) = bls_peer("127.0.0.1:7102");
+    let (peer_c, pop_c, kp_c) = bls_peer("127.0.0.1:7103");
+    let (peer_d, _pop_d, kp_d) = bls_peer("127.0.0.1:7104");
     let mut pops = BTreeMap::new();
     pops.insert(peer_a.id().public_key().clone(), pop_a);
     pops.insert(peer_b.id().public_key().clone(), pop_b);
@@ -50746,12 +50765,14 @@ fn block_sync_update_uses_active_roster_for_checkpoint() {
         pops,
     );
 
-    let state = state_with_peers(vec![
+    let peers = vec![
         peer_a.id().clone(),
         peer_b.id().clone(),
         peer_c.id().clone(),
         peer_d.id().clone(),
-    ]);
+    ];
+    let keys = vec![kp_a.clone(), kp_b, kp_c, kp_d];
+    let state = state_with_peers_and_keys(&peers, &keys);
     {
         let mut block = state.commit_topology.block();
         let mut tx = block.transaction();
@@ -99287,6 +99308,7 @@ async fn refresh_npos_seed_precommit_preserves_epoch_state_during_schedule_chang
                     epoch: 1,
                     commitment,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -99298,6 +99320,7 @@ async fn refresh_npos_seed_precommit_preserves_epoch_state_during_schedule_chang
                     epoch: 1,
                     reveal,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -99378,6 +99401,7 @@ async fn refresh_npos_seed_postcommit_boundary_advances_epoch_and_clears_inputs(
                     epoch: 1,
                     commitment,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -99389,6 +99413,7 @@ async fn refresh_npos_seed_postcommit_boundary_advances_epoch_and_clears_inputs(
                     epoch: 1,
                     reveal,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -120051,6 +120076,33 @@ fn derive_block_sync_qc_requires_commit_quorum() {
 }
 
 #[test]
+fn derive_block_sync_qc_npos_requires_stake_snapshot() {
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x78; Hash::LENGTH]));
+    let block_signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32, 3_u32].into_iter().collect();
+    let (_keypairs, topology) = sample_bls_topology(4);
+
+    let derived = super::derive_block_sync_qc_from_signers(
+        block_hash,
+        10,
+        3,
+        0,
+        zero_state_root(),
+        zero_state_root(),
+        topology.as_ref(),
+        ConsensusMode::Npos,
+        None,
+        NPOS_TAG,
+        &block_signers,
+        vec![0x01],
+    );
+    assert!(
+        derived.is_none(),
+        "NPoS block-sync QC derivation must not fall back to count quorum without a stake snapshot"
+    );
+}
+
+#[test]
 fn derive_block_sync_qc_from_committed_signers() {
     let chain: ChainId = "block-sync-from-committed"
         .parse()
@@ -121818,6 +121870,41 @@ fn validate_block_for_voting_runs_before_votes() {
         result.is_err(),
         "validation must reject block when state height does not advance correctly"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn debug_corrupt_witness_roots_changes_local_post_root() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.debug.rbc.corrupt_witness_ack = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let block_hash = sample_block(2, 0, None).hash();
+    let roots = super::StateRoots {
+        parent_state_root: Hash::prehashed([0x11; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x22; Hash::LENGTH]),
+    };
+
+    let corrupted = actor.maybe_corrupt_debug_witness_roots(block_hash, 2, 0, roots);
+    let corrupted_again = actor.maybe_corrupt_debug_witness_roots(block_hash, 2, 0, roots);
+    assert_eq!(
+        corrupted.parent_state_root, roots.parent_state_root,
+        "debug corruption must not alter the parent root"
+    );
+    assert_ne!(
+        corrupted.post_state_root, roots.post_state_root,
+        "debug corruption should alter the local post-state root"
+    );
+    assert_eq!(
+        corrupted.post_state_root, corrupted_again.post_state_root,
+        "debug corruption should be deterministic for a peer and slot"
+    );
+
+    actor.config.debug.rbc.corrupt_witness_ack = false;
+    let unchanged = actor.maybe_corrupt_debug_witness_roots(block_hash, 2, 0, roots);
+    assert_eq!(unchanged.parent_state_root, roots.parent_state_root);
+    assert_eq!(unchanged.post_state_root, roots.post_state_root);
+
+    harness.shutdown.send();
 }
 
 #[test]
@@ -126510,6 +126597,7 @@ async fn handle_vrf_commit_does_not_record_mode_mismatch_in_permissioned_mode() 
         epoch: 0,
         commitment: [0; 32],
         signer: 0,
+        bls_sig: Vec::new(),
     };
 
     let _guard = super::status::message_handling_test_guard();
@@ -126541,6 +126629,7 @@ async fn handle_vrf_reveal_does_not_record_mode_mismatch_in_permissioned_mode() 
         epoch: 0,
         reveal: [0; 32],
         signer: 0,
+        bls_sig: Vec::new(),
     };
 
     let _guard = super::status::message_handling_test_guard();
@@ -136722,10 +136811,17 @@ async fn keep_exact_frontier_block_sync_repair_in_slot_clears_generic_missing_re
     harness.shutdown.send();
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_through_block_created_owner()
+#[test]
+fn block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_through_block_created_owner()
  {
-    let mut consensus_cfg = test_sumeragi_config();
+    crate::sumeragi::sumeragi_thread_builder("sumeragi-block-sync-test")
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio test runtime");
+            runtime.block_on(async {
+                let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -136826,7 +136922,12 @@ async fn block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_t
         );
     }
 
-    harness.shutdown.send();
+                harness.shutdown.send();
+            });
+        })
+        .expect("spawn block-sync test worker")
+        .join()
+        .expect("block-sync test worker should not panic");
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -31,6 +31,10 @@ fn cost_of(word: u32) -> u64 {
     cost_of_opt(word).expect("valid opcode must have gas cost")
 }
 
+fn cost_of_with_vl(word: u32, vector_len: usize) -> u64 {
+    ivm::cost_of_with_params(word, vector_len, 0).expect("valid opcode must have gas cost")
+}
+
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     ivm::encoding::wide::encode_rr(op, rd, rs1, rs2)
 }
@@ -162,6 +166,8 @@ fn gas_getgas_and_jumps_and_vector_sha() {
     // GETGAS: low 7 bits = 0x51
     let getgas = wide_rr(wide::system::GETGAS, 0, 0, 0);
     assert_eq!(cost_of(getgas), 0);
+    let scallx = ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS);
+    assert_eq!(cost_of(scallx), 5);
     // JAL: opcode 0x6F (test schedule via low 7-bit opcode)
     let jal = wide_jump(wide::control::JAL, 0, 0);
     assert_eq!(cost_of(jal), 2);
@@ -169,7 +175,7 @@ fn gas_getgas_and_jumps_and_vector_sha() {
     let jalr = wide_ri(wide::control::JALR, 2, 1, 0);
     assert_eq!(cost_of(jalr), 2);
 
-    // VADD32: high byte 0x60
+    // VADD32: high byte 0x70
     let vadd32 = wide_rr(wide::crypto::VADD32, 0, 0, 0);
     assert_eq!(cost_of(vadd32), 2);
 
@@ -307,7 +313,7 @@ fn vector_and_sha_run_costs() {
     vm.set_vector_register(0, [1, 2, 3, 4]);
     let before = vm.gas_remaining;
     vm.run().unwrap();
-    assert_eq!(before - vm.gas_remaining, 2);
+    assert_eq!(before - vm.gas_remaining, 4);
 
     // Now SHA256BLOCK: needs a state in two vector registers and a 64-byte block in memory
     let mut program2 = ProgramMetadata {
@@ -366,9 +372,9 @@ fn vector_vand_vxor_vor_run_costs() {
         vm.run().unwrap();
         before - vm.gas_remaining
     };
-    assert_eq!(run_vec(wide::crypto::VAND), 1);
-    assert_eq!(run_vec(wide::crypto::VXOR), 1);
-    assert_eq!(run_vec(wide::crypto::VOR), 1);
+    assert_eq!(run_vec(wide::crypto::VAND), 2);
+    assert_eq!(run_vec(wide::crypto::VXOR), 2);
+    assert_eq!(run_vec(wide::crypto::VOR), 2);
 }
 
 #[test]
@@ -417,7 +423,7 @@ fn vector_vadd64_vrot32_run_costs() {
     vm.set_vector_register(0, [1, 1, 1, 1]);
     let before = vm.gas_remaining;
     vm.run().unwrap();
-    assert_eq!(before - vm.gas_remaining, 2);
+    assert_eq!(before - vm.gas_remaining, 4);
 
     // VROT32 (rotate each lane by imm)
     let mut program2 = ProgramMetadata {
@@ -438,7 +444,7 @@ fn vector_vadd64_vrot32_run_costs() {
     vm2.set_vector_register(0, [0x0000_0001, 0x8000_0000, 0x1234_5678, 0xFFFF_FFFF]);
     let before2 = vm2.gas_remaining;
     vm2.run().unwrap();
-    assert_eq!(before2 - vm2.gas_remaining, 1);
+    assert_eq!(before2 - vm2.gas_remaining, 2);
 }
 
 #[test]
@@ -498,7 +504,7 @@ fn mixed_sequence_cumulative_gas() {
 #[test]
 fn vector_vadd64_vl_override_gas() {
     use ivm::ProgramMetadata;
-    // Set an explicit vector_length to a non-zero value and verify gas remains as per schedule
+    // Set an explicit vector_length to a non-zero value and verify gas scales by lane count.
     let mut program = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -517,8 +523,7 @@ fn vector_vadd64_vl_override_gas() {
     vm.set_vector_register(0, [0x1, 0x2, 0x3, 0x4]);
     let before = vm.gas_remaining;
     vm.run().unwrap();
-    // Current schedule is constant per op; vector_length override does not change gas here
-    assert_eq!(before - vm.gas_remaining, 2);
+    assert_eq!(before - vm.gas_remaining, 8);
 }
 
 #[test]
@@ -572,9 +577,9 @@ fn vector_vand_vxor_vor_vl_override_gas() {
         vm.run().unwrap();
         before - vm.gas_remaining
     };
-    assert_eq!(run_vec(wide::crypto::VAND), 1);
-    assert_eq!(run_vec(wide::crypto::VXOR), 1);
-    assert_eq!(run_vec(wide::crypto::VOR), 1);
+    assert_eq!(run_vec(wide::crypto::VAND), 4);
+    assert_eq!(run_vec(wide::crypto::VXOR), 4);
+    assert_eq!(run_vec(wide::crypto::VOR), 4);
 }
 
 #[test]
@@ -758,7 +763,7 @@ fn vector_sequence_cumulative_gas() {
         .chunks(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
-    let expected: u64 = words.iter().map(|&w| cost_of(w)).sum();
+    let expected: u64 = words.iter().map(|&w| cost_of_with_vl(w, 4)).sum();
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     vm.load_program(&program).unwrap();
@@ -868,7 +873,7 @@ fn vector_long_chain_cumulative_gas() {
         program.extend_from_slice(&w.to_le_bytes());
     }
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let expected: u64 = seq.iter().map(|&w| cost_of(w)).sum();
+    let expected: u64 = seq.iter().map(|&w| cost_of_with_vl(w, 4)).sum();
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     vm.load_program(&program).unwrap();

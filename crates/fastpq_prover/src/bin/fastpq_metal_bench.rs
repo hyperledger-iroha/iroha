@@ -195,6 +195,17 @@ mod tests {
     }
 
     #[test]
+    fn operation_filter_parses_bn254_poseidon_words() {
+        let args = vec!["--operation".to_owned(), "bn254_poseidon_words".to_owned()];
+        let cfg = Config::from_iter(args.into_iter()).expect("operation parses");
+        assert!(matches!(
+            cfg.operation,
+            OperationFilter::Only(BenchOperation::Bn254PoseidonWords)
+        ));
+        assert!(!cfg.operation.includes_fft_tuning());
+    }
+
+    #[test]
     fn zero_fill_value_includes_bytes_and_ms() {
         let summary = Summary::from_samples(&[1.0, 2.0, 3.0]);
         let stats = ZeroFillSummary {
@@ -667,17 +678,19 @@ mod harness {
         poseidon::{FIELD_MODULUS as GOLDILOCKS_MODULUS, PoseidonSponge as CpuPoseidonSponge},
     };
     use fastpq_prover::{
-        AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, ColumnStagingPhaseStats,
-        ColumnStagingSample, ColumnStagingStats, CommandLimitSnapshot, ExecutionMode, FftTuning,
-        KernelKind, KernelStatsSample, LdeHostStats, Planner, PoseidonPipelineStats,
-        PostTileSample, QueueDepthStats, TwiddleCacheStats, adaptive_schedule_snapshot,
-        clear_execution_mode_observer, enable_kernel_stats, enable_lde_host_stats,
-        enable_poseidon_pipeline_stats, enable_post_tile_stats, enable_queue_depth_stats,
-        enable_twiddle_cache_stats, fft_tuning_snapshot, poseidon_tuning_snapshot,
-        set_execution_mode_observer, snapshot_queue_depth_stats, take_column_staging_stats,
-        take_kernel_stats, take_lde_host_stats, take_poseidon_pipeline_stats, take_post_tile_stats,
-        take_queue_depth_stats, take_twiddle_cache_stats,
+        AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, Bn254PoseidonBatchSlice,
+        ColumnStagingPhaseStats, ColumnStagingSample, ColumnStagingStats, CommandLimitSnapshot,
+        ExecutionMode, FftTuning, KernelKind, KernelStatsSample, LdeHostStats, Planner,
+        PoseidonPipelineStats, PostTileSample, QueueDepthStats, TwiddleCacheStats,
+        adaptive_schedule_snapshot, clear_execution_mode_observer, enable_kernel_stats,
+        enable_lde_host_stats, enable_poseidon_pipeline_stats, enable_post_tile_stats,
+        enable_queue_depth_stats, enable_twiddle_cache_stats, fft_tuning_snapshot,
+        poseidon_tuning_snapshot, set_execution_mode_observer, snapshot_queue_depth_stats,
+        take_column_staging_stats, take_kernel_stats, take_lde_host_stats,
+        take_poseidon_pipeline_stats, take_post_tile_stats, take_queue_depth_stats,
+        take_twiddle_cache_stats,
         trace::{PoseidonColumnBatch, hash_columns_gpu_batch, hash_columns_gpu_fused},
+        try_hash_bn254_poseidon_word_batches,
     };
     use iroha_crypto::Hash;
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -904,7 +917,7 @@ mod harness {
         println!(concat!(
             "Usage: fastpq_metal_bench [--rows <u32>] [--warmups <u32>] [--iterations <u32>] [--output <path>] ",
             "[--trace-auto] [--trace-dir <dir>] [--trace-output <path>] [--trace-template <name>] [--trace-seconds <u32>] ",
-            "[--operation <fft|ifft|lde|poseidon_hash_columns|all>] [--require-gpu] [--require-telemetry] [--gpu-probe]\n",
+            "[--operation <fft|ifft|lde|poseidon_hash_columns|bn254_poseidon_words|all>] [--require-gpu] [--require-telemetry] [--gpu-probe]\n",
             "             Defaults: rows=20000 warmups=1 iterations=5; output omitted prints JSON to stdout; --operation defaults to 'all'.\n",
             "             `--trace-auto` captures to ./fastpq.trace, `--trace-dir` writes timestamped traces underneath the provided directory,\n",
             "             and other tracing flags launch under `xcrun xctrace record` (Metal System Trace by default).\n",
@@ -967,6 +980,10 @@ mod harness {
         pub(crate) fn includes(&self, op: BenchOperation) -> bool {
             matches!(self, Self::All) || matches!(self, Self::Only(single) if *single == op)
         }
+
+        pub(crate) fn includes_fft_tuning(&self) -> bool {
+            !matches!(self, Self::Only(BenchOperation::Bn254PoseidonWords))
+        }
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -975,6 +992,7 @@ mod harness {
         Ifft,
         Lde,
         Poseidon,
+        Bn254PoseidonWords,
     }
 
     impl BenchOperation {
@@ -984,6 +1002,7 @@ mod harness {
                 Self::Ifft => "ifft",
                 Self::Lde => "lde",
                 Self::Poseidon => "poseidon_hash_columns",
+                Self::Bn254PoseidonWords => "bn254_poseidon_words",
             }
         }
     }
@@ -996,7 +1015,8 @@ mod harness {
                 "fft" => Ok(Self::Fft),
                 "ifft" => Ok(Self::Ifft),
                 "lde" => Ok(Self::Lde),
-                "poseidon_hash_columns" => Ok(Self::Poseidon),
+                "poseidon_hash_columns" | "poseidon" | "poseidon-hash" => Ok(Self::Poseidon),
+                "bn254_poseidon_words" | "bn254-poseidon-words" => Ok(Self::Bn254PoseidonWords),
                 _ => Err(()),
             }
         }
@@ -1238,6 +1258,52 @@ mod harness {
         Summary::from_samples(&samples)
     }
 
+    fn measure_word_batch<F, R>(
+        source: &Bn254PoseidonWordBatch,
+        warmups: usize,
+        iterations: usize,
+        op: F,
+    ) -> Summary
+    where
+        F: Fn(&Bn254PoseidonWordBatch) -> R,
+    {
+        for _ in 0..warmups {
+            let result = op(source);
+            black_box(result);
+        }
+        let mut samples = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let result = op(source);
+            samples.push(elapsed_ms(started.elapsed()));
+            black_box(result);
+        }
+        Summary::from_samples(&samples)
+    }
+
+    fn measure_word_batch_optional<F, R>(
+        source: &Bn254PoseidonWordBatch,
+        warmups: usize,
+        iterations: usize,
+        op: F,
+    ) -> Option<Summary>
+    where
+        F: Fn(&Bn254PoseidonWordBatch) -> Option<R>,
+    {
+        for _ in 0..warmups {
+            let result = op(source)?;
+            black_box(result);
+        }
+        let mut samples = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let result = op(source)?;
+            samples.push(elapsed_ms(started.elapsed()));
+            black_box(result);
+        }
+        Some(Summary::from_samples(&samples))
+    }
+
     fn measure_gpu_lde(
         planner: &Planner,
         source: &[Vec<u64>],
@@ -1366,6 +1432,73 @@ mod harness {
                 sponge.absorb(domain_seed(domain.as_bytes()));
                 sponge.absorb_slice(values);
                 sponge.squeeze()
+            })
+            .collect()
+    }
+
+    struct Bn254PoseidonWordBatch {
+        words: Vec<u64>,
+        slices: Vec<Bn254PoseidonBatchSlice>,
+    }
+
+    fn collect_bn254_poseidon_words_operation(config: &Config, gpu_available: bool) -> Value {
+        let batch = generate_bn254_poseidon_word_batch(config.rows);
+        let cpu_summary = measure_word_batch(&batch, config.warmups, config.iterations, |input| {
+            hash_bn254_poseidon_words_cpu(&input.words, &input.slices)
+        });
+        let gpu_summary = if gpu_available {
+            measure_word_batch_optional(&batch, config.warmups, config.iterations, |input| {
+                try_hash_bn254_poseidon_word_batches(&input.words, &input.slices)
+            })
+        } else {
+            None
+        };
+        operation_value(
+            BenchOperation::Bn254PoseidonWords.as_str(),
+            batch.words.len(),
+            batch.slices.len(),
+            &cpu_summary,
+            gpu_summary.as_ref(),
+            None,
+        )
+    }
+
+    fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
+        let mut words = Vec::with_capacity(rows.saturating_mul(5));
+        let mut slices = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let len = match row % 7 {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                3 => 3,
+                4 => 5,
+                5 => 8,
+                _ => 13,
+            };
+            let offset = words.len();
+            for idx in 0..len {
+                let value = (row as u64)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .rotate_left((idx % 63) as u32)
+                    ^ (idx as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
+                words.push(value);
+            }
+            slices.push(Bn254PoseidonBatchSlice::new(offset, len));
+        }
+        Bn254PoseidonWordBatch { words, slices }
+    }
+
+    fn hash_bn254_poseidon_words_cpu(
+        words: &[u64],
+        slices: &[Bn254PoseidonBatchSlice],
+    ) -> Vec<[u8; 32]> {
+        slices
+            .iter()
+            .map(|slice| {
+                iroha_zkp_halo2::poseidon::hash_u64_words_bytes(
+                    &words[slice.offset()..][..slice.len()],
+                )
             })
             .collect()
     }
@@ -1798,7 +1931,14 @@ mod harness {
             }
             _ => {}
         }
-        if column_staging.is_none() {
+        let column_staging_required = operations.iter().any(|entry| {
+            entry
+                .as_object()
+                .and_then(|map| map.get("operation"))
+                .and_then(Value::as_str)
+                .map_or(true, |op| op != BenchOperation::Bn254PoseidonWords.as_str())
+        });
+        if column_staging_required && column_staging.is_none() {
             reasons.push("missing_column_staging".to_owned());
             if state == RunState::Ok {
                 state = RunState::TelemetryMissing;
@@ -2433,7 +2573,11 @@ mod harness {
             resolved_mode,
             backend_label.as_str(),
         )?;
-        let fft_tuning = fft_tuning_snapshot(trace_log).ok();
+        let fft_tuning = if config.operation.includes_fft_tuning() {
+            fft_tuning_snapshot(trace_log).ok()
+        } else {
+            None
+        };
         let stats_enabled = gpu_available;
         if stats_enabled {
             enable_queue_depth_stats(true);
@@ -2468,12 +2612,17 @@ mod harness {
         } else {
             None
         };
-        let zero_fill_missing = gpu_available && zero_fill_summary.is_none();
+        let zero_fill_missing = gpu_available
+            && config.operation.includes(BenchOperation::Lde)
+            && zero_fill_summary.is_none();
         let queue_stats_missing = gpu_available
             && queue_stats
                 .as_ref()
                 .map_or(true, |stats| stats.dispatch_count == 0);
-        if gpu_available && (zero_fill_missing || queue_stats_missing) {
+        if gpu_available
+            && config.operation.includes_fft_tuning()
+            && (zero_fill_missing || queue_stats_missing)
+        {
             let (probe_zero_fill, probe_queue) =
                 capture_gpu_telemetry_probe(&planner, &columns, queue_stats_missing);
             if zero_fill_missing {
@@ -2535,7 +2684,11 @@ mod harness {
             .duration_since(UNIX_EPOCH)
             .map_err(|err| format!("system clock error: {err}"))?
             .as_secs();
-        let poseidon_micro = capture_poseidon_microbench(gpu_available, backend_label.as_str());
+        let poseidon_micro = if config.operation.includes_fft_tuning() {
+            capture_poseidon_microbench(gpu_available, backend_label.as_str())
+        } else {
+            None
+        };
         let device_profile = if gpu_available {
             capture_device_profile()
         } else {
@@ -3041,6 +3194,32 @@ mod harness {
         assert_eq!(status.dispatch_count, Some(3));
     }
 
+    #[test]
+    fn classify_run_accepts_word_batch_without_column_staging() {
+        let cpu = Summary::from_samples(&[1.0]);
+        let gpu = Summary::from_samples(&[0.4]);
+        let operations = vec![self::operation_value(
+            BenchOperation::Bn254PoseidonWords.as_str(),
+            8,
+            2,
+            &cpu,
+            Some(&gpu),
+            None,
+        )];
+        let queue = QueueDepthStats {
+            limit: 4,
+            dispatch_count: 1,
+            max_in_flight: 1,
+            busy_ms: 1.0,
+            overlap_ms: 0.0,
+            window_ms: 1.0,
+            queues: Vec::new(),
+        };
+        let status = classify_run(true, "metal", &operations, Some(&queue), None);
+        assert_eq!(status.state, RunState::Ok);
+        assert!(status.reasons.is_empty());
+    }
+
     fn prepare_columns(planner: &Planner, padded: usize, column_count: usize) -> ColumnSets {
         let time_columns = generated_columns(padded, column_count, 0x51a2_d3f4);
         let mut coeff_columns = time_columns.clone();
@@ -3161,6 +3340,16 @@ mod harness {
                 &cpu_summary,
                 gpu_summary.as_ref(),
                 None,
+            ));
+        }
+
+        if config
+            .operation
+            .includes(BenchOperation::Bn254PoseidonWords)
+        {
+            operations.push(collect_bn254_poseidon_words_operation(
+                config,
+                gpu_available,
             ));
         }
 

@@ -7,8 +7,8 @@
 //!
 //! This implementation incorporates the updated architecture with 256 tagged
 //! registers, optional hardware transactional memory and basic hardware feature
-//! detection. Vector operations currently operate on a fixed 128‑bit width and
-//! a fully scalable vector extension remains future work.
+//! detection. Vector operations use a deterministic logical lane count capped by
+//! the ABI, with hardware helpers kept behind byte-identical fallbacks.
 #[cfg(feature = "beep")]
 use std::time::Duration;
 use std::{
@@ -29,9 +29,10 @@ use sha2::{Digest, Sha256};
 use crate::{
     SyscallPolicy, decoder,
     error::{
-        VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic, VmSourceLocation,
-        VmTrapKind,
+        Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
+        VmSourceLocation, VmTrapKind,
     },
+    execution_proof::{EXECUTION_PROOF_VERSION_V1, ExecutionProof},
     gas,
     host::{AccessLog, DefaultHost, IVMHost},
     instruction,
@@ -56,8 +57,6 @@ static HARDWARE_CAPABILITIES: OnceLock<HardwareCapabilities> = OnceLock::new();
 const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
 /// Default logical vector length when not specified by metadata.
 const DEFAULT_VECTOR_LENGTH: usize = 4;
-/// Baseline lane count used for gas accounting of vector ops.
-const GAS_VECTOR_BASE_LANES: usize = crate::gas::VECTOR_BASE_LANES;
 /// Canonical instruction width for first-release IVM bytecode.
 const WIDE_INSTRUCTION_LEN: u64 = 4;
 /// Avoid Rayon scheduling overhead for tiny straight-line simple blocks.
@@ -69,6 +68,21 @@ const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
+}
+
+fn setvl_length(raw: usize) -> Result<usize, VMError> {
+    let vl = if raw == 0 { 1 } else { raw };
+    if vl > LOGICAL_VECTOR_MAX {
+        return Err(VMError::InvalidVectorLength { vector_length: vl });
+    }
+    Ok(vl)
+}
+
+fn validate_vadd64_length(vl: usize) -> Result<(), VMError> {
+    if vl == 0 || !vl.is_multiple_of(2) {
+        return Err(VMError::InvalidVectorLength { vector_length: vl });
+    }
+    Ok(())
 }
 
 fn isqrt_u64(mut n: u64) -> u64 {
@@ -181,7 +195,7 @@ struct WorkerResources {
 impl WorkerResources {
     fn new(
         template: &Arc<Mutex<IVM>>,
-        host: Option<&Arc<Mutex<Option<Box<dyn IVMHost + Send>>>>>,
+        host: Option<&Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>>,
     ) -> Self {
         let (mut vm, template_memory, template_input_bump) = {
             let template = template.lock().unwrap_or_else(|err| err.into_inner());
@@ -762,7 +776,7 @@ impl IvmBuilder {
     }
 
     /// Provide a custom host implementation.
-    pub fn with_host<H: IVMHost + Send + 'static>(mut self, host: H) -> Self {
+    pub fn with_host<H: IVMHost + Send + Sync + 'static>(mut self, host: H) -> Self {
         self.host_config = Some(Box::new(move |vm| vm.set_host(host)));
         self
     }
@@ -1149,7 +1163,7 @@ pub struct IVM {
     // structure.
     pub memory: Memory,
     pub pc: u64,
-    host: Option<Box<dyn IVMHost + Send>>,
+    host: Option<Box<dyn IVMHost + Send + Sync>>,
     gas_limit: u64,
     pub gas_remaining: u64,
     cycles: u64,
@@ -1174,6 +1188,7 @@ pub struct IVM {
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     prepared: Option<PreparedProgram>,
+    prepared_required: bool,
     branch_predictor: crate::branch_predictor::BranchPredictor,
     branch_predictions: u64,
     branch_correct: u64,
@@ -1211,11 +1226,12 @@ pub struct IVM {
     hardware_capabilities: HardwareCapabilities,
 }
 
-// The VM is self-contained and can be safely transferred across threads when no
-// host is shared between them.
-unsafe impl Send for IVM {}
-unsafe impl Sync for IVM {}
 impl std::panic::RefUnwindSafe for IVM {}
+
+// The embedded host is private and all host access requires `&mut self`.
+// Cloned VMs intentionally drop the host, and worker sharing wraps host state
+// behind a mutex, so sharing `&IVM` cannot expose a non-`Sync` host reference.
+unsafe impl Sync for IVM {}
 
 impl Clone for IVM {
     fn clone(&self) -> Self {
@@ -1246,6 +1262,7 @@ impl Clone for IVM {
             contract_debug: self.contract_debug.clone(),
             predecoded: self.predecoded.clone(),
             prepared: self.prepared.clone(),
+            prepared_required: self.prepared_required,
             branch_predictor: self.branch_predictor.clone(),
             branch_predictions: 0,
             branch_correct: 0,
@@ -1560,6 +1577,7 @@ impl IVM {
             contract_debug: None,
             predecoded: None,
             prepared: None,
+            prepared_required: false,
             branch_predictor: crate::branch_predictor::BranchPredictor::new(1024),
             branch_predictions: 0,
             branch_correct: 0,
@@ -1695,9 +1713,8 @@ impl IVM {
             | SimpleInstruction::Srl { .. }
             | SimpleInstruction::Sra { .. }
             | SimpleInstruction::SetVL { .. } => Self::GAS_ALU,
-            SimpleInstruction::Vadd { .. } => {
-                let lanes = self.vector_length.clamp(1, GAS_VECTOR_BASE_LANES);
-                Self::GAS_ALU * lanes as u64
+            SimpleInstruction::Vadd32 { .. } => {
+                gas::scaled_vector_cost(Self::GAS_ALU * 2, self.vector_length)
             }
             SimpleInstruction::Load { .. } | SimpleInstruction::Store { .. } => Self::GAS_MEM,
             SimpleInstruction::Jump { .. } | SimpleInstruction::Beq { .. } => Self::GAS_JUMP,
@@ -1820,13 +1837,9 @@ impl IVM {
                 if !self.vector_enabled {
                     return Err(VMError::VectorExtensionDisabled);
                 }
-                let mut vl = new_vl as usize;
-                if vl == 0 {
-                    vl = 1;
-                }
-                self.vector_length = vl.min(LOGICAL_VECTOR_MAX);
+                self.vector_length = setvl_length(new_vl as usize)?;
             }
-            SimpleInstruction::Vadd { rd, rs, rt } => {
+            SimpleInstruction::Vadd32 { rd, rs, rt } => {
                 if !self.vector_enabled {
                     return Err(VMError::VectorExtensionDisabled);
                 }
@@ -1839,8 +1852,8 @@ impl IVM {
                     return Err(VMError::RegisterOutOfBounds);
                 }
                 for i in 0..n {
-                    let a = self.registers.get(rs + i);
-                    let b = self.registers.get(rt + i);
+                    let a = self.registers.get(rs + i) as u32;
+                    let b = self.registers.get(rt + i) as u32;
                     if self.zk_mode {
                         let tag_a = self.registers.tag(rs + i);
                         let tag_b = self.registers.tag(rt + i);
@@ -1850,7 +1863,7 @@ impl IVM {
                         self.registers.set_tag(rd + i, tag_a);
                     }
                     let sum = a.wrapping_add(b);
-                    self.registers.set(rd + i, sum);
+                    self.registers.set(rd + i, u64::from(sum));
                 }
             }
             SimpleInstruction::Load {
@@ -2234,6 +2247,7 @@ impl IVM {
         self.last_diagnostic = None;
         self.predecoded = None;
         self.prepared = None;
+        self.prepared_required = false;
         Ok(())
     }
 
@@ -2266,12 +2280,13 @@ impl IVM {
         self.vector_length = if meta.vector_length == 0 {
             default_vector_length()
         } else {
-            std::cmp::min(meta.vector_length as usize, LOGICAL_VECTOR_MAX)
+            usize::from(meta.vector_length)
         };
         // Overlay code region while preserving INPUT/STACK contents that may
         // have been preloaded by the host/tests. OUTPUT is cleared per load.
         self.predecoded = None;
         self.prepared = None;
+        self.prepared_required = true;
         self.memory.load_code(code_region);
         self.memory.clear_output();
         self.registers.set(31, self.memory.stack_top());
@@ -2379,6 +2394,13 @@ impl IVM {
             pc = self.pc
         );
 
+        if self.prepared_required {
+            return Err(VMError::MemoryAccessViolation {
+                addr: self.pc as u32,
+                perm: Perm::EXECUTE,
+            });
+        }
+
         let (inst, len) = decoder::decode(&self.memory, self.pc)?;
         let wide_op = instruction::wide::opcode(inst);
         Ok(FetchedOp {
@@ -2406,6 +2428,8 @@ impl IVM {
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
             VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
             VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
+            VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
+            VMError::MissingHalt => VmTrapKind::MissingHalt,
             VMError::VectorExtensionDisabled
             | VMError::ZkExtensionDisabled
             | VMError::NullifierAlreadyUsed
@@ -2629,16 +2653,16 @@ impl IVM {
 
         match crate::pointer_abi::validate_tlv_bytes(envelope) {
             Ok(tlv) => {
-                if let Some((policy, abi_version)) = crate::pointer_abi::current_policy() {
-                    let unsupported_abi = abi_version != 1;
-                    let disallowed_type =
-                        !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id);
-                    if unsupported_abi || disallowed_type {
-                        return Err(VMError::AbiTypeNotAllowed {
-                            abi: abi_version,
-                            type_id: tlv.type_id as u16,
-                        });
-                    }
+                let (policy, abi_version) = crate::pointer_abi::current_policy()
+                    .unwrap_or_else(|| (self.syscall_policy(), self.abi_version()));
+                let unsupported_abi = abi_version != 1;
+                let disallowed_type =
+                    !crate::pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id);
+                if unsupported_abi || disallowed_type {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: abi_version,
+                        type_id: tlv.type_id as u16,
+                    });
                 }
                 Ok(tlv)
             }
@@ -3001,9 +3025,8 @@ impl IVM {
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
         let resume_pc = self
-            .prepared
-            .as_ref()
-            .map(|prepared| prepared.first_pc)
+            .entrypoint_pc
+            .or_else(|| self.prepared.as_ref().map(|prepared| prepared.first_pc))
             .unwrap_or(0);
         self.registers = Registers::new();
         self.pc = resume_pc;
@@ -3021,7 +3044,7 @@ impl IVM {
         self.vector_length = if self.metadata.vector_length == 0 {
             default_vector_length()
         } else {
-            usize::from(self.metadata.vector_length).min(LOGICAL_VECTOR_MAX)
+            usize::from(self.metadata.vector_length)
         };
         self.branch_predictions = 0;
         self.branch_correct = 0;
@@ -3089,7 +3112,7 @@ impl IVM {
     }
 
     /// Replace the host environment used for syscalls.
-    pub fn set_host<H: IVMHost + Send + 'static>(&mut self, host: H) {
+    pub fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
         self.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(host)));
     }
 
@@ -3116,6 +3139,199 @@ impl IVM {
     /// Access the log of register events collected during the last run.
     pub fn register_log(&self) -> &[zk::RegEvent] {
         &self.reg_log.events
+    }
+
+    fn finish_digest(hasher: Sha256) -> [u8; 32] {
+        hasher.finalize().into()
+    }
+
+    fn hash_pc_trace(entries: &[u64]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ivm-proof:pc-trace:v1");
+        hasher.update((entries.len() as u64).to_le_bytes());
+        for pc in entries {
+            hasher.update(pc.to_le_bytes());
+        }
+        Self::finish_digest(hasher)
+    }
+
+    fn hash_delta_trace(entries: &[zk::DeltaEntry]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ivm-proof:delta-trace:v1");
+        hasher.update((entries.len() as u64).to_le_bytes());
+        for entry in entries {
+            hasher.update(entry.pc.to_le_bytes());
+            hasher.update((entry.changes.len() as u64).to_le_bytes());
+            for (index, value, tag) in &entry.changes {
+                hasher.update((*index as u64).to_le_bytes());
+                hasher.update(value.to_le_bytes());
+                hasher.update([u8::from(*tag)]);
+            }
+        }
+        Self::finish_digest(hasher)
+    }
+
+    fn hash_constraints(constraints: &[Constraint]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ivm-proof:constraints:v1");
+        hasher.update((constraints.len() as u64).to_le_bytes());
+        for constraint in constraints {
+            match *constraint {
+                Constraint::Zero { reg, cycle } => {
+                    hasher.update([0]);
+                    hasher.update((reg as u64).to_le_bytes());
+                    hasher.update(cycle.to_le_bytes());
+                }
+                Constraint::Eq { reg1, reg2, cycle } => {
+                    hasher.update([1]);
+                    hasher.update((reg1 as u64).to_le_bytes());
+                    hasher.update((reg2 as u64).to_le_bytes());
+                    hasher.update(cycle.to_le_bytes());
+                }
+                Constraint::Range { reg, bits, cycle } => {
+                    hasher.update([2]);
+                    hasher.update((reg as u64).to_le_bytes());
+                    hasher.update([bits]);
+                    hasher.update(cycle.to_le_bytes());
+                }
+            }
+        }
+        Self::finish_digest(hasher)
+    }
+
+    fn update_path_digest(hasher: &mut Sha256, path: &[[u8; 32]]) {
+        hasher.update((path.len() as u64).to_le_bytes());
+        for sibling in path {
+            hasher.update(sibling);
+        }
+    }
+
+    fn hash_memory_log(events: &[MemEvent]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ivm-proof:memory-log:v1");
+        hasher.update((events.len() as u64).to_le_bytes());
+        for event in events {
+            match event {
+                MemEvent::Load {
+                    addr,
+                    value,
+                    size,
+                    path,
+                    root,
+                } => {
+                    hasher.update([0]);
+                    hasher.update(addr.to_le_bytes());
+                    hasher.update(value.to_le_bytes());
+                    hasher.update([*size]);
+                    Self::update_path_digest(&mut hasher, path);
+                    hasher.update(root.as_ref());
+                }
+                MemEvent::Store {
+                    addr,
+                    value,
+                    size,
+                    path,
+                    root,
+                } => {
+                    hasher.update([1]);
+                    hasher.update(addr.to_le_bytes());
+                    hasher.update(value.to_le_bytes());
+                    hasher.update([*size]);
+                    Self::update_path_digest(&mut hasher, path);
+                    hasher.update(root.as_ref());
+                }
+            }
+        }
+        Self::finish_digest(hasher)
+    }
+
+    fn hash_register_log(events: &[zk::RegEvent]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ivm-proof:register-log:v1");
+        hasher.update((events.len() as u64).to_le_bytes());
+        for event in events {
+            match event {
+                zk::RegEvent::Read {
+                    index,
+                    value,
+                    tag,
+                    path,
+                    root,
+                } => {
+                    hasher.update([0]);
+                    hasher.update((*index as u64).to_le_bytes());
+                    hasher.update(value.to_le_bytes());
+                    hasher.update([u8::from(*tag)]);
+                    Self::update_path_digest(&mut hasher, path);
+                    hasher.update(root.as_ref());
+                }
+                zk::RegEvent::Write {
+                    index,
+                    value,
+                    tag,
+                    path,
+                    root,
+                } => {
+                    hasher.update([1]);
+                    hasher.update((*index as u64).to_le_bytes());
+                    hasher.update(value.to_le_bytes());
+                    hasher.update([u8::from(*tag)]);
+                    Self::update_path_digest(&mut hasher, path);
+                    hasher.update(root.as_ref());
+                }
+            }
+        }
+        Self::finish_digest(hasher)
+    }
+
+    fn hash_step_log(steps: &[zk::StepEntry]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"ivm-proof:step-log:v1");
+        hasher.update((steps.len() as u64).to_le_bytes());
+        for step in steps {
+            hasher.update(step.pc.to_le_bytes());
+            hasher.update(step.reg_root.as_ref());
+            hasher.update(step.mem_root.as_ref());
+        }
+        Self::finish_digest(hasher)
+    }
+
+    /// Build a deterministic proof summary for the current execution state.
+    pub fn execution_proof(&mut self) -> ExecutionProof {
+        let output = self.memory.read_output();
+        let mut output_hasher = Sha256::new();
+        output_hasher.update(b"ivm-proof:output:v1");
+        output_hasher.update((output.len() as u64).to_le_bytes());
+        output_hasher.update(output);
+
+        ExecutionProof {
+            version: EXECUTION_PROOF_VERSION_V1,
+            code_hash: self.code_hash,
+            final_register_root: self.register_root(),
+            final_memory_root: *self.memory.current_root().as_ref(),
+            output_hash: Self::finish_digest(output_hasher),
+            pc_trace_hash: Self::hash_pc_trace(&self.pc_trace),
+            delta_trace_hash: Self::hash_delta_trace(&self.delta_trace.entries),
+            register_trace_hash: Self::hash_delta_trace(&self.trace_log.entries),
+            constraint_hash: Self::hash_constraints(&self.constraints.list),
+            memory_log_hash: Self::hash_memory_log(&self.mem_log.events),
+            register_log_hash: Self::hash_register_log(&self.reg_log.events),
+            step_log_hash: Self::hash_step_log(&self.step_log.steps),
+            cycles: self.cycles,
+            max_cycles: self.max_cycles,
+            gas_used: self.gas_limit.saturating_sub(self.gas_remaining),
+            gas_remaining: self.gas_remaining,
+            pc_trace_len: self.pc_trace.len() as u64,
+            delta_trace_len: self.delta_trace.entries.len() as u64,
+            register_trace_len: self.trace_log.entries.len() as u64,
+            constraint_len: self.constraints.list.len() as u64,
+            memory_log_len: self.mem_log.events.len() as u64,
+            register_log_len: self.reg_log.events.len() as u64,
+            step_log_len: self.step_log.steps.len() as u64,
+            zk_mode: self.zk_mode,
+            halted: self.halted,
+            constraint_failed: self.constraint_failed,
+        }
     }
 
     /// Get the Merkle root of the register file.
@@ -3243,6 +3459,7 @@ impl IVM {
             // arithmetic instructions that have no side effects and execute them
             // using the parallel scheduler. Complex instructions are still executed
             // sequentially.
+            let enable_ilp = false;
             let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
             if self.zk_mode {
                 self.trace_log = DeltaTraceLog::default();
@@ -3261,11 +3478,8 @@ impl IVM {
                 if unlikely(self.halted || (!self.zk_mode && self.constraint_failed)) {
                     break;
                 }
-                // Gracefully stop exactly at end of code: treat as end-of-stream.
-                // Do not stop for pc > code_len() so that jumps into non-code
-                // regions still fault with execute permission errors.
                 if unlikely(self.pc == self.memory.code_len()) {
-                    break;
+                    return Err(VMError::MissingHalt);
                 }
                 if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
                     return Err(VMError::ExceededMaxCycles);
@@ -3284,11 +3498,9 @@ impl IVM {
                     );
                 }
 
-                // Parallel execution blocks interfere with trace collection used by
-                // zero-knowledge circuits. Disable the ILP scheduler whenever a
-                // cycle limit is set so that every instruction executes
-                // sequentially and the trace contains one entry per step.
-                if self.max_cycles == 0 {
+                // Keep contract execution sequential until the ILP path is covered by
+                // canonical ordering/gas proofs for all host-observable effects.
+                if enable_ilp && self.max_cycles == 0 {
                     if let Some(simple) = fetched.simple {
                         // Part of a parallelisable block – defer execution.
                         self.pc = self.pc.wrapping_add(length as u64);
@@ -3336,7 +3548,29 @@ impl IVM {
                     }
                     instruction::wide::system::SCALL => {
                         let imm8 = instruction::wide::imm8(instr) as u8 as u32;
+                        if !host.allows_syscall(self.syscall_policy(), imm8) {
+                            return Err(VMError::UnknownSyscall(imm8));
+                        }
                         let extra_cost = host.syscall(imm8, self);
+                        match extra_cost {
+                            Ok(extra) => {
+                                if self.gas_remaining < extra {
+                                    return Err(VMError::OutOfGas);
+                                }
+                                self.gas_remaining -= extra;
+                            }
+                            Err(e) => return Err(e),
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::system::SYSTEM => {
+                        let number = crate::encoding::wide::decode_syscallx(instr);
+                        if !host.allows_syscall(self.syscall_policy(), number) {
+                            return Err(VMError::UnknownSyscall(number));
+                        }
+                        let extra_cost = host.syscall(number, self);
                         match extra_cost {
                             Ok(extra) => {
                                 if self.gas_remaining < extra {
@@ -4014,11 +4248,7 @@ impl IVM {
                         if unlikely(!self.vector_enabled) {
                             return Err(VMError::VectorExtensionDisabled);
                         }
-                        let vl = {
-                            let raw = instruction::wide::rs2(instr);
-                            if raw == 0 { 1 } else { raw }
-                        };
-                        self.vector_length = vl.min(LOGICAL_VECTOR_MAX);
+                        self.vector_length = setvl_length(instruction::wide::rs2(instr))?;
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -4036,6 +4266,7 @@ impl IVM {
                             return Err(VMError::RegisterOutOfBounds);
                         }
                         if wide_op == instruction::wide::crypto::VADD64 {
+                            validate_vadd64_length(vl)?;
                             // Process full 128-bit chunks through the vector helpers when possible.
                             let mut lane = 0usize;
                             while lane + 4 <= vl {
@@ -5625,7 +5856,7 @@ fn to_simple(instr: u32) -> Option<SimpleInstruction> {
                 return Some(SimpleInstruction::SetVL { new_vl: rs2 });
             }
             wide::crypto::VADD32 => {
-                return Some(SimpleInstruction::Vadd {
+                return Some(SimpleInstruction::Vadd32 {
                     rd,
                     rs: rs1,
                     rt: rs2,
@@ -5721,10 +5952,9 @@ fn analyse_instruction(
         }
         SetVL { new_vl } => {
             meta.mem_write = true; // force ordering
-            let tmp = if new_vl == 0 { 1 } else { new_vl as usize };
-            next_vl = tmp.min(max_vector_lanes);
+            next_vl = setvl_length(new_vl as usize).unwrap_or(max_vector_lanes + 1);
         }
-        Vadd { rd, rs, rt } => {
+        Vadd32 { rd, rs, rt } => {
             let stride = vl as u16;
             let base = crate::IVM::VECTOR_BASE as u16;
             for i in 0..vl as u16 {
@@ -5757,10 +5987,7 @@ fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
             IVM::GAS_SHA256_BASE + IVM::GAS_SHA256_PER_BYTE * len
         }
         SimpleInstruction::SetVL { .. } => IVM::GAS_ALU,
-        SimpleInstruction::Vadd { .. } => {
-            let lanes = vl.clamp(1, GAS_VECTOR_BASE_LANES);
-            IVM::GAS_ALU * lanes as u64
-        }
+        SimpleInstruction::Vadd32 { .. } => gas::scaled_vector_cost(IVM::GAS_ALU * 2, vl),
         SimpleInstruction::Ed25519Verify { .. } => IVM::GAS_ED25519_VERIFY,
         SimpleInstruction::DilithiumVerify { .. } => IVM::GAS_DILITHIUM_VERIFY,
         SimpleInstruction::Halt => 0,
@@ -6128,15 +6355,11 @@ fn compute_instruction(
             if !vector_enabled {
                 return Err(VMError::VectorExtensionDisabled);
             }
-            let mut vl = new_vl as usize;
-            if vl == 0 {
-                vl = 1;
-            }
             res.push(ResultUpdate::Vl {
-                value: vl.min(LOGICAL_VECTOR_MAX),
+                value: setvl_length(new_vl as usize)?,
             });
         }
-        Vadd { rd, rs, rt } => {
+        Vadd32 { rd, rs, rt } => {
             if !vector_enabled {
                 return Err(VMError::VectorExtensionDisabled);
             }
@@ -6148,8 +6371,8 @@ fn compute_instruction(
                 return Err(VMError::RegisterOutOfBounds);
             }
             for i in 0..vl {
-                let a = regs[rs + i];
-                let b = regs[rt + i];
+                let a = regs[rs + i] as u32;
+                let b = regs[rt + i] as u32;
                 if zk && tags[rs + i] != tags[rt + i] {
                     return Err(VMError::PrivacyViolation);
                 }
@@ -6157,7 +6380,7 @@ fn compute_instruction(
                 let sum = a.wrapping_add(b);
                 res.push(ResultUpdate::Reg {
                     index: (rd + i) as u16,
-                    value: sum,
+                    value: u64::from(sum),
                     tag,
                 });
             }
@@ -6273,7 +6496,7 @@ impl IVM {
                             self.memory.store_u64(addr, value)?;
                         }
                         ResultUpdate::Vl { value } => {
-                            self.vector_length = value.min(LOGICAL_VECTOR_MAX);
+                            self.vector_length = value;
                         }
                     }
                 }
@@ -6285,10 +6508,50 @@ impl IVM {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+    use std::{
+        any::Any,
+        cell::Cell,
+        sync::atomic::{AtomicU32, Ordering as AtomicOrdering},
+    };
 
     use super::*;
     use crate::{instruction, ivm_cache, metadata::LITERAL_SECTION_MAGIC};
+
+    #[test]
+    fn ivm_is_send_sync_for_state_sharing() {
+        fn assert_send<T: Send>() {}
+        fn assert_sync<T: Sync>() {}
+
+        assert_send::<IVM>();
+        assert_sync::<IVM>();
+    }
+
+    #[test]
+    fn run_with_host_accepts_non_sync_host() {
+        struct NonSyncHost(Cell<u64>);
+
+        impl IVMHost for NonSyncHost {
+            fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+                let next = self.0.get().saturating_add(1);
+                self.0.set(next);
+                vm.set_register(10, next);
+                Ok(0)
+            }
+
+            fn as_any(&mut self) -> &mut dyn Any
+            where
+                Self: 'static,
+            {
+                self
+            }
+        }
+
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = NonSyncHost(Cell::new(0));
+        let code = crate::encoding::wide::encode_halt().to_le_bytes();
+        vm.load_code(&code).expect("load halt");
+        vm.run_with_host(&mut host).expect("borrowed host runs");
+    }
 
     #[test]
     fn builder_respects_deterministic_policy() {
@@ -6330,6 +6593,25 @@ mod tests {
         let next = COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let imm = ((next % 2047) + 1) as i16;
         program_with_imm(imm)
+    }
+
+    #[test]
+    fn execution_proof_summary_is_stable_for_same_program() {
+        set_banner_enabled(false);
+        let program = program_with_imm(7);
+        let mut first = IVM::new(u64::MAX);
+        first.load_program(&program).expect("first program loads");
+        first.run().expect("first program runs");
+        let first_proof = first.execution_proof();
+
+        let mut second = IVM::new(u64::MAX);
+        second.load_program(&program).expect("second program loads");
+        second.run().expect("second program runs");
+        let second_proof = second.execution_proof();
+
+        assert_eq!(first_proof, second_proof);
+        assert_eq!(first_proof.version, EXECUTION_PROOF_VERSION_V1);
+        assert_eq!(first_proof.code_hash, first.code_hash());
     }
 
     fn empty_blob_tlv() -> Vec<u8> {
@@ -6421,6 +6703,72 @@ mod tests {
         vm.reset_predecode_misses();
         vm.run().expect("unaligned prefix program runs");
         assert_eq!(vm.predecode_misses(), 0);
+    }
+
+    #[test]
+    fn loaded_program_prefix_is_not_executable() {
+        set_banner_enabled(false);
+        let (program, literal_prefix) = program_with_literal_prefix();
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program)
+            .expect("program with literals loads");
+        assert!(literal_prefix > 0);
+
+        vm.pc = 0;
+        let err = vm.run().expect_err("literal prefix must not execute");
+        assert!(matches!(
+            err,
+            VMError::MemoryAccessViolation {
+                perm: Perm::EXECUTE,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fallthrough_without_explicit_termination_is_error() {
+        set_banner_enabled(false);
+        let addi = crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 7);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&addi.to_le_bytes()).expect("load raw code");
+
+        let err = vm.run().expect_err("fallthrough must trap");
+        assert!(matches!(err, VMError::MissingHalt));
+    }
+
+    #[test]
+    fn scallx_dispatches_extended_syscall_id() {
+        struct RecordingHost {
+            seen: Option<u32>,
+        }
+
+        impl IVMHost for RecordingHost {
+            fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+                self.seen = Some(number);
+                vm.set_register(10, u64::from(number));
+                Ok(0)
+            }
+
+            fn as_any(&mut self) -> &mut dyn std::any::Any
+            where
+                Self: 'static,
+            {
+                self
+            }
+        }
+
+        set_banner_enabled(false);
+        let syscall = crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
+        let mut code = Vec::new();
+        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&code).expect("load raw code");
+        let mut host = RecordingHost { seen: None };
+
+        vm.run_with_host(&mut host).expect("SCALLX program runs");
+        assert_eq!(host.seen, Some(syscall));
+        assert_eq!(vm.register(10), u64::from(syscall));
     }
 
     #[test]
@@ -6592,6 +6940,14 @@ seiyaku Demo {
                 .as_ref()
                 .and_then(|source| source.path.as_deref()),
             Some("contracts/runtime_trap.ko")
+        );
+    }
+
+    #[test]
+    fn missing_halt_classifies_as_missing_halt_trap() {
+        assert_eq!(
+            IVM::classify_trap(&VMError::MissingHalt),
+            VmTrapKind::MissingHalt
         );
     }
 

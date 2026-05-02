@@ -1172,9 +1172,12 @@ mod tests {
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     use std::sync::atomic::Ordering;
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
-    use std::{fs, path::PathBuf, process::Command};
+    use std::{fs, path::PathBuf, process::Command, sync::Mutex};
 
     use super::*;
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg(feature = "simd-accel")]
     fn fallback_ptr() -> usize {
@@ -1269,6 +1272,7 @@ mod tests {
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     #[test]
     fn gpu_min_len_defaults_and_env_override() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
         unsafe { std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES") };
         GPU_MIN_LEN.store(0, Ordering::Relaxed);
         assert_eq!(gpu_min_len(), GPU_MIN_DEFAULT);
@@ -1281,6 +1285,21 @@ mod tests {
         unsafe {
             std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
         }
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc_validation_schedule_checks_initial_and_interval_calls() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
+        reset_gpu_crc_validation_counter();
+
+        for _ in 0..GPU_VALIDATE_INITIAL_CALLS {
+            assert!(should_validate_gpu_crc());
+        }
+        for _ in (GPU_VALIDATE_INITIAL_CALLS + 1)..GPU_VALIDATE_INTERVAL {
+            assert!(!should_validate_gpu_crc());
+        }
+        assert!(should_validate_gpu_crc());
     }
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
@@ -1353,6 +1372,39 @@ mod tests {
     }
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc_sample_mismatch_falls_back_and_disables_backend() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
+        unsafe {
+            std::env::remove_var("NORITO_CRC64_GPU_LIB");
+            std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
+        }
+        reset_gpu_backend_for_tests();
+        GPU_MIN_LEN.store(1, Ordering::Relaxed);
+        {
+            let mut backend = gpu_backend()
+                .lock()
+                .expect("crc64 gpu backend cache poisoned");
+            *backend = GpuBackend::Custom(GpuLib {
+                handle: std::ptr::null_mut(),
+                func: crc64_bad_stub,
+            });
+        }
+
+        let payload = b"payload that cannot have a zero crc64";
+        reset_gpu_crc_validation_counter();
+        assert_eq!(try_gpu_crc64(payload), None);
+        assert!(matches!(
+            *gpu_backend()
+                .lock()
+                .expect("crc64 gpu backend cache poisoned"),
+            GpuBackend::Unavailable
+        ));
+
+        reset_gpu_backend_for_tests();
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     fn build_crc64_stub(dir: &PathBuf) -> PathBuf {
         const SRC: &str = r#"
         const POLY_REV: u64 = 0xC96C_5795_D787_0F42;
@@ -1410,6 +1462,7 @@ mod tests {
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     #[test]
     fn gpu_crc64_can_load_env_stub() {
+        let _guard = GPU_TEST_LOCK.lock().expect("crc64 gpu test lock poisoned");
         let tmp_dir =
             std::env::temp_dir().join(format!("norito_crc64_stub_{}", std::process::id()));
         let lib_path = build_crc64_stub(&tmp_dir);

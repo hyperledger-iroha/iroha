@@ -111,7 +111,7 @@ print` run (roadmap reference: `roadmap.md:2209`)።
 የአሁኑ Torii መንገዶች፡| መስመር | ዓላማ |
 |-------|--------|
 | `GET /v1/ram-lfe/program-policies` | የነቃ እና የቦዘኑ RAM-LFE ፕሮግራም ፖሊሲዎች እና የእነርሱ ይፋዊ አፈጻጸም ዲበ ዳታ፣ አማራጭ BFV `input_encryption` መለኪያዎችን እና በፕሮግራም የተደገፈ `ram_fhe_profile` ይዘረዝራል። |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | በትክክል ከ`{ input_hex }` ወይም `{ encrypted_input }` አንዱን ተቀብሎ ሀገር አልባውን `RamLfeExecutionReceipt` እና `{ output_hex, output_hash, receipt_hash }` ለተመረጠው ፕሮግራም ይመልሳል። የአሁኑ Torii የአሂድ ጊዜ ደረሰኞችን በፕሮግራም ለተያዘው የBFV ጀርባ ይሰጣል። |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | በትክክል ከ`{ input_hex }` ወይም `{ encrypted_input }` አንዱን ተቀብሎ ሀገር አልባውን `RamLfeExecutionReceipt` እና `{ output_hash, receipt_hash }` ለተመረጠው ፕሮግራም ይመልሳል። የግልጽ ጽሑፍ RAM-LFE ውጤት በTorii አይመለስም። የአሁኑ Torii የአሂድ ጊዜ ደረሰኞችን በፕሮግራም ለተያዘው የBFV ጀርባ ይሰጣል። |
 | `POST /v1/ram-lfe/receipts/verify` | ያለ ሀገር `RamLfeExecutionReceipt` በታተመው በሰንሰለት ፕሮግራም ፖሊሲ ላይ ያፀድቃል እና እንደአማራጭ በጠዋቂ ያቀረበው `output_hex` ከደረሰኝ `output_hash` ጋር እንደሚዛመድ ያረጋግጣል። |
 | `GET /v1/identifier-policies` | የነቃ እና የቦዘኑ ድብቅ ተግባር የፖሊሲ የስም ቦታዎች እና ይፋዊ ሜታዳታ ይዘረዝራል፣ አማራጭ BFV `input_encryption` ግቤቶች፣ አስፈላጊ የሆነውን የ`normalization` ሁነታ ለተመሰጠረ የደንበኛ ጎን ግቤት እና `ram_fhe_profile` በፕሮግራም ለተያዙ የBFV ፖሊሲዎች። |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | በትክክል ከ`{ input }` ወይም `{ encrypted_input }` አንዱን ይቀበላል። Plaintext `input` መደበኛ አገልጋይ-ጎን ነው; BFV `encrypted_input` በታተመው የመመሪያ ሁኔታ መሰረት አስቀድሞ መደበኛ መሆን አለበት። የመጨረሻው ነጥብ የ `opaque:` መያዣን ያመጣል እና `ClaimIdentifier` በጥሬው `signature_payload_hex` እና የተተነተነውን `signature_payload` ጨምሮ በሰንሰለት ላይ ማስገባት የሚችለውን የተፈረመ ደረሰኝ ይመልሳል። || `POST /v1/identifiers/resolve` | በትክክል ከ`{ input }` ወይም `{ encrypted_input }` አንዱን ይቀበላል። Plaintext `input` መደበኛ አገልጋይ-ጎን ነው; BFV `encrypted_input` በታተመው የመመሪያ ሁኔታ መሰረት አስቀድሞ መደበኛ መሆን አለበት። የመጨረሻ ነጥቡ ንቁ የይገባኛል ጥያቄ በሚኖርበት ጊዜ መለያውን ወደ `{ opaque_id, receipt_hash, uaid, account_id, signature }` ይፈታዋል እና እንዲሁም ቀኖናዊ የተፈረመ ክፍያ እንደ `{ signature_payload_hex, signature_payload }` ይመልሳል። |
@@ -227,8 +227,9 @@ UAID ለማግኘት ሶስት የሚደገፉ መንገዶች አሉ፡-
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```ሁልጊዜ ቃል በቃል በትንሽ ፊደላት ያከማቹ እና ከመጥለፍዎ በፊት ነጭ ቦታን መደበኛ ያድርጉት።
 እንደ `iroha app space-directory manifest scaffold` እና አንድሮይድ ያሉ የCLI ረዳቶች
 `UaidLiteral` ተንታኝ የአስተዳደር ግምገማዎች እንዲችሉ ተመሳሳይ የመቁረጥ ህጎችን ይተገበራሉ

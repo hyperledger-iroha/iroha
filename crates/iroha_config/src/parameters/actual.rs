@@ -1242,6 +1242,24 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret: Option<[u8; 32]>,
+    /// XOR asset definition used for escrowed VPN fees.
+    pub fee_asset_id: String,
+    /// Account that receives escrowed VPN lease fees.
+    pub escrow_account_id: AccountId,
+    /// Relay operator account eligible for receipt settlement.
+    pub operator_account_id: AccountId,
+    /// Fixed prepaid lease fee in nano-XOR.
+    pub lease_fee_nanos: u64,
+    /// Grace window after disconnect before unearned escrow can be refunded.
+    pub settlement_grace: Duration,
+    /// Routes pushed to VPN clients.
+    pub route_pushes: Vec<String>,
+    /// Routes explicitly excluded from the VPN tunnel.
+    pub excluded_routes: Vec<String>,
+    /// DNS servers pushed to VPN clients.
+    pub dns_servers: Vec<String>,
+    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
+    pub relay_tls_spki_sha256_hex: Option<String>,
 }
 
 impl Default for SoranetVpn {
@@ -1261,6 +1279,23 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret: None,
+            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
+            escrow_account_id: AccountId::parse_encoded(
+                &defaults::soranet::vpn::escrow_account_id(),
+            )
+            .expect("default vpn escrow account id")
+            .into_account_id(),
+            operator_account_id: AccountId::parse_encoded(
+                &defaults::soranet::vpn::operator_account_id(),
+            )
+            .expect("default vpn operator account id")
+            .into_account_id(),
+            lease_fee_nanos: defaults::soranet::vpn::LEASE_FEE_NANOS,
+            settlement_grace: Duration::from_secs(defaults::soranet::vpn::SETTLEMENT_GRACE_SECS),
+            route_pushes: defaults::soranet::vpn::route_pushes(),
+            excluded_routes: defaults::soranet::vpn::excluded_routes(),
+            dns_servers: defaults::soranet::vpn::dns_servers(),
+            relay_tls_spki_sha256_hex: None,
         }
     }
 }
@@ -5549,6 +5584,8 @@ pub struct Torii {
     pub transport: ToriiTransport,
     /// Native MCP endpoint configuration.
     pub mcp: ToriiMcp,
+    /// Cross-origin browser access policy.
+    pub cors: ToriiCors,
     /// Proof endpoint DoS/backpressure policy.
     pub proof_api: ProofApi,
     /// Optional UAID onboarding authority configuration.
@@ -5946,6 +5983,49 @@ pub struct ToriiMcp {
     pub async_job_ttl_secs: u64,
     /// Maximum asynchronous MCP jobs retained in memory.
     pub async_job_max_entries: usize,
+}
+
+/// Torii CORS response-header policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToriiCors {
+    /// Enable CORS response headers.
+    pub enabled: bool,
+    /// Explicit browser origins allowed to make cross-origin requests.
+    pub allowed_origins: Vec<String>,
+    /// Explicit HTTP methods allowed in CORS preflight responses.
+    pub allowed_methods: Vec<String>,
+    /// Explicit request headers allowed in CORS preflight responses.
+    pub allowed_headers: Vec<String>,
+    /// Explicit response headers exposed to browser clients.
+    pub exposed_headers: Vec<String>,
+    /// Maximum preflight cache age in seconds.
+    pub max_age_secs: u64,
+}
+
+impl Default for ToriiCors {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::cors::ENABLED,
+            allowed_origins: defaults::torii::cors::allowed_origins(),
+            allowed_methods: defaults::torii::cors::allowed_methods(),
+            allowed_headers: defaults::torii::cors::allowed_headers(),
+            exposed_headers: defaults::torii::cors::exposed_headers(),
+            max_age_secs: defaults::torii::cors::MAX_AGE_SECS,
+        }
+    }
+}
+
+impl From<user::ToriiCors> for ToriiCors {
+    fn from(value: user::ToriiCors) -> Self {
+        Self {
+            enabled: value.enabled,
+            allowed_origins: value.allowed_origins,
+            allowed_methods: value.allowed_methods,
+            allowed_headers: value.allowed_headers,
+            exposed_headers: value.exposed_headers,
+            max_age_secs: value.max_age_secs,
+        }
+    }
 }
 
 /// Norito-RPC transport configuration (stage, allowlist, toggles).

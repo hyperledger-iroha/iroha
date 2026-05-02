@@ -111,7 +111,7 @@ UAID は 2 番目の ID レイヤーのアンカーになりました。- グロ
 現在の Torii ルート:|ルート |目的 |
 |------|-----------|
 | `GET /v1/ram-lfe/program-policies` |アクティブおよび非アクティブな RAM-LFE プログラム ポリシーとそのパブリック実行メタデータ (オプションの BFV `input_encryption` パラメーターおよびプログラムされたバックエンド `ram_fhe_profile` を含む) をリストします。 |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` または `{ encrypted_input }` のいずれかを受け入れ、選択したプログラムのステートレスな `RamLfeExecutionReceipt` と `{ output_hex, output_hash, receipt_hash }` を返します。現在の Torii ランタイムは、プログラムされた BFV バックエンドのレシートを発行します。 |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` または `{ encrypted_input }` のいずれかを受け入れ、選択したプログラムのステートレスな `RamLfeExecutionReceipt` と `{ output_hash, receipt_hash }` を返します。Torii は RAM-LFE の平文出力を返しません。現在の Torii ランタイムは、プログラムされた BFV バックエンドのレシートを発行します。 |
 | `POST /v1/ram-lfe/receipts/verify` |ステートレスでは、公開されたオンチェーン プログラム ポリシーに対して `RamLfeExecutionReceipt` を検証し、オプションで呼び出し元が指定した `output_hex` がレシート `output_hash` と一致するかどうかをチェックします。 |
 | `GET /v1/identifier-policies` |アクティブおよび非アクティブな隠し関数ポリシーの名前空間とそのパブリック メタデータをリストします。これには、オプションの BFV `input_encryption` パラメータ、暗号化されたクライアント側入力に必要な `normalization` モード、およびプログラムされた BFV ポリシーの `ram_fhe_profile` が含まれます。 |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` または `{ encrypted_input }` のいずれかを受け入れます。プレーンテキスト `input` はサーバー側で正規化されます。 BFV `encrypted_input` は、公開されたポリシー モードに従ってすでに正規化されている必要があります。次に、エンドポイントは `opaque:` ハンドルを派生し、生の `signature_payload_hex` と解析された `signature_payload` の両方を含む、`ClaimIdentifier` がオンチェーンで送信できる署名付きレシートを返します。 || `POST /v1/identifiers/resolve` | `{ input }` または `{ encrypted_input }` のいずれかを受け入れます。プレーンテキスト `input` はサーバー側で正規化されます。 BFV `encrypted_input` は、公開されたポリシー モードに従ってすでに正規化されている必要があります。エンドポイントは、アクティブなクレームが存在する場合、識別子を `{ opaque_id, receipt_hash, uaid, account_id, signature }` に解決し、正規の署名付きペイロードも `{ signature_payload_hex, signature_payload }` として返します。 |
@@ -227,8 +227,9 @@ UAID を取得するには 3 つの方法がサポートされています。
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```リテラルは常に小文字で保存し、ハッシュする前に空白を正規化してください。
 `iroha app space-directory manifest scaffold` や Android などの CLI ヘルパー
 `UaidLiteral` パーサーは同じトリミング ルールを適用するため、ガバナンス レビューを行うことができます。

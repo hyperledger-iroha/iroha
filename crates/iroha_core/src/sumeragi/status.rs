@@ -10129,8 +10129,11 @@ mod tests {
         let settlement = sample_lane_commitment(block_height, lane_id, u64::from(lane_id) + 10);
         let envelope =
             LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope");
-        let verified_at_height = Some(block_height);
-        let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+        let verified_at_height = block_height;
+        let proof_digest = iroha_crypto::Hash::new(
+            format!("status-test-fastpq-proof:{block_height}:{lane_id}:{verified_at_height}")
+                .as_bytes(),
+        );
         envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest,
             verified_at_height,

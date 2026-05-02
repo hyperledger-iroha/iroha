@@ -402,7 +402,15 @@ pub(crate) fn is_native_escrow_custody_asset(
         .any(|(_, record)| {
             record.asset_definition == *resolved_id.definition()
                 && record.custody == *resolved_id.account()
-        }))
+        })
+        || state_transaction
+            .world
+            .vpn_leases
+            .iter()
+            .any(|(_, record)| {
+                record.asset_definition == *resolved_id.definition()
+                    && record.custody_account_id == *resolved_id.account()
+            }))
 }
 
 impl Execute for OpenAssetEscrow {
@@ -455,7 +463,7 @@ impl Execute for OpenAssetEscrow {
             state_transaction.world.accounts.remove(custody.clone());
         }
         let delta = transfer_result?;
-        state_transaction.record_transfer_transcript(authority, delta);
+        state_transaction.record_transfer_transcript(authority, delta)?;
 
         let record = AssetEscrowRecord {
             id: self.escrow_id,
@@ -585,7 +593,7 @@ impl Execute for ReleaseAssetEscrow {
             &record.amount,
             NumericAssetTransferSourcePolicy::NativeEscrowCustody,
         )?;
-        state_transaction.record_transfer_transcript(authority, delta);
+        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Released;
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
@@ -633,7 +641,7 @@ impl Execute for CancelAssetEscrow {
             &record.amount,
             NumericAssetTransferSourcePolicy::NativeEscrowCustody,
         )?;
-        state_transaction.record_transfer_transcript(authority, delta);
+        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Cancelled;
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
@@ -745,7 +753,7 @@ impl Execute for ResolveEscrowDispute {
             )?;
             deltas.push(delta);
         }
-        state_transaction.record_transfer_transcripts(authority, deltas);
+        state_transaction.record_transfer_transcripts(authority, deltas)?;
         let resolved_at_ms = state_transaction.block_unix_timestamp_ms();
         record.status = AssetEscrowStatus::Resolved;
         record.closed_at_ms = Some(resolved_at_ms);

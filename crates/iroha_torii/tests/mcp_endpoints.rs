@@ -4328,7 +4328,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts()
                 "name": "iroha.accounts.onboard",
                 "arguments": {
                     "alias": "agent-alice",
-                    "account_id": TEST_ACCOUNT_I105
+                    "account_id": TEST_ACCOUNT_I105,
+                    "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
                 }
             }
         }),

@@ -9,7 +9,8 @@ impl crate::memory::Memory {
         // Enforce address lies in INPUT region and that header (2+1+4) fits
         let start = Self::INPUT_START;
         let end = Self::INPUT_START + Self::INPUT_SIZE;
-        if !(addr >= start && addr + 7 <= end) {
+        let header_end = addr.checked_add(7).ok_or(VMError::NoritoInvalid)?;
+        if !(addr >= start && header_end <= end) {
             if crate::dev_env::decode_trace_enabled() {
                 eprintln!("TLV header OOB: addr=0x{addr:08x} INPUT=[0x{start:08x}..0x{end:08x})");
             }
@@ -32,7 +33,10 @@ impl crate::memory::Memory {
             .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
             .ok_or(VMError::NoritoInvalid)?;
         // Bounds check entirely within INPUT
-        if addr as usize + total > end as usize {
+        let envelope_end = addr
+            .checked_add(total as u64)
+            .ok_or(VMError::NoritoInvalid)?;
+        if envelope_end > end {
             return Err(VMError::NoritoInvalid);
         }
         // Load full envelope and validate header/hash/pointer type
@@ -42,15 +46,15 @@ impl crate::memory::Memory {
 
         match validate_tlv_bytes(envelope) {
             Ok(tlv) => {
-                if let Some((policy, abi_version)) = current_policy() {
-                    let unsupported_abi = abi_version != 1;
-                    let disallowed_type = !is_type_allowed_for_policy(policy, tlv.type_id);
-                    if unsupported_abi || disallowed_type {
-                        return Err(VMError::AbiTypeNotAllowed {
-                            abi: abi_version,
-                            type_id: tlv.type_id as u16,
-                        });
-                    }
+                let (policy, abi_version) =
+                    current_policy().unwrap_or((crate::SyscallPolicy::AbiV1, 1));
+                let unsupported_abi = abi_version != 1;
+                let disallowed_type = !is_type_allowed_for_policy(policy, tlv.type_id);
+                if unsupported_abi || disallowed_type {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: abi_version,
+                        type_id: tlv.type_id as u16,
+                    });
                 }
                 Ok(tlv)
             }

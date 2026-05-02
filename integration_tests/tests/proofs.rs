@@ -5,6 +5,7 @@ use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 
 use eyre::{Report, Result};
 use integration_tests::sandbox;
+use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_data_model::proof::{ProofId, ProofStatus};
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use reqwest::Client as HttpClient;
@@ -182,7 +183,9 @@ async fn fetch_proof_snapshot(url: reqwest::Url) -> Result<(String, [u8; 32], Pr
 async fn submit_proof_and_query_record() -> Result<()> {
     // Start a minimal network
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new(),
+        NetworkBuilder::new().with_config_layer(|layer| {
+            layer.write(["zk", "halo2", "enabled"], true);
+        }),
         stringify!(submit_proof_and_query_record),
     )
     .await?
@@ -199,11 +202,13 @@ async fn submit_proof_and_query_record() -> Result<()> {
         peer_clients.push(client.clone());
     }
 
-    // Prepare a dummy proof under a permissive backend (debug/* returns true)
-    let backend = "debug/ok";
-    let proof_bytes = b"integration_proof_bytes".to_vec();
-    let proof = iroha_data_model::proof::ProofBox::new(backend.into(), proof_bytes.clone());
-    let vk = iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), vec![0x01]);
+    let backend = "halo2/ipa";
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+    let vk = fixture
+        .vk_box(backend)
+        .expect("fixture must include a verifying key");
+    let proof = fixture.proof_box(backend);
+    let proof_bytes = proof.bytes.clone();
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof.clone(), vk);
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);

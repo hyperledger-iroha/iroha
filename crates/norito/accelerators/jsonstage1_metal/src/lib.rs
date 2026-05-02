@@ -1,7 +1,7 @@
-//! jsonstage1_metal: cdylib exporting JSON Stage‑1 structural tape builder via Metal.
+//! jsonstage1_metal: cdylib exporting JSON Stage-1 structural tape builder via Metal.
 //!
 //! C ABI: `json_stage1_build_tape(input_ptr, input_len, out_offsets, out_capacity, out_len)`
-//! Returns 0 on success, non-zero on failure.
+//! Returns 0 on success, 3 when Metal is unavailable, and non-zero on failure.
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe extern "C" {
@@ -55,6 +55,10 @@ const LAYOUT_FIXED_OFFSETS: u32 = 1;
 
 /// Build a structural tape (offsets) for the given JSON input.
 ///
+/// This entry point reports Metal availability directly. Scalar fallback is
+/// owned by the Norito caller so helper registration cannot confuse CPU work
+/// with an accelerated backend.
+///
 /// # Safety
 /// The caller must ensure all pointers are valid for the given lengths and
 /// refer to writable/readable memory ranges as appropriate.
@@ -66,76 +70,40 @@ pub unsafe extern "C" fn json_stage1_build_tape(
     out_capacity: usize,
     out_len: *mut usize,
 ) -> i32 {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    unsafe {
-        let rc = json_stage1_build_tape_metal_impl(
-            input_ptr,
-            input_len,
-            out_offsets,
-            out_capacity,
-            out_len,
-        );
-        if rc == 0 {
-            return rc;
-        }
-    }
-    // CPU fallback (used when Metal is unavailable or on non-mac targets)
     if input_ptr.is_null() || out_offsets.is_null() || out_len.is_null() {
-        return 1;
+        return RC_INVALID;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(input_ptr, input_len) };
-    let mut offs = Vec::<u32>::with_capacity(1024);
-    let mut i = 0usize;
-    let mut in_str = false;
-    let mut backslash_run = 0usize;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if in_str {
-            if c == b'\\' {
-                backslash_run = backslash_run.saturating_add(1);
-                i += 1;
-                continue;
-            }
-            if c == b'"' {
-                if (backslash_run & 1) == 0 {
-                    in_str = false;
-                    offs.push(i as u32);
-                }
-                backslash_run = 0;
-                i += 1;
-                continue;
-            }
-            backslash_run = 0;
-            i += 1;
-        } else {
-            match c {
-                b'"' => {
-                    in_str = true;
-                    backslash_run = 0;
-                    offs.push(i as u32);
-                    i += 1;
-                }
-                b'{' | b'}' | b'[' | b']' | b':' | b',' => {
-                    offs.push(i as u32);
-                    i += 1;
-                }
-                _ => i += 1,
-            }
+    if input_len > u32::MAX as usize {
+        return RC_INVALID;
+    }
+    if input_len == 0 {
+        unsafe {
+            *out_len = 0;
+        }
+        return RC_OK;
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        unsafe {
+            json_stage1_build_tape_metal_impl(
+                input_ptr,
+                input_len,
+                out_offsets,
+                out_capacity,
+                out_len,
+            )
         }
     }
-    let need = offs.len();
-    unsafe {
-        *out_len = need;
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (input_len, out_capacity);
+        RC_UNAVAILABLE
     }
-    if need > out_capacity {
-        return 2;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(offs.as_ptr(), out_offsets, need);
-    }
-    0
 }
 
+#[cfg(test)]
 fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     const POLY: u64 = 0xC96C_5795_D787_0F42;
     let mut crc = init;
@@ -152,6 +120,7 @@ fn crc64_raw(bytes: &[u8], init: u64) -> u64 {
     crc
 }
 
+#[cfg(test)]
 fn crc64_cpu(bytes: &[u8]) -> u64 {
     const INIT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     const XOR_OUT: u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -159,8 +128,10 @@ fn crc64_cpu(bytes: &[u8]) -> u64 {
     crc ^ XOR_OUT
 }
 
-/// Compute CRC64-XZ for the provided buffer using Metal when available,
-/// falling back to a portable CPU implementation otherwise.
+/// Compute CRC64-XZ for the provided buffer using Metal.
+///
+/// This helper reports backend unavailability or failure directly. The Norito
+/// caller owns deterministic SIMD/CPU fallback.
 ///
 /// # Safety
 /// The caller must ensure the pointers are valid for the supplied lengths.
@@ -171,21 +142,25 @@ pub unsafe extern "C" fn norito_crc64_metal(
     out_crc: *mut u64,
 ) -> i32 {
     if input_ptr.is_null() || out_crc.is_null() {
-        return 1;
+        return RC_INVALID;
     }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    unsafe {
-        let rc = norito_crc64_metal_impl(input_ptr, input_len, out_crc);
-        if rc == 0 {
-            return 0;
+    if input_len == 0 {
+        unsafe {
+            *out_crc = 0;
         }
+        return RC_OK;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(input_ptr, input_len) };
-    let crc = crc64_cpu(bytes);
-    unsafe {
-        *out_crc = crc;
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        unsafe { norito_crc64_metal_impl(input_ptr, input_len, out_crc) }
     }
-    0
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = input_len;
+        RC_UNAVAILABLE
+    }
 }
 
 /// Plan Norito binary sequence element spans.
@@ -216,7 +191,7 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        return unsafe {
+        unsafe {
             norito_sequence_plan_metal_impl(
                 input_ptr,
                 input_len,
@@ -227,7 +202,7 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
                 out_count,
                 out_used,
             )
-        };
+        }
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
@@ -397,6 +372,42 @@ mod tests {
         }
     }
 
+    fn reference_offsets(bytes: &[u8]) -> Vec<u32> {
+        let mut offsets = Vec::new();
+        let mut in_str = false;
+        let mut backslash_run = 0usize;
+        for (idx, &byte) in bytes.iter().enumerate() {
+            if in_str {
+                match byte {
+                    b'\\' => {
+                        backslash_run = backslash_run.saturating_add(1);
+                    }
+                    b'"' => {
+                        if backslash_run & 1 == 0 {
+                            in_str = false;
+                            offsets.push(idx as u32);
+                        }
+                        backslash_run = 0;
+                    }
+                    _ => {
+                        backslash_run = 0;
+                    }
+                }
+            } else {
+                match byte {
+                    b'"' => {
+                        in_str = true;
+                        backslash_run = 0;
+                        offsets.push(idx as u32);
+                    }
+                    b'{' | b'}' | b'[' | b']' | b':' | b',' => offsets.push(idx as u32),
+                    _ => {}
+                }
+            }
+        }
+        offsets
+    }
+
     #[test]
     fn basic_offsets() {
         let s = b"{\"a\":1}";
@@ -405,9 +416,28 @@ mod tests {
         let rc = unsafe {
             json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
         };
-        assert_eq!(rc, 0);
+        if skip_if_unavailable(rc, "jsonstage1_metal") {
+            return;
+        }
+        assert_eq!(rc, super::RC_OK);
         out.truncate(len);
-        assert_eq!(out, vec![0, 1, 3, 4, 6]);
+        assert_eq!(out, reference_offsets(s));
+    }
+
+    #[test]
+    fn stage1_capacity_reports_required_len_when_available() {
+        let s = br#"{"capacity":[1,2,3],"quoted":"a\"b"}"#;
+        let expected = reference_offsets(s);
+        let mut out = [0u32; 2];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
+        };
+        if skip_if_unavailable(rc, "jsonstage1_metal") {
+            return;
+        }
+        assert_eq!(rc, super::RC_NO_SPACE);
+        assert_eq!(len, expected.len());
     }
 
     #[test]
@@ -415,7 +445,10 @@ mod tests {
         let data = b"123456789";
         let mut out = 0u64;
         let rc = unsafe { norito_crc64_metal(data.as_ptr(), data.len(), &mut out) };
-        assert_eq!(rc, 0);
+        if skip_if_unavailable(rc, "jsonstage1_metal CRC64") {
+            return;
+        }
+        assert_eq!(rc, super::RC_OK);
         assert_eq!(out, 0x995D_C9BB_DF19_39FA);
     }
 
@@ -424,8 +457,92 @@ mod tests {
         let data = vec![0xAAu8; 48 * 1024];
         let mut out = 0u64;
         let rc = unsafe { norito_crc64_metal(data.as_ptr(), data.len(), &mut out) };
-        assert_eq!(rc, 0);
+        if skip_if_unavailable(rc, "jsonstage1_metal CRC64") {
+            return;
+        }
+        assert_eq!(rc, super::RC_OK);
         assert_eq!(out, crc64_cpu(&data));
+    }
+
+    #[test]
+    fn public_ffi_rejects_null_pointers() {
+        let s = b"{\"a\":1}";
+        let mut out = [0u32; 8];
+        let mut len = 0usize;
+        let mut crc = 0u64;
+
+        let rc = unsafe {
+            json_stage1_build_tape(
+                std::ptr::null(),
+                s.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, super::RC_INVALID);
+
+        let rc = unsafe {
+            json_stage1_build_tape(s.as_ptr(), s.len(), std::ptr::null_mut(), 0, &mut len)
+        };
+        assert_eq!(rc, super::RC_INVALID);
+
+        let rc = unsafe {
+            json_stage1_build_tape(
+                s.as_ptr(),
+                s.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, super::RC_INVALID);
+
+        let rc = unsafe { norito_crc64_metal(std::ptr::null(), s.len(), &mut crc) };
+        assert_eq!(rc, super::RC_INVALID);
+
+        let rc = unsafe { norito_crc64_metal(s.as_ptr(), s.len(), std::ptr::null_mut()) };
+        assert_eq!(rc, super::RC_INVALID);
+    }
+
+    #[test]
+    fn public_ffi_handles_empty_inputs_without_device_work() {
+        let input: &[u8] = b"";
+        let mut offsets = [123u32; 1];
+        let mut len = usize::MAX;
+        let rc = unsafe {
+            json_stage1_build_tape(
+                input.as_ptr(),
+                input.len(),
+                offsets.as_mut_ptr(),
+                offsets.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, super::RC_OK);
+        assert_eq!(len, 0);
+
+        let mut crc = u64::MAX;
+        let rc = unsafe { norito_crc64_metal(input.as_ptr(), input.len(), &mut crc) };
+        assert_eq!(rc, super::RC_OK);
+        assert_eq!(crc, 0);
+    }
+
+    #[test]
+    fn public_stage1_rejects_lengths_outside_offset_abi() {
+        let input = [0u8; 1];
+        let mut offsets = [0u32; 1];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape(
+                input.as_ptr(),
+                u32::MAX as usize + 1,
+                offsets.as_mut_ptr(),
+                offsets.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, super::RC_INVALID);
     }
 
     #[test]
@@ -435,7 +552,7 @@ mod tests {
         bytes.push(1);
         bytes.push(b'a');
         bytes.extend_from_slice(&[0x82, 0x01]);
-        bytes.extend(std::iter::repeat(0x55).take(130));
+        bytes.extend(std::iter::repeat_n(0x55, 130));
 
         let mut spans = vec![NoritoSequenceSpan { start: 0, end: 0 }; 2];
         let mut count = 0usize;

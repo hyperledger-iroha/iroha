@@ -39,25 +39,25 @@ public final class RamLfeJsonParser {
                       "ram-lfe program policy list.items[" + i + "].verification_mode")),
               optionalString(item.get("input_encryption")),
               optionalString(item.get("input_encryption_public_parameters")),
-	              item.get("input_encryption_public_parameters_decoded") == null
-	                  ? null
-	                  : parseBfvPublicParameters(
-	                      expectObject(
-	                          item.get("input_encryption_public_parameters_decoded"),
+              item.get("input_encryption_public_parameters_decoded") == null
+                  ? null
+                  : parseBfvPublicParameters(
+                      expectObject(
+                          item.get("input_encryption_public_parameters_decoded"),
                           "ram-lfe program policy list.items["
                               + i
                               + "].input_encryption_public_parameters_decoded"),
-	                      "ram-lfe program policy list.items["
-	                          + i
-	                          + "].input_encryption_public_parameters_decoded"),
-	              optionalString(item.get("note")),
-	              item.get("proof_verifier") == null
-	                  ? null
-	                  : parseProofVerifier(
-	                      expectObject(
-	                          item.get("proof_verifier"),
-	                          "ram-lfe program policy list.items[" + i + "].proof_verifier"),
-	                      "ram-lfe program policy list.items[" + i + "].proof_verifier")));
+                      "ram-lfe program policy list.items["
+                          + i
+                          + "].input_encryption_public_parameters_decoded"),
+              optionalString(item.get("note")),
+              item.get("proof_verifier") == null
+                  ? null
+                  : parseProofVerifier(
+                      expectObject(
+                          item.get("proof_verifier"),
+                          "ram-lfe program policy list.items[" + i + "].proof_verifier"),
+                      "ram-lfe program policy list.items[" + i + "].proof_verifier")));
     }
     final long total =
         root.containsKey("total")
@@ -73,9 +73,6 @@ public final class RamLfeJsonParser {
         requiredString(root.get("program_id"), "ram-lfe execute response.program_id"),
         requiredString(root.get("opaque_hash"), "ram-lfe execute response.opaque_hash"),
         requiredString(root.get("receipt_hash"), "ram-lfe execute response.receipt_hash"),
-        canonicalizeHex(
-            requiredString(root.get("output_hex"), "ram-lfe execute response.output_hex"),
-            "ram-lfe execute response.output_hex"),
         requiredString(root.get("output_hash"), "ram-lfe execute response.output_hash"),
         requiredString(
             root.get("associated_data_hash"), "ram-lfe execute response.associated_data_hash"),
@@ -92,7 +89,8 @@ public final class RamLfeJsonParser {
 
   public static RamLfeReceiptVerifyResponse parseReceiptVerifyResponse(final byte[] payload) {
     final Map<String, Object> root =
-        expectObject(parse(payload, "ram-lfe receipt verify response"), "ram-lfe receipt verify response");
+        expectObject(
+            parse(payload, "ram-lfe receipt verify response"), "ram-lfe receipt verify response");
     return new RamLfeReceiptVerifyResponse(
         Boolean.TRUE.equals(root.get("valid")),
         requiredString(root.get("program_id"), "ram-lfe receipt verify response.program_id"),

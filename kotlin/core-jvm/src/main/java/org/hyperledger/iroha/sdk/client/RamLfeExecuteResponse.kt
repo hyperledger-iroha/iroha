@@ -5,7 +5,6 @@ class RamLfeExecuteResponse(
     @JvmField val programId: String,
     @JvmField val opaqueHash: String,
     @JvmField val receiptHash: String,
-    @JvmField val outputHex: String,
     @JvmField val outputHash: String,
     @JvmField val associatedDataHash: String,
     @JvmField val executedAtMs: Long,

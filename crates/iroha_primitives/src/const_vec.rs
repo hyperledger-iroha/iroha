@@ -242,20 +242,24 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         if !ncore::packed_seq_enabled_for_flags(flags) {
             let mut total = seq_hdr;
             for item in slice {
-                let elem_len = item.encoded_len_hint()?;
+                let elem_len = item
+                    .encoded_len_exact()
+                    .or_else(|| item.encoded_len_hint())?;
                 let len_bytes = ncore::len_prefix_len_with_flags(elem_len, flags);
-                total = total.saturating_add(len_bytes);
-                total = total.saturating_add(elem_len);
+                total = total.checked_add(len_bytes)?;
+                total = total.checked_add(elem_len)?;
             }
             return Some(total);
         }
 
         let mut total = seq_hdr;
-        let entries = len.saturating_add(1);
-        total = total.saturating_add(8usize.saturating_mul(entries));
+        let entries = len.checked_add(1)?;
+        total = total.checked_add(8usize.checked_mul(entries)?)?;
         for item in slice {
-            let elem_hint = item.encoded_len_hint()?;
-            total = total.saturating_add(elem_hint);
+            let elem_hint = item
+                .encoded_len_exact()
+                .or_else(|| item.encoded_len_hint())?;
+            total = total.checked_add(elem_hint)?;
         }
         Some(total)
     }
@@ -281,15 +285,8 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         let offsets_bytes = entries.checked_mul(8)?;
         total = total.checked_add(offsets_bytes)?;
         let mut data_total = 0usize;
-        let mut elem_buf = Vec::new();
         for item in slice {
-            let elem_exact = if let Some(elem_exact) = item.encoded_len_exact() {
-                elem_exact
-            } else {
-                elem_buf.clear();
-                item.serialize(&mut elem_buf).ok()?;
-                elem_buf.len()
-            };
+            let elem_exact = item.encoded_len_exact()?;
             data_total = data_total.checked_add(elem_exact)?;
         }
         total = total.checked_add(data_total)?;
@@ -304,6 +301,15 @@ impl<T: NoritoSerialize> ConstVec<T> {
         flags: u8,
     ) -> Result<(), ncore::Error> {
         let mut elem_buf = Vec::new();
+        if let Some(max_hint) = slice
+            .iter()
+            .filter_map(|item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()))
+            .max()
+        {
+            elem_buf
+                .try_reserve(max_hint)
+                .map_err(|_| ncore::Error::LengthMismatch)?;
+        }
         for item in slice {
             elem_buf.clear();
             item.serialize(&mut elem_buf)?;
@@ -318,73 +324,87 @@ impl<T: NoritoSerialize> ConstVec<T> {
         writer: &mut W,
         trace_enabled: bool,
     ) -> Result<(), ncore::Error> {
-        let (offsets, data) = Self::collect_offsets(slice, trace_enabled)?;
-        Self::write_fixed_offsets(writer, &offsets, &data, trace_enabled)
+        let packed = Self::collect_packed_payload(slice, trace_enabled)?;
+        Self::write_packed_payload(writer, &packed, slice.len(), trace_enabled)
     }
 
-    fn collect_offsets(
-        slice: &[T],
-        trace_enabled: bool,
-    ) -> Result<(Vec<u64>, Vec<u8>), ncore::Error> {
+    fn collect_packed_payload(slice: &[T], trace_enabled: bool) -> Result<Vec<u8>, ncore::Error> {
         #[cfg(not(debug_assertions))]
         let _ = trace_enabled;
 
-        let mut offsets = Vec::with_capacity(slice.len() + 1);
-        let mut data = Vec::new();
-        let mut elem_buf = Vec::new();
+        let table_len = slice
+            .len()
+            .checked_add(1)
+            .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let mut packed = vec![0; table_len];
+        let mut data_reserve = 0usize;
+        for item in slice {
+            if let Some(hint) = item.encoded_len_exact().or_else(|| item.encoded_len_hint()) {
+                data_reserve = data_reserve
+                    .checked_add(hint)
+                    .ok_or(ncore::Error::LengthMismatch)?;
+            }
+        }
+        if data_reserve > 0 {
+            packed
+                .try_reserve(data_reserve)
+                .map_err(|_| ncore::Error::LengthMismatch)?;
+        }
         let mut total: u64 = 0;
 
         for (idx, item) in slice.iter().enumerate() {
             #[cfg(not(debug_assertions))]
             let _ = idx;
-            offsets.push(total);
-            elem_buf.clear();
-            item.serialize(&mut elem_buf)?;
+            let elem_start = packed.len();
+            item.serialize(&mut packed)?;
+            let elem_len = packed
+                .len()
+                .checked_sub(elem_start)
+                .ok_or(ncore::Error::LengthMismatch)?;
             #[cfg(debug_assertions)]
             if trace_enabled && idx == 0 {
                 eprintln!(
                     "ConstVec::<{}> encode first_elem len={} total_before={}",
                     core::any::type_name::<T>(),
-                    elem_buf.len(),
+                    elem_len,
                     total
                 );
             }
             #[cfg(debug_assertions)]
             if trace_enabled && core::any::type_name::<T>().contains("InstructionBox") && idx < 32 {
                 eprintln!(
-                    "ConstVec::<InstructionBox> encode idx={} len={} total_before={}",
-                    idx,
-                    elem_buf.len(),
-                    total
+                    "ConstVec::<InstructionBox> encode idx={idx} len={elem_len} total_before={total}"
                 );
             }
-            total = total.wrapping_add(elem_buf.len() as u64);
-            data.extend_from_slice(&elem_buf);
+            total = total
+                .checked_add(u64::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let offset_pos = idx
+                .checked_add(1)
+                .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+                .ok_or(ncore::Error::LengthMismatch)?;
+            packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+                .copy_from_slice(&total.to_le_bytes());
         }
-        offsets.push(total);
-        Ok((offsets, data))
+        Ok(packed)
     }
 
-    fn write_fixed_offsets<W: Write>(
+    fn write_packed_payload<W: Write>(
         writer: &mut W,
-        offsets: &[u64],
-        data: &[u8],
+        packed: &[u8],
+        len: usize,
         trace_enabled: bool,
     ) -> Result<(), ncore::Error> {
         #[cfg(not(debug_assertions))]
         let _ = trace_enabled;
+        #[cfg(not(debug_assertions))]
+        let _ = len;
 
         let limit = ncore::max_archive_len();
         if limit != 0 {
-            let offsets_bytes = offsets
-                .len()
-                .checked_mul(8)
-                .ok_or(ncore::Error::LengthMismatch)?;
-            let packed_total = offsets_bytes
-                .checked_add(data.len())
-                .ok_or(ncore::Error::LengthMismatch)?;
             let packed_total =
-                u64::try_from(packed_total).map_err(|_| ncore::Error::LengthMismatch)?;
+                u64::try_from(packed.len()).map_err(|_| ncore::Error::LengthMismatch)?;
             if packed_total > limit {
                 return Err(ncore::Error::ArchiveLengthExceeded {
                     length: packed_total,
@@ -396,29 +416,35 @@ impl<T: NoritoSerialize> ConstVec<T> {
         ncore::note_fixed_offsets_emitted();
         #[cfg(debug_assertions)]
         if trace_enabled && core::any::type_name::<T>().contains("InstructionBox") {
-            let mut preview_bytes = [0u8; 16];
-            let preview_count = offsets.len().min(2);
-            for (idx, &off) in offsets.iter().take(preview_count).enumerate() {
-                preview_bytes[idx * 8..idx * 8 + 8].copy_from_slice(&off.to_le_bytes());
-            }
-            let preview = preview_count * 8;
+            let offset_count = len.checked_add(1).ok_or(ncore::Error::LengthMismatch)?;
+            let offsets_bytes = offset_count
+                .checked_mul(core::mem::size_of::<u64>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let data_len = packed
+                .len()
+                .checked_sub(offsets_bytes)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let preview = packed.len().min(16);
             eprintln!(
                 "ConstVec::<{}> offs_bytes_preview={:?}",
                 core::any::type_name::<T>(),
-                &preview_bytes[..preview]
+                &packed[..preview]
             );
+            let mut preview_offsets = Vec::new();
+            for chunk in packed[..offsets_bytes].chunks_exact(8).take(8) {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(chunk);
+                preview_offsets.push(u64::from_le_bytes(bytes));
+            }
             eprintln!(
                 "ConstVec::<{}> offsets_summary len={} data_len={} offsets={:?}",
                 core::any::type_name::<T>(),
-                offsets.len(),
-                data.len(),
-                &offsets[..core::cmp::min(offsets.len(), 8)]
+                offset_count,
+                data_len,
+                preview_offsets
             );
         }
-        for &off in offsets {
-            writer.write_all(&off.to_le_bytes())?;
-        }
-        writer.write_all(data)?;
+        writer.write_all(packed)?;
         Ok(())
     }
 }
@@ -612,10 +638,7 @@ where
         let mut len_bytes = [0u8; 8];
         len_bytes.copy_from_slice(&decode_bytes[..8]);
         let declared = u64::from_le_bytes(len_bytes);
-        if declared == 0
-            && decode_bytes.len() > 8
-            && !ncore::packed_seq_enabled_for_flags(flags)
-        {
+        if declared == 0 && decode_bytes.len() > 8 && !ncore::packed_seq_enabled_for_flags(flags) {
             return Err(ncore::Error::LengthMismatch);
         }
     }
@@ -1575,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn packed_encoded_len_exact_serializes_elements_with_unknown_exact_len() {
+    fn packed_encoded_len_exact_is_none_when_element_exact_len_is_unknown() {
         let flags = ncore::header_flags::PACKED_SEQ | ncore::header_flags::COMPACT_LEN;
         let _guard = ncore::DecodeFlagsGuard::enter(flags);
         let value = ConstVec::from(vec![InexactByte(1), InexactByte(2), InexactByte(3)]);
@@ -1583,7 +1606,7 @@ mod tests {
 
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
 
-        assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
+        assert_eq!(value.encoded_len_exact(), None);
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
     }
 
@@ -1679,7 +1702,7 @@ mod tests {
         NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
 
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
-        assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
+        assert_eq!(value.encoded_len_exact(), None);
     }
 
     #[test]

@@ -597,8 +597,8 @@ mod tests {
             from_balance_after: Numeric::from(95u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(5u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x11; Hash::LENGTH]);
         let transcript = TransferTranscript {
@@ -649,8 +649,8 @@ mod tests {
             from_balance_after: Numeric::from(95u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(5u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x22; Hash::LENGTH]);
         let transcript = TransferTranscript {

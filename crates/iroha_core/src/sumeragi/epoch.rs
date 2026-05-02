@@ -183,7 +183,14 @@ impl EpochManager {
         if !self.is_in_commit_window(pos) {
             return VrfNoteResult::RejectedOutOfWindow;
         }
-        // Record commitment (by signer)
+        if let Some(existing) = self.commits().get(&c.signer).copied() {
+            return if existing == c.commitment {
+                VrfNoteResult::Accepted
+            } else {
+                VrfNoteResult::RejectedInvalidReveal
+            };
+        }
+        // Record commitment (by signer).
         self.commits_mut().insert(c.signer, c.commitment);
         VrfNoteResult::Accepted
     }
@@ -212,6 +219,20 @@ impl EpochManager {
             if c != commit {
                 return VrfNoteResult::RejectedInvalidReveal;
             }
+            if let Some(existing) = self.reveals.get(&r.signer).copied() {
+                return if existing == r.reveal {
+                    VrfNoteResult::AcceptedLate
+                } else {
+                    VrfNoteResult::RejectedInvalidReveal
+                };
+            }
+            if let Some(existing) = self.late_reveals.get(&r.signer) {
+                return if existing.reveal == r.reveal {
+                    VrfNoteResult::AcceptedLate
+                } else {
+                    VrfNoteResult::RejectedInvalidReveal
+                };
+            }
             self.late_reveals.insert(
                 r.signer,
                 LateRevealEntry {
@@ -221,12 +242,20 @@ impl EpochManager {
             );
             return VrfNoteResult::AcceptedLate;
         }
-        // Verify against prior commitment if any: blake2b32(reveal) == commitment
-        if let Some(commit) = self.commits().get(&r.signer).copied() {
-            let c: [u8; 32] = iroha_crypto::Hash::new(r.reveal).into();
-            if c != commit {
-                return VrfNoteResult::RejectedInvalidReveal;
-            }
+        // Verify against a prior commitment: blake2b32(reveal) == commitment.
+        let Some(commit) = self.commits().get(&r.signer).copied() else {
+            return VrfNoteResult::RejectedInvalidReveal;
+        };
+        let c: [u8; 32] = iroha_crypto::Hash::new(r.reveal).into();
+        if c != commit {
+            return VrfNoteResult::RejectedInvalidReveal;
+        }
+        if let Some(existing) = self.reveals.get(&r.signer).copied() {
+            return if existing == r.reveal {
+                VrfNoteResult::Accepted
+            } else {
+                VrfNoteResult::RejectedInvalidReveal
+            };
         }
         self.reveals.insert(r.signer, r.reveal);
         self.late_reveals.remove(&r.signer);
@@ -518,6 +547,7 @@ mod tests {
                     epoch: 0,
                     commitment: [1u8; 32],
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             );
         }
@@ -533,6 +563,7 @@ mod tests {
                 epoch: 0,
                 commitment: commit,
                 signer: 2,
+                bls_sig: Vec::new(),
             },
         );
         // Height 4..6: reveal window
@@ -543,6 +574,7 @@ mod tests {
                     epoch: 0,
                     reveal: [0u8; 32],
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             );
         }
@@ -553,6 +585,7 @@ mod tests {
                 epoch: 0,
                 reveal: [9u8; 32],
                 signer: 2,
+                bls_sig: Vec::new(),
             },
         );
         // Epoch boundary at height 10: evolves seed and clears state
@@ -583,6 +616,7 @@ mod tests {
                 epoch: 0,
                 commitment: [1u8; 32],
                 signer: 1,
+                bls_sig: Vec::new(),
             },
         );
         let _ = em.try_note_reveal_at_height(
@@ -591,6 +625,7 @@ mod tests {
                 epoch: 0,
                 reveal: [2u8; 32],
                 signer: 1,
+                bls_sig: Vec::new(),
             },
         );
         em.set_validator_roster_indices(0..3);
@@ -623,6 +658,7 @@ mod tests {
                 epoch: 0,
                 commitment: [2u8; 32],
                 signer: 3,
+                bls_sig: Vec::new(),
             },
         );
         // Invalid reveal (hash does not match commit) for signer 3 within reveal window
@@ -632,6 +668,7 @@ mod tests {
                 epoch: 0,
                 reveal: [7u8; 32],
                 signer: 3,
+                bls_sig: Vec::new(),
             },
         );
         // Commit outside window for signer 4 (ignored)
@@ -641,6 +678,7 @@ mod tests {
                 epoch: 0,
                 commitment: [1u8; 32],
                 signer: 4,
+                bls_sig: Vec::new(),
             },
         );
         // Epoch boundary -> compute penalties
@@ -662,6 +700,7 @@ mod tests {
                 epoch: 0,
                 commitment: [1u8; 32],
                 signer: 0,
+                bls_sig: Vec::new(),
             },
         );
         assert_eq!(rc, VrfNoteResult::RejectedOutOfWindow);
@@ -672,6 +711,7 @@ mod tests {
                 epoch: 0,
                 commitment: [2u8; 32],
                 signer: 1,
+                bls_sig: Vec::new(),
             },
         );
         let rr = em.try_note_reveal_at_height(
@@ -680,6 +720,7 @@ mod tests {
                 epoch: 0,
                 reveal: [9u8; 32],
                 signer: 1,
+                bls_sig: Vec::new(),
             },
         );
         assert_eq!(rr, VrfNoteResult::RejectedInvalidReveal);
@@ -697,6 +738,7 @@ mod tests {
                 epoch: 0,
                 commitment: [3u8; 32],
                 signer: 2,
+                bls_sig: Vec::new(),
             },
         );
         assert_eq!(rc, VrfNoteResult::RejectedUnknownSigner);
@@ -714,6 +756,7 @@ mod tests {
                 epoch: 0,
                 reveal: [4u8; 32],
                 signer: 2,
+                bls_sig: Vec::new(),
             },
         );
         assert_eq!(rr, VrfNoteResult::RejectedUnknownSigner);
@@ -734,6 +777,7 @@ mod tests {
                     epoch: 0,
                     commitment: commit,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -745,6 +789,7 @@ mod tests {
                 epoch: 0,
                 reveal,
                 signer: 0,
+                bls_sig: Vec::new(),
             },
         );
         assert_eq!(rr, VrfNoteResult::RejectedOutOfWindow);
@@ -766,6 +811,7 @@ mod tests {
                     epoch: 0,
                     commitment: commit,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -778,6 +824,7 @@ mod tests {
                     epoch: 0,
                     reveal,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::AcceptedLate
@@ -805,6 +852,7 @@ mod tests {
                     epoch: 0,
                     commitment: commit,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -817,6 +865,7 @@ mod tests {
                     epoch: 0,
                     reveal,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -837,11 +886,13 @@ mod tests {
             epoch: 0,
             commitment: [0x11; 32],
             signer: 0,
+            bls_sig: Vec::new(),
         };
         let reveal = VrfReveal {
             epoch: 0,
             reveal: [0x22; 32],
             signer: 0,
+            bls_sig: Vec::new(),
         };
 
         assert_eq!(
@@ -867,6 +918,7 @@ mod tests {
                     epoch: 1,
                     commitment: [0x10; 32],
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::RejectedEpochMismatch
@@ -878,6 +930,7 @@ mod tests {
                     epoch: 1,
                     reveal: [0x11; 32],
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::RejectedEpochMismatch
@@ -887,6 +940,76 @@ mod tests {
         assert!(snapshot.commits.is_empty());
         assert!(snapshot.reveals.is_empty());
         assert!(snapshot.late_reveals.is_empty());
+    }
+
+    #[test]
+    fn reveal_window_requires_prior_matching_commit_and_rejects_conflicts() {
+        let chain = ChainId::from("iroha:test:epoch_reveal_commit_binding");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 2, 5);
+
+        let reveal = [0x41; 32];
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedInvalidReveal
+        );
+
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [0xAA; 32],
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedInvalidReveal
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                4,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: [0x42; 32],
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedInvalidReveal
+        );
     }
 
     #[test]
@@ -902,6 +1025,7 @@ mod tests {
                     epoch: 0,
                     reveal: [0x21; 32],
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::RejectedOutOfWindow
@@ -915,6 +1039,7 @@ mod tests {
                     epoch: 0,
                     commitment: commitment_for(reveal),
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -926,6 +1051,7 @@ mod tests {
                     epoch: 0,
                     reveal: [0x23; 32],
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::RejectedInvalidReveal
@@ -976,6 +1102,7 @@ mod tests {
                     epoch: 0,
                     commitment: [0x31; 32],
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::RejectedOutOfWindow
@@ -1018,6 +1145,7 @@ mod tests {
                     epoch: 0,
                     commitment: commitment_for(reveal),
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1029,6 +1157,7 @@ mod tests {
                     epoch: 0,
                     reveal,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1065,6 +1194,7 @@ mod tests {
                     epoch: 0,
                     commitment: commitment_for(reveal_regular),
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1076,6 +1206,7 @@ mod tests {
                     epoch: 0,
                     reveal: reveal_regular,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1087,6 +1218,7 @@ mod tests {
                     epoch: 0,
                     commitment: commitment_for(reveal_late),
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1098,6 +1230,7 @@ mod tests {
                     epoch: 0,
                     reveal: reveal_late,
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::AcceptedLate
@@ -1236,6 +1369,7 @@ mod tests {
                     epoch: 3,
                     commitment: [0xFF; 32],
                     signer: 3,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::RejectedUnknownSigner
@@ -1323,6 +1457,7 @@ mod tests {
                     epoch: 0,
                     commitment: commit0,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1334,6 +1469,7 @@ mod tests {
                     epoch: 0,
                     reveal: reveal0,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1347,6 +1483,7 @@ mod tests {
                     epoch: 0,
                     commitment: [0xAA; 32],
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1383,6 +1520,7 @@ mod tests {
                     epoch: 0,
                     commitment: commitment_for(reveal_regular),
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1394,6 +1532,7 @@ mod tests {
                     epoch: 0,
                     reveal: reveal_regular,
                     signer: 0,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1405,6 +1544,7 @@ mod tests {
                     epoch: 0,
                     commitment: [0x73; 32],
                     signer: 1,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1416,6 +1556,7 @@ mod tests {
                     epoch: 0,
                     commitment: commitment_for(reveal_late),
                     signer: 2,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::Accepted
@@ -1427,6 +1568,7 @@ mod tests {
                     epoch: 0,
                     reveal: reveal_late,
                     signer: 2,
+                    bls_sig: Vec::new(),
                 },
             ),
             VrfNoteResult::AcceptedLate

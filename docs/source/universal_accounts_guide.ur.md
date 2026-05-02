@@ -111,7 +111,7 @@ UAIDs اب دوسری شناختی پرت کے لیے اینکر ہیں:- ایک
 موجودہ Torii راستے:| راستہ | مقصد |
 |---------|---------|
 | `GET /v1/ram-lfe/program-policies` | فعال اور غیر فعال RAM-LFE پروگرام کی پالیسیوں کے علاوہ ان کے پبلک ایگزیکیوشن میٹا ڈیٹا کی فہرست بناتا ہے، بشمول اختیاری BFV `input_encryption` پیرامیٹرز اور پروگرامڈ بیک اینڈ `ram_fhe_profile`۔ |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` یا `{ encrypted_input }` میں سے بالکل ایک کو قبول کرتا ہے اور منتخب پروگرام کے لیے بے وطن `RamLfeExecutionReceipt` پلس `{ output_hex, output_hash, receipt_hash }` واپس کرتا ہے۔ موجودہ Torii رن ٹائم پروگرام شدہ BFV بیک اینڈ کے لیے رسیدیں جاری کرتا ہے۔ |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` یا `{ encrypted_input }` میں سے بالکل ایک کو قبول کرتا ہے اور منتخب پروگرام کے لیے بے وطن `RamLfeExecutionReceipt` پلس `{ output_hash, receipt_hash }` واپس کرتا ہے۔ Torii RAM-LFE کا سادہ متن آؤٹ پٹ واپس نہیں کرتا۔ موجودہ Torii رن ٹائم پروگرام شدہ BFV بیک اینڈ کے لیے رسیدیں جاری کرتا ہے۔ |
 | `POST /v1/ram-lfe/receipts/verify` | شائع شدہ آن چین پروگرام پالیسی کے خلاف بے وطنی سے `RamLfeExecutionReceipt` کی توثیق کرتا ہے اور اختیاری طور پر چیک کرتا ہے کہ کالر کی طرف سے فراہم کردہ `output_hex` رسید `output_hash` سے میل کھاتا ہے۔ |
 | `GET /v1/identifier-policies` | فعال اور غیر فعال پوشیدہ فنکشن پالیسی کے نام کی جگہوں کے علاوہ ان کے عوامی میٹا ڈیٹا کی فہرست بناتا ہے، بشمول اختیاری BFV `input_encryption` پیرامیٹرز، انکرپٹڈ کلائنٹ سائیڈ ان پٹ کے لیے مطلوبہ `normalization` موڈ، اور پروگرام شدہ BF پالیسیوں کے لیے `ram_fhe_profile`۔ |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` یا `{ encrypted_input }` میں سے بالکل ایک کو قبول کرتا ہے۔ سادہ متن `input` سرور سائیڈ کو عام کیا گیا ہے۔ BFV `encrypted_input` کو شائع شدہ پالیسی وضع کے مطابق پہلے سے ہی معمول پر لانا ضروری ہے۔ اختتامی نقطہ پھر `opaque:` ہینڈل حاصل کرتا ہے اور ایک دستخط شدہ رسید واپس کرتا ہے جسے `ClaimIdentifier` آن چین جمع کرا سکتا ہے، بشمول خام `signature_payload_hex` اور پارس شدہ `signature_payload`۔ || `POST /v1/identifiers/resolve` | `{ input }` یا `{ encrypted_input }` میں سے بالکل ایک کو قبول کرتا ہے۔ سادہ متن `input` سرور سائیڈ کو عام کیا گیا ہے۔ BFV `encrypted_input` کو شائع شدہ پالیسی وضع کے مطابق پہلے سے ہی معمول پر لانا ضروری ہے۔ اختتامی نقطہ شناخت کنندہ کو `{ opaque_id, receipt_hash, uaid, account_id, signature }` میں حل کرتا ہے جب ایک فعال دعوی موجود ہوتا ہے، اور `{ signature_payload_hex, signature_payload }` کے طور پر کیننیکل دستخط شدہ پے لوڈ بھی واپس کرتا ہے۔ |
@@ -227,8 +227,9 @@ UAID حاصل کرنے کے تین معاون طریقے ہیں:
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```لٹریل کو ہمیشہ لوئر کیس میں اسٹور کریں اور ہیش کرنے سے پہلے وائٹ اسپیس کو معمول پر رکھیں۔
 CLI مددگار جیسے `iroha app space-directory manifest scaffold` اور Android
 `UaidLiteral` پارسر تراشنے کے ایک ہی اصول کا اطلاق کرتا ہے تاکہ گورننس کے جائزے

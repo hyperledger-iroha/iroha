@@ -208,7 +208,7 @@ pub mod isi {
                 let _ = state_transaction.world.rwa(parent.rwa())?;
             }
 
-            let rwa_id = state_transaction.next_generated_rwa_id(&domain, RegisterRwa::WIRE_ID);
+            let rwa_id = state_transaction.next_generated_rwa_id(&domain, RegisterRwa::WIRE_ID)?;
 
             if state_transaction.world.rwa(&rwa_id).is_ok() {
                 return Err(RepetitionError {
@@ -325,7 +325,7 @@ pub mod isi {
                     )
                 })?;
             let child_id = state_transaction
-                .next_generated_rwa_id(source_lot.id().domain(), TransferRwa::WIRE_ID);
+                .next_generated_rwa_id(source_lot.id().domain(), TransferRwa::WIRE_ID)?;
             if state_transaction.world.rwa(&child_id).is_ok() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Custom,
@@ -453,7 +453,7 @@ pub mod isi {
             ensure_quantity_matches_spec(spec, &merged_quantity, "merge child")?;
             let _ = state_transaction.world.domain(&domain)?;
 
-            let child_id = state_transaction.next_generated_rwa_id(&domain, MergeRwas::WIRE_ID);
+            let child_id = state_transaction.next_generated_rwa_id(&domain, MergeRwas::WIRE_ID)?;
             if state_transaction.world.rwa(&child_id).is_ok() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Custom,
@@ -772,7 +772,7 @@ pub mod isi {
                     )
                 })?;
             let child_id = state_transaction
-                .next_generated_rwa_id(source_lot.id().domain(), ForceTransferRwa::WIRE_ID);
+                .next_generated_rwa_id(source_lot.id().domain(), ForceTransferRwa::WIRE_ID)?;
             if state_transaction.world.rwa(&child_id).is_ok() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Custom,
@@ -988,6 +988,11 @@ pub mod isi {
             domain_id: &DomainId,
             accounts: &[AccountId],
         ) {
+            if stx.tx_call_hash.is_none() {
+                stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+                    [0xA5; iroha_crypto::Hash::LENGTH],
+                ));
+            }
             seed_domain_name_lease(&mut stx.world, &ALICE_ID, domain_id);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, stx)
@@ -1530,6 +1535,9 @@ pub mod query {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
+            stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+                [0xC7; iroha_crypto::Hash::LENGTH],
+            ));
 
             let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             seed_domain_name_lease(&mut stx.world, &ALICE_ID, &domain_id);

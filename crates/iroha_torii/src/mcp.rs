@@ -74,9 +74,18 @@ static MCP_ASYNC_JOBS: LazyLock<DashMap<String, AsyncJobRecord>> = LazyLock::new
 pub(crate) struct ToolSpec {
     pub(crate) name: String,
     pub(crate) description: String,
+    pub(crate) effect: ToolEffect,
     pub(crate) method: Method,
     pub(crate) path_template: String,
     pub(crate) input_schema: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolEffect {
+    Read,
+    BuildInstruction,
+    Write,
+    Operator,
 }
 
 impl ToolSpec {
@@ -207,9 +216,11 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             let input_schema =
                 build_input_schema(&spec, path, &parameters, operation.get("requestBody"));
 
+            let effect = openapi_tool_effect(path, method_key, operation);
             tools.push(ToolSpec {
                 name: format!("torii.{operation_id}"),
                 description,
+                effect,
                 method,
                 path_template: path.clone(),
                 input_schema,
@@ -228,10 +239,12 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_connect_session_delete_tool());
     tools.push(iroha_connect_status_tool());
     tools.push(iroha_vpn_profile_tool());
+    tools.push(iroha_vpn_quotes_create_tool());
     tools.push(iroha_vpn_sessions_create_tool());
     tools.push(iroha_vpn_sessions_get_tool());
     tools.push(iroha_vpn_sessions_delete_tool());
     tools.push(iroha_vpn_receipts_list_tool());
+    tools.push(iroha_vpn_receipts_submit_tool());
     tools.push(iroha_health_tool());
     tools.push(iroha_status_tool());
     tools.push(iroha_parameters_get_tool());
@@ -477,27 +490,12 @@ fn is_tool_allowed_by_policy(
 ) -> bool {
     use iroha_config::parameters::actual::ToriiMcpProfile;
 
-    let profile_allowed = match cfg.profile {
-        ToriiMcpProfile::Operator => true,
-        ToriiMcpProfile::Writer => true,
-        ToriiMcpProfile::ReadOnly => {
-            matches!(tool.method, Method::GET | Method::HEAD | Method::OPTIONS)
-                || is_musubi_pre_signing_instruction_tool(&tool.name)
-                || tool.name.contains(".query")
-                || tool.name.ends_with(".get")
-                || tool.name.ends_with(".list")
-                || tool.name.ends_with(".status")
-                || tool.name.ends_with(".health")
-                || tool.name.ends_with(".now")
-                || tool.name.ends_with(".capabilities")
-                || tool.name.ends_with(".leader")
-                || tool.name.ends_with(".phases")
-                || tool.name.ends_with(".params")
-                || tool.name.ends_with(".qc")
-                || tool.name.ends_with(".headers")
-                || tool.name.ends_with(".proof")
-                || is_offline_v2_compatibility_tool(&tool.name)
-        }
+    let profile_allowed = match (cfg.profile, tool.effect) {
+        (ToriiMcpProfile::Operator, _) => true,
+        (ToriiMcpProfile::Writer, ToolEffect::Operator) => false,
+        (ToriiMcpProfile::Writer, _) => true,
+        (ToriiMcpProfile::ReadOnly, ToolEffect::Read | ToolEffect::BuildInstruction) => true,
+        (ToriiMcpProfile::ReadOnly, ToolEffect::Write | ToolEffect::Operator) => false,
     };
     if !profile_allowed {
         return false;
@@ -522,6 +520,138 @@ fn is_tool_allowed_by_policy(
         .map(String::as_str)
         .map(str::trim)
         .any(|prefix| !prefix.is_empty() && tool.name.starts_with(prefix))
+}
+
+fn openapi_tool_effect(path: &str, method_key: &str, operation: &Map) -> ToolEffect {
+    let value = operation
+        .get(openapi::TOOL_EFFECT_EXTENSION)
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "OpenAPI operation {method_key} {path} is missing `{}`",
+                openapi::TOOL_EFFECT_EXTENSION
+            )
+        });
+    parse_tool_effect(value).unwrap_or_else(|| {
+        panic!(
+            "OpenAPI operation {method_key} {path} has invalid `{}` value `{value}`",
+            openapi::TOOL_EFFECT_EXTENSION
+        )
+    })
+}
+
+fn parse_tool_effect(value: &str) -> Option<ToolEffect> {
+    match value {
+        "read" => Some(ToolEffect::Read),
+        "build_instruction" => Some(ToolEffect::BuildInstruction),
+        "write" => Some(ToolEffect::Write),
+        "operator" => Some(ToolEffect::Operator),
+        _ => None,
+    }
+}
+
+fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
+    if is_operator_tool_name(name) {
+        return ToolEffect::Operator;
+    }
+    if is_musubi_pre_signing_instruction_tool(name) {
+        return ToolEffect::BuildInstruction;
+    }
+    if is_manual_read_tool_name(name) {
+        return ToolEffect::Read;
+    }
+    ToolEffect::Write
+}
+
+fn is_operator_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "iroha.gov.protected_namespaces.update"
+            | "iroha.gov.council.persist"
+            | "iroha.gov.council.replace"
+            | "iroha.sumeragi.evidence.submit"
+    )
+}
+
+fn is_manual_read_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "connect.ws.ticket"
+            | "connect.status"
+            | "iroha.connect.ws.ticket"
+            | "iroha.connect.status"
+            | "iroha.health"
+            | "iroha.accounts.qr"
+            | "iroha.accounts.transactions"
+            | "iroha.da.commitments.prove"
+            | "iroha.da.pin_intents.prove"
+            | "iroha.node.query_projection_checkpoint"
+            | "iroha.node.query_projection_checkpoint_plan"
+            | "iroha.node.query_projection_shard_catalog"
+            | "iroha.queries.submit"
+            | "iroha.sumeragi.new_view"
+            | "iroha.sumeragi.rbc.delivered"
+            | "iroha.sumeragi.rbc.sample"
+            | "iroha.sumeragi.vrf.commit"
+            | "iroha.sumeragi.vrf.reveal"
+    ) || is_offline_v2_compatibility_tool(name)
+        || name.ends_with(".get")
+        || name.ends_with(".list")
+        || name.ends_with(".query")
+        || name.ends_with(".status")
+        || name.ends_with(".profile")
+        || name.ends_with(".capabilities")
+        || name.ends_with(".versions")
+        || name.ends_with(".current")
+        || name.ends_with(".stats")
+        || name.ends_with(".audit")
+        || name.ends_with(".proof")
+        || name.ends_with(".bundle")
+        || name.ends_with(".bundles")
+        || name.ends_with(".retention")
+        || name.ends_with(".metrics")
+        || name.ends_with(".now")
+        || name.ends_with(".active")
+        || name.ends_with(".hash")
+        || name.ends_with(".headers")
+        || name.ends_with(".state_root")
+        || name.ends_with(".state_proof")
+        || name.ends_with(".block_proof")
+        || name.ends_with(".commit_certificates")
+        || name.ends_with(".validator_sets")
+        || name.ends_with(".rbc")
+        || name.ends_with(".pacemaker")
+        || name.ends_with(".phases")
+        || name.ends_with(".params")
+        || name.ends_with(".leader")
+        || name.ends_with(".qc")
+        || name.ends_with(".checkpoints")
+        || name.ends_with(".consensus_keys")
+        || name.ends_with(".bls_keys")
+        || name.ends_with(".key_lifecycle")
+        || name.ends_with(".telemetry")
+        || name.ends_with(".sessions")
+        || name.ends_with(".collectors")
+        || name.ends_with(".count")
+        || name.ends_with(".penalties")
+        || name.ends_with(".epoch")
+        || name.ends_with(".proof_policies")
+        || name.ends_with(".proof_policy_snapshot")
+        || name.ends_with(".verify")
+        || name.ends_with(".resolve")
+        || name.ends_with(".resolve_index")
+        || name.ends_with(".by_account")
+        || name.ends_with(".search")
+        || name.ends_with(".releases")
+        || name.ends_with(".versions")
+        || name.ends_with(".instructions")
+        || name.ends_with(".assets")
+        || name.ends_with(".permissions")
+        || name.ends_with(".portfolio")
+        || name.ends_with(".holders")
+        || name.ends_with(".definitions")
+        || name.ends_with(".chain.list")
+        || name.ends_with(".wait")
 }
 
 fn is_offline_v2_compatibility_tool(name: &str) -> bool {
@@ -750,6 +880,12 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        "iroha.vpn.quotes.create" => {
+            match dispatch_iroha_vpn_quotes_create(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
         "iroha.vpn.sessions.create" => {
             match dispatch_iroha_vpn_sessions_create(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -770,6 +906,12 @@ async fn handle_tools_call(
         }
         "iroha.vpn.receipts.list" => {
             match dispatch_iroha_vpn_receipts_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.vpn.receipts.submit" => {
+            match dispatch_iroha_vpn_receipts_submit(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2692,6 +2834,29 @@ async fn dispatch_iroha_vpn_profile(
     .await
 }
 
+async fn dispatch_iroha_vpn_quotes_create(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/vpn/quotes",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_vpn_sessions_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -2759,6 +2924,29 @@ async fn dispatch_iroha_vpn_sessions_delete(
         arguments.get("headers"),
         Vec::new(),
         None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_vpn_receipts_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/vpn/receipts",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -7798,10 +7986,11 @@ fn build_object_body_or_flat_shortcuts(
 
 fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
     if let Some(body) = arguments.get("body") {
-        return body
+        let body = body
             .as_object()
-            .map(|_| body.clone())
-            .ok_or_else(|| "`body` must be an object".to_owned());
+            .ok_or_else(|| "`body` must be an object".to_owned())?;
+        validate_accounts_onboard_raw_body(body)?;
+        return Ok(Value::Object(body.clone()));
     }
 
     let alias = arguments
@@ -7815,9 +8004,33 @@ fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
             "`account_id` or `public_key_hex` is required (or provide a raw `body`)".to_owned(),
         );
     }
+    if account_id.is_some() && public_key_hex.is_some() {
+        return Err(
+            "`account_id` and `public_key_hex` are mutually exclusive (or provide a raw `body`)"
+                .to_owned(),
+        );
+    }
+    let uaid = arguments
+        .get("uaid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`uaid` is required (or provide `body.uaid`)".to_owned())?;
+    if arguments.contains_key("identity") {
+        return Err(
+            "`identity` is not accepted; provide `identity_commitment_hex` instead".to_owned(),
+        );
+    }
+    if arguments.contains_key("identity_commitment_hex")
+        && arguments
+            .get("identity_commitment_hex")
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return Err("`identity_commitment_hex` must be a string when provided".to_owned());
+    }
 
     let mut payload = Map::new();
     payload.insert("alias".to_owned(), Value::String(alias.to_owned()));
+    payload.insert("uaid".to_owned(), Value::String(uaid.to_owned()));
     if let Some(account_id) = account_id {
         payload.insert(
             "account_id".to_owned(),
@@ -7831,14 +8044,14 @@ fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
         );
     }
 
-    if let Some(identity) = arguments.get("identity") {
-        let identity_obj = identity
-            .as_object()
-            .ok_or_else(|| "`identity` must be an object when provided".to_owned())?;
-        payload.insert("identity".to_owned(), Value::Object(identity_obj.clone()));
-    }
-    if let Some(uaid) = arguments.get("uaid").and_then(Value::as_str) {
-        payload.insert("uaid".to_owned(), Value::String(uaid.to_owned()));
+    if let Some(identity_commitment_hex) = arguments
+        .get("identity_commitment_hex")
+        .and_then(Value::as_str)
+    {
+        payload.insert(
+            "identity_commitment_hex".to_owned(),
+            Value::String(identity_commitment_hex.to_owned()),
+        );
     }
     if let Some(permissions) = arguments.get("permissions") {
         let permissions_array = permissions
@@ -7854,6 +8067,57 @@ fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
     }
 
     Ok(Value::Object(payload))
+}
+
+fn validate_accounts_onboard_raw_body(body: &Map) -> Result<(), String> {
+    if body.get("alias").and_then(Value::as_str).is_none() {
+        return Err("`body.alias` is required".to_owned());
+    }
+
+    let account_id = body.get("account_id").and_then(Value::as_str);
+    if body.contains_key("account_id") && account_id.is_none() {
+        return Err("`body.account_id` must be a string".to_owned());
+    }
+    let public_key_hex = body.get("public_key_hex").and_then(Value::as_str);
+    if body.contains_key("public_key_hex") && public_key_hex.is_none() {
+        return Err("`body.public_key_hex` must be a string".to_owned());
+    }
+    if account_id.is_none() && public_key_hex.is_none() {
+        return Err("`body.account_id` or `body.public_key_hex` is required".to_owned());
+    }
+    if account_id.is_some() && public_key_hex.is_some() {
+        return Err(
+            "`body.account_id` and `body.public_key_hex` are mutually exclusive".to_owned(),
+        );
+    }
+
+    if body.get("uaid").and_then(Value::as_str).is_none() {
+        return Err("`body.uaid` is required".to_owned());
+    }
+    if body.contains_key("identity") {
+        return Err(
+            "`body.identity` is not accepted; provide `body.identity_commitment_hex` instead"
+                .to_owned(),
+        );
+    }
+    if body.contains_key("identity_commitment_hex")
+        && body
+            .get("identity_commitment_hex")
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return Err("`body.identity_commitment_hex` must be a string".to_owned());
+    }
+    if let Some(permissions) = body.get("permissions") {
+        let permissions = permissions
+            .as_array()
+            .ok_or_else(|| "`body.permissions` must be an array when provided".to_owned())?;
+        if !permissions.iter().all(Value::is_string) {
+            return Err("`body.permissions` must contain only strings".to_owned());
+        }
+    }
+
+    Ok(())
 }
 
 fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
@@ -8180,12 +8444,7 @@ fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(),
 
     for (raw_name, raw_value) in headers_obj {
         let lowered = raw_name.to_ascii_lowercase();
-        if lowered == "content-length"
-            || lowered == "host"
-            || lowered == "connection"
-            || lowered == limits::REMOTE_ADDR_HEADER
-            || lowered == "x-forwarded-client-cert"
-        {
+        if is_reserved_extra_header(&lowered) {
             continue;
         }
         let header_name: HeaderName = raw_name
@@ -8198,6 +8457,25 @@ fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(),
         out.insert(header_name, header_value);
     }
     Ok(())
+}
+
+fn is_reserved_extra_header(lowered: &str) -> bool {
+    matches!(
+        lowered,
+        "authorization"
+            | "content-length"
+            | "host"
+            | "connection"
+            | "x-forwarded-client-cert"
+            | "x-iroha-timestamp-ms"
+            | "x-iroha-nonce"
+            | "x-iroha-witness"
+    ) || lowered == HEADER_X_API_TOKEN
+        || lowered == HEADER_X_IROHA_ACCOUNT
+        || lowered == HEADER_X_IROHA_SIGNATURE
+        || lowered == HEADER_X_IROHA_API_VERSION
+        || lowered == limits::REMOTE_ADDR_HEADER
+        || lowered.starts_with("x-iroha-internal-")
 }
 
 async fn response_to_value(response: Response) -> Result<Value, String> {
@@ -8388,6 +8666,7 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 fn connect_ws_ticket_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.ws.ticket".to_owned(),
+        effect: manual_tool_effect_from_name("connect.ws.ticket"),
         description: "Build Connect WebSocket join metadata (URL + auth headers/protocol token)."
             .to_owned(),
         method: Method::GET,
@@ -8425,6 +8704,7 @@ fn connect_ws_ticket_tool() -> ToolSpec {
 fn connect_session_create_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.create".to_owned(),
+        effect: manual_tool_effect_from_name("connect.session.create"),
         description: "Create an Iroha Connect session and return app/wallet tokens.".to_owned(),
         method: Method::POST,
         path_template: "/v1/connect/session".to_owned(),
@@ -8466,6 +8746,7 @@ fn connect_session_create_tool() -> ToolSpec {
 fn connect_session_create_and_ticket_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.create_and_ticket".to_owned(),
+        effect: manual_tool_effect_from_name("connect.session.create_and_ticket"),
         description: "Create an Iroha Connect session and immediately build WebSocket join metadata for a selected role.".to_owned(),
         method: Method::POST,
         path_template: "/v1/connect/session".to_owned(),
@@ -8517,6 +8798,7 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
 fn connect_session_delete_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.delete".to_owned(),
+        effect: manual_tool_effect_from_name("connect.session.delete"),
         description: "Delete/purge an Iroha Connect session by SID using the management token or an Authorization header.".to_owned(),
         method: Method::DELETE,
         path_template: "/v1/connect/session/{sid}".to_owned(),
@@ -8547,6 +8829,7 @@ fn connect_session_delete_tool() -> ToolSpec {
 fn connect_status_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.status".to_owned(),
+        effect: manual_tool_effect_from_name("connect.status"),
         description: "Get redacted aggregate Iroha Connect status, or token-gated per-session status when `sid` and `token_management` are provided.".to_owned(),
         method: Method::GET,
         path_template: "/v1/connect/status".to_owned(),
@@ -8611,6 +8894,7 @@ fn iroha_connect_status_tool() -> ToolSpec {
 fn iroha_vpn_profile_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.profile".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.profile"),
         description: "Fetch the public Sora VPN profile advertised by Torii.".to_owned(),
         method: Method::GET,
         path_template: "/v1/vpn/profile".to_owned(),
@@ -8628,10 +8912,49 @@ fn iroha_vpn_profile_tool() -> ToolSpec {
     }
 }
 
+fn iroha_vpn_quotes_create_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.quotes.create".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.quotes.create"),
+        description: "Create a signed Sora VPN XOR escrow quote for the active wallet account."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/vpn/quotes".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "exit_class": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.exit_class`."
+                },
+                "metering_public_key_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.metering_public_key_hex`; required so Torii can return a native `OpenVpnLeaseEscrow` skeleton bound to the client voucher key."
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw VPN quote request body. If provided, its own fields take precedence over flat shortcuts. Successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Optional request headers. Signed VPN quote routes normally use canonical `X-Iroha-*` headers."
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_vpn_sessions_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.sessions.create".to_owned(),
-        description: "Create a signed Sora VPN session for the active wallet account.".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.sessions.create"),
+        description:
+            "Create a signed Sora VPN session after committing the quoted XOR escrow payment."
+                .to_owned(),
         method: Method::POST,
         path_template: "/v1/vpn/sessions".to_owned(),
         input_schema: norito::json!({
@@ -8641,6 +8964,18 @@ fn iroha_vpn_sessions_create_tool() -> ToolSpec {
                 "exit_class": {
                     "type": "string",
                     "description": "Convenience shortcut for `body.exit_class`."
+                },
+                "quote_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.quote_id`."
+                },
+                "payment_tx_hash": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.payment_tx_hash`."
+                },
+                "metering_public_key_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.metering_public_key_hex`."
                 },
                 "body": {
                     "type": "object",
@@ -8661,6 +8996,7 @@ fn iroha_vpn_sessions_create_tool() -> ToolSpec {
 fn iroha_vpn_sessions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.sessions.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.sessions.get"),
         description: "Fetch the current status of a signed Sora VPN session.".to_owned(),
         method: Method::GET,
         path_template: "/v1/vpn/sessions/{session_id}".to_owned(),
@@ -8702,6 +9038,7 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
 fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.sessions.delete".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.sessions.delete"),
         description: "Delete a signed Sora VPN session and return its canonical receipt."
             .to_owned(),
         method: Method::DELETE,
@@ -8741,9 +9078,50 @@ fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
     }
 }
 
+fn iroha_vpn_receipts_submit_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.receipts.submit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.receipts.submit"),
+        description:
+            "Submit a relay receipt plus client usage voucher for Sora VPN XOR settlement."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/vpn/receipts".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "relay_receipt_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.relay_receipt_hex`."
+                },
+                "client_voucher_hex": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.client_voucher_hex`."
+                },
+                "lease_id_hex": {
+                    "type": "string",
+                    "description": "Optional convenience shortcut for `body.lease_id_hex`; defaults to the quote id when omitted."
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw VPN receipt settlement body. If provided, its own fields take precedence over flat shortcuts. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_vpn_receipts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.receipts.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.vpn.receipts.list"),
         description: "List canonical Sora VPN receipts for the active wallet account.".to_owned(),
         method: Method::GET,
         path_template: "/v1/vpn/receipts".to_owned(),
@@ -8764,6 +9142,7 @@ fn iroha_vpn_receipts_list_tool() -> ToolSpec {
 fn iroha_health_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.health".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.health"),
         description: "Get node liveness status (`/health`).".to_owned(),
         method: Method::GET,
         path_template: "/health".to_owned(),
@@ -8784,6 +9163,7 @@ fn iroha_health_tool() -> ToolSpec {
 fn iroha_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.status".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.status"),
         description: "Get node status snapshot (`/status`).".to_owned(),
         method: Method::GET,
         path_template: "/status".to_owned(),
@@ -8804,6 +9184,7 @@ fn iroha_status_tool() -> ToolSpec {
 fn iroha_parameters_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.parameters.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.parameters.get"),
         description: "Get node parameters snapshot (`/v1/parameters`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/parameters".to_owned(),
@@ -8824,6 +9205,7 @@ fn iroha_parameters_get_tool() -> ToolSpec {
 fn iroha_node_capabilities_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.capabilities".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.node.capabilities"),
         description: "Get node capability metadata (`/v1/node/capabilities`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/node/capabilities".to_owned(),
@@ -8844,6 +9226,7 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
 fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint_plan".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.node.query_projection_checkpoint_plan"),
         description:
             "Validate that uploaded shard refs exactly cover the canonical live query projection shard set and preview the rebuilt checkpoint (`/v1/node/query/projection/checkpoint/plan`)."
                 .to_owned(),
@@ -8898,6 +9281,7 @@ fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
 fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint_publish".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.node.query_projection_checkpoint_publish"),
         description:
             "Rebuild uploaded shard refs that exactly cover the canonical live shard set and persist the query projection checkpoint (`/v1/node/query/projection/checkpoint/publish`)."
                 .to_owned(),
@@ -8952,6 +9336,7 @@ fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
 fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_shard_catalog".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.node.query_projection_shard_catalog"),
         description:
             "Enumerate the live query projection shard catalog for one resource family (`/v1/node/query/projection/catalog/{resource}`)."
                 .to_owned(),
@@ -8993,6 +9378,7 @@ fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
 fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.node.query_projection_checkpoint"),
         description:
             "Fetch the latest query projection checkpoint descriptor (`/v1/node/query/projection/checkpoint`)."
                 .to_owned(),
@@ -9015,6 +9401,7 @@ fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
 fn iroha_time_now_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.time.now".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.time.now"),
         description: "Get node wall-clock snapshot (`/v1/time/now`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/time/now".to_owned(),
@@ -9035,6 +9422,7 @@ fn iroha_time_now_tool() -> ToolSpec {
 fn iroha_time_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.time.status".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.time.status"),
         description: "Get time synchronization status (`/v1/time/status`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/time/status".to_owned(),
@@ -9055,6 +9443,7 @@ fn iroha_time_status_tool() -> ToolSpec {
 fn iroha_api_versions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.api.versions".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.api.versions"),
         description: "List supported Torii API versions (`/v1/api/versions`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/api/versions".to_owned(),
@@ -9075,6 +9464,7 @@ fn iroha_api_versions_tool() -> ToolSpec {
 fn iroha_offline_transfers_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.transfers.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.offline.transfers.list"),
         description: "Compatibility alias for legacy offline transfer listings; returns Offline V2 readiness guidance with an empty listing shape.".to_owned(),
         method: Method::GET,
         path_template: "/v1/offline/transfers".to_owned(),
@@ -9105,6 +9495,7 @@ fn iroha_offline_transfers_list_tool() -> ToolSpec {
 fn iroha_offline_transfers_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.transfers.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.offline.transfers.get"),
         description: "Compatibility alias for legacy offline transfer bundle lookups (`bundle` shortcut supported); Offline V2 uses transaction instructions instead.".to_owned(),
         method: Method::GET,
         path_template: "/v1/offline/transfers/{bundle}".to_owned(),
@@ -9146,6 +9537,7 @@ fn iroha_offline_transfers_get_tool() -> ToolSpec {
 fn iroha_offline_transfers_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.transfers.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.offline.transfers.query"),
         description: "Compatibility alias for legacy offline transfer query envelopes; returns Offline V2 readiness guidance with an empty result shape.".to_owned(),
         method: Method::POST,
         path_template: "/v1/offline/transfers/query".to_owned(),
@@ -9186,6 +9578,7 @@ fn iroha_offline_transfers_query_tool() -> ToolSpec {
 fn iroha_offline_revocations_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.revocations.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.offline.revocations.list"),
         description: "Compatibility alias for legacy offline revocation listings; returns Offline V2 readiness guidance with an empty listing shape.".to_owned(),
         method: Method::GET,
         path_template: "/v1/offline/revocations".to_owned(),
@@ -9215,6 +9608,7 @@ fn iroha_offline_revocations_list_tool() -> ToolSpec {
 fn iroha_offline_revocations_bundle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.revocations.bundle".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.offline.revocations.bundle"),
         description: "Compatibility alias for legacy offline revocation bundles; Offline V2 revocation state is represented by note instructions and ledger state.".to_owned(),
         method: Method::POST,
         path_template: "/v1/offline/revocations/bundle".to_owned(),
@@ -9245,6 +9639,7 @@ fn iroha_offline_revocations_bundle_tool() -> ToolSpec {
 fn iroha_sumeragi_commit_certificates_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_certificates".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.commit_certificates"),
         description:
             "List recent commit certificates (`/v1/sumeragi/commit-certificates`) with optional `from`/`limit` query shortcuts."
                 .to_owned(),
@@ -9273,6 +9668,7 @@ fn iroha_sumeragi_commit_certificates_tool() -> ToolSpec {
 fn iroha_sumeragi_validator_sets_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.validator_sets.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.validator_sets.list"),
         description: "List validator set snapshots (`/v1/sumeragi/validator-sets`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/validator-sets".to_owned(),
@@ -9293,6 +9689,7 @@ fn iroha_sumeragi_validator_sets_list_tool() -> ToolSpec {
 fn iroha_sumeragi_validator_sets_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.validator_sets.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.validator_sets.get"),
         description: "Fetch validator set snapshot by height (`/v1/sumeragi/validator-sets/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/validator-sets/{height}".to_owned(),
@@ -9329,6 +9726,7 @@ fn iroha_sumeragi_validator_sets_get_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc"),
         description: "Fetch RBC status (`/v1/sumeragi/rbc`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/rbc".to_owned(),
@@ -9349,6 +9747,7 @@ fn iroha_sumeragi_rbc_tool() -> ToolSpec {
 fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.pacemaker".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.pacemaker"),
         description: "Fetch pacemaker status (`/v1/sumeragi/pacemaker`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/pacemaker".to_owned(),
@@ -9369,6 +9768,7 @@ fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
 fn iroha_sumeragi_phases_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.phases".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.phases"),
         description: "Fetch phase status (`/v1/sumeragi/phases`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/phases".to_owned(),
@@ -9389,6 +9789,7 @@ fn iroha_sumeragi_phases_tool() -> ToolSpec {
 fn iroha_sumeragi_params_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.params".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.params"),
         description: "Fetch Sumeragi parameters (`/v1/sumeragi/params`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/params".to_owned(),
@@ -9409,6 +9810,7 @@ fn iroha_sumeragi_params_tool() -> ToolSpec {
 fn iroha_sumeragi_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.status".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.status"),
         description: "Fetch Sumeragi status snapshot (`/v1/sumeragi/status`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/status".to_owned(),
@@ -9429,6 +9831,7 @@ fn iroha_sumeragi_status_tool() -> ToolSpec {
 fn iroha_sumeragi_leader_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.leader".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.leader"),
         description: "Fetch current Sumeragi leader info (`/v1/sumeragi/leader`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/leader".to_owned(),
@@ -9449,6 +9852,7 @@ fn iroha_sumeragi_leader_tool() -> ToolSpec {
 fn iroha_sumeragi_qc_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.qc".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.qc"),
         description: "Fetch latest Sumeragi quorum-certificate summary (`/v1/sumeragi/qc`)."
             .to_owned(),
         method: Method::GET,
@@ -9470,6 +9874,7 @@ fn iroha_sumeragi_qc_tool() -> ToolSpec {
 fn iroha_sumeragi_checkpoints_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.checkpoints".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.checkpoints"),
         description: "Fetch Sumeragi checkpoint summary (`/v1/sumeragi/checkpoints`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/checkpoints".to_owned(),
@@ -9490,6 +9895,7 @@ fn iroha_sumeragi_checkpoints_tool() -> ToolSpec {
 fn iroha_sumeragi_consensus_keys_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.consensus_keys".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.consensus_keys"),
         description: "Fetch active Sumeragi consensus keys (`/v1/sumeragi/consensus-keys`)."
             .to_owned(),
         method: Method::GET,
@@ -9511,6 +9917,7 @@ fn iroha_sumeragi_consensus_keys_tool() -> ToolSpec {
 fn iroha_sumeragi_bls_keys_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.bls_keys".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.bls_keys"),
         description: "Fetch Sumeragi BLS key roster (`/v1/sumeragi/bls_keys`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/bls_keys".to_owned(),
@@ -9531,6 +9938,7 @@ fn iroha_sumeragi_bls_keys_tool() -> ToolSpec {
 fn iroha_sumeragi_key_lifecycle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.key_lifecycle".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.key_lifecycle"),
         description: "Fetch Sumeragi key lifecycle snapshots (`/v1/sumeragi/key-lifecycle`)."
             .to_owned(),
         method: Method::GET,
@@ -9552,6 +9960,7 @@ fn iroha_sumeragi_key_lifecycle_tool() -> ToolSpec {
 fn iroha_sumeragi_telemetry_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.telemetry".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.telemetry"),
         description: "Fetch Sumeragi telemetry snapshot (`/v1/sumeragi/telemetry`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/telemetry".to_owned(),
@@ -9572,6 +9981,7 @@ fn iroha_sumeragi_telemetry_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.sessions".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.sessions"),
         description: "List Sumeragi RBC sessions (`/v1/sumeragi/rbc/sessions`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/rbc/sessions".to_owned(),
@@ -9592,6 +10002,7 @@ fn iroha_sumeragi_rbc_sessions_tool() -> ToolSpec {
 fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.commit_qc.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.commit_qc.get"),
         description: "Fetch Sumeragi commit QC by block hash (`/v1/sumeragi/commit_qc/{hash}`; `hash` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/commit_qc/{hash}".to_owned(),
@@ -9624,6 +10035,7 @@ fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
 fn iroha_sumeragi_collectors_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.collectors".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.collectors"),
         description: "Fetch Sumeragi collectors snapshot (`/v1/sumeragi/collectors`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/collectors".to_owned(),
@@ -9644,6 +10056,7 @@ fn iroha_sumeragi_collectors_tool() -> ToolSpec {
 fn iroha_sumeragi_evidence_count_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.evidence.count".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.evidence.count"),
         description: "Fetch Sumeragi evidence count (`/v1/sumeragi/evidence/count`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/evidence/count".to_owned(),
@@ -9664,6 +10077,7 @@ fn iroha_sumeragi_evidence_count_tool() -> ToolSpec {
 fn iroha_sumeragi_evidence_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.evidence.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.evidence.list"),
         description:
             "List Sumeragi evidence entries (`/v1/sumeragi/evidence`) with optional query shortcuts."
                 .to_owned(),
@@ -9690,6 +10104,7 @@ fn iroha_sumeragi_evidence_list_tool() -> ToolSpec {
 fn iroha_sumeragi_evidence_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.evidence.submit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.evidence.submit"),
         description:
             "Submit consensus evidence (`/v1/sumeragi/evidence/submit`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -9721,6 +10136,7 @@ fn iroha_sumeragi_evidence_submit_tool() -> ToolSpec {
 fn iroha_sumeragi_new_view_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.new_view".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.new_view"),
         description: "Fetch NEW_VIEW counters (`/v1/sumeragi/new_view/json`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/new_view/json".to_owned(),
@@ -9741,6 +10157,7 @@ fn iroha_sumeragi_new_view_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_delivered_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.delivered".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.delivered"),
         description: "Fetch RBC delivered status (`/v1/sumeragi/rbc/delivered/{height}/{view}`; `height`/`block_height` and `view` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
@@ -9782,6 +10199,7 @@ fn iroha_sumeragi_rbc_delivered_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.penalties".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.vrf.penalties"),
         description: "Fetch VRF penalties for an epoch (`/v1/sumeragi/vrf/penalties/{epoch}`; `epoch` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/vrf/penalties/{epoch}".to_owned(),
@@ -9814,6 +10232,7 @@ fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_epoch_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.epoch".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.vrf.epoch"),
         description: "Fetch VRF epoch snapshot (`/v1/sumeragi/vrf/epoch/{epoch}`; `epoch` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/vrf/epoch/{epoch}".to_owned(),
@@ -9846,6 +10265,7 @@ fn iroha_sumeragi_vrf_epoch_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_commit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.commit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.vrf.commit"),
         description: "Fetch latest VRF commit snapshot (`/v1/sumeragi/vrf/commit`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/vrf/commit".to_owned(),
@@ -9866,6 +10286,7 @@ fn iroha_sumeragi_vrf_commit_tool() -> ToolSpec {
 fn iroha_sumeragi_vrf_reveal_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.vrf.reveal".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.vrf.reveal"),
         description: "Fetch latest VRF reveal snapshot (`/v1/sumeragi/vrf/reveal`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/sumeragi/vrf/reveal".to_owned(),
@@ -9886,6 +10307,7 @@ fn iroha_sumeragi_vrf_reveal_tool() -> ToolSpec {
 fn iroha_sumeragi_rbc_sample_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.rbc.sample".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.sumeragi.rbc.sample"),
         description:
             "Fetch RBC sampled sessions (`/v1/sumeragi/rbc/sample`) with optional query shortcuts."
                 .to_owned(),
@@ -9912,6 +10334,7 @@ fn iroha_sumeragi_rbc_sample_tool() -> ToolSpec {
 fn iroha_da_ingest_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.ingest".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.ingest"),
         description:
             "Ingest DA payload (`/v1/da/ingest`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -9939,6 +10362,7 @@ fn iroha_da_ingest_tool() -> ToolSpec {
 fn iroha_da_proof_policies_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policies".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.proof_policies"),
         description: "Fetch DA proof policies (`/v1/da/proof_policies`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/da/proof_policies".to_owned(),
@@ -9959,6 +10383,7 @@ fn iroha_da_proof_policies_tool() -> ToolSpec {
 fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policy_snapshot".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.proof_policy_snapshot"),
         description: "Fetch DA proof policy snapshot (`/v1/da/proof_policy_snapshot`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/da/proof_policy_snapshot".to_owned(),
@@ -9979,6 +10404,7 @@ fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
 fn iroha_da_manifests_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.manifests.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.manifests.get"),
         description:
             "Fetch DA manifest payload (`/v1/da/manifests/{ticket}`; `ticket`/`manifest_ticket`/`id` shortcuts supported)."
                 .to_owned(),
@@ -10021,6 +10447,7 @@ fn iroha_da_manifests_get_tool() -> ToolSpec {
 fn iroha_da_commitments_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.commitments.list"),
         description:
             "List DA commitments (`/v1/da/commitments`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10048,6 +10475,7 @@ fn iroha_da_commitments_list_tool() -> ToolSpec {
 fn iroha_da_commitments_prove_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.prove".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.commitments.prove"),
         description:
             "Compute DA commitment proof placeholder (`/v1/da/commitments/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10075,6 +10503,7 @@ fn iroha_da_commitments_prove_tool() -> ToolSpec {
 fn iroha_da_commitments_verify_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.verify".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.commitments.verify"),
         description:
             "Verify DA commitment payload (`/v1/da/commitments/verify`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10102,6 +10531,7 @@ fn iroha_da_commitments_verify_tool() -> ToolSpec {
 fn iroha_da_pin_intents_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.pin_intents.list"),
         description:
             "List DA pin intents (`/v1/da/pin_intents`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10129,6 +10559,7 @@ fn iroha_da_pin_intents_list_tool() -> ToolSpec {
 fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.prove".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.pin_intents.prove"),
         description:
             "Fetch DA pin intent proof data (`/v1/da/pin_intents/prove`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10156,6 +10587,7 @@ fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
 fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.verify".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.da.pin_intents.verify"),
         description:
             "Verify DA pin intent proof payload (`/v1/da/pin_intents/verify`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10183,6 +10615,7 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
 fn iroha_runtime_abi_active_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.active".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.abi.active"),
         description: "Fetch the active runtime ABI version (`/v1/runtime/abi/active`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/runtime/abi/active".to_owned(),
@@ -10203,6 +10636,7 @@ fn iroha_runtime_abi_active_tool() -> ToolSpec {
 fn iroha_runtime_abi_hash_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.hash".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.abi.hash"),
         description: "Fetch active runtime ABI hash (`/v1/runtime/abi/hash`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/runtime/abi/hash".to_owned(),
@@ -10223,6 +10657,7 @@ fn iroha_runtime_abi_hash_tool() -> ToolSpec {
 fn iroha_runtime_metrics_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.metrics".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.metrics"),
         description: "Fetch runtime metrics (`/v1/runtime/metrics`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/runtime/metrics".to_owned(),
@@ -10243,6 +10678,7 @@ fn iroha_runtime_metrics_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.upgrades.list"),
         description: "List runtime upgrades (`/v1/runtime/upgrades`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/runtime/upgrades".to_owned(),
@@ -10263,6 +10699,7 @@ fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.propose".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.upgrades.propose"),
         description:
             "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10290,6 +10727,7 @@ fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.activate".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.upgrades.activate"),
         description: "Activate a runtime upgrade (`/v1/runtime/upgrades/activate/{id}`; `id`/`upgrade_id` shortcuts supported).".to_owned(),
         method: Method::POST,
         path_template: "/v1/runtime/upgrades/activate/{id}".to_owned(),
@@ -10331,6 +10769,7 @@ fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_cancel_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.cancel".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.runtime.upgrades.cancel"),
         description: "Cancel a runtime upgrade (`/v1/runtime/upgrades/cancel/{id}`; `id`/`upgrade_id` shortcuts supported).".to_owned(),
         method: Method::POST,
         path_template: "/v1/runtime/upgrades/cancel/{id}".to_owned(),
@@ -10372,6 +10811,7 @@ fn iroha_runtime_upgrades_cancel_tool() -> ToolSpec {
 fn iroha_ledger_headers_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.headers".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.ledger.headers"),
         description:
             "Fetch recent block headers (`/v1/ledger/headers`) with optional `from`/`limit` query shortcuts."
                 .to_owned(),
@@ -10400,6 +10840,7 @@ fn iroha_ledger_headers_tool() -> ToolSpec {
 fn iroha_ledger_state_root_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.state_root".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.ledger.state_root"),
         description: "Fetch execution state root by height (`/v1/ledger/state/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/ledger/state/{height}".to_owned(),
@@ -10436,6 +10877,7 @@ fn iroha_ledger_state_root_tool() -> ToolSpec {
 fn iroha_ledger_state_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.state_proof".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.ledger.state_proof"),
         description: "Fetch execution state proof (QC) by height (`/v1/ledger/state-proof/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/ledger/state-proof/{height}".to_owned(),
@@ -10472,6 +10914,7 @@ fn iroha_ledger_state_proof_tool() -> ToolSpec {
 fn iroha_ledger_block_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.block_proof".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.ledger.block_proof"),
         description: "Fetch block-entry Merkle proofs (`/v1/ledger/block/{height}/proof/{entry_hash}`; `height`/`block_height` and `entry_hash`/`tx_hash`/`hash` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/ledger/block/{height}/proof/{entry_hash}".to_owned(),
@@ -10521,6 +10964,7 @@ fn iroha_ledger_block_proof_tool() -> ToolSpec {
 fn iroha_bridge_finality_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.bridge.finality.proof".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.bridge.finality.proof"),
         description: "Fetch bridge finality proof by height (`/v1/bridge/finality/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/bridge/finality/{height}".to_owned(),
@@ -10557,6 +11001,7 @@ fn iroha_bridge_finality_proof_tool() -> ToolSpec {
 fn iroha_bridge_finality_bundle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.bridge.finality.bundle".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.bridge.finality.bundle"),
         description: "Fetch bridge finality commitment+justification bundle by height (`/v1/bridge/finality/bundle/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/bridge/finality/bundle/{height}".to_owned(),
@@ -10593,6 +11038,7 @@ fn iroha_bridge_finality_bundle_tool() -> ToolSpec {
 fn iroha_proofs_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.proofs.get"),
         description:
             "Fetch a proof record by id (`/v1/proofs/{id}`; `id`/`proof_id` shortcuts supported)."
                 .to_owned(),
@@ -10631,6 +11077,7 @@ fn iroha_proofs_get_tool() -> ToolSpec {
 fn iroha_proofs_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.proofs.query"),
         description:
             "Query proof records (`/v1/proofs/query`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
@@ -10658,6 +11105,7 @@ fn iroha_proofs_query_tool() -> ToolSpec {
 fn iroha_proofs_retention_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.retention".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.proofs.retention"),
         description: "Fetch proof retention status (`/v1/proofs/retention`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/proofs/retention".to_owned(),
@@ -10678,6 +11126,7 @@ fn iroha_proofs_retention_tool() -> ToolSpec {
 fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
         description: description.to_owned(),
         method: Method::POST,
         path_template: path_template.to_owned(),
@@ -10703,6 +11152,7 @@ fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> To
 fn iroha_gov_contract_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.contract.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.contract.get"),
         description:
             "Read the governance binding for one contract address (`/v1/gov/contracts/{contract_address}`; `contract_address` shortcut supported)."
                 .to_owned(),
@@ -10745,6 +11195,7 @@ fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
 fn iroha_gov_proposals_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.proposals.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.proposals.get"),
         description:
             "Fetch governance proposal detail (`/v1/gov/proposals/{id}`; `id`/`proposal_id` shortcuts supported)."
                 .to_owned(),
@@ -10783,6 +11234,7 @@ fn iroha_gov_proposals_get_tool() -> ToolSpec {
 fn iroha_gov_locks_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.locks.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.locks.get"),
         description:
             "Fetch governance lock records (`/v1/gov/locks/{rid}`; `rid`/`referendum_id` shortcuts supported)."
                 .to_owned(),
@@ -10825,6 +11277,7 @@ fn iroha_gov_locks_get_tool() -> ToolSpec {
 fn iroha_gov_referenda_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.referenda.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.referenda.get"),
         description:
             "Fetch governance referendum detail (`/v1/gov/referenda/{id}`; `id`/`referendum_id` shortcuts supported)."
                 .to_owned(),
@@ -10863,6 +11316,7 @@ fn iroha_gov_referenda_get_tool() -> ToolSpec {
 fn iroha_gov_tally_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.tally.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.tally.get"),
         description:
             "Fetch governance tally detail (`/v1/gov/tally/{id}`; `id`/`tally_id` shortcuts supported)."
                 .to_owned(),
@@ -10933,6 +11387,7 @@ fn iroha_gov_ballots_plain_tool() -> ToolSpec {
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.protected_namespaces.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.protected_namespaces.list"),
         description: "List protected governance namespaces (`/v1/gov/protected-namespaces`)."
             .to_owned(),
         method: Method::GET,
@@ -10962,6 +11417,7 @@ fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
 fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.unlocks.stats".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.unlocks.stats"),
         description: "Fetch governance unlock statistics (`/v1/gov/unlocks/stats`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/gov/unlocks/stats".to_owned(),
@@ -10982,6 +11438,7 @@ fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
 fn iroha_gov_council_current_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.council.current".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.council.current"),
         description: "Fetch current governance council set (`/v1/gov/council/current`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/gov/council/current".to_owned(),
@@ -11018,6 +11475,7 @@ fn iroha_gov_council_replace_tool() -> ToolSpec {
 fn iroha_gov_council_audit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.council.audit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.gov.council.audit"),
         description: "Fetch governance council derivation audit data (`/v1/gov/council/audit`)."
             .to_owned(),
         method: Method::GET,
@@ -11063,6 +11521,7 @@ fn iroha_gov_finalize_tool() -> ToolSpec {
 fn iroha_aliases_resolve_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.aliases.resolve"),
         description: "Resolve an alias to its account binding (`/v1/aliases/resolve`).".to_owned(),
         method: Method::POST,
         path_template: "/v1/aliases/resolve".to_owned(),
@@ -11092,6 +11551,7 @@ fn iroha_aliases_resolve_tool() -> ToolSpec {
 fn iroha_aliases_resolve_index_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve_index".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.aliases.resolve_index"),
         description: "Resolve an alias index to its account binding (`/v1/aliases/resolve_index`)."
             .to_owned(),
         method: Method::POST,
@@ -11122,6 +11582,7 @@ fn iroha_aliases_resolve_index_tool() -> ToolSpec {
 fn iroha_aliases_by_account_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.by_account".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.aliases.by_account"),
         description: "List aliases bound to an account (`/v1/aliases/by_account`).".to_owned(),
         method: Method::POST,
         path_template: "/v1/aliases/by_account".to_owned(),
@@ -11159,6 +11620,7 @@ fn iroha_aliases_by_account_tool() -> ToolSpec {
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
         description: description.to_owned(),
         method: Method::POST,
         path_template: path_template.to_owned(),
@@ -11184,6 +11646,7 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
 fn iroha_contracts_code_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.code.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.contracts.code.get"),
         description: "Fetch contract code metadata (`code_hash` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/contracts/code/{code_hash}".to_owned(),
@@ -11220,6 +11683,7 @@ fn iroha_contracts_code_get_tool() -> ToolSpec {
 fn iroha_contracts_code_bytes_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.code.bytes.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.contracts.code.bytes.get"),
         description:
             "Fetch contract code bytes (`/v1/contracts/code-bytes/{code_hash}`; `code_hash` shortcut supported)."
                 .to_owned(),
@@ -11266,6 +11730,7 @@ fn iroha_contracts_deploy_tool() -> ToolSpec {
 fn iroha_contracts_deploy_bundle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.deploy_bundle".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.contracts.deploy_bundle"),
         description:
             "Deploy a contract bundle (`/v1/contracts/deploy-bundle`; set `dry_run=true` for planning)."
                 .to_owned(),
@@ -11302,6 +11767,7 @@ fn iroha_contracts_deploy_bundle_tool() -> ToolSpec {
 fn iroha_contracts_deploy_bundles_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.deploy_bundles.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.contracts.deploy_bundles.get"),
         description:
             "Fetch a persisted contract deploy-bundle receipt (`bundle_digest` shortcut supported)."
                 .to_owned(),
@@ -11348,6 +11814,7 @@ fn iroha_contracts_call_tool() -> ToolSpec {
 fn iroha_contracts_call_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.call_and_wait".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.contracts.call_and_wait"),
         description:
             "Call a deployed contract instance and poll pipeline status until a terminal state."
                 .to_owned(),
@@ -11400,6 +11867,7 @@ fn iroha_contracts_call_and_wait_tool() -> ToolSpec {
 fn iroha_contracts_state_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.state.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.contracts.state.get"),
         description:
             "Read contract state (`/v1/contracts/state`) using path/paths/prefix query modes."
                 .to_owned(),
@@ -11432,6 +11900,7 @@ fn iroha_contracts_state_get_tool() -> ToolSpec {
 fn iroha_accounts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.list"),
         description:
             "List accounts with optional query filters/pagination (supports flat top-level query args)."
                 .to_owned(),
@@ -11461,6 +11930,7 @@ fn iroha_accounts_list_tool() -> ToolSpec {
 fn iroha_accounts_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.get"),
         description:
             "Fetch canonical account detail from the same-route account read (`account_id` shortcut supported). Defaults to JSON; set accept=application/x-norito for typed Norito."
                 .to_owned(),
@@ -11495,6 +11965,7 @@ fn iroha_accounts_get_tool() -> ToolSpec {
 fn iroha_accounts_qr_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.qr".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.qr"),
         description: "Fetch explorer account QR code (`account_id` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/accounts/{account_id}/qr".to_owned(),
@@ -11527,6 +11998,7 @@ fn iroha_accounts_qr_tool() -> ToolSpec {
 fn iroha_accounts_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.query"),
         description:
             "Query accounts with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
@@ -11563,6 +12035,7 @@ fn iroha_accounts_query_tool() -> ToolSpec {
 fn iroha_accounts_onboard_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.onboard".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.onboard"),
         description:
             "Onboard an account (`alias` + `account_id` or `public_key_hex` shortcuts supported when `body` is omitted)."
                 .to_owned(),
@@ -11571,6 +12044,16 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "anyOf": [
+                { "required": ["body"] },
+                {
+                    "required": ["alias", "uaid"],
+                    "oneOf": [
+                        { "required": ["account_id"] },
+                        { "required": ["public_key_hex"] }
+                    ]
+                }
+            ],
             "properties": {
                 "alias": {
                     "type": "string",
@@ -11584,14 +12067,13 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
                     "type": "string",
                     "description": "Convenience shortcut for `body.public_key_hex` for Ed25519 public key bytes."
                 },
-                "identity": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Optional onboarding identity metadata."
+                "identity_commitment_hex": {
+                    "type": "string",
+                    "description": "Optional 64-hex digest commitment for off-chain identity metadata."
                 },
                 "uaid": {
                     "type": "string",
-                    "description": "Optional UAID literal."
+                    "description": "Required UAID literal for shortcut onboarding."
                 },
                 "permissions": {
                     "type": "array",
@@ -11616,6 +12098,7 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
 fn iroha_accounts_faucet_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.faucet".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.faucet"),
         description:
             "Request starter testnet funds for an existing account (`account_id` shortcut supported when `body` is omitted)."
                 .to_owned(),
@@ -11647,6 +12130,7 @@ fn iroha_accounts_faucet_tool() -> ToolSpec {
 fn iroha_account_transactions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.transactions".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.transactions"),
         description:
             "List transactions authored by a specific account (`account_id` shortcut supported)."
                 .to_owned(),
@@ -11685,6 +12169,7 @@ fn iroha_account_transactions_tool() -> ToolSpec {
 fn iroha_account_transactions_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.transactions.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.transactions.query"),
         description: "Query transactions authored by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).".to_owned(),
         method: Method::POST,
         path_template: "/v1/accounts/{account_id}/transactions/query".to_owned(),
@@ -11731,6 +12216,7 @@ fn iroha_account_transactions_query_tool() -> ToolSpec {
 fn iroha_account_assets_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.assets".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.assets"),
         description: "List assets held by a specific account (`account_id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
@@ -11771,6 +12257,7 @@ fn iroha_account_assets_tool() -> ToolSpec {
 fn iroha_account_assets_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.assets.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.assets.query"),
         description: "Query assets held by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).".to_owned(),
         method: Method::POST,
         path_template: "/v1/accounts/{account_id}/assets/query".to_owned(),
@@ -11817,6 +12304,7 @@ fn iroha_account_assets_query_tool() -> ToolSpec {
 fn iroha_account_permissions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.permissions".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.permissions"),
         description:
             "List permissions granted to a specific account (`account_id` shortcut supported)."
                 .to_owned(),
@@ -11851,6 +12339,7 @@ fn iroha_account_permissions_tool() -> ToolSpec {
 fn iroha_account_portfolio_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.portfolio".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.portfolio"),
         description: "Fetch a UAID portfolio snapshot (`uaid` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/accounts/{uaid}/portfolio".to_owned(),
@@ -11891,6 +12380,7 @@ fn iroha_account_portfolio_tool() -> ToolSpec {
 fn iroha_domains_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.domains.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.domains.list"),
         description: "List domains with optional flat pagination/query fields.".to_owned(),
         method: Method::GET,
         path_template: "/v1/domains".to_owned(),
@@ -11917,6 +12407,7 @@ fn iroha_domains_list_tool() -> ToolSpec {
 fn iroha_domains_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.domains.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.domains.get"),
         description: "Fetch explorer domain detail (`domain_id` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/domains/{domain_id}".to_owned(),
@@ -11953,6 +12444,7 @@ fn iroha_domains_get_tool() -> ToolSpec {
 fn iroha_domains_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.domains.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.domains.query"),
         description:
             "Query domains with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
@@ -11989,6 +12481,7 @@ fn iroha_domains_query_tool() -> ToolSpec {
 fn iroha_musubi_search_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.musubi.search".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.musubi.search"),
         description: "Search Musubi Kotodama packages by namespace and text query.".to_owned(),
         method: Method::GET,
         path_template: "/v1/musubi/packages".to_owned(),
@@ -12028,6 +12521,7 @@ fn iroha_musubi_search_tool() -> ToolSpec {
 fn iroha_musubi_release_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.musubi.release.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.musubi.release.get"),
         description: "Fetch one Musubi release by `namespace/name@version`.".to_owned(),
         method: Method::GET,
         path_template: "/v1/musubi/release".to_owned(),
@@ -12041,6 +12535,7 @@ fn iroha_musubi_release_get_tool() -> ToolSpec {
 fn iroha_musubi_package_releases_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.musubi.package.releases".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.musubi.package.releases"),
         description: "List Musubi release summaries for a package id.".to_owned(),
         method: Method::GET,
         path_template: "/v1/musubi/releases".to_owned(),
@@ -12054,6 +12549,7 @@ fn iroha_musubi_package_releases_tool() -> ToolSpec {
 fn iroha_musubi_package_versions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.musubi.package.versions".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.musubi.package.versions"),
         description: "List registered Musubi versions for a package id.".to_owned(),
         method: Method::GET,
         path_template: "/v1/musubi/versions".to_owned(),
@@ -12067,6 +12563,7 @@ fn iroha_musubi_package_versions_tool() -> ToolSpec {
 fn iroha_musubi_alias_resolve_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.musubi.alias.resolve".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.musubi.alias.resolve"),
         description: "Resolve a curated Musubi short alias to its canonical package id.".to_owned(),
         method: Method::GET,
         path_template: "/v1/musubi/aliases/{alias}".to_owned(),
@@ -12237,6 +12734,7 @@ fn musubi_instruction_tool(
 
     ToolSpec {
         name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
         description: description.to_owned(),
         method: Method::POST,
         path_template: path_template.to_owned(),
@@ -12247,6 +12745,7 @@ fn musubi_instruction_tool(
 fn iroha_subscriptions_plans_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.plans.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.subscriptions.plans.list"),
         description: "List subscription plans with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/subscriptions/plans".to_owned(),
@@ -12274,6 +12773,7 @@ fn iroha_subscriptions_plans_list_tool() -> ToolSpec {
 fn iroha_subscriptions_plans_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.plans.create".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.subscriptions.plans.create"),
         description: "Create a subscription plan (`body` payload).".to_owned(),
         method: Method::POST,
         path_template: "/v1/subscriptions/plans".to_owned(),
@@ -12299,6 +12799,7 @@ fn iroha_subscriptions_plans_create_tool() -> ToolSpec {
 fn iroha_subscriptions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.subscriptions.list"),
         description: "List subscriptions with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/subscriptions".to_owned(),
@@ -12328,6 +12829,7 @@ fn iroha_subscriptions_list_tool() -> ToolSpec {
 fn iroha_subscriptions_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.create".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.subscriptions.create"),
         description: "Create a subscription (`body` payload).".to_owned(),
         method: Method::POST,
         path_template: "/v1/subscriptions".to_owned(),
@@ -12353,6 +12855,7 @@ fn iroha_subscriptions_create_tool() -> ToolSpec {
 fn iroha_subscriptions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.subscriptions.get"),
         description: "Fetch subscription detail (`subscription_id`/`id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
@@ -12449,6 +12952,7 @@ fn iroha_subscription_action_tool(
 ) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
         description: description.to_owned(),
         method: Method::POST,
         path_template: format!("/v1/subscriptions/{{subscription_id}}/{action}"),
@@ -12490,6 +12994,7 @@ fn iroha_subscription_action_tool(
 fn iroha_asset_definitions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.definitions".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.definitions"),
         description:
             "List asset definitions with optional flat pagination/sort/filter query fields."
                 .to_owned(),
@@ -12520,6 +13025,7 @@ fn iroha_asset_definitions_tool() -> ToolSpec {
 fn iroha_asset_definitions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.definitions.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.definitions.get"),
         description: "Fetch explorer asset definition detail (`definition_id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
@@ -12553,6 +13059,7 @@ fn iroha_asset_definitions_get_tool() -> ToolSpec {
 fn iroha_asset_definitions_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.definitions.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.definitions.query"),
         description: "Query asset definitions with QueryEnvelope shortcuts when `body` is omitted."
             .to_owned(),
         method: Method::POST,
@@ -12588,6 +13095,7 @@ fn iroha_asset_definitions_query_tool() -> ToolSpec {
 fn iroha_asset_holders_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.holders".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.holders"),
         description: "List asset holders for one definition (`definition_id` shortcut supported)."
             .to_owned(),
         method: Method::GET,
@@ -12628,6 +13136,7 @@ fn iroha_asset_holders_tool() -> ToolSpec {
 fn iroha_asset_holders_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.holders.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.holders.query"),
         description: "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported). Supports exact aggregate DSL queries, for example PAYNET PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. Production aggregate reads serve local DA projection shards as `query_source=projection_da_cache` and hydrate missing shards from approved SoraFS providers as `query_source=projection_da_hydrated`; incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.".to_owned(),
         method: Method::POST,
         path_template: "/v1/assets/{definition_id}/holders/query".to_owned(),
@@ -12674,6 +13183,7 @@ fn iroha_asset_holders_query_tool() -> ToolSpec {
 fn iroha_assets_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.list"),
         description: "List explorer assets with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/assets".to_owned(),
@@ -12703,6 +13213,7 @@ fn iroha_assets_list_tool() -> ToolSpec {
 fn iroha_assets_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.assets.get"),
         description: "Fetch explorer asset detail (`asset_id` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/assets/{asset_id}".to_owned(),
@@ -12739,6 +13250,7 @@ fn iroha_assets_get_tool() -> ToolSpec {
 fn iroha_nfts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.nfts.list"),
         description: "List explorer NFTs with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/nfts".to_owned(),
@@ -12767,6 +13279,7 @@ fn iroha_nfts_list_tool() -> ToolSpec {
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.chain.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.nfts.chain.list"),
         description: "List NFTs from chain state (`/v1/nfts`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/nfts".to_owned(),
@@ -12787,6 +13300,7 @@ fn iroha_nfts_chain_list_tool() -> ToolSpec {
 fn iroha_nfts_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.nfts.get"),
         description: "Fetch explorer NFT detail (`nft_id` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/nfts/{nft_id}".to_owned(),
@@ -12823,6 +13337,7 @@ fn iroha_nfts_get_tool() -> ToolSpec {
 fn iroha_nfts_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.nfts.query"),
         description:
             "Query NFTs with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
@@ -12859,6 +13374,7 @@ fn iroha_nfts_query_tool() -> ToolSpec {
 fn iroha_rwas_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.rwas.list"),
         description: "List explorer RWA lots with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/rwas".to_owned(),
@@ -12887,6 +13403,7 @@ fn iroha_rwas_list_tool() -> ToolSpec {
 fn iroha_rwas_chain_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.chain.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.rwas.chain.list"),
         description: "List RWA lots from chain state (`/v1/rwas`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/rwas".to_owned(),
@@ -12907,6 +13424,7 @@ fn iroha_rwas_chain_list_tool() -> ToolSpec {
 fn iroha_rwas_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.rwas.get"),
         description: "Fetch explorer RWA detail (`rwa_id` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/rwas/{rwa_id}".to_owned(),
@@ -12943,6 +13461,7 @@ fn iroha_rwas_get_tool() -> ToolSpec {
 fn iroha_rwas_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.query".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.rwas.query"),
         description:
             "Query RWA lots with filter/select/sort/pagination envelope (flat shortcuts supported)."
                 .to_owned(),
@@ -12979,6 +13498,7 @@ fn iroha_rwas_query_tool() -> ToolSpec {
 fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.iso20022.pacs008.submit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.iso20022.pacs008.submit"),
         description:
             "Submit an ISO 20022 pacs.008 payload (`message_xml`/`xml` shortcuts supported)."
                 .to_owned(),
@@ -13020,6 +13540,7 @@ fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
 fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.iso20022.pacs009.submit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.iso20022.pacs009.submit"),
         description:
             "Submit an ISO 20022 pacs.009 payload (`message_xml`/`xml` shortcuts supported)."
                 .to_owned(),
@@ -13061,6 +13582,7 @@ fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
 fn iroha_iso20022_status_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.iso20022.status.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.iso20022.status.get"),
         description: "Fetch ISO 20022 bridge status by message id (`msg_id`/`message_id` shortcuts supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/iso20022/status/{msg_id}".to_owned(),
@@ -13101,6 +13623,7 @@ fn iroha_iso20022_status_get_tool() -> ToolSpec {
 fn iroha_queries_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.queries.submit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.queries.submit"),
         description:
             "Submit a versioned SignedQuery encoded as canonical Norito bytes in `body_base64`."
                 .to_owned(),
@@ -13128,6 +13651,7 @@ fn iroha_queries_submit_tool() -> ToolSpec {
 fn iroha_transactions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.transactions.list"),
         description: "List explorer transactions with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/transactions".to_owned(),
@@ -13158,6 +13682,7 @@ fn iroha_transactions_list_tool() -> ToolSpec {
 fn iroha_transactions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.transactions.get"),
         description: "Fetch explorer transaction detail (`hash` shortcut supported).".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/transactions/{hash}".to_owned(),
@@ -13201,6 +13726,7 @@ fn iroha_transactions_get_tool() -> ToolSpec {
 fn iroha_instructions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.instructions.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.instructions.list"),
         description: "List explorer instructions with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/instructions".to_owned(),
@@ -13234,6 +13760,7 @@ fn iroha_instructions_list_tool() -> ToolSpec {
 fn iroha_instructions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.instructions.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.instructions.get"),
         description: "Fetch explorer instruction detail (`hash` + `index` shortcuts supported)."
             .to_owned(),
         method: Method::GET,
@@ -13287,6 +13814,7 @@ fn iroha_instructions_get_tool() -> ToolSpec {
 fn iroha_blocks_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.blocks.list".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.blocks.list"),
         description: "List explorer blocks with optional flat query filters.".to_owned(),
         method: Method::GET,
         path_template: "/v1/explorer/blocks".to_owned(),
@@ -13313,6 +13841,7 @@ fn iroha_blocks_list_tool() -> ToolSpec {
 fn iroha_blocks_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.blocks.get".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.blocks.get"),
         description:
             "Fetch explorer block detail (`identifier` shortcut and block aliases supported)."
                 .to_owned(),
@@ -13357,6 +13886,7 @@ fn iroha_blocks_get_tool() -> ToolSpec {
 fn iroha_transactions_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.transactions.submit"),
         description: "Submit a versioned SignedTransaction encoded as canonical Norito bytes in `body_base64`.".to_owned(),
         method: Method::POST,
         path_template: "/transaction".to_owned(),
@@ -13382,6 +13912,7 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
 fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit_and_wait".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
         description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
         method: Method::POST,
         path_template: "/transaction".to_owned(),
@@ -13432,6 +13963,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
 fn iroha_transactions_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.wait".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.transactions.wait"),
         description:
             "Poll typed pipeline status for an existing transaction hash until a terminal state. Defaults to JSON; set status_accept=application/x-norito for typed Norito."
                 .to_owned(),
@@ -13490,6 +14022,7 @@ fn iroha_transactions_wait_tool() -> ToolSpec {
 fn iroha_transactions_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.status".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.transactions.status"),
         description:
             "Get the latest typed pipeline status for a submitted transaction hash (`hash`/`transaction_hash` shortcuts supported). Defaults to JSON; set accept=application/x-norito for typed Norito."
                 .to_owned(),
@@ -13582,12 +14115,29 @@ mod tests {
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
-    fn sample_tool(name: &str, method: Method) -> ToolSpec {
+    fn sample_tool(name: &str, method: Method, effect: ToolEffect) -> ToolSpec {
         ToolSpec {
             name: name.to_owned(),
+            effect,
             description: "sample".to_owned(),
             method,
             path_template: "/v1/sample".to_owned(),
+            input_schema: norito::json!({ "type": "object" }),
+        }
+    }
+
+    fn sample_tool_at(
+        name: &str,
+        method: Method,
+        path_template: &str,
+        effect: ToolEffect,
+    ) -> ToolSpec {
+        ToolSpec {
+            name: name.to_owned(),
+            effect,
+            description: "sample".to_owned(),
+            method,
+            path_template: path_template.to_owned(),
             input_schema: norito::json!({ "type": "object" }),
         }
     }
@@ -13659,7 +14209,7 @@ mod tests {
 
     #[test]
     fn capabilities_payload_includes_toolset_version() {
-        let tool = sample_tool("iroha.health", Method::GET);
+        let tool = sample_tool("iroha.health", Method::GET, ToolEffect::Read);
         let refs = vec![&tool];
         let payload = capabilities_payload(&refs);
         let toolset_version = payload
@@ -13732,6 +14282,7 @@ mod tests {
     fn descriptor_publishes_openai_compatible_input_schema() {
         let tool = ToolSpec {
             name: "iroha.connect.session.delete".to_owned(),
+            effect: ToolEffect::Write,
             description: "Delete/purge an Iroha Connect session by SID.".to_owned(),
             method: Method::DELETE,
             path_template: "/v1/connect/session/{sid}".to_owned(),
@@ -13788,13 +14339,99 @@ mod tests {
     fn read_only_policy_blocks_mutating_tools() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::ReadOnly;
-        let read_tool = sample_tool("iroha.accounts.get", Method::GET);
-        let instruction_builder_tool =
-            sample_tool("iroha.musubi.instructions.yank_release", Method::POST);
-        let write_tool = sample_tool("iroha.transactions.submit", Method::POST);
+        let read_tool = sample_tool("iroha.accounts.get", Method::GET, ToolEffect::Read);
+        let instruction_builder_tool = sample_tool(
+            "iroha.musubi.instructions.yank_release",
+            Method::POST,
+            ToolEffect::BuildInstruction,
+        );
+        let write_tool = sample_tool("iroha.transactions.submit", Method::POST, ToolEffect::Write);
+        let name_only_query_tool = sample_tool("iroha.fake.query", Method::POST, ToolEffect::Write);
+        let explicit_query_tool = sample_tool_at(
+            "iroha.queries.submit",
+            Method::POST,
+            "/query",
+            ToolEffect::Read,
+        );
         assert!(is_tool_allowed_by_policy(&cfg, &read_tool));
         assert!(is_tool_allowed_by_policy(&cfg, &instruction_builder_tool));
+        assert!(is_tool_allowed_by_policy(&cfg, &explicit_query_tool));
+        assert!(!is_tool_allowed_by_policy(&cfg, &name_only_query_tool));
         assert!(!is_tool_allowed_by_policy(&cfg, &write_tool));
+    }
+
+    #[test]
+    fn openapi_tool_effects_drive_policy() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+        let mut read_only_cfg = cfg.clone();
+        read_only_cfg.profile = ToriiMcpProfile::ReadOnly;
+
+        let query = tools
+            .iter()
+            .find(|tool| tool.method == Method::POST && tool.path_template == "/query")
+            .expect("query tool");
+        assert_eq!(query.effect, ToolEffect::Read);
+        assert!(is_tool_allowed_by_policy(&read_only_cfg, query));
+
+        let protected_update = tools
+            .iter()
+            .find(|tool| {
+                tool.method == Method::POST && tool.path_template == "/v1/gov/protected-namespaces"
+            })
+            .expect("protected namespace update tool");
+        assert_eq!(protected_update.effect, ToolEffect::Operator);
+        assert!(!is_tool_allowed_by_policy(&read_only_cfg, protected_update));
+    }
+
+    #[test]
+    fn get_tools_are_declared_read_effect() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::Operator;
+        cfg.expose_operator_routes = true;
+        let tools = build_tool_specs(&cfg);
+
+        for tool in tools.iter().filter(|tool| tool.method == Method::GET) {
+            assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
+        }
+    }
+
+    #[test]
+    fn mcp_policy_keeps_operator_tools_operator_only() {
+        let protected_update = sample_tool_at(
+            "iroha.gov.protected_namespaces.update",
+            Method::POST,
+            "/v1/gov/protected-namespaces",
+            ToolEffect::Operator,
+        );
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::ReadOnly;
+        assert!(!is_tool_allowed_by_policy(&cfg, &protected_update));
+        cfg.profile = ToriiMcpProfile::Writer;
+        assert!(!is_tool_allowed_by_policy(&cfg, &protected_update));
+        cfg.profile = ToriiMcpProfile::Operator;
+        assert!(is_tool_allowed_by_policy(&cfg, &protected_update));
+    }
+
+    #[test]
+    fn manual_sumeragi_snapshot_tools_remain_read_only() {
+        let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+        cfg.profile = ToriiMcpProfile::ReadOnly;
+
+        for tool in [
+            iroha_sumeragi_vrf_commit_tool(),
+            iroha_sumeragi_vrf_reveal_tool(),
+            iroha_sumeragi_rbc_sample_tool(),
+        ] {
+            assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
+            assert!(is_tool_allowed_by_policy(&cfg, &tool), "{}", tool.name);
+        }
+
+        let submit = iroha_sumeragi_evidence_submit_tool();
+        assert_eq!(submit.effect, ToolEffect::Operator);
+        assert!(!is_tool_allowed_by_policy(&cfg, &submit));
     }
 
     #[test]
@@ -13817,6 +14454,7 @@ mod tests {
     fn tool_descriptor_sanitizes_top_level_function_schema_keywords() {
         let tool = ToolSpec {
             name: "iroha.test.invalid_schema".to_owned(),
+            effect: ToolEffect::Write,
             description: "sample".to_owned(),
             method: Method::POST,
             path_template: "/v1/test".to_owned(),
@@ -13875,7 +14513,16 @@ mod tests {
         let headers = norito::json!({
             "x-test": "1",
             "x-iroha-remote-addr": "127.0.0.1",
-            "x-forwarded-client-cert": "present"
+            "x-forwarded-client-cert": "present",
+            "authorization": "Bearer injected",
+            "x-api-token": "injected",
+            "x-iroha-account": "injected",
+            "x-iroha-signature": "injected",
+            "x-iroha-api-version": "injected",
+            "x-iroha-timestamp-ms": "injected",
+            "x-iroha-nonce": "injected",
+            "x-iroha-witness": "injected",
+            "x-iroha-internal-route": "injected"
         });
 
         apply_extra_headers(&mut out, Some(&headers)).expect("headers accepted");
@@ -13886,6 +14533,15 @@ mod tests {
         );
         assert!(!out.contains_key("x-iroha-remote-addr"));
         assert!(!out.contains_key("x-forwarded-client-cert"));
+        assert!(!out.contains_key("authorization"));
+        assert!(!out.contains_key("x-api-token"));
+        assert!(!out.contains_key("x-iroha-account"));
+        assert!(!out.contains_key("x-iroha-signature"));
+        assert!(!out.contains_key("x-iroha-api-version"));
+        assert!(!out.contains_key("x-iroha-timestamp-ms"));
+        assert!(!out.contains_key("x-iroha-nonce"));
+        assert!(!out.contains_key("x-iroha-witness"));
+        assert!(!out.contains_key("x-iroha-internal-route"));
     }
 
     #[tokio::test]
@@ -14985,6 +15641,16 @@ mod tests {
         assert_eq!(profile.name, "iroha.vpn.profile");
         assert_eq!(profile.path_template, "/v1/vpn/profile");
 
+        let quote = iroha_vpn_quotes_create_tool();
+        assert_eq!(quote.name, "iroha.vpn.quotes.create");
+        assert_eq!(quote.path_template, "/v1/vpn/quotes");
+        let quote_schema = quote.input_schema.as_object().expect("quote schema");
+        let quote_properties = quote_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("quote properties");
+        assert!(quote_properties.contains_key("metering_public_key_hex"));
+
         let create = iroha_vpn_sessions_create_tool();
         assert_eq!(create.name, "iroha.vpn.sessions.create");
         assert_eq!(create.path_template, "/v1/vpn/sessions");
@@ -15000,6 +15666,19 @@ mod tests {
         let receipts = iroha_vpn_receipts_list_tool();
         assert_eq!(receipts.name, "iroha.vpn.receipts.list");
         assert_eq!(receipts.path_template, "/v1/vpn/receipts");
+
+        let receipt_submit = iroha_vpn_receipts_submit_tool();
+        assert_eq!(receipt_submit.name, "iroha.vpn.receipts.submit");
+        assert_eq!(receipt_submit.path_template, "/v1/vpn/receipts");
+        let schema = receipt_submit
+            .input_schema
+            .as_object()
+            .expect("receipt submit schema");
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("receipt submit properties");
+        assert!(properties.contains_key("lease_id_hex"));
     }
 
     #[test]
@@ -15490,7 +16169,7 @@ mod tests {
         let args = norito::json!({
             "alias": "alice",
             "account_id": TEST_ACCOUNT_I105,
-            "identity": { "tier": "gold" },
+            "identity_commitment_hex": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
             "permissions": ["CanRegisterDomain"]
         });
@@ -15501,7 +16180,10 @@ mod tests {
             body.get("account_id").and_then(Value::as_str),
             Some(TEST_ACCOUNT_I105)
         );
-        assert!(body.get("identity").is_some_and(Value::is_object));
+        assert_eq!(
+            body.get("identity_commitment_hex").and_then(Value::as_str),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        );
         assert!(body.get("uaid").is_some_and(Value::is_string));
         assert!(body.get("permissions").is_some_and(Value::is_array));
     }
@@ -15510,6 +16192,7 @@ mod tests {
     fn build_accounts_onboard_body_accepts_public_key_hex_shortcut() {
         let args = norito::json!({
             "alias": "alice",
+            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
             "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
         });
         let body = build_accounts_onboard_body(args.as_object().expect("object")).expect("body");
@@ -15519,6 +16202,108 @@ mod tests {
             Some("1111111111111111111111111111111111111111111111111111111111111111")
         );
         assert!(body.get("account_id").is_none());
+    }
+
+    #[test]
+    fn build_accounts_onboard_body_rejects_missing_uaid_shortcut() {
+        let args = norito::json!({
+            "alias": "alice",
+            "account_id": TEST_ACCOUNT_I105
+        });
+        let err =
+            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
+        assert!(err.contains("`uaid` is required"));
+    }
+
+    #[test]
+    fn build_accounts_onboard_body_rejects_raw_identity_shortcut() {
+        let args = norito::json!({
+            "alias": "alice",
+            "account_id": TEST_ACCOUNT_I105,
+            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+            "identity": {}
+        });
+        let err =
+            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
+        assert!(err.contains("`identity` is not accepted"));
+    }
+
+    #[test]
+    fn build_accounts_onboard_body_rejects_ambiguous_account_material_shortcut() {
+        let args = norito::json!({
+            "alias": "alice",
+            "account_id": TEST_ACCOUNT_I105,
+            "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        });
+        let err =
+            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn build_accounts_onboard_body_validates_raw_body_contract() {
+        let valid = norito::json!({
+            "body": {
+                "alias": "alice",
+                "account_id": TEST_ACCOUNT_I105,
+                "identity_commitment_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+                "permissions": ["CanRegisterDomain"]
+            }
+        });
+        let body =
+            build_accounts_onboard_body(valid.as_object().expect("object")).expect("valid body");
+        assert!(
+            body.as_object()
+                .is_some_and(|body| body.contains_key("uaid"))
+        );
+
+        let missing_uaid = norito::json!({
+            "body": {
+                "alias": "alice",
+                "account_id": TEST_ACCOUNT_I105
+            }
+        });
+        let err = build_accounts_onboard_body(missing_uaid.as_object().expect("object"))
+            .expect_err("missing uaid");
+        assert!(err.contains("`body.uaid` is required"));
+
+        let raw_identity = norito::json!({
+            "body": {
+                "alias": "alice",
+                "account_id": TEST_ACCOUNT_I105,
+                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+                "identity": {}
+            }
+        });
+        let err = build_accounts_onboard_body(raw_identity.as_object().expect("object"))
+            .expect_err("raw identity");
+        assert!(err.contains("`body.identity` is not accepted"));
+
+        let ambiguous = norito::json!({
+            "body": {
+                "alias": "alice",
+                "account_id": TEST_ACCOUNT_I105,
+                "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+        });
+        let err = build_accounts_onboard_body(ambiguous.as_object().expect("object"))
+            .expect_err("ambiguous account material");
+        assert!(err.contains("mutually exclusive"));
+
+        let invalid_permissions = norito::json!({
+            "body": {
+                "alias": "alice",
+                "account_id": TEST_ACCOUNT_I105,
+                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+                "permissions": ["CanRegisterDomain", 7]
+            }
+        });
+        let err = build_accounts_onboard_body(invalid_permissions.as_object().expect("object"))
+            .expect_err("invalid permissions");
+        assert!(err.contains("`body.permissions` must contain only strings"));
     }
 
     #[test]

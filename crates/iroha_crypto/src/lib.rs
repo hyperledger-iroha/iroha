@@ -602,6 +602,9 @@ pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
 pub struct Ed25519BatchScratch {
     public_keys: Vec<signature::ed25519::PublicKey>,
     signatures: Vec<ed25519_dalek::Signature>,
+    miss_messages: Vec<usize>,
+    miss_raw_signatures: Vec<usize>,
+    miss_original_indices: Vec<usize>,
 }
 
 impl Ed25519BatchScratch {
@@ -609,6 +612,9 @@ impl Ed25519BatchScratch {
     pub fn clear(&mut self) {
         self.public_keys.clear();
         self.signatures.clear();
+        self.miss_messages.clear();
+        self.miss_raw_signatures.clear();
+        self.miss_original_indices.clear();
     }
 }
 
@@ -691,19 +697,148 @@ pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
     seed32: [u8; 32],
     scratch: &mut Ed25519BatchScratch,
 ) -> Result<(), Error> {
-    scratch.public_keys.clear();
-    scratch.public_keys.reserve(public_keys.len());
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
+        return Err(Error::BadSignature);
+    }
+    let _ = seed32;
+
+    scratch.clear();
+    scratch
+        .miss_original_indices
+        .try_reserve(messages.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .miss_messages
+        .try_reserve(messages.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .miss_raw_signatures
+        .try_reserve(signatures.len())
+        .map_err(|_| Error::BadSignature)?;
     scratch
         .public_keys
-        .extend(public_keys.iter().map(|key| key.0));
-    signature::ed25519::Ed25519Sha512::parse_signatures_into(signatures, &mut scratch.signatures)?;
-    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_deterministic(
-        messages,
-        signatures,
+        .try_reserve(public_keys.len())
+        .map_err(|_| Error::BadSignature)?;
+    scratch
+        .signatures
+        .try_reserve(signatures.len())
+        .map_err(|_| Error::BadSignature)?;
+
+    let mut cached_hits = 0usize;
+    for (idx, ((message, signature), public_key)) in messages
+        .iter()
+        .zip(signatures.iter())
+        .zip(public_keys.iter())
+        .enumerate()
+    {
+        if signature::ed25519::is_verify_ok_cached(&public_key.0, message, signature) {
+            cached_hits = cached_hits.saturating_add(1);
+            continue;
+        }
+        scratch.miss_original_indices.push(idx);
+        scratch.miss_messages.push(idx);
+        scratch.miss_raw_signatures.push(idx);
+        scratch
+            .signatures
+            .push(signature::ed25519::Ed25519Sha512::parse_signature(
+                signature,
+            )?);
+        scratch.public_keys.push(public_key.0);
+    }
+
+    if scratch.miss_original_indices.is_empty() {
+        return Ok(());
+    }
+
+    if cached_hits == 0 {
+        return signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_uncached(
+            messages,
+            signatures,
+            &scratch.signatures,
+            &scratch.public_keys,
+        );
+    }
+
+    let miss_messages = scratch
+        .miss_messages
+        .iter()
+        .map(|&idx| messages[idx])
+        .collect::<Vec<_>>();
+    let miss_raw_signatures = scratch
+        .miss_raw_signatures
+        .iter()
+        .map(|&idx| signatures[idx])
+        .collect::<Vec<_>>();
+
+    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_uncached(
+        &miss_messages,
+        &miss_raw_signatures,
         &scratch.signatures,
         &scratch.public_keys,
-        seed32,
     )
+}
+
+/// Return the lowest-index failing Ed25519 tuple for pre-parsed public keys.
+///
+/// The search uses the same deterministic batch verifier as
+/// [`ed25519_verify_batch_preparsed_deterministic_with_scratch`] and keeps
+/// `scratch` reusable across bisection probes.
+#[must_use]
+pub fn ed25519_first_bad_preparsed_deterministic_with_scratch(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch,
+) -> Option<(usize, String)> {
+    if messages.is_empty()
+        || ed25519_verify_batch_preparsed_deterministic_with_scratch(
+            messages,
+            signatures,
+            public_keys,
+            seed32,
+            scratch,
+        )
+        .is_ok()
+    {
+        return None;
+    }
+    if messages.len() == 1 {
+        let detail = ed25519_verify_batch_preparsed_deterministic_with_scratch(
+            messages,
+            signatures,
+            public_keys,
+            seed32,
+            scratch,
+        )
+        .expect_err("single invalid Ed25519 item must fail")
+        .to_string();
+        return Some((0, detail));
+    }
+
+    let split = messages.len() / 2;
+    let (left_messages, right_messages) = messages.split_at(split);
+    let (left_signatures, right_signatures) = signatures.split_at(split);
+    let (left_public_keys, right_public_keys) = public_keys.split_at(split);
+    ed25519_first_bad_preparsed_deterministic_with_scratch(
+        left_messages,
+        left_signatures,
+        left_public_keys,
+        seed32,
+        scratch,
+    )
+    .or_else(|| {
+        ed25519_first_bad_preparsed_deterministic_with_scratch(
+            right_messages,
+            right_signatures,
+            right_public_keys,
+            seed32,
+            scratch,
+        )
+        .map(|(idx, detail)| (idx + split, detail))
+    })
 }
 
 /// Deterministic secp256k1 (ECDSA) batch verification wrapper.

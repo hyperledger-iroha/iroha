@@ -77,8 +77,7 @@ use iroha_data_model::{
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneFastpqProofMaterial, LaneId,
-        LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob,
     },
     peer::PeerId,
     transaction::{
@@ -308,16 +307,6 @@ fn attach_manifest_roots_to_relays(
 ) {
     for envelope in envelopes {
         envelope.manifest_root = manifest_roots.get(&envelope.dataspace_id).copied();
-    }
-}
-
-fn attach_fastpq_proof_material_to_relays(envelopes: &mut [LaneRelayEnvelope]) {
-    for envelope in envelopes {
-        let verified_at_height = Some(envelope.block_height);
-        envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
-            proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
-            verified_at_height,
-        });
     }
 }
 
@@ -3115,7 +3104,18 @@ pub(crate) mod valid {
                         None,
                     ));
                 }
-                if !proof_matches_manifest(proof, dsid, policy.manifest_root) {
+                let envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+                    .map_err(|err| {
+                        make_axt_error_with(
+                            AxtRejectReason::Proof,
+                            &format!("proof payload is not an AXT proof envelope: {err}"),
+                            Some(dsid),
+                            Some(policy.target_lane),
+                            None,
+                            None,
+                        )
+                    })?;
+                if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
                     return Err(make_axt_error_with(
                         AxtRejectReason::Manifest,
                         "proof does not match policy manifest root",
@@ -3165,6 +3165,16 @@ pub(crate) mod valid {
                         }
                     }
                 }
+                fastpq_prover::verify_axt_proof_envelope(&envelope).map_err(|err| {
+                    make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        &format!("FASTPQ verification failed: {err}"),
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    )
+                })?;
                 Ok(())
             };
 
@@ -5267,47 +5277,6 @@ pub(crate) mod valid {
                     )
                 }
 
-                fn first_bad_ed25519_slice(
-                    messages: &[&[u8]],
-                    signatures: &[&[u8]],
-                    public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
-                    scratch: &mut iroha_crypto::Ed25519BatchScratch,
-                ) -> Option<(usize, String)> {
-                    if messages.is_empty()
-                        || verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
-                            .is_ok()
-                    {
-                        return None;
-                    }
-                    if messages.len() == 1 {
-                        let detail =
-                            verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
-                                .expect_err("single invalid Ed25519 item must fail")
-                                .to_string();
-                        return Some((0, detail));
-                    }
-
-                    let split = messages.len() / 2;
-                    let (left_messages, right_messages) = messages.split_at(split);
-                    let (left_signatures, right_signatures) = signatures.split_at(split);
-                    let (left_public_keys, right_public_keys) = public_keys.split_at(split);
-                    first_bad_ed25519_slice(
-                        left_messages,
-                        left_signatures,
-                        left_public_keys,
-                        scratch,
-                    )
-                    .or_else(|| {
-                        first_bad_ed25519_slice(
-                            right_messages,
-                            right_signatures,
-                            right_public_keys,
-                            scratch,
-                        )
-                        .map(|(idx, detail)| (idx + split, detail))
-                    })
-                }
-
                 let mut items = Vec::new();
                 let mut messages = Vec::new();
                 let mut signatures = Vec::new();
@@ -5355,7 +5324,13 @@ pub(crate) mod valid {
                         verify_ed25519_batch_slices(messages, signatures, public_keys, &mut scratch)
                     {
                         if let Some((relative_idx, detail)) =
-                            first_bad_ed25519_slice(messages, signatures, public_keys, &mut scratch)
+                            iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                                messages,
+                                signatures,
+                                public_keys,
+                                [0; 32],
+                                &mut scratch,
+                            )
                         {
                             let idx = items[range_start + relative_idx].idx;
                             return Err(signature_error(signed_txs[idx], detail));
@@ -7013,7 +6988,6 @@ pub(crate) mod valid {
                     commit_qc.as_ref(),
                 );
                 attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
-                attach_fastpq_proof_material_to_relays(&mut lane_relay_envelopes);
                 crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
             }
 
@@ -12373,6 +12347,103 @@ mod commit {
             }
         }
 
+        fn proof_blob_for(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+        ) -> ProofBlob {
+            proof_blob_for_with_amount(dsid, manifest_root, proof_seed, expiry_slot, None, None)
+        }
+
+        fn proof_blob_for_with_amount(
+            dsid: DataSpaceId,
+            manifest_root: [u8; 32],
+            proof_seed: &[u8],
+            expiry_slot: u64,
+            committed_amount: Option<u128>,
+            amount_commitment: Option<[u8; 32]>,
+        ) -> ProofBlob {
+            let source_tx_commitment = test_digest(b"axt-block-test:source-tx", &[proof_seed]);
+            let claim_digest = test_digest(b"axt-block-test:claim", &[proof_seed]);
+            let witness_commitment = test_digest(b"axt-block-test:witness", &[proof_seed]);
+            let policy_commitment = test_digest(b"axt-block-test:policy", &[&manifest_root[..]]);
+            let binding = iroha_data_model::nexus::AxtFastpqBinding {
+                parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+                source_dsid: dsid.as_u64(),
+                source_dataspace: format!("test-dataspace-{}", dsid.as_u64()),
+                source_receipt_id: format!(
+                    "receipt-{}",
+                    hex::encode(source_tx_commitment.as_ref())
+                ),
+                source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+                claim_type: "authorization".to_owned(),
+                claim_digest: hex::encode(claim_digest.as_ref()),
+                witness_commitment: hex::encode(witness_commitment.as_ref()),
+                policy_commitment: hex::encode(policy_commitment.as_ref()),
+                verified_effect_type: "test_effect".to_owned(),
+                corridor: "test-corridor".to_owned(),
+                verifier_id: "fastpq".to_owned(),
+                verifier_version: "v1".to_owned(),
+                target_dsids: vec![dsid.as_u64()],
+                effect_binding: None,
+            };
+
+            let mut dsid_bytes = [0_u8; 16];
+            dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+            let mut batch = fastpq_prover::TransitionBatch::new(
+                fastpq_prover::AXT_DEFAULT_PARAMETER,
+                fastpq_prover::PublicInputs {
+                    dsid: dsid_bytes,
+                    slot: expiry_slot,
+                    old_root: test_digest(b"axt-block-test:old-root", &[proof_seed]).into(),
+                    new_root: manifest_root,
+                    perm_root: test_digest(b"axt-block-test:perm-root", &[proof_seed]).into(),
+                    tx_set_hash: test_digest(b"axt-block-test:tx-set", &[proof_seed]).into(),
+                },
+            );
+            batch.push(fastpq_prover::StateTransition::new(
+                b"axt/block/proof".to_vec(),
+                proof_seed.to_vec(),
+                manifest_root.to_vec(),
+                fastpq_prover::OperationKind::MetaSet,
+            ));
+            batch.sort();
+            batch.metadata.insert(
+                "entry_hash".to_owned(),
+                source_tx_commitment.as_ref().to_vec(),
+            );
+            fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT test batch");
+            let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+                .expect("FASTPQ prover")
+                .prove(&batch)
+                .expect("FASTPQ proof");
+            let fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof)
+                .expect("AXT FASTPQ payload");
+            let envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root,
+                da_commitment: None,
+                proof: fastpq_payload,
+                fastpq_binding: Some(binding),
+                committed_amount,
+                amount_commitment,
+            };
+            ProofBlob {
+                payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+                expiry_slot: Some(expiry_slot),
+            }
+        }
+
+        fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+            let mut payload = Vec::new();
+            payload.extend_from_slice(domain);
+            for part in parts {
+                payload.extend_from_slice(part);
+            }
+            iroha_crypto::Hash::new(payload)
+        }
+
         fn build_block_with_envelopes(
             envelope: AxtEnvelopeRecord,
             snapshot: AxtPolicySnapshot,
@@ -12475,10 +12546,12 @@ mod commit {
                         amount: "5".to_owned(),
                     },
                 },
-                proof: Some(ProofBlob {
-                    payload: policy.manifest_root.to_vec(),
-                    expiry_slot: Some(50),
-                }),
+                proof: Some(proof_blob_for(
+                    dsid,
+                    policy.manifest_root,
+                    b"handle-clock-skew",
+                    50,
+                )),
                 amount: 5,
                 amount_commitment: None,
             };
@@ -12541,10 +12614,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"duplicate-handle", 12),
                 }],
                 handles: vec![handle.clone(), handle],
                 commit_height: Some(1),
@@ -12599,17 +12669,11 @@ mod commit {
                 proofs: vec![
                     AxtProofFragment {
                         dsid: dsid_a,
-                        proof: ProofBlob {
-                            payload: policy_a.manifest_root.to_vec(),
-                            expiry_slot: Some(25),
-                        },
+                        proof: proof_blob_for(dsid_a, policy_a.manifest_root, b"cross-lane-a", 25),
                     },
                     AxtProofFragment {
                         dsid: dsid_b,
-                        proof: ProofBlob {
-                            payload: policy_b.manifest_root.to_vec(),
-                            expiry_slot: Some(25),
-                        },
+                        proof: proof_blob_for(dsid_b, policy_b.manifest_root, b"cross-lane-b", 25),
                     },
                 ],
                 handles: vec![
@@ -12666,10 +12730,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"amount-mismatch", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -12722,10 +12783,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"missing-touch", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -12772,10 +12830,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"handle-without-touch", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -12828,10 +12883,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"touch-prefix", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -12881,10 +12933,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"descriptor-binding", 12),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -12931,17 +12980,11 @@ mod commit {
             let proofs = vec![
                 AxtProofFragment {
                     dsid: dsid_a,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid_a, policy.manifest_root, b"cross-dsid-a", 12),
                 },
                 AxtProofFragment {
                     dsid: dsid_b,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(12),
-                    },
+                    proof: proof_blob_for(dsid_b, policy.manifest_root, b"cross-dsid-b", 12),
                 },
             ];
 
@@ -12999,10 +13042,7 @@ mod commit {
 
             let proof = AxtProofFragment {
                 dsid,
-                proof: ProofBlob {
-                    payload: policy.manifest_root.to_vec(),
-                    expiry_slot: Some(15),
-                },
+                proof: proof_blob_for(dsid, policy.manifest_root, b"overspend-subnonce", 15),
             };
 
             let envelope = AxtEnvelopeRecord {
@@ -13062,6 +13102,50 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_rejects_raw_manifest_root_proof() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(21);
+            let lane = LaneId::new(8);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x44; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 2,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: Vec::new(),
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Proof, "not an AXT proof envelope");
+        }
+
+        #[test]
         fn axt_validation_rejects_expired_proof() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -13090,10 +13174,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(4),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"expired-proof", 4),
                 }],
                 handles: Vec::new(),
                 commit_height: Some(1),
@@ -13138,10 +13219,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(0),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"zero-proof-expiry", 0),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13177,10 +13255,12 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.proof = Some(ProofBlob {
-                payload: policy.manifest_root.to_vec(),
-                expiry_slot: Some(8),
-            });
+            handle.proof = Some(proof_blob_for(
+                dsid,
+                policy.manifest_root,
+                b"proof-before-handle",
+                8,
+            ));
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -13220,6 +13300,15 @@ mod commit {
             };
             let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 8, policy.manifest_root);
+            let mismatched_envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root: [0x99; 32],
+                da_commitment: None,
+                proof: vec![0xAA],
+                fastpq_binding: None,
+                committed_amount: None,
+                amount_commitment: None,
+            };
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -13228,7 +13317,8 @@ mod commit {
                 proofs: vec![AxtProofFragment {
                     dsid,
                     proof: ProofBlob {
-                        payload: [0x99; 32].to_vec(),
+                        payload: norito::to_bytes(&mismatched_envelope)
+                            .expect("encode mismatched envelope"),
                         expiry_slot: Some(12),
                     },
                 }],
@@ -13332,10 +13422,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"budget-block", 10),
                 }],
                 handles: vec![handle_one, handle_two],
                 commit_height: Some(1),
@@ -13377,10 +13464,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"handle-era", 10),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13426,10 +13510,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"zero-handle-expiry", 10),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13564,10 +13645,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(8),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"zero-root-handle", 8),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13614,10 +13692,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: policy.manifest_root.to_vec(),
-                        expiry_slot: Some(9),
-                    },
+                    proof: proof_blob_for(dsid, policy.manifest_root, b"snapshot-fallback", 9),
                 }],
                 handles: vec![handle],
                 commit_height: Some(2),
@@ -13668,10 +13743,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![AxtProofFragment {
                     dsid: dsid_b,
-                    proof: ProofBlob {
-                        payload: policy_b.manifest_root.to_vec(),
-                        expiry_slot: Some(10),
-                    },
+                    proof: proof_blob_for(dsid_b, policy_b.manifest_root, b"policy-slot-dsid", 10),
                 }],
                 handles: vec![handle],
                 commit_height: Some(1),
@@ -13717,10 +13789,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment {
                     dsid,
-                    proof: ProofBlob {
-                        payload: manifest_root.to_vec(),
-                        expiry_slot: Some(15),
-                    },
+                    proof: proof_blob_for(dsid, manifest_root, b"missing-policy-snapshot", 15),
                 }],
                 handles: vec![handle],
                 commit_height: Some(3),
@@ -13835,18 +13904,16 @@ mod commit {
                 }],
             };
             let binding = binding_for_descriptor(&descriptor);
-            let proof_envelope = AxtProofEnvelope {
+            let proof = proof_blob_for_with_amount(
                 dsid,
-                manifest_root: policy.manifest_root,
-                da_commitment: None,
-                proof: vec![0xAB],
-                fastpq_binding: None,
-                committed_amount: Some(5),
-                amount_commitment: None,
-            };
-            let proof_payload = norito::to_bytes(&proof_envelope).expect("encode proof envelope");
+                policy.manifest_root,
+                b"hidden-amount",
+                9,
+                Some(5),
+                None,
+            );
             let expected_commitment =
-                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof_payload.as_slice()));
+                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof.payload.as_slice()));
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
             handle.intent.op.amount = "hidden".to_owned();
@@ -13864,13 +13931,7 @@ mod commit {
                         write: Vec::new(),
                     },
                 }],
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: proof_payload,
-                        expiry_slot: Some(9),
-                    },
-                }],
+                proofs: vec![AxtProofFragment { dsid, proof }],
                 handles: vec![handle],
                 commit_height: Some(1),
             };
@@ -13906,16 +13967,14 @@ mod commit {
                 }],
             };
             let binding = binding_for_descriptor(&descriptor);
-            let proof_envelope = AxtProofEnvelope {
+            let proof = proof_blob_for_with_amount(
                 dsid,
-                manifest_root: policy.manifest_root,
-                da_commitment: None,
-                proof: vec![0xCD],
-                fastpq_binding: None,
-                committed_amount: Some(5),
-                amount_commitment: None,
-            };
-            let proof_payload = norito::to_bytes(&proof_envelope).expect("encode proof envelope");
+                policy.manifest_root,
+                b"hidden-amount-mismatch",
+                9,
+                Some(5),
+                None,
+            );
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
             handle.intent.op.amount = "hidden".to_owned();
@@ -13933,13 +13992,7 @@ mod commit {
                         write: Vec::new(),
                     },
                 }],
-                proofs: vec![AxtProofFragment {
-                    dsid,
-                    proof: ProofBlob {
-                        payload: proof_payload,
-                        expiry_slot: Some(9),
-                    },
-                }],
+                proofs: vec![AxtProofFragment { dsid, proof }],
                 handles: vec![handle],
                 commit_height: Some(1),
             };
@@ -15024,9 +15077,12 @@ mod tests {
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
             core::iter::once((dataspace_id, manifest_root)).collect();
         attach_manifest_roots_to_relays(&mut envelopes, &manifest_roots);
-        attach_fastpq_proof_material_to_relays(&mut envelopes);
 
         assert_eq!(envelopes.len(), 1);
+        envelopes[0].fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
+            proof_digest: Hash::new(b"test-fastpq-proof"),
+            verified_at_height: envelopes[0].block_height,
+        });
         assert_eq!(envelopes[0].manifest_root, Some(manifest_root));
         assert!(envelopes[0].fastpq_proof.is_some());
         envelopes[0]

@@ -29,6 +29,10 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(VrfVerifyRequest)".into();
         ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64".into();
         gas = "G_verify".into();
+    } else if up.contains("VERIFY_PROOF") || n == 0xF6 {
+        args = "r10=&NoritoBytes(OpenVerifyEnvelope)".into();
+        ret = "r10=0/1, r11=status:u64".into();
+        gas = "G_verify".into();
     } else if up.contains("ROOTS_GET") || n == 0x64 {
         args = "r10=&NoritoBytes(RootsGetRequest)".into();
         ret = "ptr (NoritoBytes in INPUT)".into();
@@ -77,9 +81,68 @@ fn guess_defaults(n: u32) -> (String, String, String) {
     } else if up.contains("POINTER_TO_NORITO") || n == 0x5D {
         args = "r10=&PointerType<T>".into();
         ret = "ptr (&NoritoBytes(TLV envelope))".into();
+        gas = "G_pointer + bytes".into();
     } else if up.contains("POINTER_FROM_NORITO") || n == 0x5E {
         args = "r10=&NoritoBytes(TLV envelope), r11=expected?:u16".into();
         ret = "ptr (&PointerType<T>)".into();
+        gas = "G_pointer + bytes".into();
+    } else if up.contains("TLV_EQ") || n == 0x5F {
+        args = "r10=&Tlv, r11=&Tlv".into();
+        ret = "r10=1/0".into();
+        gas = "G_tlv_eq + bytes".into();
+    } else if up.contains("TLV_LEN") || n == 0x77 {
+        args = "r10=&Tlv".into();
+        ret = "r10=payload_len:u64".into();
+        gas = "G_tlv_len + bytes".into();
+    } else if up.starts_with("NUMERIC_") {
+        gas = "G_numeric".into();
+        if up.contains("FROM_INT") {
+            args = "r10=value:i64".into();
+            ret = "r10=ptr (&NoritoBytes(Numeric))".into();
+        } else if up.contains("TO_INT") {
+            args = "r10=&NoritoBytes(Numeric)".into();
+            ret = "r10=value:i64".into();
+        } else if up.contains("NEG") {
+            args = "r10=&NoritoBytes(Numeric)".into();
+            ret = "r10=ptr (&NoritoBytes(Numeric))".into();
+        } else if up.contains("EQ")
+            || up.contains("NE")
+            || up.contains("LT")
+            || up.contains("LE")
+            || up.contains("GT")
+            || up.contains("GE")
+        {
+            args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)".into();
+            ret = "r10=u64(0/1)".into();
+        } else {
+            args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)".into();
+            ret = "r10=ptr (&NoritoBytes(Numeric))".into();
+        }
+    } else if up.contains("PROVE_EXECUTION") || n == 0xF4 {
+        ret = "r10=ptr (&NoritoBytes(ExecutionProof)), r11=status:u64".into();
+        gas = "G_prove".into();
+    } else if up.contains("SM4_GCM_SEAL") || n == 0x92 {
+        args = "r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext)".into();
+        ret = "r10=ptr (&Blob(ciphertext || tag16))".into();
+        gas = "G_sm4 + bytes".into();
+    } else if up.contains("SM4_GCM_OPEN") || n == 0x93 {
+        args =
+            "r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag16)"
+                .into();
+        ret = "r10=ptr (&Blob(plaintext)) or 0".into();
+        gas = "G_sm4 + bytes".into();
+    } else if up.contains("SM4_CCM_SEAL") || n == 0x94 {
+        args =
+            "r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(plaintext), r14=tag_len:u64"
+                .into();
+        ret = "r10=ptr (&Blob(ciphertext || tag))".into();
+        gas = "G_sm4 + bytes".into();
+    } else if up.contains("SM4_CCM_OPEN") || n == 0x95 {
+        args =
+            "r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag), r14=tag_len:u64"
+                .into();
+        ret = "r10=ptr (&Blob(plaintext)) or 0".into();
+        gas = "G_sm4 + bytes".into();
     } else if up.contains("VERIFY") {
         ret = "u64=0/1".into();
         gas = "G_verify".into();
@@ -101,11 +164,26 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_get_pub".into();
     } else if up.contains("GET_AUTHORITY") || n == 0xA4 {
         ret = "ptr (AccountId in INPUT)".into();
-        gas = "G_get_auth".into();
+        gas = "G_get_auth + bytes".into();
     } else if up.contains("RESOLVE_ACCOUNT_ALIAS") || n == 0xA7 {
         args = "r10=&Blob(alias literal)".into();
         ret = "ptr (&AccountId in INPUT)".into();
         gas = "G_alias_resolve".into();
+    } else if up.contains("CURRENT_TIME_MS") || n == 0xA8 {
+        ret = "r10=unix_time_ms:u64".into();
+        gas = "G_sysvar".into();
+    } else if up.contains("STATE_GET") || n == 0x50 {
+        args = "r10=&Name".into();
+        ret = "r10=ptr (&NoritoBytes) or 0".into();
+        gas = "G_state_get + bytes".into();
+    } else if up.contains("STATE_SET") || n == 0x51 {
+        args = "r10=&Name, r11=&NoritoBytes".into();
+        ret = "u64=0".into();
+        gas = "G_state_set + bytes".into();
+    } else if up.contains("STATE_DEL") || n == 0x52 {
+        args = "r10=&Name".into();
+        ret = "u64=0".into();
+        gas = "G_state_del".into();
     } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
         args = "r10=&Blob(TLV)".into();
         ret = "ptr (r10)".into();
@@ -118,6 +196,48 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=addr, r11=out, r12=depth_cap?, r13=root_out?".into();
         ret = "u64=depth".into();
         gas = "G_mpath + depth".into();
+    } else if up.contains("QUERY_EXECUTE_NORITO") || n == 0x01_0000 {
+        args = "r10=&NoritoBytes(QueryRequest)".into();
+        ret = "r10=ptr (&NoritoBytes(QueryResponse))".into();
+        gas = "G_scq".into();
+    } else if up.starts_with("QUERY_GET_") || n == 0x01_0001 || n == 0x01_0002 {
+        args = "r10=&NoritoBytes(request)".into();
+        ret = "r10=ptr (&NoritoBytes(response))".into();
+        gas = "G_scq".into();
+    } else if up.contains("SYSVAR_CHAIN_ID") || n == 0x01_0020 {
+        ret = "r10=ptr (&Blob(chain_id)) or 0".into();
+        gas = "G_sysvar + bytes".into();
+    } else if up.contains("SYSVAR_BLOCK_HEIGHT") || n == 0x01_0021 {
+        ret = "r10=height:u64".into();
+        gas = "G_sysvar".into();
+    } else if up.contains("SYSVAR_BLOCK_TIME_MS") || n == 0x01_0022 {
+        ret = "r10=block_time_ms:u64".into();
+        gas = "G_sysvar".into();
+    } else if up.contains("SYSVAR_AUTHORITY") || n == 0x01_0023 {
+        ret = "r10=ptr (&AccountId)".into();
+        gas = "G_get_auth + bytes".into();
+    } else if up.contains("SYSVAR_CONTRACT_ADDRESS") || n == 0x01_0024 {
+        ret = "r10=ptr (&NoritoBytes(ContractAddress)) or 0".into();
+        gas = "G_sysvar + bytes".into();
+    } else if up.contains("SYSVAR_ENTRYPOINT") || n == 0x01_0025 {
+        ret = "r10=ptr (&Blob(entrypoint)) or 0".into();
+        gas = "G_sysvar + bytes".into();
+    } else if up.contains("STATE_KEYS") || n == 0x01_0030 {
+        args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64".into();
+        ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64".into();
+        gas = "G_state_keys + count + bytes".into();
+    } else if up.contains("STATE_HAS") || n == 0x01_0031 {
+        args = "r10=&Name(path)".into();
+        ret = "r10=present:u64".into();
+        gas = "G_state_has".into();
+    } else if up.contains("STATE_LEN") || n == 0x01_0032 {
+        args = "r10=&Name(path)".into();
+        ret = "r10=len:u64, r11=found:u64".into();
+        gas = "G_state_len + bytes".into();
+    } else if up.contains("STATE_COUNT") || n == 0x01_0033 {
+        args = "r10=&Name(prefix)".into();
+        ret = "r10=total:u64".into();
+        gas = "G_state_count + count".into();
     } else if up.contains("EXECUTE_QUERY") || n == 0xA1 {
         args = "r10=&Json".into();
         ret = "ptr (r10)".into();

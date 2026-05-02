@@ -59,6 +59,7 @@ const DEFAULT_VPN_COVER_JITTER_MILLIS: u16 = 10;
 const DEFAULT_VPN_EXIT_CLASS: &str = "standard";
 const DEFAULT_VPN_LEASE_SECS: u32 = 10 * 60;
 const DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS: u32 = 90;
+const DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES: u64 = 1_048_576;
 const DEFAULT_VPN_METER_HASH_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -322,6 +323,10 @@ fn default_vpn_dns_push_interval_secs() -> u32 {
     DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS
 }
 
+fn default_vpn_usage_voucher_debt_window_bytes() -> u64 {
+    DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES
+}
+
 fn default_vpn_cover_to_data_per_mille() -> u16 {
     DEFAULT_VPN_COVER_TO_DATA_PER_MILLE
 }
@@ -508,6 +513,12 @@ pub struct VpnConfig {
     /// Optional local backend socket used to bridge helper-authenticated VPN traffic.
     #[norito(default)]
     pub backend_addr: Option<String>,
+    /// Optional on-disk spool directory for operator-submitted VPN settlement artifacts.
+    #[norito(default)]
+    pub receipt_spool_dir: Option<PathBuf>,
+    /// Maximum observed payload bytes the relay will forward beyond the latest client voucher.
+    #[norito(default = "default_vpn_usage_voucher_debt_window_bytes")]
+    pub usage_voucher_debt_window_bytes: u64,
     /// Cover traffic generation parameters.
     #[norito(default)]
     pub cover: VpnCoverTrafficConfig,
@@ -531,6 +542,8 @@ impl Default for VpnConfig {
             dns_overrides: Vec::new(),
             helper_ticket_secret_hex: None,
             backend_addr: None,
+            receipt_spool_dir: None,
+            usage_voucher_debt_window_bytes: default_vpn_usage_voucher_debt_window_bytes(),
             cover: VpnCoverTrafficConfig::default(),
             billing: VpnBillingConfig::default(),
         }
@@ -554,6 +567,9 @@ impl VpnConfig {
         if self.dns_push_interval_secs == 0 {
             self.dns_push_interval_secs = default_vpn_dns_push_interval_secs();
         }
+        if self.usage_voucher_debt_window_bytes == 0 {
+            self.usage_voucher_debt_window_bytes = default_vpn_usage_voucher_debt_window_bytes();
+        }
         self.cover.apply_defaults();
         self.billing.apply_defaults();
     }
@@ -562,9 +578,10 @@ impl VpnConfig {
         self.apply_defaults();
         self.cover.validate()?;
         self.billing.validate()?;
-        if self.flow_label_bits == 0 || self.flow_label_bits > 24 {
+        if self.flow_label_bits != 24 {
             return Err(ConfigError::Vpn(
-                "vpn.flow_label_bits must be between 1 and 24".to_string(),
+                "vpn.flow_label_bits must be 24 for the v1 helper/relay flow-label derivation"
+                    .to_string(),
             ));
         }
         if !self.enabled {
@@ -593,6 +610,12 @@ impl VpnConfig {
         let routes = self.parse_route_push()?;
         let dns_overrides = self.parse_dns_overrides()?;
         let helper_ticket_secret_hex = self.parse_helper_ticket_secret_hex()?;
+        self.receipt_spool_dir = self.parse_receipt_spool_dir();
+        if helper_ticket_secret_hex.is_none() {
+            return Err(ConfigError::Vpn(
+                "vpn.helper_ticket_secret_hex must be set when vpn.enabled is true".to_string(),
+            ));
+        }
         let backend_addr = self.parse_backend_addr()?;
         self.exit_class = self.exit_class.trim().to_owned();
         if let Err(error) = VpnExitClassV1::try_from_label(&self.exit_class) {
@@ -724,6 +747,13 @@ impl VpnConfig {
             ))
         })?;
         Ok(Some(parsed.to_string()))
+    }
+
+    pub(crate) fn parse_receipt_spool_dir(&self) -> Option<PathBuf> {
+        self.receipt_spool_dir
+            .as_ref()
+            .filter(|path| !path.as_os_str().is_empty())
+            .cloned()
     }
 
     pub fn helper_ticket_secret_bytes(&self) -> Option<[u8; 32]> {
@@ -3955,6 +3985,7 @@ mod tests {
     fn vpn_cover_ratio_allows_zero_when_enabled() {
         let mut cfg = VpnConfig {
             enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
             cover: VpnCoverTrafficConfig {
                 enabled: true,
                 cover_to_data_per_mille: 0,
@@ -4006,6 +4037,7 @@ mod tests {
     fn vpn_backend_addr_normalizes_socket_addr() {
         let mut cfg = VpnConfig {
             enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
             backend_addr: Some(" 127.0.0.1:19090 ".to_string()),
             ..VpnConfig::default()
         };
@@ -4021,6 +4053,7 @@ mod tests {
     fn vpn_backend_addr_rejects_invalid_socket_addr() {
         let mut cfg = VpnConfig {
             enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
             backend_addr: Some("not-a-socket".to_string()),
             ..VpnConfig::default()
         };
@@ -4039,10 +4072,26 @@ mod tests {
     }
 
     #[test]
+    fn vpn_receipt_spool_dir_preserves_operator_path() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            receipt_spool_dir: Some(PathBuf::from("/var/spool/soranet/vpn-receipts")),
+            ..VpnConfig::default()
+        };
+        cfg.validate().expect("vpn config should validate");
+        assert_eq!(
+            cfg.receipt_spool_dir.as_deref(),
+            Some(Path::new("/var/spool/soranet/vpn-receipts"))
+        );
+    }
+
+    #[test]
     fn vpn_control_plane_threads_routes_and_dns() {
         let mut cfg = VpnConfig {
             enabled: true,
             lease_secs: 45,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
             route_push: vec!["10.0.0.0/24".to_string()],
             dns_overrides: vec!["1.1.1.1".to_string()],
             ..VpnConfig::default()

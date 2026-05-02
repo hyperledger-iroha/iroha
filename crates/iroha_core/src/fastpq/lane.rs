@@ -12,9 +12,7 @@ use fastpq_prover::{
     set_metal_queue_policy,
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
-#[cfg(test)]
-use iroha_crypto::Hash;
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, consensus::ExecWitness};
 use iroha_logger::{debug, info, warn};
 use tokio::sync::mpsc;
@@ -65,13 +63,25 @@ pub struct FastpqWitnessJob {
     pub(crate) context: FastpqWitnessContext,
 }
 
+/// Proof bytes and digest produced by the FASTPQ lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FastpqProofOutput {
+    /// Norito-encoded FASTPQ proof payload.
+    pub proof_bytes: Vec<u8>,
+    /// Stable digest of `proof_bytes` for relay metadata and telemetry.
+    pub proof_digest: Hash,
+}
+
 /// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
 pub trait FastpqProofEngine: Send + Sync + 'static {
     /// Prove the supplied transition batch.
     ///
     /// # Errors
     /// Returns an error when the prover backend fails to generate a proof.
-    fn prove(&self, batch: &fastpq_prover::TransitionBatch) -> fastpq_prover::Result<()>;
+    fn prove(
+        &self,
+        batch: &fastpq_prover::TransitionBatch,
+    ) -> fastpq_prover::Result<FastpqProofOutput>;
 }
 
 struct RealProofEngine {
@@ -79,8 +89,17 @@ struct RealProofEngine {
 }
 
 impl FastpqProofEngine for RealProofEngine {
-    fn prove(&self, batch: &fastpq_prover::TransitionBatch) -> fastpq_prover::Result<()> {
-        self.prover.prove(batch).map(|_| ())
+    fn prove(
+        &self,
+        batch: &fastpq_prover::TransitionBatch,
+    ) -> fastpq_prover::Result<FastpqProofOutput> {
+        let proof = self.prover.prove(batch)?;
+        let proof_bytes = norito::to_bytes(&proof)?;
+        let proof_digest = Hash::new(&proof_bytes);
+        Ok(FastpqProofOutput {
+            proof_bytes,
+            proof_digest,
+        })
     }
 }
 
@@ -223,13 +242,15 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
         transition_count = transition_count.saturating_add(batch.transitions.len());
         let started = Instant::now();
         match engine.prove(&batch) {
-            Ok(()) => {
+            Ok(output) => {
                 proved = proved.saturating_add(1);
                 debug!(
                     height = job.height,
                     view = job.view,
                     entry_hash,
                     transitions = batch.transitions.len(),
+                    proof_bytes = output.proof_bytes.len(),
+                    proof_digest = ?output.proof_digest,
                     elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
                     "fastpq lane: generated proof"
                 );
@@ -409,10 +430,17 @@ mod tests {
     }
 
     impl FastpqProofEngine for MockEngine {
-        fn prove(&self, batch: &fastpq_prover::TransitionBatch) -> fastpq_prover::Result<()> {
+        fn prove(
+            &self,
+            batch: &fastpq_prover::TransitionBatch,
+        ) -> fastpq_prover::Result<FastpqProofOutput> {
             *self.calls.lock().unwrap() += 1;
             let _ = &batch.parameter;
-            Ok(())
+            let proof_bytes = b"mock-fastpq-proof".to_vec();
+            Ok(FastpqProofOutput {
+                proof_digest: Hash::new(&proof_bytes),
+                proof_bytes,
+            })
         }
     }
 
@@ -433,8 +461,8 @@ mod tests {
                     from_balance_after: Numeric::from(90u32),
                     to_balance_before: Numeric::from(5u32),
                     to_balance_after: Numeric::from(15u32),
-                    from_merkle_proof: None,
-                    to_merkle_proof: None,
+                    from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+                    to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
                 }],
                 authority_digest: authority_digest(&ALICE_ID),
                 poseidon_preimage_digest: None,

@@ -29,6 +29,7 @@ use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
+    asset::definition::ConfidentialPolicyMode,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
@@ -1018,6 +1019,149 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
     })
 }
 
+#[derive(Clone, Copy)]
+enum ConfidentialPolicyAdmissionAction {
+    Shield,
+    Transfer,
+    Unshield,
+}
+
+impl ConfidentialPolicyAdmissionAction {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Shield => "shield",
+            Self::Transfer => "transfer",
+            Self::Unshield => "unshield",
+        }
+    }
+}
+
+fn confidential_policy_admission_rejection(
+    action: ConfidentialPolicyAdmissionAction,
+) -> TransactionRejectionReason {
+    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+        "{} not permitted by policy",
+        action.label()
+    )))
+}
+
+fn effective_confidential_policy_mode_for_admission(
+    world: &impl WorldReadOnly,
+    asset_def_id: &AssetDefinitionId,
+    block_height: u64,
+) -> Result<ConfidentialPolicyMode, TransactionRejectionReason> {
+    let asset_definition = world
+        .asset_definition(asset_def_id)
+        .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
+    let policy = *asset_definition.confidential_policy();
+    let Some(transition) = policy.pending_transition() else {
+        return Ok(policy.mode());
+    };
+
+    if transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
+        && block_height >= transition.effective_height()
+    {
+        let transparent_total = world
+            .asset_total_amount(asset_def_id)
+            .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
+        if transparent_total > Numeric::zero() {
+            return Ok(transition.previous_mode());
+        }
+    }
+
+    Ok(policy.effective_mode(block_height))
+}
+
+fn validate_confidential_policy_for_action(
+    world: &impl WorldReadOnly,
+    asset_def_id: &AssetDefinitionId,
+    block_height: u64,
+    action: ConfidentialPolicyAdmissionAction,
+) -> Result<(), TransactionRejectionReason> {
+    let policy_mode =
+        effective_confidential_policy_mode_for_admission(world, asset_def_id, block_height)?;
+    match action {
+        ConfidentialPolicyAdmissionAction::Shield => match policy_mode {
+            ConfidentialPolicyMode::TransparentOnly => {
+                Err(confidential_policy_admission_rejection(action))
+            }
+            ConfidentialPolicyMode::Convertible => {
+                let allowed = world
+                    .zk_assets()
+                    .get(asset_def_id)
+                    .is_some_and(|st| st.allow_shield);
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(confidential_policy_admission_rejection(action))
+                }
+            }
+            ConfidentialPolicyMode::ShieldedOnly => Ok(()),
+        },
+        ConfidentialPolicyAdmissionAction::Transfer => {
+            if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
+                Err(confidential_policy_admission_rejection(action))
+            } else {
+                Ok(())
+            }
+        }
+        ConfidentialPolicyAdmissionAction::Unshield => match policy_mode {
+            ConfidentialPolicyMode::TransparentOnly | ConfidentialPolicyMode::ShieldedOnly => {
+                Err(confidential_policy_admission_rejection(action))
+            }
+            ConfidentialPolicyMode::Convertible => {
+                let allowed = world
+                    .zk_assets()
+                    .get(asset_def_id)
+                    .is_some_and(|st| st.allow_unshield);
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(confidential_policy_admission_rejection(action))
+                }
+            }
+        },
+    }
+}
+
+pub(crate) fn validate_confidential_policy_admission_for_world(
+    executable: &Executable,
+    world: &impl WorldReadOnly,
+    block_height: u64,
+) -> Result<(), TransactionRejectionReason> {
+    let Executable::Instructions(instructions) = executable else {
+        return Ok(());
+    };
+
+    for instruction in instructions {
+        let any = instruction.as_any();
+        if let Some(shield) = any.downcast_ref::<zk::Shield>() {
+            validate_confidential_policy_for_action(
+                world,
+                shield.asset(),
+                block_height,
+                ConfidentialPolicyAdmissionAction::Shield,
+            )?;
+        } else if let Some(transfer) = any.downcast_ref::<zk::ZkTransfer>() {
+            validate_confidential_policy_for_action(
+                world,
+                transfer.asset(),
+                block_height,
+                ConfidentialPolicyAdmissionAction::Transfer,
+            )?;
+        } else if let Some(unshield) = any.downcast_ref::<zk::Unshield>() {
+            validate_confidential_policy_for_action(
+                world,
+                unshield.asset(),
+                block_height,
+                ConfidentialPolicyAdmissionAction::Unshield,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
     format!(
         "fallback={} samples_used={} peers_seen={} offset_ms={} confidence_ms={} min_samples_ok={} offset_ok={} confidence_ok={}",
@@ -1151,8 +1295,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         let encoded_len = signed_bytes.len();
         let payload_hash = HashOf::new(tx.payload());
         let single_ed25519_key = Self::parsed_single_ed25519_key(&tx);
+        let entrypoint_hash = Self::external_entrypoint_hash_from_signed(&tx);
         let entrypoint = TransactionEntrypoint::External(tx);
-        let entrypoint_hash = entrypoint.hash();
         let signed_hash = Self::compat_signed_hash(entrypoint_hash);
         let accepted = Self::from_entrypoint(Cow::Owned(entrypoint));
         let _ = accepted.signed_bytes.set(Some(signed_bytes));
@@ -1193,16 +1337,35 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> HashOf<TransactionEntrypoint> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut writer = Blake2HashWriter::new();
-        norito::core::NoritoSerialize::serialize(&0u32, &mut writer)
-            .expect("u32 discriminant serialization cannot fail");
-        let payload_len = u64::try_from(signed_payload.len())
-            .expect("signed transaction payload length fits u64");
-        norito::core::write_len(&mut writer, payload_len)
-            .expect("hash writer accepts length prefix");
+        Self::write_external_entrypoint_hash_prefix(&mut writer, signed_payload.len());
         writer
             .write_all(signed_payload)
             .expect("hash writer accepts signed transaction payload");
         HashOf::from_untyped_unchecked(writer.finalize())
+    }
+
+    fn external_entrypoint_hash_from_signed(
+        tx: &SignedTransaction,
+    ) -> HashOf<TransactionEntrypoint> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let payload_len = Self::bare_encoded_len(tx);
+        let mut writer = Blake2HashWriter::new();
+        Self::write_external_entrypoint_hash_prefix(&mut writer, payload_len);
+        norito::core::NoritoSerialize::serialize(tx, &mut writer)
+            .expect("hash writer accepts signed transaction payload");
+        HashOf::from_untyped_unchecked(writer.finalize())
+    }
+
+    fn write_external_entrypoint_hash_prefix(
+        writer: &mut Blake2HashWriter,
+        signed_payload_len: usize,
+    ) {
+        norito::core::NoritoSerialize::serialize(&0u32, &mut *writer)
+            .expect("u32 discriminant serialization cannot fail");
+        let payload_len =
+            u64::try_from(signed_payload_len).expect("signed transaction payload length fits u64");
+        norito::core::write_len(&mut *writer, payload_len)
+            .expect("hash writer accepts length prefix");
     }
 
     fn framed_padding_for<T>() -> usize {
@@ -1214,19 +1377,16 @@ impl<'tx> AcceptedTransaction<'tx> {
         if remainder == 0 { 0 } else { align - remainder }
     }
 
-    fn framed_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
+    fn bare_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
         value
             .encoded_len_exact()
-            .map(|payload_len| {
-                norito::core::Header::SIZE
-                    .saturating_add(Self::framed_padding_for::<T>())
-                    .saturating_add(payload_len)
-            })
-            .unwrap_or_else(|| {
-                norito::core::Header::SIZE
-                    .saturating_add(Self::framed_padding_for::<T>())
-                    .saturating_add(norito::codec::Encode::encoded_len(value))
-            })
+            .unwrap_or_else(|| norito::codec::Encode::encoded_len(value))
+    }
+
+    fn framed_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
+        norito::core::Header::SIZE
+            .saturating_add(Self::framed_padding_for::<T>())
+            .saturating_add(Self::bare_encoded_len(value))
     }
 
     fn framed_encoded_payload_len<T>(payload_len: usize) -> usize {
@@ -1298,7 +1458,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: &SignedTransaction,
         encoded_len: usize,
     ) -> PreparedTransactionMetadata {
-        let entrypoint_hash = tx.hash_as_entrypoint();
+        let entrypoint_hash = Self::external_entrypoint_hash_from_signed(tx);
         Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
             tx,
             entrypoint_hash,
@@ -3154,6 +3314,11 @@ impl StateBlock<'_> {
         };
 
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
+        validate_confidential_policy_admission_for_world(
+            tx.instructions(),
+            &state_transaction.world,
+            state_transaction.block_height(),
+        )?;
 
         if !is_heartbeat {
             enforce_fraud_policy(
@@ -3757,19 +3922,27 @@ impl StateBlock<'_> {
             debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
             let policy = ivm::SyscallPolicy::AbiV1;
             for op in decoded.iter() {
-                if ivm::instruction::wide::opcode(op.inst) == ivm::instruction::wide::system::SCALL
-                {
+                let opcode = ivm::instruction::wide::opcode(op.inst);
+                let number = if opcode == ivm::instruction::wide::system::SCALL {
                     // SCALL immediate is an unsigned byte; reinterpret negative imm8 as its
                     // 8-bit two's complement value to mirror VM execution semantics.
-                    let number = u32::from(ivm::instruction::wide::imm8(op.inst).to_ne_bytes()[0]);
-                    if !ivm::syscalls::is_syscall_allowed(policy, number) {
-                        return Err(TransactionRejectionReason::Validation(
-                            ValidationFail::NotPermitted(format!(
-                                "unknown syscall number 0x{number:02x} for abi_version {}",
-                                meta.abi_version
-                            )),
-                        ));
-                    }
+                    Some(u32::from(
+                        ivm::instruction::wide::imm8(op.inst).to_ne_bytes()[0],
+                    ))
+                } else if opcode == ivm::instruction::wide::system::SYSTEM {
+                    Some(ivm::encoding::wide::decode_syscallx(op.inst))
+                } else {
+                    None
+                };
+                if let Some(number) = number
+                    && !ivm::syscalls::is_syscall_allowed(policy, number)
+                {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(format!(
+                            "unknown syscall number 0x{number:02x} for abi_version {}",
+                            meta.abi_version
+                        )),
+                    ));
                 }
             }
         }
@@ -5456,6 +5629,71 @@ pub mod tests {
         (World::with([domain], [account], []), authority_id, key_pair)
     }
 
+    fn world_with_convertible_zk_asset(
+        allow_shield: bool,
+        allow_unshield: bool,
+    ) -> (World, AccountId, AssetDefinitionId) {
+        let (mut world, authority_id, _) = world_with_authority("wonderland");
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "zkpolicy".parse().expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .confidential_policy(
+                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+            )
+            .build(&authority_id);
+        world
+            .asset_definitions
+            .insert(asset_def_id.clone(), asset_definition);
+        let mut zk_state = crate::state::ZkAssetState::default();
+        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+        zk_state.allow_shield = allow_shield;
+        zk_state.allow_unshield = allow_unshield;
+        world.zk_assets.insert(asset_def_id.clone(), zk_state);
+        (world, authority_id, asset_def_id)
+    }
+
+    #[test]
+    fn confidential_policy_admission_rejects_disabled_shield() {
+        let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(false, true);
+        let executable =
+            Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
+                asset_def_id,
+                authority_id,
+                10,
+                [7; 32],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            ))]));
+
+        let err = validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
+            .expect_err("disabled shield must be rejected during admission");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                assert_eq!(reason, "shield not permitted by policy");
+            }
+            other => panic!("expected policy NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confidential_policy_admission_allows_enabled_shield() {
+        let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(true, true);
+        let executable =
+            Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
+                asset_def_id,
+                authority_id,
+                10,
+                [9; 32],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            ))]));
+
+        validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
+            .expect("enabled shield should pass confidential policy admission");
+    }
+
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: TestDataSpaceId,
@@ -6526,6 +6764,26 @@ pub mod tests {
     }
 
     #[test]
+    fn borrowed_external_entrypoint_hash_matches_canonical_hash() {
+        let chain: ChainId = "accepted-borrowed-entrypoint-hash-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "borrowed-hash".into())])
+            .sign(keypair.private_key());
+        let versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+
+        assert_eq!(
+            AcceptedTransaction::external_entrypoint_hash_from_signed(&signed),
+            signed.hash_as_entrypoint()
+        );
+        assert_eq!(
+            AcceptedTransaction::external_entrypoint_hash_from_signed_payload(&versioned[1..]),
+            signed.hash_as_entrypoint()
+        );
+    }
+
+    #[test]
     fn accept_with_canonical_signed_bytes_reuses_payload_cache() {
         let chain: ChainId = "accepted-canonical-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7425,6 +7683,21 @@ pub mod tests {
         program
     }
 
+    /// Build a minimal program that issues a single extended syscall followed by HALT.
+    fn minimal_ivm_program_with_syscallx(abi_version: u8, syscall: u32) -> Vec<u8> {
+        let mut code = Vec::new();
+        code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let mut program = Vec::new();
+        program.extend_from_slice(b"IVM\0");
+        program.extend_from_slice(&[1, 0, 0, 4]);
+        program.extend_from_slice(&1_000u64.to_le_bytes());
+        program.push(abi_version);
+        program.extend_from_slice(&code);
+        program
+    }
+
     const TEST_GAS_LIMIT: u64 = 1_000_000;
 
     fn metadata_with_gas_limit(limit: u64) -> Metadata {
@@ -8147,6 +8420,48 @@ pub mod tests {
 
         // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
         let prog = minimal_ivm_program_with_syscall(1, syscall);
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+            .sign(kp.private_key());
+
+        let mut ivm_cache = IvmCache::new();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        match result {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                let expected = format!("unknown syscall number 0x{syscall:02x}");
+                assert!(
+                    msg.contains(&expected) && msg.contains("abi_version 1"),
+                    "expected UnknownSyscall rejection to surface via NotPermitted, got {msg}"
+                );
+            }
+            other => panic!("Expected UnknownSyscall rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_ivm_unknown_scallx_rejected_at_admission() {
+        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use nonzero_ext::nonzero;
+
+        let (world, authority_id, kp) = world_with_authority("wonderland");
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query_handle = crate::query::store::LiveQueryStore::start_test();
+        let chain: ChainId = "chain".parse().unwrap();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let syscall = 0x02_0000;
+        assert!(!ivm::syscalls::is_syscall_allowed(
+            ivm::SyscallPolicy::AbiV1,
+            syscall
+        ));
+
+        let prog = minimal_ivm_program_with_syscallx(1, syscall);
         let tx = TransactionBuilder::new(chain, authority_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))

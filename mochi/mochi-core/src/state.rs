@@ -805,10 +805,8 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::BlockHeader(_) => "BlockHeader",
         QueryOutputBatchBox::BlockHeaderHash(_) => "BlockHeaderHash",
         QueryOutputBatchBox::ProofRecord(_) => "ProofRecord",
-        QueryOutputBatchBox::OfflineAllowanceRecord(_) => "OfflineAllowanceRecord",
-        QueryOutputBatchBox::OfflineToOnlineTransfer(_) => "OfflineToOnlineTransfer",
-        QueryOutputBatchBox::OfflineCounterSummary(_) => "OfflineCounterSummary",
-        QueryOutputBatchBox::OfflineVerdictRevocation(_) => "OfflineVerdictRevocation",
+        QueryOutputBatchBox::AssetEscrowRecord(_) => "AssetEscrowRecord",
+        QueryOutputBatchBox::AnonymousAssetEscrowRecord(_) => "AnonymousAssetEscrowRecord",
     }
 }
 
@@ -1082,19 +1080,19 @@ mod tests {
     }
 
     #[test]
-    fn batch_label_handles_rwa_and_offline_variants() {
+    fn batch_label_handles_rwa_and_escrow_variants() {
         assert_eq!(
             batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
             "RwaId"
         );
         assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
         assert_eq!(
-            batch_label(&QueryOutputBatchBox::OfflineCounterSummary(Vec::new())),
-            "OfflineCounterSummary"
+            batch_label(&QueryOutputBatchBox::AssetEscrowRecord(Vec::new())),
+            "AssetEscrowRecord"
         );
         assert_eq!(
-            batch_label(&QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())),
-            "OfflineVerdictRevocation"
+            batch_label(&QueryOutputBatchBox::AnonymousAssetEscrowRecord(Vec::new())),
+            "AnonymousAssetEscrowRecord"
         );
         assert_eq!(
             batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),

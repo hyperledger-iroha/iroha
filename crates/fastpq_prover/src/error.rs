@@ -151,7 +151,7 @@ pub enum Error {
         /// Position of the failing query.
         index: usize,
     },
-    /// FASTPQ replay verifier input exceeded a configured limit.
+    /// FASTPQ verifier input exceeded a configured limit.
     #[error("FASTPQ verifier limit `{limit}` exceeded: {actual} > {max}")]
     VerifierLimitExceeded {
         /// Name of the rejected limit.
@@ -234,18 +234,12 @@ pub enum Error {
         #[source]
         source: norito::core::Error,
     },
-    /// Transfer gadget Merkle proof payload could not be decoded.
-    #[error("failed to decode transfer merkle proof: {source}")]
-    TransferProofDecode {
+    /// AXT `FastPQ` proof payload could not be decoded.
+    #[error("failed to decode AXT FastPQ proof payload: {source}")]
+    AxtProofPayloadDecode {
         /// Underlying Norito error.
         #[source]
         source: norito::core::Error,
-    },
-    /// Transfer gadget Merkle proof advertised an unsupported version.
-    #[error("unsupported transfer merkle proof version {version}")]
-    TransferProofUnsupportedVersion {
-        /// Version identifier contained in the proof payload.
-        version: u16,
     },
     /// Numeric value referenced by the transfer gadget cannot be normalized into witness units.
     #[error("transfer gadget numeric `{field}` cannot be normalized into 64-bit witness units")]

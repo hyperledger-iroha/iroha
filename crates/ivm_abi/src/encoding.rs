@@ -122,6 +122,19 @@ pub mod wide {
         ((word >> 24) as u8, (word & 0xFF) as u8)
     }
 
+    /// Encode a 24-bit extended syscall id in the `SYSTEM`/SCALLX slot.
+    #[inline]
+    pub const fn encode_syscallx(syscall: u32) -> u32 {
+        assert!(syscall <= 0x00ff_ffff);
+        ((crate::instruction::wide::system::SYSTEM as u32) << 24) | syscall
+    }
+
+    /// Decode the 24-bit extended syscall id carried by a `SYSTEM`/SCALLX word.
+    #[inline]
+    pub const fn decode_syscallx(word: u32) -> u32 {
+        word & 0x00ff_ffff
+    }
+
     #[inline]
     pub const fn encode_halt() -> u32 {
         (crate::instruction::wide::control::HALT as u32) << 24
@@ -167,5 +180,16 @@ mod tests {
         assert_eq!(base, 3);
         assert_eq!(rs_lo, 5);
         assert_eq!(rs_hi, 6);
+    }
+
+    #[test]
+    fn syscallx_roundtrips_24_bit_number() {
+        let number = 0x00ab_cdef;
+        let word = wide::encode_syscallx(number);
+        assert_eq!(
+            instruction::wide::opcode(word),
+            instruction::wide::system::SYSTEM
+        );
+        assert_eq!(wide::decode_syscallx(word), number);
     }
 }

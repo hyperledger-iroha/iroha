@@ -246,7 +246,7 @@ pub mod wide {
                 // System
                 | system::SCALL
                 | system::GETGAS
-                // NOTE: system::SYSTEM is reserved and currently invalid.
+                | system::SYSTEM
                 // Crypto/vector
                 | crypto::VADD32
                 | crypto::VADD64

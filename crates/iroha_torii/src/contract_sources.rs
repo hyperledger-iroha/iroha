@@ -97,7 +97,7 @@ pub struct ContractViewEntrypointDto {
     norito::derive::NoritoDeserialize,
 )]
 pub struct ContractViewSyscallDto {
-    pub number: u8,
+    pub number: u32,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub count: u64,
@@ -544,7 +544,7 @@ fn render_program_syscalls(analysis: &ProgramAnalysis) -> String {
         .syscalls
         .iter()
         .map(|entry| {
-            let name = ivm::syscalls::syscall_name(entry.number.into()).unwrap_or("UNKNOWN");
+            let name = ivm::syscalls::syscall_name(entry.number).unwrap_or("UNKNOWN");
             format!("{name} x{}", entry.count)
         })
         .collect::<Vec<_>>()
@@ -740,7 +740,7 @@ fn to_analysis_dto(analysis: &ProgramAnalysis) -> ContractViewAnalysisDto {
             .iter()
             .map(|entry| ContractViewSyscallDto {
                 number: entry.number,
-                name: ivm::syscalls::syscall_name(entry.number.into()).map(ToOwned::to_owned),
+                name: ivm::syscalls::syscall_name(entry.number).map(ToOwned::to_owned),
                 count: entry.count,
             })
             .collect(),

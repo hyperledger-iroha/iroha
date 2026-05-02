@@ -1171,10 +1171,11 @@ impl<'a> Parser<'a> {
                             meta.abi_version = Some(value as u8);
                         }
                         "vector_length" | "vl" => {
-                            if !(0..=u8::MAX as i64).contains(&value) {
+                            if !(0..=ivm_abi::metadata::VECTOR_LENGTH_MAX as i64).contains(&value) {
                                 return Err(ParseError {
                                     message: format!(
-                                        "meta key '{key}' value {value} out of range (0..=255)"
+                                        "meta key '{key}' value {value} out of range (0..={})",
+                                        ivm_abi::metadata::VECTOR_LENGTH_MAX
                                     ),
                                     line: value_tok.line,
                                     column: value_tok.column,
@@ -2637,7 +2638,7 @@ mod tests {
     fn parse_contract_meta_rejects_out_of_range_values() {
         let src = r#"
         seiyaku C {
-            meta { vl: 999; }
+            meta { vl: 65; }
         }
         "#;
         let err = parse(src).unwrap_err();

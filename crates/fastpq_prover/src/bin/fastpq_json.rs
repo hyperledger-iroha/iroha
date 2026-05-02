@@ -12,13 +12,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::{
     AXT_DEFAULT_PARAMETER, Proof, Prover, TransitionBatch,
-    batch_manifest_sha256 as axt_batch_manifest_sha256, build_batch_from_binding,
-    canonicalize_binding, verify,
+    batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch, canonicalize_binding,
+    encode_axt_fastpq_payload, transition_batch_from_model, verify,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
+    fastpq::FastpqTransitionBatch,
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtTouchSpec,
         LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, TouchManifest,
@@ -27,8 +28,6 @@ use iroha_data_model::{
 use norito::to_bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-
-const DEFAULT_SAMPLE_COUNT: usize = 7;
 
 #[derive(Parser)]
 #[command(name = "fastpq_json")]
@@ -59,13 +58,9 @@ struct MeasureInput {
     #[serde(default)]
     dataspace: String,
     #[serde(default)]
-    source_dsid: u64,
-    #[serde(default)]
     verifier_id: String,
     #[serde(default)]
     verifier_version: String,
-    #[serde(default = "default_sample_count")]
-    sample_count: usize,
     claim_types: Vec<String>,
     #[serde(default)]
     fixtures: Vec<ProofRequest>,
@@ -122,6 +117,7 @@ struct ProofRequest {
     source_lane_id: u32,
     #[serde(default = "default_relay_block_height")]
     relay_block_height: u64,
+    batch_base64: String,
     #[serde(default)]
     effect_binding: Option<EffectBindingRequest>,
 }
@@ -191,10 +187,6 @@ struct VerifyResponse {
     batch_manifest_sha256: String,
 }
 
-fn default_sample_count() -> usize {
-    DEFAULT_SAMPLE_COUNT
-}
-
 fn default_relay_block_height() -> u64 {
     1
 }
@@ -237,50 +229,39 @@ fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
     let parameter = normalized_parameter(&request.parameter);
     let verifier_id = normalized_verifier_id(&request.verifier_id);
     let verifier_version = normalized_verifier_version(&request.verifier_version);
-    let sample_count = request.sample_count.max(1);
-    let fixture_mode = !request.fixtures.is_empty();
+    if request.fixtures.is_empty() {
+        return Err(
+            "measure requires maintained fixtures with execution-captured batch_base64; \
+             synthetic descriptor-only requests are not supported"
+                .to_string(),
+        );
+    }
     let mut benchmarks = BTreeMap::new();
     for claim_type in &request.claim_types {
         let claim_type = normalized_claim_type(claim_type)?;
-        let mut proof_sizes = Vec::with_capacity(sample_count);
-        let mut prove_ms = Vec::with_capacity(sample_count);
-        let mut verify_ms = Vec::with_capacity(sample_count);
-        let proof_requests: Vec<ProofRequest> = if fixture_mode {
-            request
-                .fixtures
-                .iter()
-                .filter_map(|fixture| {
-                    let normalized = normalized_claim_type(&fixture.claim_type).ok()?;
-                    if normalized == claim_type {
-                        Some(ProofRequest {
-                            parameter: normalized_parameter(&fixture.parameter),
-                            ..fixture.clone()
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            (0..sample_count)
-                .map(|sample_index| {
-                    synthetic_proof_request(
-                        &parameter,
-                        request.source_dsid,
-                        &claim_type,
-                        &request.dataspace,
-                        sample_index,
-                        &verifier_id,
-                        &verifier_version,
-                    )
-                })
-                .collect()
-        };
+        let proof_requests: Vec<ProofRequest> = request
+            .fixtures
+            .iter()
+            .filter_map(|fixture| {
+                let normalized = normalized_claim_type(&fixture.claim_type).ok()?;
+                if normalized == claim_type {
+                    Some(ProofRequest {
+                        parameter: normalized_parameter(&fixture.parameter),
+                        ..fixture.clone()
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
         if proof_requests.is_empty() {
             return Err(format!(
                 "measure input is missing maintained fixtures for claim_type: {claim_type}"
             ));
         }
+        let mut proof_sizes = Vec::with_capacity(proof_requests.len());
+        let mut prove_ms = Vec::with_capacity(proof_requests.len());
+        let mut verify_ms = Vec::with_capacity(proof_requests.len());
         for proof_request in &proof_requests {
             let prove = prove_request(proof_request)?;
             proof_sizes.push(prove.0.len());
@@ -307,16 +288,8 @@ fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
     }
     Ok(MeasureOutput {
         dataspace: request.dataspace,
-        measurement_mode: if fixture_mode {
-            "fastpq_prover_fixture_replay".to_string()
-        } else {
-            "fastpq_prover".to_string()
-        },
-        sample_count: if fixture_mode {
-            request.fixtures.len().max(1)
-        } else {
-            sample_count
-        },
+        measurement_mode: "fastpq_prover_fixture_replay".to_string(),
+        sample_count: request.fixtures.len(),
         parameter,
         benchmarks,
     })
@@ -414,49 +387,19 @@ fn prove_request(
 
 fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, String> {
     let binding = request_to_binding(request);
-    build_batch_from_binding(&binding).map_err(|err| err.to_string())
+    let mut batch = decode_request_batch(&request.batch_base64)?;
+    bind_axt_batch(&mut batch, &binding)
+        .map_err(|err| format!("failed to bind AXT metadata to FASTPQ batch: {err}"))?;
+    Ok(batch)
 }
 
-fn synthetic_proof_request(
-    parameter: &str,
-    source_dsid: u64,
-    claim_type: &str,
-    dataspace: &str,
-    sample_index: usize,
-    verifier_id: &str,
-    verifier_version: &str,
-) -> ProofRequest {
-    let seed = format!("{dataspace}:{claim_type}:{sample_index}");
-    ProofRequest {
-        parameter: parameter.to_string(),
-        source_dsid,
-        source_dataspace: dataspace.to_string(),
-        source_receipt_id: sha256_hex(format!("{seed}:receipt").as_bytes()),
-        target_dsids: vec![source_dsid.saturating_add(1)],
-        source_tx_commitment: sha256_hex(seed.as_bytes()),
-        claim_type: claim_type.to_string(),
-        claim_digest: sha256_hex(format!("{seed}:claim").as_bytes()),
-        witness_commitment: sha256_hex(format!("{seed}:witness").as_bytes()),
-        policy_commitment: sha256_hex(format!("{seed}:policy").as_bytes()),
-        verified_effect_type: "receipt_bound_effect".to_string(),
-        corridor: dataspace.to_string(),
-        verifier_id: verifier_id.to_string(),
-        verifier_version: verifier_version.to_string(),
-        source_lane_id: u32::try_from(source_dsid).unwrap_or_default(),
-        relay_block_height: u64::try_from(sample_index)
-            .unwrap_or_default()
-            .saturating_add(1),
-        effect_binding: Some(EffectBindingRequest {
-            destination_domain: Some("lane".to_string()),
-            destination_account_id: None,
-            vault_account_id: None,
-            issuance_account_id: None,
-            source_asset_definition_id: Some(format!("source_asset_{sample_index}")),
-            destination_asset_definition_id: Some(format!("destination_asset_{sample_index}")),
-            source_amount_i64: Some(50_000 + i64::try_from(sample_index).unwrap_or_default()),
-            destination_amount_i64: Some(50_000 + i64::try_from(sample_index).unwrap_or_default()),
-        }),
-    }
+fn decode_request_batch(encoded: &str) -> Result<TransitionBatch, String> {
+    let bytes = BASE64_STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|err| format!("invalid batch_base64: {err}"))?;
+    let dto: FastpqTransitionBatch = norito::decode_from_bytes(&bytes)
+        .map_err(|err| format!("failed to decode batch_base64 FastpqTransitionBatch: {err}"))?;
+    Ok(transition_batch_from_model(&dto))
 }
 
 fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<AxtArtifacts, String> {
@@ -478,6 +421,11 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
     let manifest_root: [u8; 32] = manifest_root_hash.into();
     let fastpq_binding = canonicalize_binding(&request_to_binding(request))
         .map_err(|err| format!("canonical binding failed: {err}"))?;
+    let batch = build_batch_from_request(request)?;
+    let proof: Proof = norito::decode_from_bytes(proof_bytes)
+        .map_err(|err| format!("failed to decode proof bytes for AXT payload: {err}"))?;
+    let fastpq_payload = encode_axt_fastpq_payload(&batch, proof)
+        .map_err(|err| format!("failed to encode AXT FASTPQ payload: {err}"))?;
     let proof_envelope = AxtProofEnvelope {
         dsid,
         manifest_root,
@@ -485,7 +433,7 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
             &batch_manifest_sha256(request),
             "batch_manifest_sha256",
         )?),
-        proof: proof_bytes.to_vec(),
+        proof: fastpq_payload,
         fastpq_binding: Some(fastpq_binding),
         committed_amount: None,
         amount_commitment: Some(hex_digest32(
@@ -562,10 +510,10 @@ fn build_relay_artifacts(
     let base = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
         .map_err(|err| format!("failed to build lane relay envelope: {err}"))?
         .with_manifest_root(Some(manifest_root));
-    let proof_digest = base.expected_fastpq_proof_digest(Some(block_height));
+    let proof_digest = Hash::new(proof_payload);
     let envelope = base.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
         proof_digest,
-        verified_at_height: Some(block_height),
+        verified_at_height: block_height,
     }));
     let relay_ref = envelope.relay_ref();
     let relay_envelope_hex = norito_hex(&envelope)?;

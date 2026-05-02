@@ -2201,8 +2201,8 @@ pub struct ExecWitnessMsg {
     pub witness: ExecWitness,
 }
 
-/// VRF commit (`NPoS` only).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+/// VRF commit used by the Sumeragi epoch-randomness path.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfCommit {
     /// Epoch index to which the commit applies.
     pub epoch: u64,
@@ -2210,10 +2210,12 @@ pub struct VrfCommit {
     pub commitment: [u8; 32],
     /// Signer index within the validator set.
     pub signer: ValidatorIndex,
+    /// BLS signature over the canonical VRF-commit preimage.
+    pub bls_sig: Vec<u8>,
 }
 
-/// VRF reveal (`NPoS` only).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+/// VRF reveal used by the Sumeragi epoch-randomness path.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfReveal {
     /// Epoch index to which the reveal applies.
     pub epoch: u64,
@@ -2221,6 +2223,8 @@ pub struct VrfReveal {
     pub reveal: [u8; 32],
     /// Signer index within the validator set.
     pub signer: ValidatorIndex,
+    /// BLS signature over the canonical VRF-reveal preimage.
+    pub bls_sig: Vec<u8>,
 }
 
 /// Reconfiguration payload (permissioned governance path).
@@ -2688,6 +2692,7 @@ mod tests {
             epoch: 7,
             commitment: [0xAB; 32],
             signer: 5,
+            bls_sig: Vec::new(),
         }
     }
 
@@ -2696,6 +2701,7 @@ mod tests {
             epoch: 7,
             reveal: [0xCD; 32],
             signer: 5,
+            bls_sig: Vec::new(),
         }
     }
 

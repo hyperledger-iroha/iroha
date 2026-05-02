@@ -2781,6 +2781,7 @@ mod network_relay_tests {
             epoch: 1,
             commitment: [0x13; 32],
             signer: 0,
+            bls_sig: Vec::new(),
         };
         sumeragi_msg(BlockMessage::VrfCommit(commit))
     }
@@ -2790,6 +2791,7 @@ mod network_relay_tests {
             epoch: 1,
             reveal: [0x14; 32],
             signer: 0,
+            bls_sig: Vec::new(),
         };
         sumeragi_msg(BlockMessage::VrfReveal(reveal))
     }

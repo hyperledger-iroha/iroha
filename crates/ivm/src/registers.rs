@@ -9,9 +9,10 @@
 //! each register when zero–knowledge mode is active.  Vector operations no
 //! longer use a dedicated register file – instead groups of the general
 //! registers are interpreted as vectors.  This module implements that design.
-use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
+use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 
 use crate::zk::{RegEvent, with_reg_logger};
@@ -23,37 +24,33 @@ pub struct Registers {
     /// and `true` denotes private (secret) data.
     tags: [bool; 256],
     /// Execution-scope usage bookkeeping for register-telemetry sampling.
-    usage: Cell<RegisterUsage>,
+    usage: Mutex<RegisterUsage>,
     /// Merkle tree commitment to the register contents and tags (canonical type).
-    tree: RefCell<MerkleTree<[u8; 32]>>,
+    tree: Mutex<MerkleTree<[u8; 32]>>,
     /// Cached leaf digests for efficient rebuilds of the canonical Merkle tree.
     leaves: Vec<[u8; 32]>,
     /// Dirty flag to defer rebuilds until root/path are requested.
-    dirty: Cell<bool>,
+    dirty: AtomicBool,
     /// Pending register indices awaiting incremental rebuild.
-    pending: RefCell<Vec<usize>>,
+    pending: Mutex<Vec<usize>>,
 }
 
 impl Clone for Registers {
     fn clone(&self) -> Self {
-        // Avoid cloning RefCell<MerkleTree> via RefCell::clone(), which would
-        // attempt to borrow() the inner tree and can panic if a mutable borrow
-        // is active in another thread (e.g., during incremental updates).
-        // Instead, rebuild a fresh Merkle tree from cached leaf digests.
         let gpr = self.gpr;
         let tags = self.tags;
-        let usage = self.usage.get();
+        let usage = *self.usage.lock();
         let leaves = self.leaves.clone();
         let tree = MerkleTree::from_hashed_leaves_sha256(leaves.clone());
-        let pending = self.pending.borrow().clone();
+        let pending = self.pending.lock().clone();
         Registers {
             gpr,
             tags,
-            usage: Cell::new(usage),
-            tree: RefCell::new(tree),
+            usage: Mutex::new(usage),
+            tree: Mutex::new(tree),
             leaves,
-            dirty: Cell::new(self.dirty.get()),
-            pending: RefCell::new(pending),
+            dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
+            pending: Mutex::new(pending),
         }
     }
 }
@@ -64,9 +61,8 @@ impl Registers {
         #[cfg(any(feature = "iroha_telemetry", test))]
         {
             debug_assert!(idx < 256);
-            let mut usage = self.usage.get();
+            let mut usage = self.usage.lock();
             usage.mark(idx);
-            self.usage.set(usage);
         }
         #[cfg(not(any(feature = "iroha_telemetry", test)))]
         {
@@ -76,18 +72,18 @@ impl Registers {
 
     #[inline]
     fn mark_pending(&self, idx: usize) {
-        let mut pending = self.pending.borrow_mut();
+        let mut pending = self.pending.lock();
         if !pending.contains(&idx) {
             pending.push(idx);
         }
-        self.dirty.set(true);
+        self.dirty.store(true, Ordering::Release);
     }
 
     #[inline]
     pub fn new() -> Self {
         let gpr = [0u64; 256];
         let tags = [false; 256];
-        let usage = Cell::new(RegisterUsage::new());
+        let usage = Mutex::new(RegisterUsage::new());
         let zero_leaf: [u8; 32] = {
             let b = [0u8; 9];
             Sha256::digest(b).into()
@@ -98,10 +94,10 @@ impl Registers {
             gpr,
             tags,
             usage,
-            tree: RefCell::new(tree),
+            tree: Mutex::new(tree),
             leaves,
-            dirty: Cell::new(false),
-            pending: RefCell::new(Vec::new()),
+            dirty: AtomicBool::new(false),
+            pending: Mutex::new(Vec::new()),
         }
     }
 
@@ -110,7 +106,7 @@ impl Registers {
     pub fn usage_summary(&self) -> RegisterUsageSummary {
         #[cfg(any(feature = "iroha_telemetry", test))]
         {
-            self.usage.get().summary()
+            (*self.usage.lock()).summary()
         }
         #[cfg(not(any(feature = "iroha_telemetry", test)))]
         {
@@ -121,8 +117,7 @@ impl Registers {
     /// Clear the execution-scope usage accounting without touching register contents.
     #[inline]
     pub fn clear_usage(&self) {
-        #[cfg(any(feature = "iroha_telemetry", test))]
-        self.usage.set(RegisterUsage::new());
+        *self.usage.lock() = RegisterUsage::new();
     }
     /// Get the value of register `idx`.
     #[inline]
@@ -153,9 +148,9 @@ impl Registers {
             #[cfg(feature = "merkle_incremental")]
             {
                 self.tree
-                    .borrow_mut()
+                    .lock()
                     .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-                self.dirty.set(false);
+                self.dirty.store(false, Ordering::Release);
             }
             #[cfg(not(feature = "merkle_incremental"))]
             {
@@ -184,9 +179,9 @@ impl Registers {
         #[cfg(feature = "merkle_incremental")]
         {
             self.tree
-                .borrow_mut()
+                .lock()
                 .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-            self.dirty.set(false);
+            self.dirty.store(false, Ordering::Release);
         }
         #[cfg(not(feature = "merkle_incremental"))]
         {
@@ -223,9 +218,9 @@ impl Registers {
             #[cfg(feature = "merkle_incremental")]
             {
                 self.tree
-                    .borrow_mut()
+                    .lock()
                     .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-                self.dirty.set(false);
+                self.dirty.store(false, Ordering::Release);
             }
             #[cfg(not(feature = "merkle_incremental"))]
             {
@@ -254,9 +249,9 @@ impl Registers {
         #[cfg(feature = "merkle_incremental")]
         {
             self.tree
-                .borrow_mut()
+                .lock()
                 .update_hashed_leaf_sha256(idx, self.leaves[idx]);
-            self.dirty.set(false);
+            self.dirty.store(false, Ordering::Release);
         }
         #[cfg(not(feature = "merkle_incremental"))]
         {
@@ -295,18 +290,15 @@ impl Registers {
     /// Return the Merkle root of the register file.
     #[inline]
     pub fn merkle_root(&self) -> HashOf<MerkleTree<[u8; 32]>> {
-        self.ensure_built()
-            .borrow()
-            .root()
-            .expect("tree has at least one leaf")
+        self.ensure_built();
+        self.tree.lock().root().expect("tree has at least one leaf")
     }
 
     /// Merkle authentication path for register `idx`.
     #[inline]
     pub fn merkle_path(&self, idx: usize) -> Vec<[u8; 32]> {
         let proof = self
-            .ensure_built()
-            .borrow()
+            .ensure_built_and_lock()
             .get_proof(idx as u32)
             .expect("valid index");
         proof
@@ -323,8 +315,7 @@ impl Registers {
         &self,
         idx: usize,
     ) -> (HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>) {
-        let tree_ref = self.ensure_built();
-        let tree = tree_ref.borrow();
+        let tree = self.ensure_built_and_lock();
         let root = tree.root().expect("tree has at least one leaf");
         let path = tree
             .get_proof(idx as u32)
@@ -362,12 +353,17 @@ impl Registers {
     /// deterministic full rebuild today; once `iroha_crypto` exposes a
     /// canonical incremental builder, the `merkle_incremental` feature gate
     /// will switch this to an incremental update path.
-    fn ensure_built(&self) -> &RefCell<MerkleTree<[u8; 32]>> {
-        if self.dirty.get() {
+    fn ensure_built(&self) {
+        if self.dirty.load(Ordering::Acquire) {
             self.rebuild_tree();
-            self.dirty.set(false);
+            self.dirty.store(false, Ordering::Release);
         }
-        &self.tree
+    }
+
+    #[inline]
+    fn ensure_built_and_lock(&self) -> parking_lot::MutexGuard<'_, MerkleTree<[u8; 32]>> {
+        self.ensure_built();
+        self.tree.lock()
     }
 
     #[inline]
@@ -375,7 +371,7 @@ impl Registers {
     fn rebuild_tree(&self) {
         #[cfg(feature = "merkle_incremental")]
         {
-            let mut pending = self.pending.borrow_mut();
+            let mut pending = self.pending.lock();
             if pending.is_empty() {
                 return;
             }
@@ -384,7 +380,7 @@ impl Registers {
             let indices: Vec<usize> = pending.drain(..).collect();
             drop(pending);
 
-            let mut tree = self.tree.borrow_mut();
+            let mut tree = self.tree.lock();
             for idx in indices {
                 tree.update_hashed_leaf_sha256(idx, self.leaves[idx]);
             }
@@ -392,8 +388,8 @@ impl Registers {
         #[cfg(not(feature = "merkle_incremental"))]
         {
             let tree = MerkleTree::from_hashed_leaves_sha256(self.leaves.clone());
-            self.tree.replace(tree);
-            self.pending.borrow_mut().clear();
+            *self.tree.lock() = tree;
+            self.pending.lock().clear();
         }
     }
 

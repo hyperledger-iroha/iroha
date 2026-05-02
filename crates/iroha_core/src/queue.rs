@@ -44,7 +44,7 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    transaction::{Executable, TransactionEntrypoint},
+    transaction::{Executable, TransactionEntrypoint, error::TransactionRejectionReason},
 };
 use iroha_logger::{trace, warn};
 use iroha_primitives::time::TimeSource;
@@ -507,6 +507,13 @@ pub enum Error {
         /// Reason describing why the transaction could not cover the Nexus fee bound.
         reason: String,
     },
+    /// Confidential policy admission rejected the transaction before queueing: {detail} ({reason})
+    ConfidentialPolicyAdmissionRejected {
+        /// Reason describing why the confidential policy rejected the transaction.
+        reason: TransactionRejectionReason,
+        /// Human-readable confidential policy rejection detail.
+        detail: String,
+    },
     /// Nexus fee admission encountered invalid node configuration: {reason}
     NexusFeeAdmissionConfigInvalid {
         /// Reason describing which Nexus fee configuration entry is invalid.
@@ -619,19 +626,39 @@ trait QueueAdmissionStateAccess {
         authority: &AccountId,
         lane_alias: &str,
     ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
+
+    fn validate_confidential_policy_admission(
+        &mut self,
+        executable: &Executable,
+    ) -> Result<(), Error>;
 }
 
 struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
     nexus: &'view Nexus,
+    next_block_height: u64,
+}
+
+fn transaction_rejection_detail(reason: &TransactionRejectionReason) -> String {
+    match reason {
+        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+            detail,
+        )) => detail.clone(),
+        _ => reason.to_string(),
+    }
 }
 
 impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
     const fn new<'view>(
         world: &'view W,
         nexus: &'view Nexus,
+        next_block_height: u64,
     ) -> EagerAdmissionStateAccess<'view, W> {
-        EagerAdmissionStateAccess { world, nexus }
+        EagerAdmissionStateAccess {
+            world,
+            nexus,
+            next_block_height,
+        }
     }
 }
 
@@ -660,6 +687,21 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
         lane_alias: &str,
     ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
         Queue::extract_lane_authority_domains(self.world, authority, lane_alias)
+    }
+
+    fn validate_confidential_policy_admission(
+        &mut self,
+        executable: &Executable,
+    ) -> Result<(), Error> {
+        crate::tx::validate_confidential_policy_admission_for_world(
+            executable,
+            self.world,
+            self.next_block_height,
+        )
+        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
+            detail: transaction_rejection_detail(&reason),
+            reason,
+        })
     }
 }
 
@@ -731,6 +773,25 @@ impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
             authority,
             lane_alias,
         )
+    }
+
+    fn validate_confidential_policy_admission(
+        &mut self,
+        executable: &Executable,
+    ) -> Result<(), Error> {
+        self.ensure_world_and_nexus();
+        let next_block_height = u64::try_from(self.state.committed_height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        crate::tx::validate_confidential_policy_admission_for_world(
+            executable,
+            self.world.as_ref().expect("world initialized above"),
+            next_block_height,
+        )
+        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
+            detail: transaction_rejection_detail(&reason),
+            reason,
+        })
     }
 }
 
@@ -1624,6 +1685,7 @@ impl Queue {
                     iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
                 ),
             ),
+            Error::ConfidentialPolicyAdmissionRejected { reason, .. } => Some(reason.clone()),
             Error::NexusFeeAdmissionConfigInvalid { reason } => Some(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::InternalError(reason.clone()),
@@ -1849,8 +1911,14 @@ impl Queue {
         }
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state_view.telemetry;
-        let mut state_access =
-            EagerAdmissionStateAccess::new(state_view.world(), &state_view.nexus);
+        let next_block_height = u64::try_from(state_view.height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut state_access = EagerAdmissionStateAccess::new(
+            state_view.world(),
+            &state_view.nexus,
+            next_block_height,
+        );
         self.push_checked_with_lane_context(
             checked,
             routing_decision,
@@ -1965,6 +2033,16 @@ impl Queue {
                     err,
                 });
             }
+        }
+
+        if let Some(transaction) = checked.as_accepted().external()
+            && let Err(err) =
+                state_access.validate_confidential_policy_admission(transaction.instructions())
+        {
+            return Err(Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err,
+            });
         }
 
         #[cfg(feature = "telemetry")]
@@ -6317,6 +6395,66 @@ pub mod tests {
                 "route rejection reason should include lane lookup failure"
             );
         }
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_confidential_policy_before_enqueue() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let account = Account::new(authority_id.clone()).build(&authority_id);
+        let asset_def_id =
+            AssetDefinitionId::new(domain_id, "zkqueuepolicy".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .confidential_policy(
+                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+            )
+            .build(&authority_id);
+        let mut world = World::with([domain], [account], [asset_definition]);
+        let mut zk_state = crate::state::ZkAssetState::default();
+        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+        zk_state.allow_shield = false;
+        zk_state.allow_unshield = true;
+        world.zk_assets.insert(asset_def_id.clone(), zk_state);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_with(
+            authority_id.clone(),
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(
+                iroha_data_model::isi::zk::Shield::new(
+                    asset_def_id,
+                    authority_id,
+                    10,
+                    [3; 32],
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                ),
+            )],
+            Metadata::default(),
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &state)
+            .expect_err("disabled shield must be rejected before enqueue");
+
+        assert!(matches!(
+            err.err,
+            Error::ConfidentialPolicyAdmissionRejected { .. }
+        ));
+        if let Error::ConfidentialPolicyAdmissionRejected { detail, reason } = &err.err {
+            assert_eq!(detail, "shield not permitted by policy");
+            assert!(matches!(
+                reason,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message == "shield not permitted by policy"
+            ));
+        }
+        assert_eq!(queue.queued_len(), 0);
     }
 
     #[test]

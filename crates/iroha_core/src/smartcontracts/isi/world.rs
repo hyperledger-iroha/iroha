@@ -73,7 +73,7 @@ pub mod isi {
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
-            VerifiedLaneRelayRecord, proof_matches_manifest,
+            VerifiedLaneRelayRecord,
         },
         parameter::{Parameter, SumeragiParameter},
         prelude::*,
@@ -10768,8 +10768,34 @@ pub mod isi {
                 )
                 .into());
             }
+            let proof_payload_hash = CryptoHash::new(&proof_blob.payload);
+            let Some(fastpq_material) = envelope.fastpq_proof.as_ref() else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof material is missing".into(),
+                    ),
+                )
+                .into());
+            };
+            if fastpq_material.proof_digest != proof_payload_hash {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof digest does not match proof_blob payload".into(),
+                    ),
+                )
+                .into());
+            }
 
             let verified_at_height = state_transaction.block_height();
+            let material_verified_at_height = fastpq_material.verified_at_height;
+            if material_verified_at_height > verified_at_height {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof metadata height is in the future".into(),
+                    ),
+                )
+                .into());
+            }
             if let Some(expiry_slot) = proof_blob.expiry_slot
                 && verified_at_height > expiry_slot
             {
@@ -10780,16 +10806,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if !proof_matches_manifest(&proof_blob, envelope.dataspace_id, manifest_root) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verified lane relay proof does not match the declared manifest_root"
-                            .into(),
-                    ),
-                )
-                .into());
-            }
-
             let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
                 .map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
@@ -10798,10 +10814,13 @@ pub mod isi {
                         )),
                     )
                 })?;
-            if proof_envelope.manifest_root != manifest_root {
+            if proof_envelope.dsid != envelope.dataspace_id
+                || proof_envelope.manifest_root != manifest_root
+            {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
-                        "verified lane relay proof manifest_root mismatch".into(),
+                        "verified lane relay proof does not match the declared manifest_root"
+                            .into(),
                     ),
                 )
                 .into());
@@ -10822,28 +10841,18 @@ pub mod isi {
                 )
                 .into());
             }
-            let batch = fastpq_prover::build_batch_from_binding(&binding).map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("verified lane relay binding is invalid: {err}"),
-                ))
-            })?;
-            let proof = norito::decode_from_bytes::<fastpq_prover::Proof>(&proof_envelope.proof)
+            let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
                 .map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "verified lane relay FASTPQ proof decode failed: {err}"
-                        )),
+                    InstructionExecutionError::InvariantViolation(
+                        format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
-            fastpq_prover::verify(&batch, &proof).map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("verified lane relay FASTPQ verification failed: {err}").into(),
-                )
-            })?;
 
             let record = VerifiedLaneRelayRecord::new(
                 envelope,
-                CryptoHash::new(&proof_blob.payload),
+                proof_payload_hash,
+                verified_fastpq.statement_digest,
+                verified_fastpq.proof_digest,
                 verified_at_height,
                 manifest_root,
                 binding,
@@ -12071,8 +12080,9 @@ pub mod isi {
             )
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root));
-            let verified_at_height = Some(base_envelope.block_height);
-            let proof_digest = base_envelope.expected_fastpq_proof_digest(verified_at_height);
+            let verified_at_height = base_envelope.block_height;
+            let proof_digest =
+                Hash::new(b"sample-verified-lane-relay-external-fastpq-proof-payload");
             let envelope = base_envelope.with_fastpq_proof_material(Some(
                 iroha_data_model::nexus::LaneFastpqProofMaterial {
                     proof_digest,
@@ -12104,6 +12114,8 @@ pub mod isi {
             VerifiedLaneRelayRecord::new(
                 envelope,
                 Hash::new(b"proof"),
+                [0xAB; 32],
+                Hash::new(b"fastpq-proof"),
                 42,
                 manifest_root,
                 fastpq_binding,

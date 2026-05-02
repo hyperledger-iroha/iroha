@@ -8,8 +8,11 @@ The Nexus program exposes a read-only Torii endpoint for inspecting the
 aggregated holdings associated with a Universal Account ID (UAID). The surface
 is backed by `iroha_core::nexus::portfolio::collect_portfolio`, which consults
 the Space Directory bindings managed by the main Sora Nexus dataspace to learn
-which accounts/dataspaces a UAID is active in. The response is grouped first by
-dataspace and then by account for deterministic diffing.
+which account/dataspaces a UAID is active in. In v1 each UAID maps to exactly
+one canonical `AccountId`; the response groups that account's non-zero assets
+by balance scope (`global` assets under the account's Space Directory/default
+dataspace, and `dataspace:<id>` assets under their explicit dataspace) for
+deterministic diffing.
 
 ```
 GET /v1/accounts/{uaid}/portfolio
@@ -33,7 +36,7 @@ GET /v1/accounts/{uaid}/portfolio
 {
   "uaid": "uaid:ab7c…",
   "totals": {
-    "accounts": 2,
+    "accounts": 1,
     "positions": 3
   },
   "dataspaces": [
@@ -59,7 +62,7 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "cbdc",
       "accounts": [
         {
-          "account_id": "sora<i105-account-id-2>",
+          "account_id": "sora<i105-account-id>",
           "label": "primary-cbdc",
           "assets": [
             {
@@ -80,13 +83,16 @@ GET /v1/accounts/{uaid}/portfolio
 }
 ```
 
-* `totals.accounts` counts how many ledger accounts reference the UAID.
+* `totals.accounts` counts unique ledger accounts that reference the UAID. In
+  the v1 universal-account model this is `0` or `1`.
 * `totals.positions` counts the non-zero asset positions aggregated across
-  those accounts.
+  that account.
 * `dataspaces` enumerate holdings per dataspace. Each slice corresponds to the
-  UAID↔dataspace bindings stored in the Space Directory; if a UAID has not been
-  bound yet it will appear under the fallback `default_dataspace`
-  (`DataSpaceId::UNIVERSAL`).
+  asset balance scope used by the account. Global balances use the
+  UAID↔dataspace bindings stored in the Space Directory, falling back to
+  `default_dataspace` (`DataSpaceId::UNIVERSAL`) when the account is not bound
+  yet; dataspace-scoped balances are reported under their explicit
+  `AssetBalanceScope::Dataspace` id.
 * Each account entry includes the optional stable label plus the sorted list of
   asset positions with their canonical identifiers and Norito numeric balances.
   Account IDs are canonical I105 literals; asset definition IDs remain
@@ -159,7 +165,9 @@ Sample response:
 
 The bindings snapshot is derived from the `uaid_dataspaces` ledger map (managed
 by the Space Directory). If no bindings exist yet, the `dataspaces` array is
-empty. Access controls mirror the portfolio endpoint: CIDR/API-token policies
+empty. The public payload keeps the historical `accounts` array shape for SDK
+compatibility, but strict v1 UAID bindings contain at most one canonical
+`AccountId` per UAID. Access controls mirror the portfolio endpoint: CIDR/API-token policies
 apply, and malformed UAID literals produce `400` errors. Use this endpoint to
 confirm manifest rollouts before attaching allowances or enabling AMX flows.
 The underlying ledger map now updates automatically: when a capability manifest

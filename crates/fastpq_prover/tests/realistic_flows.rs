@@ -1,7 +1,8 @@
 //! FASTPQ proof smoke tests covering realistic governance and remittance scenarios.
 
 use fastpq_prover::{
-    OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify,
+    OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
+    gadgets::transfer::attach_transfer_smt_witnesses, verify,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
@@ -86,17 +87,21 @@ fn remittance_batch() -> TransitionBatch {
         OperationKind::Transfer,
     ));
 
-    let transcript = remittance_transcript(
+    let mut transcripts = vec![remittance_transcript(
         &asset_definition,
         &from_account,
         &to_account,
         REMIT_AMOUNT,
         ALICE_START,
         BOB_START,
-    );
+    )];
+    let (old_root, new_root) =
+        attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
+    batch.public_inputs.old_root = old_root;
+    batch.public_inputs.new_root = new_root;
     batch.metadata.insert(
         TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
-        to_bytes(&vec![transcript]).expect("encode transcripts"),
+        to_bytes(&transcripts).expect("encode transcripts"),
     );
 
     batch.sort();
@@ -106,6 +111,8 @@ fn remittance_batch() -> TransitionBatch {
 fn combined_batch() -> TransitionBatch {
     let mut governance = governance_batch();
     let mut remit = remittance_batch();
+    governance.public_inputs.old_root = remit.public_inputs.old_root;
+    governance.public_inputs.new_root = remit.public_inputs.new_root;
     governance.transitions.append(&mut remit.transitions);
     governance.metadata.extend(remit.metadata);
     governance.sort();
@@ -151,8 +158,8 @@ fn remittance_transcript(
         from_balance_after: Numeric::from(alice_start - remit_amount),
         to_balance_before: Numeric::from(bob_start),
         to_balance_after: Numeric::from(bob_start + remit_amount),
-        from_merkle_proof: None,
-        to_merkle_proof: None,
+        from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };
     let batch_hash = Hash::new(b"remit-batch");
     let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);

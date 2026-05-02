@@ -124,6 +124,7 @@ use iroha_data_model::{
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
+    soranet::vpn::VpnLeaseRecordV1,
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::{
@@ -409,6 +410,7 @@ macro_rules! build_world_block {
             viral_bonus_paid: $state.viral_bonus_paid.$method(),
             asset_escrows: $state.asset_escrows.$method(),
             anonymous_asset_escrows: $state.anonymous_asset_escrows.$method(),
+            vpn_leases: $state.vpn_leases.$method(),
             uaid_dataspaces: $state.uaid_dataspaces.$method(),
             space_directory_manifests: $state.space_directory_manifests.$method(),
             axt_policies: $state.axt_policies.$method(),
@@ -593,6 +595,7 @@ macro_rules! build_world_transaction {
             viral_bonus_paid: $state.viral_bonus_paid.transaction(),
             asset_escrows: $state.asset_escrows.transaction(),
             anonymous_asset_escrows: $state.anonymous_asset_escrows.transaction(),
+            vpn_leases: $state.vpn_leases.transaction(),
             uaid_dataspaces: $state.uaid_dataspaces.transaction(),
             space_directory_manifests: $state.space_directory_manifests.transaction(),
             axt_policies: $state.axt_policies.transaction(),
@@ -1567,6 +1570,8 @@ pub struct World {
     pub(crate) asset_escrows: Storage<EscrowId, AssetEscrowRecord>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: Storage<EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings maintained by the Space Directory.
     #[norito(skip)]
     pub(crate) uaid_dataspaces: Storage<UniversalAccountId, UaidDataspaceBindings>,
@@ -1988,6 +1993,8 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_escrows: StorageBlock<'world, EscrowId, AssetEscrowRecord>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings for this block scope.
     pub(crate) uaid_dataspaces: StorageBlock<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
@@ -2549,6 +2556,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows:
         StorageTransaction<'block, 'world, EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings maintained by the Space Directory.
     pub(crate) uaid_dataspaces:
         StorageTransaction<'block, 'world, UniversalAccountId, UaidDataspaceBindings>,
@@ -3302,6 +3311,8 @@ pub struct WorldView<'world> {
     pub(crate) asset_escrows: StorageView<'world, EscrowId, AssetEscrowRecord>,
     /// Native anonymous asset escrows keyed by escrow identifier.
     pub(crate) anonymous_asset_escrows: StorageView<'world, EscrowId, AnonymousAssetEscrowRecord>,
+    /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// UAID dataspace bindings derived from the Space Directory.
     pub(crate) uaid_dataspaces: StorageView<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records derived from the Space Directory host.
@@ -11605,6 +11616,7 @@ impl World {
             viral_bonus_paid: self.viral_bonus_paid.view(),
             asset_escrows: self.asset_escrows.view(),
             anonymous_asset_escrows: self.anonymous_asset_escrows.view(),
+            vpn_leases: self.vpn_leases.view(),
             uaid_dataspaces: self.uaid_dataspaces.view(),
             space_directory_manifests: self.space_directory_manifests.view(),
             axt_policies: self.axt_policies.view(),
@@ -11954,6 +11966,8 @@ pub trait WorldReadOnly {
     fn anonymous_asset_escrows(
         &self,
     ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord>;
+    /// Native SoraNet VPN lease escrow records keyed by lease identifier.
+    fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1>;
     /// UAID dataspace bindings managed by the Space Directory.
     fn uaid_dataspaces(&self) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings>;
     /// UAID capability manifests maintained by the Space Directory.
@@ -13042,6 +13056,9 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord> {
                 &self.anonymous_asset_escrows
             }
+            fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1> {
+                &self.vpn_leases
+            }
             fn uaid_dataspaces(
                 &self,
             ) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings> {
@@ -13671,6 +13688,7 @@ impl<'world> WorldBlock<'world> {
             viral_bonus_paid,
             asset_escrows,
             anonymous_asset_escrows,
+            vpn_leases,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -13895,6 +13913,7 @@ impl<'world> WorldBlock<'world> {
         viral_escrows.commit();
         asset_escrows.commit();
         anonymous_asset_escrows.commit();
+        vpn_leases.commit();
         viral_binding_claims.commit();
         viral_daily_counters.commit();
         viral_campaign_budget.commit();
@@ -14828,6 +14847,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             viral_bonus_paid,
             asset_escrows,
             anonymous_asset_escrows,
+            vpn_leases,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -15029,6 +15049,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         viral_escrows.apply();
         asset_escrows.apply();
         anonymous_asset_escrows.apply();
+        vpn_leases.apply();
         viral_binding_claims.apply();
         viral_daily_counters.apply();
         viral_campaign_budget.apply();
@@ -18467,8 +18488,9 @@ impl State {
         *self.latest_block_header.write() = Some(header);
     }
 
-    #[cfg(test)]
-    fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Override the latest committed block-header cache in tests.
+    pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
         self.update_latest_block_header_cache(header);
     }
 
@@ -22251,13 +22273,40 @@ impl<'state> StateBlock<'state> {
             .height()
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
-        let transactions: std::collections::HashSet<_> = block
-            .as_ref()
-            .external_entrypoints_cloned()
-            .map(|entrypoint| {
-                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()))
-            })
-            .collect();
+        let signed_block = block.as_ref();
+        let transactions: std::collections::HashSet<_> = if let Some(entrypoints) =
+            signed_block.external_entrypoints_slice()
+        {
+            if entrypoints
+                .iter()
+                .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
+            {
+                entrypoints
+                    .iter()
+                    .map(|entrypoint| {
+                        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(
+                            entrypoint.hash(),
+                        ))
+                    })
+                    .collect()
+            } else {
+                entrypoints
+                    .iter()
+                    .filter_map(|entrypoint| match entrypoint {
+                        TransactionEntrypoint::External(tx) => Some(
+                            crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash,
+                        ),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        } else {
+            signed_block
+                .transactions_vec()
+                .iter()
+                .map(|tx| crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash)
+                .collect()
+        };
         self.transactions.insert_block(transactions, block_height);
 
         if let Some(bundle) = block.as_ref().da_commitments() {
@@ -23592,11 +23641,12 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
-        tx.record_transfer_transcript(&ALICE_ID, delta);
+        tx.record_transfer_transcript(&ALICE_ID, delta)
+            .expect("record transcript");
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         let entry = transcripts
@@ -23612,7 +23662,7 @@ mod transfer_transcript_tests {
     }
 
     #[test]
-    fn transfer_transcripts_synthesize_hash_when_missing_call_hash() {
+    fn transfer_transcripts_reject_missing_call_hash() {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), Arc::clone(&kura), query);
@@ -23633,31 +23683,38 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::zero(),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::zero(),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
-        let expected = {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(b"iroha:fastpq:v1:synthetic|");
-            buf.extend_from_slice(&1u64.to_be_bytes());
-            buf.extend_from_slice(&0u64.to_be_bytes());
-            iroha_crypto::Hash::new(buf)
-        };
-        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &expected);
-        tx.record_transfer_transcript(&ALICE_ID, delta);
+        let err = tx
+            .record_transfer_transcript(&ALICE_ID, delta)
+            .expect_err("missing transaction call_hash must fail");
+        assert!(
+            err.to_string().contains("transaction call_hash"),
+            "unexpected error: {err}"
+        );
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
-        assert_eq!(transcripts.len(), 1);
-        let entry = transcripts
-            .get(&expected)
-            .expect("transcripts recorded under synthetic hash");
-        assert_eq!(entry.len(), 1);
-        let transcript = &entry[0];
-        assert_eq!(
-            transcript.authority_digest,
-            crate::fastpq::authority_digest(&ALICE_ID)
+        assert!(transcripts.is_empty());
+    }
+
+    #[test]
+    fn generated_rwa_id_rejects_missing_call_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let domain = DomainId::try_new("wonderland", "universal").unwrap();
+
+        let err = tx
+            .next_generated_rwa_id(&domain, "test")
+            .expect_err("missing transaction call_hash must fail");
+        assert!(
+            err.to_string().contains("transaction call_hash"),
+            "unexpected error: {err}"
         );
-        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
     }
 
     #[test]
@@ -23668,6 +23725,9 @@ mod transfer_transcript_tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+            [1_u8; iroha_crypto::Hash::LENGTH],
+        ));
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -23682,8 +23742,8 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::from(90_u32),
             to_balance_before: Numeric::from(0_u32),
             to_balance_after: Numeric::from(10_u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let delta_b = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
@@ -23694,10 +23754,11 @@ mod transfer_transcript_tests {
             from_balance_after: Numeric::from(85_u32),
             to_balance_before: Numeric::from(10_u32),
             to_balance_after: Numeric::from(15_u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
-        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()]);
+        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()])
+            .expect("record batch transcript");
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert_eq!(transcripts.len(), 1);
@@ -23815,8 +23876,8 @@ mod fastpq_tx_set_hash_tests {
             from_balance_after: Numeric::from(90u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(10u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x11; 32]);
         let transcript = TransferTranscript {
@@ -23861,8 +23922,8 @@ mod fastpq_tx_set_hash_tests {
             from_balance_after: Numeric::from(90u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(10u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x22; 32]);
         let transcript = TransferTranscript {
@@ -23930,8 +23991,8 @@ mod fastpq_tx_set_hash_tests {
             from_balance_after: Numeric::from(90u32),
             to_balance_before: Numeric::from(0u32),
             to_balance_after: Numeric::from(10u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
         };
         let batch_hash = Hash::prehashed([0x33; 32]);
         let transcript = TransferTranscript {
@@ -26517,8 +26578,8 @@ impl StateTransaction<'_, '_> {
         &mut self,
         authority: &AccountId,
         delta: TransferDeltaTranscript,
-    ) {
-        self.record_transfer_transcripts(authority, vec![delta]);
+    ) -> Result<(), Error> {
+        self.record_transfer_transcripts(authority, vec![delta])
     }
 
     /// Record a multi-delta transfer transcript so the FASTPQ prover can consume batch witnesses.
@@ -26526,13 +26587,15 @@ impl StateTransaction<'_, '_> {
         &mut self,
         authority: &AccountId,
         mut deltas: Vec<TransferDeltaTranscript>,
-    ) {
+    ) -> Result<(), Error> {
         if deltas.is_empty() {
-            return;
+            return Ok(());
         }
-        let batch_hash = self
-            .tx_call_hash
-            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let batch_hash = self.tx_call_hash.ok_or_else(|| {
+            Error::InvariantViolation(
+                "FastPQ transfer transcript recording requires a transaction call_hash".into(),
+            )
+        })?;
         let authority_digest = crate::fastpq::authority_digest(authority);
         let transcript = TransferTranscript {
             batch_hash,
@@ -26542,29 +26605,34 @@ impl StateTransaction<'_, '_> {
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
+        Ok(())
     }
 
     /// Generate the next canonical RWA identifier for this transaction scope.
     ///
-    /// The id is derived from the current transaction entrypoint hash when available and
-    /// falls back to a deterministic synthetic batch hash for ad-hoc execution contexts.
-    #[must_use]
-    pub fn next_generated_rwa_id(&mut self, domain: &DomainId, purpose: &str) -> RwaId {
-        let batch_hash = self
-            .tx_call_hash
-            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+    /// The id is derived from the current transaction entrypoint hash.
+    pub fn next_generated_rwa_id(
+        &mut self,
+        domain: &DomainId,
+        purpose: &str,
+    ) -> Result<RwaId, Error> {
+        let call_hash = self.tx_call_hash.ok_or_else(|| {
+            Error::InvariantViolation(
+                "RWA identifier generation requires a transaction call_hash".into(),
+            )
+        })?;
         let ordinal = self.rwa_generated_id_ordinal;
         self.rwa_generated_id_ordinal = self.rwa_generated_id_ordinal.saturating_add(1);
 
         let mut bytes = Vec::with_capacity(
-            b"iroha:rwa:id:v2|".len() + purpose.len() + batch_hash.as_ref().len() + 8,
+            b"iroha:rwa:id:v1|".len() + purpose.len() + call_hash.as_ref().len() + 8,
         );
-        bytes.extend_from_slice(b"iroha:rwa:id:v2|");
+        bytes.extend_from_slice(b"iroha:rwa:id:v1|");
         bytes.extend_from_slice(purpose.as_bytes());
         bytes.push(0xff);
-        bytes.extend_from_slice(batch_hash.as_ref());
+        bytes.extend_from_slice(call_hash.as_ref());
         bytes.extend_from_slice(&ordinal.to_le_bytes());
-        RwaId::generated(domain.clone(), Hash::new(bytes))
+        Ok(RwaId::generated(domain.clone(), Hash::new(bytes)))
     }
 
     /// Record a completed AXT envelope for persistence within the current block.
@@ -26883,7 +26951,7 @@ impl StateTransaction<'_, '_> {
         event: &ExecuteTriggerEvent,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         if self.tx_call_hash.is_none() {
-            self.seed_trigger_batch_hash(event);
+            self.seed_trigger_call_hash(event);
         }
         let (executable, action_authority) = {
             let action = self
@@ -27645,25 +27713,7 @@ impl StateTransaction<'_, '_> {
             .any(|allowed| allowed.subject_id() == sponsor.subject_id())
     }
 
-    fn ensure_synthetic_batch_hash_with<F>(&mut self, extra: F) -> iroha_crypto::Hash
-    where
-        F: FnOnce(&mut Vec<u8>),
-    {
-        if let Some(hash) = self.tx_call_hash {
-            return hash;
-        }
-        let mut buf = Vec::with_capacity(96);
-        buf.extend_from_slice(b"iroha:fastpq:v1:synthetic|");
-        buf.extend_from_slice(&self._curr_block.height().get().to_be_bytes());
-        let ordinal = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
-        buf.extend_from_slice(&ordinal.to_be_bytes());
-        extra(&mut buf);
-        let hash = iroha_crypto::Hash::new(buf);
-        self.tx_call_hash = Some(hash);
-        hash
-    }
-
-    fn seed_trigger_batch_hash(&mut self, event: &ExecuteTriggerEvent) {
+    fn seed_trigger_call_hash(&mut self, event: &ExecuteTriggerEvent) {
         use norito::codec::Encode as _;
         if self.tx_call_hash.is_some() {
             return;
@@ -27671,11 +27721,15 @@ impl StateTransaction<'_, '_> {
         let trigger_id = event.trigger_id();
         let authority = event.authority();
         let args = event.args();
-        self.ensure_synthetic_batch_hash_with(|buf| {
-            buf.extend_from_slice(&trigger_id.encode());
-            buf.extend_from_slice(&authority.encode());
-            buf.extend_from_slice(&args.encode());
-        });
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"iroha:trigger:call_hash:v1|");
+        buf.extend_from_slice(&self._curr_block.height().get().to_be_bytes());
+        let ordinal = u64::try_from(*self.committed_fragments).unwrap_or(u64::MAX);
+        buf.extend_from_slice(&ordinal.to_be_bytes());
+        buf.extend_from_slice(&trigger_id.encode());
+        buf.extend_from_slice(&authority.encode());
+        buf.extend_from_slice(&args.encode());
+        self.tx_call_hash = Some(iroha_crypto::Hash::new(buf));
     }
 }
 
@@ -28109,6 +28163,20 @@ pub(crate) mod deserialize {
         )
     }
 
+    pub(super) fn validate_ram_lfe_program_policies(
+        policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
+    ) -> Result<(), json::Error> {
+        for (program_id, policy) in policies.view().iter() {
+            crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(
+                |err| json::Error::InvalidField {
+                    field: format!("world.ram_lfe_program_policies.{program_id}"),
+                    message: err.to_string(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     fn take_optional_default_lossy<T>(
         map: &mut json::native::Map,
         key: &str,
@@ -28206,6 +28274,7 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "account_aliases_by_account")?;
         let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
+        validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let account_recovery_policies =
@@ -28351,6 +28420,7 @@ pub(crate) mod deserialize {
         let content_chunks = take_optional_default(&mut map, "content_chunks")?;
         let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
         let anonymous_asset_escrows = take_optional_default(&mut map, "anonymous_asset_escrows")?;
+        let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
         let merge_hint_roots: Cell<Vec<Hash>> =
             take_optional_default(&mut map, "merge_hint_roots")?;
         let merge_global_state_root: Cell<Option<Hash>> =
@@ -28405,6 +28475,7 @@ pub(crate) mod deserialize {
             viral_bonus_paid: Storage::default(),
             asset_escrows,
             anonymous_asset_escrows,
+            vpn_leases,
             uaid_dataspaces: Storage::default(),
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),
@@ -29199,7 +29270,10 @@ mod tests {
     };
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, RamLfeBackend, RamLfeVerificationMode,
+        Signature,
+    };
     use iroha_data_model::account::AccountDetails;
     use iroha_data_model::isi::verifying_keys;
     use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
@@ -29231,13 +29305,14 @@ mod tests {
         name::Name,
         nexus::{
             AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
-            AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
-            AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog,
-            DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
-            LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet,
-            LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion,
-            ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
-            RemoteSpendIntent, SpendOp, TouchManifest,
+            AxtFastpqBinding, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry,
+            AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment, AxtRejectReason,
+            AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
+            GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
+            LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
+            LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
+            PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent,
+            SpendOp, TouchManifest,
         },
         peer::PeerId,
         prelude::*,
@@ -29256,6 +29331,121 @@ mod tests {
     use super::*;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    fn axt_test_digest(domain: &[u8], parts: &[&[u8]]) -> Hash {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(domain);
+        for part in parts {
+            payload.extend_from_slice(part);
+        }
+        Hash::new(payload)
+    }
+
+    fn axt_proof_blob_for(
+        dsid: DataSpaceId,
+        manifest_root: [u8; 32],
+        proof_seed: &[u8],
+        expiry_slot: u64,
+    ) -> ProofBlob {
+        let source_tx_commitment = axt_test_digest(b"axt-state-test:source-tx", &[proof_seed]);
+        let claim_digest = axt_test_digest(b"axt-state-test:claim", &[proof_seed]);
+        let witness_commitment = axt_test_digest(b"axt-state-test:witness", &[proof_seed]);
+        let policy_commitment = axt_test_digest(b"axt-state-test:policy", &[&manifest_root]);
+        let binding = AxtFastpqBinding {
+            parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: format!("state-test-dataspace-{}", dsid.as_u64()),
+            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_owned(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "test_effect".to_owned(),
+            corridor: "state-test-corridor".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        };
+        let mut dsid_bytes = [0_u8; 16];
+        dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+        let mut batch = fastpq_prover::TransitionBatch::new(
+            fastpq_prover::AXT_DEFAULT_PARAMETER,
+            fastpq_prover::PublicInputs {
+                dsid: dsid_bytes,
+                slot: expiry_slot,
+                old_root: axt_test_digest(b"axt-state-test:old-root", &[proof_seed]).into(),
+                new_root: manifest_root,
+                perm_root: axt_test_digest(b"axt-state-test:perm-root", &[proof_seed]).into(),
+                tx_set_hash: axt_test_digest(b"axt-state-test:tx-set", &[proof_seed]).into(),
+            },
+        );
+        batch.push(fastpq_prover::StateTransition::new(
+            b"axt/state/proof".to_vec(),
+            proof_seed.to_vec(),
+            manifest_root.to_vec(),
+            fastpq_prover::OperationKind::MetaSet,
+        ));
+        batch.sort();
+        batch.metadata.insert(
+            "entry_hash".to_owned(),
+            source_tx_commitment.as_ref().to_vec(),
+        );
+        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT state test batch");
+        let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+            .expect("FASTPQ prover")
+            .prove(&batch)
+            .expect("FASTPQ proof");
+        let fastpq_payload =
+            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: fastpq_payload,
+            fastpq_binding: Some(binding),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        ProofBlob {
+            payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+            expiry_slot: Some(expiry_slot),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_ram_lfe_program_policy_storage() {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let resolver = KeyPair::random();
+        let program_id: RamLfeProgramId = "test_program".parse().expect("program id");
+        let policy = RamLfeProgramPolicy::new(
+            program_id.clone(),
+            owner,
+            RamLfeBackend::HkdfSha3_512PrfV1,
+            RamLfeVerificationMode::Proof,
+            PolicyCommitment {
+                backend: RamLfeBackend::HkdfSha3_512PrfV1,
+                policy_hash: Hash::new(b"policy"),
+                public_parameters: Vec::new(),
+            },
+            resolver.public_key().clone(),
+        );
+        let mut policies = Storage::default();
+        policies.insert(program_id, policy);
+
+        let err = deserialize::validate_ram_lfe_program_policies(&policies)
+            .expect_err("invalid policy must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("world.ram_lfe_program_policies.test_program"),
+            "expected field path in error, got {message}"
+        );
+        assert!(
+            message.contains("cannot use proof verification"),
+            "expected policy validation message, got {message}"
+        );
+    }
 
     fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -30508,6 +30698,46 @@ mod tests {
         assert!(state.has_committed_transaction(indexed_hash));
         assert_eq!(
             state.committed_transaction_height(&indexed_hash),
+            Some(nonzero!(1_usize))
+        );
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_plain_external_transaction_hashes() {
+        let chain_id = (*super::DEFAULT_TEST_CHAIN_ID).clone();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain = Domain::new(sample_domain_id()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        let tx = TransactionBuilder::new(chain_id, authority.clone())
+            .with_instructions([Log::new(Level::INFO, "external".to_owned())])
+            .sign(keypair.private_key());
+        let tx_hash = tx.hash();
+
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let new_block = BlockBuilder::new(vec![accepted])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(new_block.header());
+        let valid_block = new_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("plain external block should commit");
+
+        assert!(state.has_committed_transaction(tx_hash));
+        assert_eq!(
+            state.committed_transaction_height(&tx_hash),
             Some(nonzero!(1_usize))
         );
     }
@@ -33090,9 +33320,17 @@ mod tests {
         envelope: &LaneRelayEnvelope,
         view: u64,
     ) -> LaneFastpqProofMaterial {
-        let verified_at_height = Some(envelope.block_height.saturating_add(view));
+        let verified_at_height = envelope.block_height.saturating_add(view);
         LaneFastpqProofMaterial {
-            proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
+            proof_digest: Hash::new(
+                format!(
+                    "state-test-fastpq-proof:{}:{}:{}:{verified_at_height}",
+                    envelope.dataspace_id.as_u64(),
+                    envelope.lane_id.as_u32(),
+                    envelope.block_height
+                )
+                .as_bytes(),
+            ),
             verified_at_height,
         }
     }
@@ -33215,7 +33453,7 @@ mod tests {
         let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap);
         envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
             proof_digest: Hash::prehashed([0u8; Hash::LENGTH]),
-            verified_at_height: Some(2),
+            verified_at_height: 2,
         });
 
         let err = state
@@ -37960,10 +38198,7 @@ mod tests {
         };
         let proof_fragment = AxtProofFragment {
             dsid,
-            proof: ProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(5),
-            },
+            proof: axt_proof_blob_for(dsid, manifest_root, b"state-restart", 5),
         };
         let merchant_id = gen_account_in("wonderland").0;
         let handle_fragment = AxtHandleFragment {
@@ -38200,10 +38435,7 @@ mod tests {
         };
         let proof_fragment = AxtProofFragment {
             dsid,
-            proof: ProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(8),
-            },
+            proof: axt_proof_blob_for(dsid, manifest_root, b"state-retention", 8),
         };
         let handle_fragment = AxtHandleFragment {
             handle: AssetHandle {
@@ -39140,10 +39372,7 @@ mod tests {
         };
         let proof_fragment = AxtProofFragment {
             dsid,
-            proof: ProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(5),
-            },
+            proof: axt_proof_blob_for(dsid, manifest_root, b"persisted-block-replay", 5),
         };
         let handle_fragment = AxtHandleFragment {
             handle: AssetHandle {

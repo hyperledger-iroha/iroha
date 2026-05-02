@@ -59,15 +59,18 @@ fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Re
     } else {
         Some(DecodeFlagsGuard::enter(default_encode_flags()))
     };
+    let flags = effective_layout_flags();
     let exact_len = value.encoded_len_exact();
     let hint_len = exact_len.or_else(|| value.encoded_len_hint());
     let mut payload = Vec::new();
     if let Some(hint) = hint_len {
-        payload.reserve_exact(hint);
+        payload
+            .try_reserve(hint)
+            .map_err(|_| Error::LengthMismatch)?;
     }
     value.serialize(&mut payload)?;
-    let len = payload.len() as u64;
-    write_len(&mut writer, len)?;
+    let len = u64::try_from(payload.len()).map_err(|_| Error::LengthMismatch)?;
+    write_len_with_flags(&mut writer, len, flags)?;
     writer.write_all(&payload)?;
     Ok(())
 }
@@ -371,6 +374,28 @@ pub fn len_prefix_len_with_flags(value: usize, flags: u8) -> usize {
     } else {
         8
     }
+}
+
+#[inline]
+fn len_prefixed_payload_len_with_flags(payload_len: usize, flags: u8) -> Option<usize> {
+    len_prefix_len_with_flags(payload_len, flags).checked_add(payload_len)
+}
+
+#[inline]
+fn len_prefixed_payload_len(payload_len: usize) -> Option<usize> {
+    len_prefixed_payload_len_with_flags(payload_len, effective_layout_flags())
+}
+
+#[inline]
+fn tagged_len_prefixed_payload_len_with_flags(payload_len: usize, flags: u8) -> Option<usize> {
+    1usize
+        .checked_add(len_prefix_len_with_flags(payload_len, flags))?
+        .checked_add(payload_len)
+}
+
+#[inline]
+fn tagged_len_prefixed_payload_len(payload_len: usize) -> Option<usize> {
+    tagged_len_prefixed_payload_len_with_flags(payload_len, effective_layout_flags())
 }
 
 /// Number of bytes used to encode a sequence length prefix for `value`.
@@ -1658,6 +1683,27 @@ fn read_u64_le_at(bytes: &[u8], idx: usize) -> Result<u64, Error> {
     Ok(u64::from_le_bytes(buf))
 }
 
+#[inline]
+fn read_fixed_offset_usize_at(bytes: &[u8], idx: usize) -> Result<usize, Error> {
+    len_u64_to_usize(read_u64_le_at(bytes, idx)?)
+}
+
+fn validate_fixed_offset_table(bytes: &[u8], entries: usize) -> Result<usize, Error> {
+    let mut prev = 0usize;
+    for idx in 0..entries {
+        let off = read_fixed_offset_usize_at(bytes, idx)?;
+        if idx == 0 {
+            if off != 0 {
+                return Err(Error::LengthMismatch);
+            }
+        } else if off < prev {
+            return Err(Error::LengthMismatch);
+        }
+        prev = off;
+    }
+    Ok(prev)
+}
+
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 mod sequence_gpu {
     use std::{
@@ -2096,13 +2142,13 @@ pub fn write_len_with_flags<W: Write>(
         note_compact_len_emitted();
         Ok(())
     } else {
-        writer.write_u64::<LittleEndian>(value)
+        writer.write_all(&value.to_le_bytes())
     }
 }
 
 /// Write a sequence length prefix (fixed u64).
 pub fn write_seq_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
-    writer.write_u64::<LittleEndian>(value)
+    writer.write_all(&value.to_le_bytes())
 }
 
 /// Append a length prefix honoring `COMPACT_LEN` to `out`.
@@ -2134,10 +2180,11 @@ pub fn write_len_prefixed<W: Write, T: NoritoSerialize, const N: usize>(
     value: &T,
     buf: &mut SmallBuf<N>,
 ) -> Result<(), Error> {
+    let flags = effective_layout_flags();
     buf.clear();
     value.serialize(&mut *buf)?;
     let len = u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?;
-    write_len(writer, len)?;
+    write_len_with_flags(writer, len, flags)?;
     writer.write_all(buf.as_slice())?;
     Ok(())
 }
@@ -2158,11 +2205,11 @@ pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
 
 fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Result<(), Error> {
     let mut offset = 0u64;
-    writer.write_u64::<LittleEndian>(0)?;
+    writer.write_all(&0u64.to_le_bytes())?;
     for len in lengths {
         let len_u64 = u64::try_from(*len).map_err(|_| Error::LengthMismatch)?;
         offset = offset.checked_add(len_u64).ok_or(Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(offset)?;
+        writer.write_all(&offset.to_le_bytes())?;
     }
     Ok(())
 }
@@ -2188,17 +2235,20 @@ where
     let packed = use_packed_seq();
     if !packed {
         let mut buf = Vec::new();
+        let flags = effective_layout_flags();
         for item in iter {
             buf.clear();
             if let Some(hint) = hint_elem(&item)
                 && buf.capacity() < hint
             {
-                buf.reserve_exact(hint - buf.capacity());
+                buf.try_reserve(hint - buf.capacity())
+                    .map_err(|_| Error::LengthMismatch)?;
             }
             encode_elem(item, &mut buf)?;
-            write_len(
+            write_len_with_flags(
                 writer,
                 u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?,
+                flags,
             )?;
             writer.write_all(&buf)?;
         }
@@ -2211,38 +2261,280 @@ where
         return Ok(());
     }
 
-    let mut lengths = Vec::with_capacity(len);
-    let mut data = Vec::new();
-    let mut buf = Vec::new();
-    for item in iter {
-        buf.clear();
+    let table_len = len
+        .checked_add(1)
+        .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+        .ok_or(Error::LengthMismatch)?;
+    let mut packed = vec![0; table_len];
+    let mut total = 0u64;
+    let mut count = 0usize;
+    for (idx, item) in iter.into_iter().enumerate() {
+        if idx >= len {
+            return Err(Error::LengthMismatch);
+        }
         if let Some(hint) = hint_elem(&item) {
-            if buf.capacity() < hint {
-                buf.reserve_exact(hint - buf.capacity());
-            }
-            let needed = data.len().saturating_add(hint);
-            if data.capacity() < needed {
-                data.reserve_exact(needed - data.capacity());
+            let needed = packed
+                .len()
+                .checked_add(hint)
+                .ok_or(Error::LengthMismatch)?;
+            if packed.capacity() < needed {
+                packed
+                    .try_reserve(needed - packed.capacity())
+                    .map_err(|_| Error::LengthMismatch)?;
             }
         }
-        encode_elem(item, &mut buf)?;
-        lengths.push(buf.len());
-        let needed = data.len().saturating_add(buf.len());
-        if data.capacity() < needed {
-            data.reserve_exact(needed - data.capacity());
+        let elem_start = packed.len();
+        encode_elem(item, &mut packed)?;
+        let elem_len = packed
+            .len()
+            .checked_sub(elem_start)
+            .ok_or(Error::LengthMismatch)?;
+        total = total
+            .checked_add(u64::try_from(elem_len).map_err(|_| Error::LengthMismatch)?)
+            .ok_or(Error::LengthMismatch)?;
+        let offset_pos = idx
+            .checked_add(1)
+            .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+            .ok_or(Error::LengthMismatch)?;
+        packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+            .copy_from_slice(&total.to_le_bytes());
+        count += 1;
+    }
+    if count != len {
+        return Err(Error::LengthMismatch);
+    }
+    writer.write_all(&packed)?;
+    Ok(())
+}
+
+fn encode_slice_payloads<W, T>(writer: &mut W, slice: &[T]) -> Result<(), Error>
+where
+    W: Write,
+    T: NoritoSerialize,
+{
+    write_seq_len(
+        writer,
+        u64::try_from(slice.len()).map_err(|_| Error::LengthMismatch)?,
+    )?;
+
+    if !use_packed_seq() {
+        let mut buf = Vec::new();
+        if let Some(max_hint) = slice
+            .iter()
+            .filter_map(|item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()))
+            .max()
+        {
+            buf.try_reserve(max_hint)
+                .map_err(|_| Error::LengthMismatch)?;
         }
-        data.extend_from_slice(&buf);
+        let flags = effective_layout_flags();
+        for item in slice {
+            buf.clear();
+            item.serialize(&mut buf)?;
+            write_len_with_flags(
+                writer,
+                u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?,
+                flags,
+            )?;
+            writer.write_all(&buf)?;
+        }
+        return Ok(());
     }
 
-    write_fixed_offsets(writer, &lengths)?;
+    note_fixed_offsets_emitted();
+    let table_len = slice
+        .len()
+        .checked_add(1)
+        .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+        .ok_or(Error::LengthMismatch)?;
+    let mut packed = vec![0; table_len];
 
-    writer.write_all(&data)?;
+    let mut data_reserve = 0usize;
+    for item in slice {
+        if let Some(hint) = item.encoded_len_exact().or_else(|| item.encoded_len_hint()) {
+            data_reserve = data_reserve
+                .checked_add(hint)
+                .ok_or(Error::LengthMismatch)?;
+        }
+    }
+    if data_reserve > 0 {
+        packed
+            .try_reserve(data_reserve)
+            .map_err(|_| Error::LengthMismatch)?;
+    }
+
+    let mut total = 0u64;
+    for (idx, item) in slice.iter().enumerate() {
+        let elem_start = packed.len();
+        item.serialize(&mut packed)?;
+        let elem_len = packed
+            .len()
+            .checked_sub(elem_start)
+            .ok_or(Error::LengthMismatch)?;
+        total = total
+            .checked_add(u64::try_from(elem_len).map_err(|_| Error::LengthMismatch)?)
+            .ok_or(Error::LengthMismatch)?;
+        let offset_pos = idx
+            .checked_add(1)
+            .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+            .ok_or(Error::LengthMismatch)?;
+        packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+            .copy_from_slice(&total.to_le_bytes());
+    }
+    writer.write_all(&packed)?;
     Ok(())
+}
+
+fn sequence_encoded_len_hint<'a, T, I>(len: usize, items: I) -> Option<usize>
+where
+    T: NoritoSerialize + 'a,
+    I: IntoIterator<Item = &'a T>,
+{
+    let mut total = 8usize;
+    if use_packed_seq() {
+        let entries = len.checked_add(1)?;
+        total = total.checked_add(entries.checked_mul(8)?)?;
+        for item in items {
+            let elem_len = item
+                .encoded_len_exact()
+                .or_else(|| item.encoded_len_hint())?;
+            total = total.checked_add(elem_len)?;
+        }
+        return Some(total);
+    }
+
+    let flags = effective_layout_flags();
+    for item in items {
+        let elem_len = item
+            .encoded_len_exact()
+            .or_else(|| item.encoded_len_hint())?;
+        total = total.checked_add(len_prefix_len_with_flags(elem_len, flags))?;
+        total = total.checked_add(elem_len)?;
+    }
+    Some(total)
+}
+
+fn sequence_encoded_len_exact<'a, T, I>(len: usize, items: I) -> Option<usize>
+where
+    T: NoritoSerialize + 'a,
+    I: IntoIterator<Item = &'a T>,
+{
+    let mut total = 8usize;
+    if use_packed_seq() {
+        let entries = len.checked_add(1)?;
+        total = total.checked_add(entries.checked_mul(8)?)?;
+        for item in items {
+            total = total.checked_add(item.encoded_len_exact()?)?;
+        }
+        return Some(total);
+    }
+
+    let flags = effective_layout_flags();
+    for item in items {
+        let elem_len = item.encoded_len_exact()?;
+        total = total.checked_add(len_prefix_len_with_flags(elem_len, flags))?;
+        total = total.checked_add(elem_len)?;
+    }
+    Some(total)
+}
+
+fn map_encoded_len_hint<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
+where
+    K: NoritoSerialize + 'a,
+    V: NoritoSerialize + 'a,
+    I: IntoIterator<Item = (&'a K, &'a V)>,
+{
+    let mut total = 8usize;
+    if use_packed_seq() {
+        let table_len = len
+            .checked_add(1)?
+            .checked_mul(core::mem::size_of::<u64>())?;
+        total = total.checked_add(table_len.checked_mul(2)?)?;
+        for (key, value) in entries {
+            let key_len = key.encoded_len_exact().or_else(|| key.encoded_len_hint())?;
+            let value_len = value
+                .encoded_len_exact()
+                .or_else(|| value.encoded_len_hint())?;
+            total = total.checked_add(key_len)?;
+            total = total.checked_add(value_len)?;
+        }
+        return Some(total);
+    }
+
+    let flags = effective_layout_flags();
+    for (key, value) in entries {
+        let key_len = key.encoded_len_exact().or_else(|| key.encoded_len_hint())?;
+        let value_len = value
+            .encoded_len_exact()
+            .or_else(|| value.encoded_len_hint())?;
+        total = total.checked_add(len_prefix_len_with_flags(key_len, flags))?;
+        total = total.checked_add(key_len)?;
+        total = total.checked_add(len_prefix_len_with_flags(value_len, flags))?;
+        total = total.checked_add(value_len)?;
+    }
+    Some(total)
+}
+
+fn map_encoded_len_exact<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
+where
+    K: NoritoSerialize + 'a,
+    V: NoritoSerialize + 'a,
+    I: IntoIterator<Item = (&'a K, &'a V)>,
+{
+    let mut total = 8usize;
+    if use_packed_seq() {
+        let table_len = len
+            .checked_add(1)?
+            .checked_mul(core::mem::size_of::<u64>())?;
+        total = total.checked_add(table_len.checked_mul(2)?)?;
+        for (key, value) in entries {
+            total = total.checked_add(key.encoded_len_exact()?)?;
+            total = total.checked_add(value.encoded_len_exact()?)?;
+        }
+        return Some(total);
+    }
+
+    let flags = effective_layout_flags();
+    for (key, value) in entries {
+        let key_len = key.encoded_len_exact()?;
+        let value_len = value.encoded_len_exact()?;
+        total = total.checked_add(len_prefix_len_with_flags(key_len, flags))?;
+        total = total.checked_add(key_len)?;
+        total = total.checked_add(len_prefix_len_with_flags(value_len, flags))?;
+        total = total.checked_add(value_len)?;
+    }
+    Some(total)
+}
+
+fn map_max_field_len_hint<'a, K, V, I>(entries: I) -> Option<usize>
+where
+    K: NoritoSerialize + 'a,
+    V: NoritoSerialize + 'a,
+    I: IntoIterator<Item = (&'a K, &'a V)>,
+{
+    let mut max_len: Option<usize> = None;
+    for (key, value) in entries {
+        for field_len in [
+            key.encoded_len_exact().or_else(|| key.encoded_len_hint()),
+            value
+                .encoded_len_exact()
+                .or_else(|| value.encoded_len_hint()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            max_len = Some(match max_len {
+                Some(max_len) => max_len.max(field_len),
+                None => field_len,
+            });
+        }
+    }
+    max_len
 }
 
 #[cfg(test)]
 mod encode_seq_payloads_tests {
-    use super::{DecodeFlagsGuard, encode_seq_payloads, header_flags};
+    use super::{DecodeFlagsGuard, encode_seq_payloads, encode_slice_payloads, header_flags};
 
     #[test]
     fn encode_seq_payloads_packed_uses_hints_and_keeps_layout() {
@@ -2280,6 +2572,22 @@ mod encode_seq_payloads_tests {
         let data = &out[cursor..];
         let expected: Vec<u8> = items.iter().flatten().copied().collect();
         assert_eq!(data, expected.as_slice());
+    }
+
+    #[test]
+    fn encode_slice_payloads_matches_packed_layout() {
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+        let items = [0x0102_u16, 0x0304_u16, 0x0506_u16];
+        let mut out = Vec::new();
+
+        encode_slice_payloads(&mut out, &items).expect("encode packed slice");
+
+        assert_eq!(&out[..8], &(3u64).to_le_bytes());
+        assert_eq!(&out[8..16], &(0u64).to_le_bytes());
+        assert_eq!(&out[16..24], &(2u64).to_le_bytes());
+        assert_eq!(&out[24..32], &(4u64).to_le_bytes());
+        assert_eq!(&out[32..40], &(6u64).to_le_bytes());
+        assert_eq!(&out[40..], &[0x02, 0x01, 0x04, 0x03, 0x06, 0x05]);
     }
 }
 
@@ -2735,6 +3043,86 @@ where
     Ok((out, offset))
 }
 
+fn decode_length_prefixed_sequence_legacy_with<'a, T, F>(
+    bytes: &'a [u8],
+    len: usize,
+    mut offset: usize,
+    mut on_value: F,
+) -> Result<usize, Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    F: FnMut(T) -> Result<(), Error>,
+{
+    for _ in 0..len {
+        let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;
+        offset = offset
+            .checked_add(header_len)
+            .ok_or(Error::LengthMismatch)?;
+        let data_start = offset;
+        let expected_end = data_start
+            .checked_add(elem_len)
+            .ok_or(Error::LengthMismatch)?;
+        if expected_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+        let decode_input = if elem_len == 0 {
+            &bytes[data_start..]
+        } else {
+            &bytes[data_start..expected_end]
+        };
+        let (value, used) = decode_field_canonical::<T>(decode_input)?;
+        if used > bytes.len().saturating_sub(data_start) {
+            return Err(Error::LengthMismatch);
+        }
+        if elem_len != 0 && used != elem_len {
+            return Err(Error::LengthMismatch);
+        }
+        if elem_len == 0 && used == 0 && core::mem::size_of::<T>() != 0 {
+            return Err(Error::LengthMismatch);
+        }
+        let consumed = if elem_len == 0 { used } else { elem_len };
+        let data_end = data_start
+            .checked_add(consumed)
+            .ok_or(Error::LengthMismatch)?;
+        record_slice_access(&bytes[data_start..data_end], consumed);
+        on_value(value)?;
+        offset = data_end;
+    }
+    Ok(offset)
+}
+
+fn decode_sequence_elements<'a, T, F>(bytes: &'a [u8], mut on_value: F) -> Result<usize, Error>
+where
+    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    F: FnMut(T) -> Result<(), Error>,
+{
+    let (len, offset) = read_seq_len_slice(bytes)?;
+    let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+    let layout = if use_packed_seq() {
+        BinarySequenceLayout::FixedOffsets
+    } else {
+        BinarySequenceLayout::LengthPrefixed
+    };
+    let plan = plan_binary_sequence(bytes, flags, layout)?;
+    if layout == BinarySequenceLayout::LengthPrefixed
+        && core::mem::size_of::<T>() != 0
+        && plan.spans.iter().any(SequenceSpan::is_empty)
+    {
+        return decode_length_prefixed_sequence_legacy_with::<T, _>(bytes, len, offset, on_value);
+    }
+
+    for span in &plan.spans {
+        let element_slice = span.get(bytes)?;
+        record_slice_access(element_slice, span.len());
+        let (value, used) = decode_field_canonical::<T>(element_slice)?;
+        if used != span.len() {
+            return Err(Error::LengthMismatch);
+        }
+        on_value(value)?;
+    }
+    Ok(plan.used)
+}
+
 impl<'a> DecodeFromSlice<'a> for &'a [u8] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
@@ -2815,9 +3203,12 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (vec, used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let mut deque = VecDeque::with_capacity(vec.len());
-        deque.extend(vec);
+        let (len, _) = read_seq_len_slice(bytes)?;
+        let mut deque = VecDeque::with_capacity(len);
+        let used = decode_sequence_elements::<T, _>(bytes, |value| {
+            deque.push_back(value);
+            Ok(())
+        })?;
         Ok((deque, used))
     }
 }
@@ -2827,11 +3218,11 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (vec, used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         let mut list = LinkedList::new();
-        for value in vec {
+        let used = decode_sequence_elements::<T, _>(bytes, |value| {
             list.push_back(value);
-        }
+            Ok(())
+        })?;
         Ok((list, used))
     }
 }
@@ -2841,8 +3232,13 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (values, used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
-        Ok((BinaryHeap::from(values), used))
+        let (len, _) = read_seq_len_slice(bytes)?;
+        let mut heap = BinaryHeap::with_capacity(len);
+        let used = decode_sequence_elements::<T, _>(bytes, |value| {
+            heap.push(value);
+            Ok(())
+        })?;
+        Ok((heap, used))
     }
 }
 
@@ -2851,13 +3247,13 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (values, used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         let mut out = BTreeSet::new();
-        for value in values {
+        let used = decode_sequence_elements::<T, _>(bytes, |value| {
             if !out.insert(value) {
                 return Err(Error::LengthMismatch);
             }
-        }
+            Ok(())
+        })?;
         Ok((out, used))
     }
 }
@@ -2867,9 +3263,136 @@ where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (ordered, used) = <BTreeSet<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
-        Ok((ordered.into_iter().collect(), used))
+        let (len, _) = read_seq_len_slice(bytes)?;
+        let mut out = HashSet::with_capacity(len);
+        let used = decode_sequence_elements::<T, _>(bytes, |value| {
+            if !out.insert(value) {
+                return Err(Error::LengthMismatch);
+            }
+            Ok(())
+        })?;
+        Ok((out, used))
     }
+}
+
+fn decode_map_entries<'a, K, V, F>(
+    bytes: &'a [u8],
+    mut on_entry: F,
+) -> Result<(usize, usize), Error>
+where
+    K: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    F: FnMut(K, V) -> Result<(), Error>,
+{
+    let (len, mut offset) = read_seq_len_slice(bytes)?;
+    if use_packed_seq() {
+        let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let table_len = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+        let offsets_bytes = table_len.checked_mul(2).ok_or(Error::LengthMismatch)?;
+        let header_end = offset
+            .checked_add(offsets_bytes)
+            .ok_or(Error::LengthMismatch)?;
+        if header_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+
+        let key_offsets = bytes
+            .get(offset..offset + table_len)
+            .ok_or(Error::LengthMismatch)?;
+        let value_offsets_start = offset.checked_add(table_len).ok_or(Error::LengthMismatch)?;
+        let value_offsets = bytes
+            .get(value_offsets_start..header_end)
+            .ok_or(Error::LengthMismatch)?;
+        offset = header_end;
+
+        let key_total = validate_fixed_offset_table(key_offsets, entries)?;
+        let val_total = validate_fixed_offset_table(value_offsets, entries)?;
+        let key_data_start = offset;
+        let key_data_end = key_data_start
+            .checked_add(key_total)
+            .ok_or(Error::LengthMismatch)?;
+        let val_data_start = key_data_end;
+        let val_data_end = val_data_start
+            .checked_add(val_total)
+            .ok_or(Error::LengthMismatch)?;
+        if val_data_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+
+        for idx in 0..len {
+            let key_start_offset = read_fixed_offset_usize_at(key_offsets, idx)?;
+            let key_end_offset = read_fixed_offset_usize_at(key_offsets, idx + 1)?;
+            let key_start = key_data_start
+                .checked_add(key_start_offset)
+                .ok_or(Error::LengthMismatch)?;
+            let key_end = key_data_start
+                .checked_add(key_end_offset)
+                .ok_or(Error::LengthMismatch)?;
+            if key_end > key_data_end || key_start > key_end {
+                return Err(Error::LengthMismatch);
+            }
+            let key_slice = bytes.get(key_start..key_end).ok_or(Error::LengthMismatch)?;
+            record_slice_access(key_slice, key_end - key_start);
+            let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
+            if key_used != key_end - key_start {
+                return Err(Error::LengthMismatch);
+            }
+
+            let value_start_offset = read_fixed_offset_usize_at(value_offsets, idx)?;
+            let value_end_offset = read_fixed_offset_usize_at(value_offsets, idx + 1)?;
+            let value_start = val_data_start
+                .checked_add(value_start_offset)
+                .ok_or(Error::LengthMismatch)?;
+            let value_end = val_data_start
+                .checked_add(value_end_offset)
+                .ok_or(Error::LengthMismatch)?;
+            if value_end > val_data_end || value_start > value_end {
+                return Err(Error::LengthMismatch);
+            }
+            let value_slice = bytes
+                .get(value_start..value_end)
+                .ok_or(Error::LengthMismatch)?;
+            record_slice_access(value_slice, value_end - value_start);
+            let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
+            if value_used != value_end - value_start {
+                return Err(Error::LengthMismatch);
+            }
+            on_entry(key, value)?;
+        }
+        return Ok((len, val_data_end));
+    }
+
+    for _ in 0..len {
+        let (key_len, key_hdr) = read_len_dyn_slice(&bytes[offset..])?;
+        offset = offset.checked_add(key_hdr).ok_or(Error::LengthMismatch)?;
+        let key_end = offset.checked_add(key_len).ok_or(Error::LengthMismatch)?;
+        if key_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+        let key_slice = &bytes[offset..key_end];
+        record_slice_access(key_slice, key_len);
+        let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
+        if key_used != key_len {
+            return Err(Error::LengthMismatch);
+        }
+        offset = key_end;
+
+        let (value_len, value_hdr) = read_len_dyn_slice(&bytes[offset..])?;
+        offset = offset.checked_add(value_hdr).ok_or(Error::LengthMismatch)?;
+        let value_end = offset.checked_add(value_len).ok_or(Error::LengthMismatch)?;
+        if value_end > bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+        let value_slice = &bytes[offset..value_end];
+        record_slice_access(value_slice, value_len);
+        let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
+        if value_used != value_len {
+            return Err(Error::LengthMismatch);
+        }
+        offset = value_end;
+        on_entry(key, value)?;
+    }
+    Ok((len, offset))
 }
 
 impl<'a, K, V> DecodeFromSlice<'a> for BTreeMap<K, V>
@@ -2878,141 +3401,14 @@ where
     V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (len, mut offset) = read_seq_len_slice(bytes)?;
         let mut out = BTreeMap::new();
-        if use_packed_seq() {
-            let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
-            let offsets_bytes = entries.checked_mul(16).ok_or(Error::LengthMismatch)?;
-            let header_end = offset
-                .checked_add(offsets_bytes)
-                .ok_or(Error::LengthMismatch)?;
-            if header_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-
-            let mut key_offsets = Vec::with_capacity(entries);
-            for idx in 0..entries {
-                let start = offset + idx * 8;
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(&bytes[start..start + 8]);
-                let off = len_u64_to_usize(u64::from_le_bytes(buf))?;
-                if idx == 0 {
-                    if off != 0 {
-                        return Err(Error::LengthMismatch);
-                    }
-                } else if off < *key_offsets.last().unwrap() {
-                    return Err(Error::LengthMismatch);
-                }
-                key_offsets.push(off);
-            }
-            let mut val_offsets = Vec::with_capacity(entries);
-            let val_base = offset + entries * 8;
-            for idx in 0..entries {
-                let start = val_base + idx * 8;
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(&bytes[start..start + 8]);
-                let off = len_u64_to_usize(u64::from_le_bytes(buf))?;
-                if idx == 0 {
-                    if off != 0 {
-                        return Err(Error::LengthMismatch);
-                    }
-                } else if off < *val_offsets.last().unwrap() {
-                    return Err(Error::LengthMismatch);
-                }
-                val_offsets.push(off);
-            }
-            offset = header_end;
-
-            let key_total = *key_offsets.last().unwrap_or(&0);
-            let val_total = *val_offsets.last().unwrap_or(&0);
-            let key_data_start = offset;
-            let key_data_end = key_data_start
-                .checked_add(key_total)
-                .ok_or(Error::LengthMismatch)?;
-            let val_data_start = key_data_end;
-            let val_data_end = val_data_start
-                .checked_add(val_total)
-                .ok_or(Error::LengthMismatch)?;
-            if val_data_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-
-            let mut keys = Vec::with_capacity(len);
-            for idx in 0..len {
-                let start = key_data_start
-                    .checked_add(key_offsets[idx])
-                    .ok_or(Error::LengthMismatch)?;
-                let end = key_data_start
-                    .checked_add(key_offsets[idx + 1])
-                    .ok_or(Error::LengthMismatch)?;
-                if end > key_data_end || start > end {
-                    return Err(Error::LengthMismatch);
-                }
-                let key_slice = bytes.get(start..end).ok_or(Error::LengthMismatch)?;
-                record_slice_access(key_slice, end - start);
-                let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
-                if key_used != end - start {
-                    return Err(Error::LengthMismatch);
-                }
-                keys.push(key);
-            }
-
-            for (idx, key) in keys.into_iter().enumerate() {
-                let start = val_data_start
-                    .checked_add(val_offsets[idx])
-                    .ok_or(Error::LengthMismatch)?;
-                let end = val_data_start
-                    .checked_add(val_offsets[idx + 1])
-                    .ok_or(Error::LengthMismatch)?;
-                if end > val_data_end || start > end {
-                    return Err(Error::LengthMismatch);
-                }
-                let value_slice = bytes.get(start..end).ok_or(Error::LengthMismatch)?;
-                record_slice_access(value_slice, end - start);
-                let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
-                if value_used != end - start {
-                    return Err(Error::LengthMismatch);
-                }
-                if out.insert(key, value).is_some() {
-                    return Err(Error::LengthMismatch);
-                }
-            }
-            return Ok((out, val_data_end));
-        }
-        for _ in 0..len {
-            let (key_len, key_hdr) = read_len_dyn_slice(&bytes[offset..])?;
-            offset = offset.checked_add(key_hdr).ok_or(Error::LengthMismatch)?;
-            let key_end = offset.checked_add(key_len).ok_or(Error::LengthMismatch)?;
-            if key_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-            let key_slice = &bytes[offset..key_end];
-            record_slice_access(key_slice, key_len);
-            let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
-            if key_used != key_len {
-                return Err(Error::LengthMismatch);
-            }
-            offset = key_end;
-
-            let (value_len, value_hdr) = read_len_dyn_slice(&bytes[offset..])?;
-            offset = offset.checked_add(value_hdr).ok_or(Error::LengthMismatch)?;
-            let value_end = offset.checked_add(value_len).ok_or(Error::LengthMismatch)?;
-            if value_end > bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
-            let value_slice = &bytes[offset..value_end];
-            record_slice_access(value_slice, value_len);
-            let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
-            if value_used != value_len {
-                return Err(Error::LengthMismatch);
-            }
-            offset = value_end;
-
+        let (_, used) = decode_map_entries::<K, V, _>(bytes, |key, value| {
             if out.insert(key, value).is_some() {
                 return Err(Error::LengthMismatch);
             }
-        }
-        Ok((out, offset))
+            Ok(())
+        })?;
+        Ok((out, used))
     }
 }
 
@@ -3022,8 +3418,15 @@ where
     V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let (ordered, used) = <BTreeMap<K, V> as DecodeFromSlice>::decode_from_slice(bytes)?;
-        Ok((ordered.into_iter().collect(), used))
+        let (len, _) = read_seq_len_slice(bytes)?;
+        let mut out = HashMap::with_capacity(len);
+        let (_, used) = decode_map_entries::<K, V, _>(bytes, |key, value| {
+            if out.insert(key, value).is_some() {
+                return Err(Error::LengthMismatch);
+            }
+            Ok(())
+        })?;
+        Ok((out, used))
     }
 }
 
@@ -3042,20 +3445,28 @@ where
         let packed = use_packed_seq();
         if !packed {
             let mut buffer = Vec::new();
+            if let Some(max_field_len) = map_max_field_len_hint(self.iter()) {
+                buffer
+                    .try_reserve(max_field_len)
+                    .map_err(|_| Error::LengthMismatch)?;
+            }
+            let flags = effective_layout_flags();
             for (key, value) in self.iter() {
                 buffer.clear();
                 key.serialize(&mut buffer)?;
-                write_len(
+                write_len_with_flags(
                     &mut writer,
                     u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                    flags,
                 )?;
                 writer.write_all(&buffer)?;
 
                 buffer.clear();
                 value.serialize(&mut buffer)?;
-                write_len(
+                write_len_with_flags(
                     &mut writer,
                     u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                    flags,
                 )?;
                 writer.write_all(&buffer)?;
             }
@@ -3063,37 +3474,83 @@ where
         }
 
         note_fixed_offsets_emitted();
-        if len == 0 {
-            write_fixed_offsets(&mut writer, &[])?;
-            write_fixed_offsets(&mut writer, &[])?;
-            return Ok(());
-        }
-
-        let mut key_sizes = Vec::with_capacity(len);
-        let mut val_sizes = Vec::with_capacity(len);
-        let mut key_data = Vec::new();
-        let mut val_data = Vec::new();
-        let mut key_buf = Vec::new();
-        let mut val_buf = Vec::new();
-
+        let table_len = len
+            .checked_add(1)
+            .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+            .ok_or(Error::LengthMismatch)?;
+        let tables_len = table_len.checked_mul(2).ok_or(Error::LengthMismatch)?;
+        let mut packed = vec![0; tables_len];
+        let mut data_reserve = 0usize;
         for (key, value) in self.iter() {
-            key_buf.clear();
-            key.serialize(&mut key_buf)?;
-            val_buf.clear();
-            value.serialize(&mut val_buf)?;
-
-            key_sizes.push(key_buf.len());
-            val_sizes.push(val_buf.len());
-            key_data.extend_from_slice(&key_buf);
-            val_data.extend_from_slice(&val_buf);
+            if let Some(hint) = key.encoded_len_exact().or_else(|| key.encoded_len_hint()) {
+                data_reserve = data_reserve
+                    .checked_add(hint)
+                    .ok_or(Error::LengthMismatch)?;
+            }
+            if let Some(hint) = value
+                .encoded_len_exact()
+                .or_else(|| value.encoded_len_hint())
+            {
+                data_reserve = data_reserve
+                    .checked_add(hint)
+                    .ok_or(Error::LengthMismatch)?;
+            }
+        }
+        if data_reserve > 0 {
+            packed
+                .try_reserve(data_reserve)
+                .map_err(|_| Error::LengthMismatch)?;
         }
 
-        write_fixed_offsets(&mut writer, &key_sizes)?;
-        write_fixed_offsets(&mut writer, &val_sizes)?;
+        let mut key_total = 0u64;
+        for (idx, (key, _)) in self.iter().enumerate() {
+            let elem_start = packed.len();
+            key.serialize(&mut packed)?;
+            let elem_len = packed
+                .len()
+                .checked_sub(elem_start)
+                .ok_or(Error::LengthMismatch)?;
+            key_total = key_total
+                .checked_add(u64::try_from(elem_len).map_err(|_| Error::LengthMismatch)?)
+                .ok_or(Error::LengthMismatch)?;
+            let offset_pos = idx
+                .checked_add(1)
+                .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+                .ok_or(Error::LengthMismatch)?;
+            packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+                .copy_from_slice(&key_total.to_le_bytes());
+        }
 
-        writer.write_all(&key_data)?;
-        writer.write_all(&val_data)?;
+        let mut value_total = 0u64;
+        for (idx, (_, value)) in self.iter().enumerate() {
+            let elem_start = packed.len();
+            value.serialize(&mut packed)?;
+            let elem_len = packed
+                .len()
+                .checked_sub(elem_start)
+                .ok_or(Error::LengthMismatch)?;
+            value_total = value_total
+                .checked_add(u64::try_from(elem_len).map_err(|_| Error::LengthMismatch)?)
+                .ok_or(Error::LengthMismatch)?;
+            let offset_pos = idx
+                .checked_add(1)
+                .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+                .and_then(|offset| table_len.checked_add(offset))
+                .ok_or(Error::LengthMismatch)?;
+            packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+                .copy_from_slice(&value_total.to_le_bytes());
+        }
+
+        writer.write_all(&packed)?;
         Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        map_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        map_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -3139,20 +3596,28 @@ where
         let packed = use_packed_seq();
         if !packed {
             let mut buffer = Vec::new();
+            if let Some(max_field_len) = map_max_field_len_hint(entries.iter().copied()) {
+                buffer
+                    .try_reserve(max_field_len)
+                    .map_err(|_| Error::LengthMismatch)?;
+            }
+            let flags = effective_layout_flags();
             for (key, value) in entries.into_iter() {
                 buffer.clear();
                 key.serialize(&mut buffer)?;
-                write_len(
+                write_len_with_flags(
                     &mut writer,
                     u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                    flags,
                 )?;
                 writer.write_all(&buffer)?;
 
                 buffer.clear();
                 value.serialize(&mut buffer)?;
-                write_len(
+                write_len_with_flags(
                     &mut writer,
                     u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                    flags,
                 )?;
                 writer.write_all(&buffer)?;
             }
@@ -3160,37 +3625,83 @@ where
         }
 
         note_fixed_offsets_emitted();
-        if len == 0 {
-            write_fixed_offsets(&mut writer, &[])?;
-            write_fixed_offsets(&mut writer, &[])?;
-            return Ok(());
+        let table_len = len
+            .checked_add(1)
+            .and_then(|entries| entries.checked_mul(core::mem::size_of::<u64>()))
+            .ok_or(Error::LengthMismatch)?;
+        let tables_len = table_len.checked_mul(2).ok_or(Error::LengthMismatch)?;
+        let mut packed = vec![0; tables_len];
+        let mut data_reserve = 0usize;
+        for &(key, value) in &entries {
+            if let Some(hint) = key.encoded_len_exact().or_else(|| key.encoded_len_hint()) {
+                data_reserve = data_reserve
+                    .checked_add(hint)
+                    .ok_or(Error::LengthMismatch)?;
+            }
+            if let Some(hint) = value
+                .encoded_len_exact()
+                .or_else(|| value.encoded_len_hint())
+            {
+                data_reserve = data_reserve
+                    .checked_add(hint)
+                    .ok_or(Error::LengthMismatch)?;
+            }
+        }
+        if data_reserve > 0 {
+            packed
+                .try_reserve(data_reserve)
+                .map_err(|_| Error::LengthMismatch)?;
         }
 
-        let mut key_sizes = Vec::with_capacity(len);
-        let mut val_sizes = Vec::with_capacity(len);
-        let mut key_data = Vec::new();
-        let mut val_data = Vec::new();
-        let mut key_buf = Vec::new();
-        let mut val_buf = Vec::new();
-
-        for (key, value) in entries.into_iter() {
-            key_buf.clear();
-            key.serialize(&mut key_buf)?;
-            val_buf.clear();
-            value.serialize(&mut val_buf)?;
-
-            key_sizes.push(key_buf.len());
-            val_sizes.push(val_buf.len());
-            key_data.extend_from_slice(&key_buf);
-            val_data.extend_from_slice(&val_buf);
+        let mut key_total = 0u64;
+        for (idx, &(key, _)) in entries.iter().enumerate() {
+            let elem_start = packed.len();
+            key.serialize(&mut packed)?;
+            let elem_len = packed
+                .len()
+                .checked_sub(elem_start)
+                .ok_or(Error::LengthMismatch)?;
+            key_total = key_total
+                .checked_add(u64::try_from(elem_len).map_err(|_| Error::LengthMismatch)?)
+                .ok_or(Error::LengthMismatch)?;
+            let offset_pos = idx
+                .checked_add(1)
+                .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+                .ok_or(Error::LengthMismatch)?;
+            packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+                .copy_from_slice(&key_total.to_le_bytes());
         }
 
-        write_fixed_offsets(&mut writer, &key_sizes)?;
-        write_fixed_offsets(&mut writer, &val_sizes)?;
+        let mut value_total = 0u64;
+        for (idx, &(_, value)) in entries.iter().enumerate() {
+            let elem_start = packed.len();
+            value.serialize(&mut packed)?;
+            let elem_len = packed
+                .len()
+                .checked_sub(elem_start)
+                .ok_or(Error::LengthMismatch)?;
+            value_total = value_total
+                .checked_add(u64::try_from(elem_len).map_err(|_| Error::LengthMismatch)?)
+                .ok_or(Error::LengthMismatch)?;
+            let offset_pos = idx
+                .checked_add(1)
+                .and_then(|offset| offset.checked_mul(core::mem::size_of::<u64>()))
+                .and_then(|offset| table_len.checked_add(offset))
+                .ok_or(Error::LengthMismatch)?;
+            packed[offset_pos..offset_pos + core::mem::size_of::<u64>()]
+                .copy_from_slice(&value_total.to_le_bytes());
+        }
 
-        writer.write_all(&key_data)?;
-        writer.write_all(&val_data)?;
+        writer.write_all(&packed)?;
         Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        map_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        map_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -3232,6 +3743,14 @@ where
             |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
         )
     }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        sequence_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        sequence_encoded_len_exact(self.len(), self.iter())
+    }
 }
 
 impl<'a, T> NoritoDeserialize<'a> for BTreeSet<T>
@@ -3272,6 +3791,14 @@ where
             |item, buf| item.serialize(buf),
             |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
         )
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        sequence_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -3497,8 +4024,8 @@ impl<const N: usize> SmallBuf<N> {
         self.len = 0;
         if self.spilled {
             self.spill.clear();
+            self.spilled = false;
         }
-        // don't reset `spilled` flag; it remains sticky until next use
     }
 
     /// Current length in bytes.
@@ -3824,13 +4351,13 @@ impl Header {
     fn write(&self, mut w: impl Write) -> Result<(), Error> {
         validate_header_flags(self.flags)?;
         w.write_all(&self.magic)?;
-        w.write_u8(self.major)?;
-        w.write_u8(self.minor)?;
+        w.write_all(&[self.major])?;
+        w.write_all(&[self.minor])?;
         w.write_all(&self.schema)?;
-        w.write_u8(self.compression as u8)?;
-        w.write_u64::<LittleEndian>(self.length)?;
-        w.write_u64::<LittleEndian>(self.checksum)?;
-        w.write_u8(self.flags)?; // flags in padding byte
+        w.write_all(&[self.compression as u8])?;
+        w.write_all(&self.length.to_le_bytes())?;
+        w.write_all(&self.checksum.to_le_bytes())?;
+        w.write_all(&[self.flags])?; // flags in padding byte
         Ok(())
     }
 
@@ -4168,7 +4695,7 @@ pub fn archived_from_slice_unchecked<'a, T>(bytes: &'a [u8]) -> ArchivedRef<'a, 
 
 impl NoritoSerialize for u8 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u8(*self)?;
+        writer.write_all(&[*self])?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4187,7 +4714,7 @@ impl<'a> NoritoDeserialize<'a> for u8 {
 
 impl NoritoSerialize for i8 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_i8(*self)?;
+        writer.write_all(&[*self as u8])?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4206,7 +4733,7 @@ impl<'a> NoritoDeserialize<'a> for i8 {
 
 impl NoritoSerialize for u16 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u16::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4253,7 +4780,7 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU16 {
 
 impl NoritoSerialize for i16 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_i16::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4272,7 +4799,7 @@ impl<'a> NoritoDeserialize<'a> for i16 {
 
 impl NoritoSerialize for u32 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u32::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4319,7 +4846,7 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU32 {
 
 impl NoritoSerialize for bool {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u8(*self as u8)?;
+        writer.write_all(&[*self as u8])?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4338,7 +4865,7 @@ impl<'a> NoritoDeserialize<'a> for bool {
 
 impl NoritoSerialize for char {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u32::<LittleEndian>(*self as u32)?;
+        writer.write_all(&(*self as u32).to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4395,7 +4922,7 @@ impl<'a, T> DecodeFromSlice<'a> for PhantomData<T> {
 
 impl NoritoSerialize for i32 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_i32::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4414,7 +4941,7 @@ impl<'a> NoritoDeserialize<'a> for i32 {
 
 impl NoritoSerialize for u64 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u64::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4461,7 +4988,7 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU64 {
 
 impl NoritoSerialize for i64 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_i64::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4480,7 +5007,7 @@ impl<'a> NoritoDeserialize<'a> for i64 {
 
 impl NoritoSerialize for usize {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u64::<LittleEndian>(*self as u64)?;
+        writer.write_all(&(*self as u64).to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4499,7 +5026,7 @@ impl<'a> NoritoDeserialize<'a> for usize {
 
 impl NoritoSerialize for isize {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_i64::<LittleEndian>(*self as i64)?;
+        writer.write_all(&(*self as i64).to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4518,7 +5045,7 @@ impl<'a> NoritoDeserialize<'a> for isize {
 
 impl NoritoSerialize for u128 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u128::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4537,7 +5064,7 @@ impl<'a> NoritoDeserialize<'a> for u128 {
 
 impl NoritoSerialize for i128 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_i128::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4556,7 +5083,7 @@ impl<'a> NoritoDeserialize<'a> for i128 {
 
 impl NoritoSerialize for f32 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_f32::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_bits().to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4624,7 +5151,7 @@ impl<'a> NoritoDeserialize<'a> for f32 {
 
 impl NoritoSerialize for f64 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_f64::<LittleEndian>(*self)?;
+        writer.write_all(&self.to_bits().to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4706,16 +5233,15 @@ impl NoritoSerialize for String {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let bytes = self.as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
-        write_len(&mut writer, len)?;
+        write_len_with_flags(&mut writer, len, effective_layout_flags())?;
         writer.write_all(bytes)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        // Conservative upper bound to minimize reallocations across layouts
-        Some(8 + self.len())
+        len_prefixed_payload_len(self.len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        Some(len_prefix_len(self.len()) + self.len())
+        len_prefixed_payload_len(self.len())
     }
 }
 
@@ -4761,16 +5287,15 @@ impl NoritoSerialize for &str {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let bytes = self.as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
-        write_len(&mut writer, len)?;
+        write_len_with_flags(&mut writer, len, effective_layout_flags())?;
         writer.write_all(bytes)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        // Conservative upper bound to minimize reallocations across layouts
-        Some(8 + self.len())
+        len_prefixed_payload_len(self.len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        Some(len_prefix_len(self.len()) + self.len())
+        len_prefixed_payload_len(self.len())
     }
 }
 
@@ -4851,12 +5376,15 @@ impl NoritoSerialize for Cow<'_, str> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let bytes = self.as_ref().as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
-        write_len(&mut writer, len)?;
+        write_len_with_flags(&mut writer, len, effective_layout_flags())?;
         writer.write_all(bytes)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        Some(8 + self.len())
+        len_prefixed_payload_len(self.len())
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        len_prefixed_payload_len(self.len())
     }
 }
 
@@ -4881,10 +5409,10 @@ impl NoritoSerialize for Box<str> {
         self.as_ref().serialize(writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        Some(8 + self.len())
+        len_prefixed_payload_len(self.len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        Some(len_prefix_len(self.len()) + self.len())
+        len_prefixed_payload_len(self.len())
     }
 }
 
@@ -4910,13 +5438,14 @@ impl<T: NoritoSerialize> NoritoSerialize for Box<T> {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         (**self)
-            .encoded_len_hint()
-            .map(|inner| inner + core::mem::size_of::<u64>())
+            .encoded_len_exact()
+            .or_else(|| (**self).encoded_len_hint())
+            .and_then(len_prefixed_payload_len)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         (**self)
             .encoded_len_exact()
-            .map(|inner| inner + len_prefix_len(inner))
+            .and_then(len_prefixed_payload_len)
     }
 }
 
@@ -4941,13 +5470,14 @@ impl<T: NoritoSerialize> NoritoSerialize for Rc<T> {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         (**self)
-            .encoded_len_hint()
-            .map(|inner| inner + core::mem::size_of::<u64>())
+            .encoded_len_exact()
+            .or_else(|| (**self).encoded_len_hint())
+            .and_then(len_prefixed_payload_len)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         (**self)
             .encoded_len_exact()
-            .map(|inner| inner + len_prefix_len(inner))
+            .and_then(len_prefixed_payload_len)
     }
 }
 
@@ -4972,13 +5502,14 @@ impl<T: NoritoSerialize> NoritoSerialize for Arc<T> {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         (**self)
-            .encoded_len_hint()
-            .map(|inner| inner + core::mem::size_of::<u64>())
+            .encoded_len_exact()
+            .or_else(|| (**self).encoded_len_hint())
+            .and_then(len_prefixed_payload_len)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         (**self)
             .encoded_len_exact()
-            .map(|inner| inner + len_prefix_len(inner))
+            .and_then(len_prefixed_payload_len)
     }
 }
 
@@ -5047,16 +5578,14 @@ impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {
 
 impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+        let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
         match self {
             Some(value) => {
-                writer.write_u8(1)?;
-                let mut buf = Vec::new();
-                value.serialize(&mut buf)?;
-                write_len(&mut writer, buf.len() as u64)?;
-                writer.write_all(&buf)?;
+                writer.write_all(&[1])?;
+                write_len_prefixed(&mut writer, value, &mut tmp)?;
             }
             None => {
-                writer.write_u8(0)?;
+                writer.write_all(&[0])?;
             }
         }
         Ok(())
@@ -5064,8 +5593,9 @@ impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
     fn encoded_len_hint(&self) -> Option<usize> {
         match self {
             Some(v) => v
-                .encoded_len_hint()
-                .map(|len| 1 + len_prefix_len(len) + len),
+                .encoded_len_exact()
+                .or_else(|| v.encoded_len_hint())
+                .and_then(tagged_len_prefixed_payload_len),
             None => Some(1),
         }
     }
@@ -5073,7 +5603,7 @@ impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
         match self {
             Some(v) => v
                 .encoded_len_exact()
-                .map(|len| 1 + len_prefix_len(len) + len),
+                .and_then(tagged_len_prefixed_payload_len),
             None => Some(1),
         }
     }
@@ -5132,11 +5662,11 @@ impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
         let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
         match self {
             Ok(value) => {
-                writer.write_u8(0)?;
+                writer.write_all(&[0])?;
                 write_len_prefixed(&mut writer, value, &mut tmp)?;
             }
             Err(err) => {
-                writer.write_u8(1)?;
+                writer.write_all(&[1])?;
                 write_len_prefixed(&mut writer, err, &mut tmp)?;
             }
         }
@@ -5144,8 +5674,25 @@ impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         match self {
-            Ok(v) => v.encoded_len_hint().map(|len| 1 + 8 + len),
-            Err(e) => e.encoded_len_hint().map(|len| 1 + 8 + len),
+            Ok(v) => v
+                .encoded_len_exact()
+                .or_else(|| v.encoded_len_hint())
+                .and_then(tagged_len_prefixed_payload_len),
+            Err(e) => e
+                .encoded_len_exact()
+                .or_else(|| e.encoded_len_hint())
+                .and_then(tagged_len_prefixed_payload_len),
+        }
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        match self {
+            Ok(v) => v
+                .encoded_len_exact()
+                .and_then(tagged_len_prefixed_payload_len),
+            Err(e) => e
+                .encoded_len_exact()
+                .and_then(tagged_len_prefixed_payload_len),
         }
     }
 }
@@ -5208,13 +5755,52 @@ where
 impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut buf = Vec::new();
+        if let Some(max_hint) = self
+            .iter()
+            .filter_map(|item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()))
+            .max()
+        {
+            buf.try_reserve(max_hint)
+                .map_err(|_| Error::LengthMismatch)?;
+        }
+        let flags = effective_layout_flags();
         for item in self {
             buf.clear();
             item.serialize(&mut buf)?;
-            write_len(&mut writer, buf.len() as u64)?;
+            write_len_with_flags(
+                &mut writer,
+                u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?,
+                flags,
+            )?;
             writer.write_all(&buf)?;
         }
         Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        let flags = effective_layout_flags();
+        let mut total = 0usize;
+        for item in self {
+            let elem_len = item
+                .encoded_len_exact()
+                .or_else(|| item.encoded_len_hint())?;
+            total = total
+                .checked_add(len_prefix_len_with_flags(elem_len, flags))?
+                .checked_add(elem_len)?;
+        }
+        Some(total)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let flags = effective_layout_flags();
+        let mut total = 0usize;
+        for item in self {
+            let elem_len = item.encoded_len_exact()?;
+            total = total
+                .checked_add(len_prefix_len_with_flags(elem_len, flags))?
+                .checked_add(elem_len)?;
+        }
+        Some(total)
     }
 }
 
@@ -5711,7 +6297,11 @@ impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        None
+        sequence_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -5734,8 +6324,8 @@ where
         }
         let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
         let bytes = &payload[offset..];
-        let (vec, _used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
-        Ok(VecDeque::from(vec))
+        let (deque, _used) = <VecDeque<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok(deque)
     }
 }
 
@@ -5751,7 +6341,11 @@ impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        None
+        sequence_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -5774,11 +6368,7 @@ where
         }
         let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
         let bytes = &payload[offset..];
-        let (vec, _used) = <Vec<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let mut list = LinkedList::new();
-        for value in vec {
-            list.push_back(value);
-        }
+        let (list, _used) = <LinkedList<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(list)
     }
 }
@@ -5799,16 +6389,11 @@ where
         )
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        let mut items: Vec<_> = self.iter().collect();
-        items.sort();
-        let mut total: usize = 8;
-        for item in items {
-            match item.encoded_len_hint() {
-                Some(el) => total = total.saturating_add(8 + el),
-                None => return None,
-            }
-        }
-        Some(total)
+        sequence_encoded_len_hint(self.len(), self.iter())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -5885,21 +6470,21 @@ impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
             writer.write_all(bytes)?;
             return Ok(());
         }
-        encode_seq_payloads(
-            &mut writer,
-            self.len(),
-            self.iter(),
-            |item, buf| item.serialize(buf),
-            |item| item.encoded_len_exact().or_else(|| item.encoded_len_hint()),
-        )
+        encode_slice_payloads(&mut writer, self)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        if core::any::type_name::<T>() == "u8" {
+            return self.len().checked_add(8);
+        }
+        sequence_encoded_len_hint(self.len(), self.iter())
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
         if core::any::type_name::<T>() == "u8" {
-            self.len().checked_add(8)
-        } else {
-            None
+            return self.len().checked_add(8);
         }
+        sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
 
@@ -5925,6 +6510,27 @@ where
     }
 }
 
+#[inline]
+fn tuple_serialization_flags() -> u8 {
+    let defaults = default_encode_flags();
+    let dynamic_mask = header_flags::PACKED_SEQ;
+    let static_defaults = defaults & !dynamic_mask;
+    match current_decode_flags_effective() {
+        None => defaults,
+        Some(0) => 0,
+        Some(current) => {
+            let current_dynamic = current & dynamic_mask;
+            let current_static = current & !dynamic_mask;
+            let effective_static = if current_static == 0 {
+                static_defaults
+            } else {
+                current_static | static_defaults
+            };
+            current_dynamic | effective_static
+        }
+    }
+}
+
 macro_rules! impl_tuple {
     ($( $name:ident $var:ident $idx:tt ),+ $(,)?) => {
         impl<$( $name: NoritoSerialize ),+> NoritoSerialize for ( $( $name, )+ ) {
@@ -5933,23 +6539,7 @@ macro_rules! impl_tuple {
                 // defaults as the bare codec path (packed seq/struct and
                 // compact lengths when enabled). This keeps nested encodings
                 // like `Vec<u8>` consistent with the decoder's expectations.
-                let __defaults = default_encode_flags();
-                let __dynamic_mask = header_flags::PACKED_SEQ;
-                let __static_defaults = __defaults & !__dynamic_mask;
-                let __merged = match current_decode_flags_effective() {
-                    None => __defaults,
-                    Some(0) => 0,
-                    Some(__current) => {
-                        let __current_dynamic = __current & __dynamic_mask;
-                        let __current_static = __current & !__dynamic_mask;
-                        let __effective_static = if __current_static == 0 {
-                            __static_defaults
-                        } else {
-                            __current_static | __static_defaults
-                        };
-                        __current_dynamic | __effective_static
-                    }
-                };
+                let __merged = tuple_serialization_flags();
                 let __guard = DecodeFlagsGuard::enter_with_hint(__merged, __merged);
                 // Use a small stack-backed buffer to avoid heap traffic for
                 // fixed/small fields.
@@ -5964,7 +6554,11 @@ macro_rules! impl_tuple {
                 $(
                     __buf.clear();
                     self.$idx.serialize(&mut __buf)?;
-                    write_len(&mut writer, __buf.len() as u64)?;
+                    write_len_with_flags(
+                        &mut writer,
+                        u64::try_from(__buf.len()).map_err(|_| Error::LengthMismatch)?,
+                        __merged,
+                    )?;
                     writer.write_all(__buf.as_slice())?;
                 )+
                 Ok(())
@@ -5972,10 +6566,13 @@ macro_rules! impl_tuple {
 
             fn encoded_len_hint(&self) -> Option<usize> {
                 let mut total = 0usize;
+                let flags = tuple_serialization_flags();
                 $(
-                    let elem_len = self.$idx.encoded_len_hint()?;
+                    let elem_len = self.$idx
+                        .encoded_len_exact()
+                        .or_else(|| self.$idx.encoded_len_hint())?;
                     total = total
-                        .checked_add(core::mem::size_of::<u64>())?
+                        .checked_add(len_prefix_len_with_flags(elem_len, flags))?
                         .checked_add(elem_len)?;
                 )+
                 Some(total)
@@ -5983,15 +6580,11 @@ macro_rules! impl_tuple {
 
             fn encoded_len_exact(&self) -> Option<usize> {
                 let mut total = 0usize;
+                let flags = tuple_serialization_flags();
                 $(
                     let elem_len = self.$idx.encoded_len_exact()?;
-                    let prefix_len = if use_compact_len() {
-                        len_prefix_len(elem_len)
-                    } else {
-                        core::mem::size_of::<u64>()
-                    };
                     total = total
-                        .checked_add(prefix_len)?
+                        .checked_add(len_prefix_len_with_flags(elem_len, flags))?
                         .checked_add(elem_len)?;
                 )+
                 Some(total)
@@ -6352,6 +6945,37 @@ pub fn frame_bare_with_header_flags<T: NoritoSerialize>(
     Ok(out)
 }
 
+/// Write a bare payload with a Norito header directly to `writer`.
+///
+/// This is the streaming equivalent of [`frame_bare_with_header_flags`]. It is
+/// useful when the framed payload is embedded immediately into a larger archive
+/// and materializing a temporary `Vec<u8>` would add avoidable copy traffic.
+pub fn write_bare_frame_with_header_flags<T, W>(
+    writer: &mut W,
+    payload: &[u8],
+    flags: u8,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    W: Write + ?Sized,
+{
+    let mut header = Header::new(T::schema_hash(), payload.len() as u64, crc64(payload));
+    header.flags |= flags;
+    header.write(&mut *writer)?;
+
+    let mut padding = payload_alignment_padding_for::<T>();
+    if padding != 0 {
+        const ZEROS: [u8; 64] = [0; 64];
+        while padding != 0 {
+            let chunk = padding.min(ZEROS.len());
+            writer.write_all(&ZEROS[..chunk])?;
+            padding -= chunk;
+        }
+    }
+    writer.write_all(payload)?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn frame_bare_with_default_header<T: NoritoSerialize>(
     payload: &[u8],
@@ -6401,6 +7025,28 @@ mod bytesink_tests {
         let mut s = ByteSink::with_headroom(4, Header::SIZE);
         s.write_all(&[1, 2, 3, 4, 5]).unwrap();
         assert_eq!(s.checksum(), crc64(&[1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn smallbuf_clear_returns_short_writes_to_stack_storage() {
+        use std::io::Write as _;
+
+        let mut buf = SmallBuf::<4>::new();
+        buf.write_all(&[1, 2, 3, 4, 5]).unwrap();
+        assert!(buf.spilled);
+        assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5]);
+
+        buf.clear();
+        assert!(!buf.spilled);
+        assert!(buf.is_empty());
+
+        buf.write_all(&[9, 8]).unwrap();
+        assert!(!buf.spilled);
+        assert_eq!(buf.as_slice(), &[9, 8]);
+
+        buf.write_all(&[7, 6, 5]).unwrap();
+        assert!(buf.spilled);
+        assert_eq!(buf.as_slice(), &[9, 8, 7, 6, 5]);
     }
 
     #[test]
@@ -8179,6 +8825,20 @@ mod tests {
     }
 
     #[test]
+    fn write_bare_frame_with_header_flags_matches_vec_framer() {
+        reset_decode_state();
+        let value = vec![9u32, 8, 7, 6];
+        let (bare, flags) = crate::codec::encode_with_header_flags(&value);
+        let expected =
+            frame_bare_with_header_flags::<Vec<u32>>(&bare, flags).expect("frame payload into vec");
+        let mut actual = Vec::new();
+        write_bare_frame_with_header_flags::<Vec<u32>, _>(&mut actual, &bare, flags)
+            .expect("frame payload into writer");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn frame_current_payload_preserves_active_flags() {
         reset_decode_state();
         let value = vec![5u64, 6, 7, 8];
@@ -8380,6 +9040,253 @@ mod tests {
         let err = super::btreemap_entry_slices(&keys, &values, 0, 3, 0, 1, 0)
             .expect_err("slice bounds check");
         assert!(matches!(err, Error::LengthMismatch));
+    }
+
+    #[test]
+    fn packed_maps_keep_key_then_value_payload_layout() {
+        fn read_u64_at(bytes: &[u8], offset: usize) -> u64 {
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&bytes[offset..offset + 8]);
+            u64::from_le_bytes(buf)
+        }
+
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+        let mut tree = std::collections::BTreeMap::new();
+        tree.insert(0x0102_u16, 0x0304_0506_u32);
+        tree.insert(0x0708_u16, 0x090A_0B0C_u32);
+
+        let mut bytes = Vec::new();
+        NoritoSerialize::serialize(&tree, &mut bytes).expect("serialize packed map");
+        assert_eq!(read_u64_at(&bytes, 0), 2);
+        assert_eq!(read_u64_at(&bytes, 8), 0);
+        assert_eq!(read_u64_at(&bytes, 16), 2);
+        assert_eq!(read_u64_at(&bytes, 24), 4);
+        assert_eq!(read_u64_at(&bytes, 32), 0);
+        assert_eq!(read_u64_at(&bytes, 40), 4);
+        assert_eq!(read_u64_at(&bytes, 48), 8);
+        assert_eq!(
+            &bytes[56..],
+            &[
+                0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x0C, 0x0B, 0x0A, 0x09
+            ]
+        );
+
+        let (decoded_tree, used) =
+            <std::collections::BTreeMap<u16, u32> as DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode packed btree map");
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded_tree, tree);
+
+        let mut hash = std::collections::HashMap::new();
+        hash.insert(0x0708_u16, 0x090A_0B0C_u32);
+        hash.insert(0x0102_u16, 0x0304_0506_u32);
+        let mut hash_bytes = Vec::new();
+        NoritoSerialize::serialize(&hash, &mut hash_bytes).expect("serialize packed hash map");
+        assert_eq!(hash_bytes, bytes);
+        let (decoded_hash, used) =
+            <std::collections::HashMap<u16, u32> as DecodeFromSlice>::decode_from_slice(
+                &hash_bytes,
+            )
+            .expect("decode packed hash map");
+        assert_eq!(used, hash_bytes.len());
+        assert_eq!(decoded_hash, hash);
+        reset_decode_state();
+    }
+
+    #[test]
+    fn collection_decoders_handle_u8_element_sequences_directly() {
+        use std::collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque};
+
+        reset_decode_state();
+        let deque = VecDeque::from([1_u8, 2, 3]);
+        let mut deque_bytes = Vec::new();
+        NoritoSerialize::serialize(&deque, &mut deque_bytes).expect("serialize vecdeque");
+        assert!(
+            deque_bytes.len() > 8 + deque.len(),
+            "VecDeque<u8> uses per-element sequence framing"
+        );
+        let (decoded_deque, used) =
+            <VecDeque<u8> as DecodeFromSlice>::decode_from_slice(&deque_bytes)
+                .expect("decode vecdeque");
+        assert_eq!(used, deque_bytes.len());
+        assert_eq!(decoded_deque, deque);
+
+        let list = LinkedList::from([4_u8, 5, 6]);
+        let mut list_bytes = Vec::new();
+        NoritoSerialize::serialize(&list, &mut list_bytes).expect("serialize linked list");
+        let (decoded_list, used) =
+            <LinkedList<u8> as DecodeFromSlice>::decode_from_slice(&list_bytes)
+                .expect("decode linked list");
+        assert_eq!(used, list_bytes.len());
+        assert_eq!(decoded_list, list);
+
+        let heap = BinaryHeap::from([7_u8, 8, 9]);
+        let mut heap_bytes = Vec::new();
+        NoritoSerialize::serialize(&heap, &mut heap_bytes).expect("serialize heap");
+        let (decoded_heap, used) =
+            <BinaryHeap<u8> as DecodeFromSlice>::decode_from_slice(&heap_bytes)
+                .expect("decode heap");
+        assert_eq!(used, heap_bytes.len());
+        assert_eq!(decoded_heap.into_sorted_vec(), heap.into_sorted_vec());
+
+        let btree = BTreeSet::from([10_u8, 11, 12]);
+        let mut btree_bytes = Vec::new();
+        NoritoSerialize::serialize(&btree, &mut btree_bytes).expect("serialize btree set");
+        let (decoded_btree, used) =
+            <BTreeSet<u8> as DecodeFromSlice>::decode_from_slice(&btree_bytes)
+                .expect("decode btree set");
+        assert_eq!(used, btree_bytes.len());
+        assert_eq!(decoded_btree, btree);
+
+        let hash = HashSet::from([13_u8, 14, 15]);
+        let mut hash_bytes = Vec::new();
+        NoritoSerialize::serialize(&hash, &mut hash_bytes).expect("serialize hash set");
+        let (decoded_hash, used) = <HashSet<u8> as DecodeFromSlice>::decode_from_slice(&hash_bytes)
+            .expect("decode hash set");
+        assert_eq!(used, hash_bytes.len());
+        assert_eq!(decoded_hash, hash);
+        reset_decode_state();
+    }
+
+    #[test]
+    fn collection_and_map_encoded_lengths_match_payloads() {
+        use std::collections::{
+            BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
+        };
+
+        fn assert_lengths<T: NoritoSerialize>(value: &T) {
+            let mut bytes = Vec::new();
+            NoritoSerialize::serialize(value, &mut bytes).expect("serialize value");
+            assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
+            assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
+        }
+
+        reset_decode_state();
+        assert_lengths(&VecDeque::from([1_u16, 2, 3]));
+        assert_lengths(&LinkedList::from([4_u16, 5, 6]));
+        assert_lengths(&BinaryHeap::from([7_u16, 8, 9]));
+        assert_lengths(&BTreeSet::from([10_u16, 11, 12]));
+        assert_lengths(&HashSet::from([13_u16, 14, 15]));
+        assert_lengths(&BTreeMap::from([(1_u16, 2_u32), (3, 4)]));
+        assert_lengths(&HashMap::from([(5_u16, 6_u32), (7, 8)]));
+
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+        assert_lengths(&VecDeque::from([1_u16, 2, 3]));
+        assert_lengths(&LinkedList::from([4_u16, 5, 6]));
+        assert_lengths(&BinaryHeap::from([7_u16, 8, 9]));
+        assert_lengths(&BTreeSet::from([10_u16, 11, 12]));
+        assert_lengths(&HashSet::from([13_u16, 14, 15]));
+        assert_lengths(&BTreeMap::from([(1_u16, 2_u32), (3, 4)]));
+        assert_lengths(&HashMap::from([(5_u16, 6_u32), (7, 8)]));
+        reset_decode_state();
+    }
+
+    #[test]
+    fn array_and_tuple_serialization_use_compact_element_lengths() {
+        let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+
+        let array = [5_u8, 7];
+        let mut array_bytes = Vec::new();
+        NoritoSerialize::serialize(&array, &mut array_bytes).expect("serialize array");
+        assert_eq!(array_bytes, [1, 5, 1, 7]);
+        assert_eq!(array.encoded_len_hint(), Some(array_bytes.len()));
+        assert_eq!(array.encoded_len_exact(), Some(array_bytes.len()));
+
+        let mut tuple_bytes = Vec::new();
+        let tuple = (5_u8, 7_u8);
+        NoritoSerialize::serialize(&tuple, &mut tuple_bytes).expect("serialize tuple");
+        assert_eq!(tuple_bytes, [1, 5, 1, 7]);
+        assert_eq!(tuple.encoded_len_hint(), Some(tuple_bytes.len()));
+        assert_eq!(tuple.encoded_len_exact(), Some(tuple_bytes.len()));
+
+        reset_decode_state();
+    }
+
+    #[test]
+    fn string_and_result_lengths_match_compact_payloads() {
+        use std::{borrow::Cow, rc::Rc, sync::Arc};
+
+        let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+
+        let value = String::from("ok");
+        let mut string_bytes = Vec::new();
+        NoritoSerialize::serialize(&value, &mut string_bytes).expect("serialize string");
+        assert_eq!(string_bytes, [2, b'o', b'k']);
+        assert_eq!(value.encoded_len_hint(), Some(string_bytes.len()));
+        assert_eq!(value.encoded_len_exact(), Some(string_bytes.len()));
+
+        let borrowed = "ok";
+        let mut borrowed_bytes = Vec::new();
+        NoritoSerialize::serialize(&borrowed, &mut borrowed_bytes).expect("serialize &str");
+        assert_eq!(borrowed_bytes, string_bytes);
+        assert_eq!(borrowed.encoded_len_hint(), Some(borrowed_bytes.len()));
+        assert_eq!(borrowed.encoded_len_exact(), Some(borrowed_bytes.len()));
+
+        let cow: Cow<'_, str> = Cow::Borrowed("ok");
+        let mut cow_bytes = Vec::new();
+        NoritoSerialize::serialize(&cow, &mut cow_bytes).expect("serialize cow str");
+        assert_eq!(cow_bytes, string_bytes);
+        assert_eq!(cow.encoded_len_hint(), Some(cow_bytes.len()));
+        assert_eq!(cow.encoded_len_exact(), Some(cow_bytes.len()));
+
+        let boxed_str = String::from("ok").into_boxed_str();
+        let mut boxed_str_bytes = Vec::new();
+        NoritoSerialize::serialize(&boxed_str, &mut boxed_str_bytes).expect("serialize box str");
+        assert_eq!(boxed_str_bytes, string_bytes);
+        assert_eq!(boxed_str.encoded_len_hint(), Some(boxed_str_bytes.len()));
+        assert_eq!(boxed_str.encoded_len_exact(), Some(boxed_str_bytes.len()));
+
+        let boxed = Box::new(String::from("ok"));
+        let mut boxed_bytes = Vec::new();
+        NoritoSerialize::serialize(&boxed, &mut boxed_bytes).expect("serialize boxed string");
+        assert_eq!(boxed_bytes, [3, 2, b'o', b'k']);
+        assert_eq!(boxed.encoded_len_hint(), Some(boxed_bytes.len()));
+        assert_eq!(boxed.encoded_len_exact(), Some(boxed_bytes.len()));
+
+        let rc = Rc::new(String::from("ok"));
+        let mut rc_bytes = Vec::new();
+        NoritoSerialize::serialize(&rc, &mut rc_bytes).expect("serialize rc string");
+        assert_eq!(rc_bytes, boxed_bytes);
+        assert_eq!(rc.encoded_len_hint(), Some(rc_bytes.len()));
+        assert_eq!(rc.encoded_len_exact(), Some(rc_bytes.len()));
+
+        let arc = Arc::new(String::from("ok"));
+        let mut arc_bytes = Vec::new();
+        NoritoSerialize::serialize(&arc, &mut arc_bytes).expect("serialize arc string");
+        assert_eq!(arc_bytes, boxed_bytes);
+        assert_eq!(arc.encoded_len_hint(), Some(arc_bytes.len()));
+        assert_eq!(arc.encoded_len_exact(), Some(arc_bytes.len()));
+
+        let some = Some(String::from("ok"));
+        let mut some_bytes = Vec::new();
+        NoritoSerialize::serialize(&some, &mut some_bytes).expect("serialize option some");
+        assert_eq!(some_bytes, [1, 3, 2, b'o', b'k']);
+        assert_eq!(some.encoded_len_hint(), Some(some_bytes.len()));
+        assert_eq!(some.encoded_len_exact(), Some(some_bytes.len()));
+
+        let none: Option<String> = None;
+        let mut none_bytes = Vec::new();
+        NoritoSerialize::serialize(&none, &mut none_bytes).expect("serialize option none");
+        assert_eq!(none_bytes, [0]);
+        assert_eq!(none.encoded_len_hint(), Some(none_bytes.len()));
+        assert_eq!(none.encoded_len_exact(), Some(none_bytes.len()));
+
+        let ok: Result<String, String> = Ok(value);
+        let mut ok_bytes = Vec::new();
+        NoritoSerialize::serialize(&ok, &mut ok_bytes).expect("serialize result ok");
+        assert_eq!(ok_bytes, [0, 3, 2, b'o', b'k']);
+        assert_eq!(ok.encoded_len_hint(), Some(ok_bytes.len()));
+        assert_eq!(ok.encoded_len_exact(), Some(ok_bytes.len()));
+
+        let err: Result<String, String> = Err(String::from("no"));
+        let mut err_bytes = Vec::new();
+        NoritoSerialize::serialize(&err, &mut err_bytes).expect("serialize result err");
+        assert_eq!(err_bytes, [1, 3, 2, b'n', b'o']);
+        assert_eq!(err.encoded_len_hint(), Some(err_bytes.len()));
+        assert_eq!(err.encoded_len_exact(), Some(err_bytes.len()));
+
+        reset_decode_state();
     }
 
     #[test]

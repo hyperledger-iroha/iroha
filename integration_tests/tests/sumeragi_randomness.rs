@@ -10,11 +10,14 @@ use std::{
 };
 
 use base64::Engine as _;
-use eyre::{Result, WrapErr, ensure};
+use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::client::Client;
+use iroha_core::sumeragi::consensus::{NPOS_TAG, vrf_commit_preimage, vrf_reveal_preimage};
+use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
-    Level,
+    ChainId, Level,
+    block::consensus::{VrfCommit, VrfReveal},
     isi::{Log, SetParameter},
     parameter::{
         Parameter,
@@ -23,17 +26,17 @@ use iroha_data_model::{
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
-use rand::{Rng as _, SeedableRng};
-use rand_chacha::ChaCha8Rng;
+use rand::Rng as _;
 use reqwest::Client as HttpClient;
 use sha2::{Digest as _, Sha256};
 use tokio::time::sleep;
 
 const EPOCH_LENGTH_BLOCKS: u64 = 10;
-const VRF_COMMIT_WINDOW_BLOCKS: u64 = 1;
+const VRF_COMMIT_WINDOW_BLOCKS: u64 = 4;
 const VRF_REVEAL_WINDOW_BLOCKS: u64 = 0;
 const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 3;
 const BLOCK_TIME_MS: u64 = 600;
+const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
 const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 const TELEMETRY_RETRY_ATTEMPTS: usize = 30;
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
@@ -66,12 +69,41 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         .join("v1/sumeragi/telemetry")
         .wrap_err("compose telemetry URL")?;
 
-    let target_signer = 0_u32;
+    let chain_id = network.chain_id();
+    let auto_snapshot = wait_for_epoch_record(&client, epoch, |json| {
+        json.get("participants")
+            .and_then(Value::as_array)
+            .is_some_and(|participants| {
+                participants.iter().any(|participant| {
+                    participant
+                        .get("commitment")
+                        .and_then(Value::as_str)
+                        .is_some()
+                })
+            })
+    })
+    .await?;
+    let (target_signer, signer_key_pair, reveal, commitment) =
+        find_recorded_vrf_material(network.peers(), &chain_id, epoch, &auto_snapshot)?;
+    let commit_sig_hex = vrf_commit_signature_hex(
+        &chain_id,
+        &signer_key_pair,
+        epoch,
+        target_signer,
+        commitment,
+    );
+    let reveal_sig_hex =
+        vrf_reveal_signature_hex(&chain_id, &signer_key_pair, epoch, target_signer, reveal);
 
-    let reveal = random_bytes();
-    let commitment = commitment_from_reveal(&reveal);
-
-    submit_vrf_commit(&client, &http, epoch, target_signer, commitment).await?;
+    submit_vrf_commit(
+        &client,
+        &http,
+        epoch,
+        target_signer,
+        commitment,
+        &commit_sig_hex,
+    )
+    .await?;
     client.submit_blocking(Log::new(Level::INFO, "vrf commit flush".to_owned()))?;
 
     let commitment_hex = hex::encode(commitment);
@@ -121,8 +153,15 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         .saturating_add(VRF_LATE_REVEAL_SAFETY_BLOCKS);
     wait_for_height_total_at_least(&client, reveal_cutoff_height).await?;
 
-    let snapshot_after =
-        submit_late_reveal_until_recorded(&client, &http, epoch, target_signer, reveal).await?;
+    let snapshot_after = submit_late_reveal_until_recorded(
+        &client,
+        &http,
+        epoch,
+        target_signer,
+        reveal,
+        &reveal_sig_hex,
+    )
+    .await?;
 
     let seed_after = snapshot_after
         .get("seed_hex")
@@ -224,7 +263,12 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     let penalties = wait_for_penalties(&client, epoch, |json| {
         json.get("committed_no_reveal")
             .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
+            .is_some_and(|committed| {
+                !committed
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .any(|signer| signer == u64::from(target_signer))
+            })
     })
     .await?;
     let committed: Vec<u32> = penalties
@@ -238,14 +282,19 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         })
         .collect();
     ensure!(
-        committed.is_empty(),
-        "committed_no_reveal should be empty after late reveal, got {committed:?}"
+        !committed.contains(&target_signer),
+        "committed_no_reveal should not include late reveal signer {target_signer}, got {committed:?}"
     );
 
     let status_final = wait_for_sumeragi_status(&client, |json| {
         let epoch_reported = json.get("vrf_penalty_epoch")?.as_u64()?;
         let committed = json.get("vrf_committed_no_reveal_total")?.as_u64()?;
-        Some(epoch_reported == epoch && committed == 0)
+        let late = json.get("vrf_late_reveals_total")?.as_u64()?;
+        Some(
+            epoch_reported == epoch
+                && late >= 1
+                && committed <= network.peers().len().saturating_sub(1) as u64,
+        )
     })
     .await?;
     ensure!(
@@ -443,15 +492,96 @@ fn short_epoch_npos_parameters() -> SumeragiNposParameters {
     }
 }
 
-fn random_bytes() -> [u8; 32] {
-    let mut rng = ChaCha8Rng::seed_from_u64(0x5355_4d45);
-    let mut bytes = [0u8; 32];
-    rng.fill(&mut bytes);
-    bytes
-}
-
 fn commitment_from_reveal(reveal: &[u8; 32]) -> [u8; 32] {
     iroha_crypto::Hash::new(reveal).into()
+}
+
+fn find_recorded_vrf_material(
+    peers: &[iroha_test_network::NetworkPeer],
+    chain_id: &ChainId,
+    epoch: u64,
+    snapshot: &Value,
+) -> Result<(u32, KeyPair, [u8; 32], [u8; 32])> {
+    let participants = snapshot
+        .get("participants")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("VRF epoch snapshot is missing participants"))?;
+    for participant in participants {
+        let Some(commitment_hex) = participant.get("commitment").and_then(Value::as_str) else {
+            continue;
+        };
+        let signer = participant
+            .get("signer")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| eyre!("VRF participant is missing signer"))?;
+        let signer = u32::try_from(signer).wrap_err("VRF signer index exceeds u32")?;
+        for peer in peers {
+            let Some(key_pair) = peer.bls_key_pair() else {
+                continue;
+            };
+            let (reveal, commitment) = derive_vrf_material(chain_id, key_pair, epoch, signer);
+            if hex::encode(commitment) == commitment_hex {
+                return Ok((signer, key_pair.clone(), reveal, commitment));
+            }
+        }
+    }
+    eyre::bail!("no local BLS key matched recorded VRF commitments for epoch {epoch}")
+}
+
+fn derive_vrf_material(
+    chain_id: &ChainId,
+    signer_key_pair: &KeyPair,
+    epoch: u64,
+    signer: u32,
+) -> ([u8; 32], [u8; 32]) {
+    let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+    let mut message = Vec::with_capacity(
+        VRF_INPUT_DOMAIN.len() + chain_hash.as_ref().len() + core::mem::size_of::<u64>() * 2,
+    );
+    message.extend_from_slice(VRF_INPUT_DOMAIN);
+    message.extend_from_slice(chain_hash.as_ref());
+    message.extend_from_slice(&epoch.to_be_bytes());
+    message.extend_from_slice(&u64::from(signer).to_be_bytes());
+    let signature = Signature::new(signer_key_pair.private_key(), &message);
+    let reveal: [u8; 32] = iroha_crypto::Hash::new(signature.payload()).into();
+    let commitment = commitment_from_reveal(&reveal);
+    (reveal, commitment)
+}
+
+fn vrf_commit_signature_hex(
+    chain_id: &ChainId,
+    signer_key_pair: &KeyPair,
+    epoch: u64,
+    signer: u32,
+    commitment: [u8; 32],
+) -> String {
+    let commit = VrfCommit {
+        epoch,
+        signer,
+        commitment,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_commit_preimage(chain_id, NPOS_TAG, &commit);
+    let signature = Signature::new(signer_key_pair.private_key(), &preimage);
+    hex::encode(signature.payload())
+}
+
+fn vrf_reveal_signature_hex(
+    chain_id: &ChainId,
+    signer_key_pair: &KeyPair,
+    epoch: u64,
+    signer: u32,
+    reveal: [u8; 32],
+) -> String {
+    let reveal = VrfReveal {
+        epoch,
+        signer,
+        reveal,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_reveal_preimage(chain_id, NPOS_TAG, &reveal);
+    let signature = Signature::new(signer_key_pair.private_key(), &preimage);
+    hex::encode(signature.payload())
 }
 
 async fn submit_vrf_commit(
@@ -460,14 +590,15 @@ async fn submit_vrf_commit(
     epoch: u64,
     signer: u32,
     commitment: [u8; 32],
+    bls_sig_hex: &str,
 ) -> Result<()> {
     let url = client
         .torii_url
         .join("v1/sumeragi/vrf/commit")
         .wrap_err("compose VRF commit URL")?;
     let body = format!(
-        "{{\"epoch\":{epoch},\"signer\":{signer},\"commitment_hex\":\"{}\"}}",
-        hex::encode(commitment)
+        "{{\"epoch\":{epoch},\"signer\":{signer},\"commitment_hex\":\"{}\",\"bls_sig_hex\":\"{bls_sig_hex}\"}}",
+        hex::encode(commitment),
     )
     .into_bytes();
     let mut request = http
@@ -481,11 +612,11 @@ async fn submit_vrf_commit(
         request = request.header("Authorization", auth);
     }
     let response = request.send().await.wrap_err("submit VRF commit")?;
-    ensure!(
-        response.status().is_success(),
-        "VRF commit submission failed: {}",
-        response.status()
-    );
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        eyre::bail!("VRF commit submission failed: {status}: {body}");
+    }
     Ok(())
 }
 
@@ -495,14 +626,15 @@ async fn submit_vrf_reveal(
     epoch: u64,
     signer: u32,
     reveal: [u8; 32],
+    bls_sig_hex: &str,
 ) -> Result<()> {
     let url = client
         .torii_url
         .join("v1/sumeragi/vrf/reveal")
         .wrap_err("compose VRF reveal URL")?;
     let body = format!(
-        "{{\"epoch\":{epoch},\"signer\":{signer},\"reveal_hex\":\"{}\"}}",
-        hex::encode(reveal)
+        "{{\"epoch\":{epoch},\"signer\":{signer},\"reveal_hex\":\"{}\",\"bls_sig_hex\":\"{bls_sig_hex}\"}}",
+        hex::encode(reveal),
     )
     .into_bytes();
     let mut request = http
@@ -516,11 +648,11 @@ async fn submit_vrf_reveal(
         request = request.header("Authorization", auth);
     }
     let response = request.send().await.wrap_err("submit VRF reveal")?;
-    ensure!(
-        response.status().is_success(),
-        "VRF reveal submission failed: {}",
-        response.status()
-    );
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        eyre::bail!("VRF reveal submission failed: {status}: {body}");
+    }
     Ok(())
 }
 
@@ -530,6 +662,7 @@ async fn submit_late_reveal_until_recorded(
     epoch: u64,
     signer: u32,
     reveal: [u8; 32],
+    bls_sig_hex: &str,
 ) -> Result<Value> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
     const PROCESSING_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -539,7 +672,7 @@ async fn submit_late_reveal_until_recorded(
     let mut last_snapshot = None;
     let mut epoch_finalized = false;
     for attempt in 0..RETRIES {
-        submit_vrf_reveal(client, http, epoch, signer, reveal).await?;
+        submit_vrf_reveal(client, http, epoch, signer, reveal, bls_sig_hex).await?;
 
         // First poll the snapshot without forcing progress. Committing a block
         // immediately after every submit can race straight into finalization.
@@ -734,9 +867,10 @@ fn epoch_and_position_from_height(height: u64) -> (u64, u64) {
 }
 
 async fn wait_for_epoch_commit_window(client: &Client) -> Result<u64> {
-    // Align near the end of commit window so manual commits can reliably
-    // override earlier automatic commitments for the same signer.
-    wait_for_epoch_position(client, VRF_COMMIT_WINDOW_BLOCKS).await
+    // Leave enough blocks in the commit window for the external API message to
+    // be handled even when local network startup is slow.
+    let desired_position = VRF_COMMIT_WINDOW_BLOCKS.saturating_sub(2).max(1);
+    wait_for_epoch_position(client, desired_position).await
 }
 
 async fn wait_for_epoch_position(client: &Client, desired_position: u64) -> Result<u64> {

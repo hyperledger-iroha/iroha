@@ -7,7 +7,8 @@ use std::{
 
 use fastpq_isi::CANONICAL_PARAMETER_SETS;
 use fastpq_prover::{
-    OperationKind, PublicInputs, StateTransition, TransitionBatch, ordering_hash, trace_commitment,
+    OperationKind, PublicInputs, StateTransition, TransitionBatch,
+    gadgets::transfer::attach_transfer_smt_witnesses, ordering_hash, trace_commitment,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -54,7 +55,12 @@ fn build_fixture(name: &str) -> TransitionBatch {
 
     match name {
         "transfer" => {
-            let transcript = sample_transfer_transcript();
+            let mut transcripts = vec![sample_transfer_transcript()];
+            let (old_root, new_root) =
+                attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
+            batch.public_inputs.old_root = old_root;
+            batch.public_inputs.new_root = new_root;
+            let transcript = transcripts.pop().expect("transcript");
             for transition in sample_transfer_transitions(&transcript) {
                 batch.push(transition);
             }
@@ -103,20 +109,21 @@ fn u64_bytes(value: u64) -> Vec<u8> {
 }
 
 fn sample_transfer_transcript() -> TransferTranscript {
+    let asset_definition = AssetDefinitionId::new(
+        DomainId::try_new("fixture", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
     let delta = TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),
         to_account: (*BOB_ID).clone(),
-        asset_definition: AssetDefinitionId::new(
-            DomainId::try_new("fixture", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        ),
+        asset_definition,
         amount: Numeric::from(75u32),
         from_balance_before: Numeric::from(1_000u32),
         from_balance_after: Numeric::from(925u32),
         to_balance_before: Numeric::from(75u32),
         to_balance_after: Numeric::from(150u32),
-        from_merkle_proof: None,
-        to_merkle_proof: None,
+        from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     };
     let batch_hash = Hash::prehashed([0x11; 32]);
     let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
@@ -233,7 +240,7 @@ fn trace_commitment_matches_golden_vectors() {
     let expectations: [(&str, &str); 3] = [
         (
             "transfer",
-            "05bf5e9d2f293a69854437f91438e222134e9f491c77e3d5c4c97a1dd8f22a5f",
+            "13729e8b39a4f8296e99ea901f3b86b4760c37a88a52f4c7f86b66245018a5a9",
         ),
         (
             "mint",

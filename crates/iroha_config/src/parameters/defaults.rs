@@ -1451,8 +1451,8 @@ pub mod torii {
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
     /// Default global pre-auth connection cap (pre-RLIMIT clamp).
     pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
-    /// Default per-IP pre-auth connection cap (None disables per-IP caps).
-    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = None;
+    /// Default per-IP pre-auth connection cap.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(64usize));
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -1994,6 +1994,38 @@ pub mod torii {
         pub const RATE_PER_MINUTE: Option<u32> = Some(240);
         /// Optional MCP request burst budget.
         pub const BURST: Option<u32> = Some(120);
+    }
+
+    /// CORS defaults surfaced via `torii.cors`.
+    pub mod cors {
+        /// Enable CORS response headers.
+        pub const ENABLED: bool = false;
+        /// Default maximum preflight cache age in seconds.
+        pub const MAX_AGE_SECS: u64 = 3_600;
+
+        /// Origins allowed to make browser cross-origin requests.
+        #[must_use]
+        pub fn allowed_origins() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// HTTP methods allowed in CORS preflight responses.
+        #[must_use]
+        pub fn allowed_methods() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Request headers allowed in CORS preflight responses.
+        #[must_use]
+        pub fn allowed_headers() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Response headers exposed to browser clients.
+        #[must_use]
+        pub fn exposed_headers() -> Vec<String> {
+            Vec::new()
+        }
     }
     /// Default poll interval (seconds) for Taikai anchor uploads.
     pub const DA_TAIKAI_ANCHOR_POLL_INTERVAL_SECS: u64 = 30;
@@ -3510,7 +3542,7 @@ pub mod soranet {
         use std::time::Duration;
 
         /// Enable the VPN tunnel by default.
-        pub const ENABLED: bool = true;
+        pub const ENABLED: bool = false;
         /// Fixed cell size (bytes).
         pub const CELL_SIZE_BYTES: u16 = 1_024;
         /// Flow label width (bits).
@@ -3535,6 +3567,49 @@ pub mod soranet {
         pub const EXIT_CLASS: &str = "standard";
         /// Default meter family identifier.
         pub const METER_FAMILY: &str = "soranet.vpn.standard";
+        /// Default full-tunnel IPv4 route pushed to clients.
+        pub const DEFAULT_IPV4_ROUTE: &str = "0.0.0.0/0";
+        /// Default full-tunnel IPv6 route pushed to clients.
+        pub const DEFAULT_IPV6_ROUTE: &str = "::/0";
+        /// Default DNS server pushed to clients.
+        pub const DEFAULT_DNS_SERVER: &str = "1.1.1.1";
+        /// Default prepaid lease fee in nano-XOR.
+        pub const LEASE_FEE_NANOS: u64 = 1_000_000;
+        /// Default settlement grace after disconnect before escrow is refundable.
+        pub const SETTLEMENT_GRACE_SECS: u64 = 60;
+
+        /// XOR asset definition used for VPN escrow.
+        pub fn fee_asset_id() -> String {
+            "xor#universal.universal".to_string()
+        }
+
+        /// Account that receives VPN escrow payments before receipt settlement.
+        pub fn escrow_account_id() -> String {
+            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+        }
+
+        /// Default operator account used when an enabled deployment does not override it.
+        pub fn operator_account_id() -> String {
+            super::super::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()
+        }
+
+        /// Default client routes.
+        pub fn route_pushes() -> Vec<String> {
+            vec![
+                DEFAULT_IPV4_ROUTE.to_string(),
+                DEFAULT_IPV6_ROUTE.to_string(),
+            ]
+        }
+
+        /// Default routes excluded from the tunnel.
+        pub fn excluded_routes() -> Vec<String> {
+            Vec::new()
+        }
+
+        /// Default DNS servers.
+        pub fn dns_servers() -> Vec<String> {
+            vec![DEFAULT_DNS_SERVER.to_string()]
+        }
 
         /// Returns the default guard refresh cadence.
         #[must_use]

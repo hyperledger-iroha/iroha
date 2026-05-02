@@ -1760,12 +1760,21 @@ mod tests {
         metrics.record_vpn_frame_egress_count(3, true);
         metrics.record_vpn_receipt(&iroha_data_model::soranet::vpn::VpnSessionReceiptV1 {
             session_id: [0xAA; 16],
+            quote_id: [0xBB; 32],
+            payment_tx_hash: [0xCC; 32],
+            account_hash: [0xDD; 32],
+            relay_id: [0xEE; 32],
             ingress_bytes: 10,
             egress_bytes: 20,
             cover_bytes: 5,
             uptime_secs: 3,
+            started_at_ms: 1_000,
+            ended_at_ms: 4_000,
             exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
             meter_hash: [0x11; 32],
+            earned_fee_nanos: 0,
+            highest_voucher_sequence: 0,
+            client_voucher_hash: [0x22; 32],
         });
         metrics.record_token_outcome("deadbeef", "cafebabe", "accepted");
 

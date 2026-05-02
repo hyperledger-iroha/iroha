@@ -1,7 +1,8 @@
 //! Generic RAM-LFE program-policy instruction handlers.
 
 use iroha_crypto::{
-    Hash, RamLfeBackend, RamLfeVerificationMode, decode_bfv_programmed_public_parameters,
+    BfvIdentifierPublicParameters, Hash, RamLfeBackend, RamLfeVerificationMode,
+    decode_bfv_programmed_public_parameters,
 };
 use iroha_data_model::{
     proof::VerifyingKeyBox,
@@ -58,6 +59,7 @@ pub mod isi {
                     .into(),
                 ));
             }
+            validate_program_policy(&policy)?;
             state_transaction
                 .world
                 .ram_lfe_program_policies
@@ -96,6 +98,7 @@ pub mod isi {
                     .into(),
                 ));
             }
+            validate_program_policy(policy)?;
             policy.active = true;
             Ok(())
         }
@@ -151,13 +154,99 @@ pub mod isi {
     }
 }
 
-/// Validate a stateless RAM-LFE execution receipt against the published program policy.
+/// Validate a RAM-LFE program policy before storing or restoring it.
+pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<(), Error> {
+    if policy.backend != policy.commitment.backend {
+        return Err(Error::InvariantViolation(
+            format!(
+                "RAM-LFE program policy {} backend does not match commitment backend",
+                policy.program_id
+            )
+            .into(),
+        ));
+    }
+    match policy.backend {
+        RamLfeBackend::HkdfSha3_512PrfV1 => {
+            if policy.verification_mode == RamLfeVerificationMode::Proof {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE program policy {} cannot use proof verification with backend {}",
+                        policy.program_id,
+                        policy.backend.as_str()
+                    )
+                    .into(),
+                ));
+            }
+        }
+        RamLfeBackend::BfvAffineSha3_256V1 => {
+            if policy.commitment.public_parameters.is_empty() {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE program policy {} is missing BFV public parameters",
+                        policy.program_id
+                    )
+                    .into(),
+                ));
+            }
+            let archived = norito::from_bytes::<BfvIdentifierPublicParameters>(
+                &policy.commitment.public_parameters,
+            )
+            .map_err(|err| {
+                Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE program policy {} has invalid BFV public parameters: {err}",
+                        policy.program_id
+                    )
+                    .into(),
+                )
+            })?;
+            let public_parameters: BfvIdentifierPublicParameters =
+                norito::core::NoritoDeserialize::deserialize(archived);
+            public_parameters.validate().map_err(|err| {
+                Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE program policy {} has invalid BFV public parameters: {err}",
+                        policy.program_id
+                    )
+                    .into(),
+                )
+            })?;
+            if policy.verification_mode == RamLfeVerificationMode::Proof {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "RAM-LFE program policy {} cannot use proof verification with backend {}",
+                        policy.program_id,
+                        policy.backend.as_str()
+                    )
+                    .into(),
+                ));
+            }
+        }
+        RamLfeBackend::BfvProgrammedSha3_256V1 => {
+            decode_bfv_programmed_public_parameters(&policy.commitment.public_parameters).map_err(
+                |err| {
+                    Error::InvariantViolation(
+                        format!(
+                            "RAM-LFE program policy {} has invalid programmed public parameters: {err}",
+                            policy.program_id
+                        )
+                        .into(),
+                    )
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate a stateless RAM-LFE execution receipt against the published program policy and clock.
 ///
 /// This mirrors the attestation checks used during identifier-claim admission,
 /// but without any identifier-specific ledger binding checks.
-pub fn validate_execution_receipt(
+pub fn validate_execution_receipt_at(
     receipt: &RamLfeExecutionReceipt,
     program_policy: &RamLfeProgramPolicy,
+    now_ms: u64,
 ) -> Result<(), String> {
     let payload = &receipt.payload;
     if payload.program_id != program_policy.program_id {
@@ -183,6 +272,26 @@ pub fn validate_execution_receipt(
     if program_policy.commitment.backend != program_policy.backend {
         return Err(format!(
             "RAM-LFE program policy {} backend does not match its commitment backend",
+            program_policy.program_id
+        ));
+    }
+    if let Some(expires_at_ms) = payload.expires_at_ms {
+        if expires_at_ms <= payload.executed_at_ms {
+            return Err(format!(
+                "RAM-LFE receipt for program {} expires at or before execution time",
+                program_policy.program_id
+            ));
+        }
+        if expires_at_ms <= now_ms {
+            return Err(format!(
+                "RAM-LFE receipt for program {} is expired",
+                program_policy.program_id
+            ));
+        }
+    }
+    if payload.executed_at_ms > now_ms {
+        return Err(format!(
+            "RAM-LFE receipt for program {} was executed in the future",
             program_policy.program_id
         ));
     }
@@ -339,4 +448,82 @@ fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8;
             vec![scalar]
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use iroha_crypto::{KeyPair, PolicyCommitment};
+    use iroha_data_model::{
+        account::AccountId,
+        proof::ProofBox,
+        ram_lfe::{RamLfeProgramId, RamLfeReceiptAttestation},
+    };
+
+    use super::*;
+
+    fn sample_policy() -> RamLfeProgramPolicy {
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let resolver = KeyPair::random();
+        RamLfeProgramPolicy::new(
+            RamLfeProgramId::from_str("test_program").expect("program id"),
+            owner,
+            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeVerificationMode::Signed,
+            PolicyCommitment {
+                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                policy_hash: Hash::new(b"policy"),
+                public_parameters: Vec::new(),
+            },
+            resolver.public_key().clone(),
+        )
+    }
+
+    fn sample_receipt(
+        policy: &RamLfeProgramPolicy,
+        executed_at_ms: u64,
+        expires_at_ms: Option<u64>,
+    ) -> RamLfeExecutionReceipt {
+        RamLfeExecutionReceipt {
+            payload: RamLfeExecutionReceiptPayload {
+                program_id: policy.program_id.clone(),
+                program_digest: Hash::new(b"program"),
+                backend: policy.backend,
+                verification_mode: policy.verification_mode,
+                output_hash: Hash::new(b"output"),
+                associated_data_hash: Hash::new(b"associated-data"),
+                executed_at_ms,
+                expires_at_ms,
+            },
+            attestation: RamLfeReceiptAttestation::Proof(ProofBox::new(
+                "unsupported".into(),
+                vec![0xAA],
+            )),
+        }
+    }
+
+    #[test]
+    fn validate_execution_receipt_rejects_expired_receipts() {
+        let policy = sample_policy();
+        let receipt = sample_receipt(&policy, 100, Some(200));
+        let err = validate_execution_receipt_at(&receipt, &policy, 200).expect_err("expired");
+        assert!(err.contains("is expired"));
+    }
+
+    #[test]
+    fn validate_execution_receipt_rejects_malformed_expiry() {
+        let policy = sample_policy();
+        let receipt = sample_receipt(&policy, 100, Some(100));
+        let err = validate_execution_receipt_at(&receipt, &policy, 150).expect_err("bad expiry");
+        assert!(err.contains("expires at or before execution time"));
+    }
+
+    #[test]
+    fn validate_execution_receipt_rejects_future_execution_time() {
+        let policy = sample_policy();
+        let receipt = sample_receipt(&policy, 200, None);
+        let err = validate_execution_receipt_at(&receipt, &policy, 100).expect_err("future");
+        assert!(err.contains("executed in the future"));
+    }
 }

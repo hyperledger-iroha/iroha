@@ -26,6 +26,11 @@ publish` run (roadmap reference: `roadmap.md:2209`).
   map for the `/portfolio` and `/uaids/*` APIs.
 - `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
   the universal dataspace when none exists, so the UAID is immediately bound.
+  The request must include an explicit canonical `uaid` plus either
+  `account_id` or `public_key_hex`; Torii no longer derives a UAID from mutable
+  alias or account material. Raw identity metadata is rejected. Submit
+  `identity_commitment_hex` when off-chain identity evidence needs an audit
+  commitment on the account.
   Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
 - All SDKs expose helpers for canonicalising UAID literals (e.g.,
   `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
@@ -107,7 +112,7 @@ Current Torii routes:
 | Route | Purpose |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | Lists active and inactive RAM-LFE program policies plus their public execution metadata, including optional BFV `input_encryption` parameters and the programmed-backend `ram_fhe_profile`. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | Accepts exactly one of `{ input_hex }` or `{ encrypted_input }` and returns the stateless `RamLfeExecutionReceipt` plus `{ output_hex, output_hash, receipt_hash }` for the selected program. The current Torii runtime issues receipts for the programmed BFV backend. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Accepts exactly one of `{ input_hex }` or `{ encrypted_input }` and returns the stateless `RamLfeExecutionReceipt` plus `{ output_hash, receipt_hash }` for the selected program. The plaintext RAM-LFE output is not returned by Torii. The current Torii runtime issues receipts for the programmed BFV backend. |
 | `POST /v1/ram-lfe/receipts/verify` | Statelessly validates a `RamLfeExecutionReceipt` against the published on-chain program policy and optionally checks that a caller-supplied `output_hex` matches the receipt `output_hash`. |
 | `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters, the required `normalization` mode for encrypted client-side input, and `ram_fhe_profile` for programmed BFV policies. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain, including both the raw `signature_payload_hex` and the parsed `signature_payload`. |
@@ -224,21 +229,23 @@ There are three supported ways to obtain a UAID:
    and manifest metadata the Space Directory host persists (see
    `docs/space-directory.md` §3 for payload samples).
 3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
-   the canonical participant seed with Blake2b-256 and prefix the result with
-   `uaid:`. The snippet below mirrors the helper documented in
+   the canonical participant seed with Blake2b-256, set the final byte's least
+   significant bit to `1`, and prefix the result with `uaid:`. The snippet
+   below mirrors the helper documented in
    `docs/space-directory.md` §3.3:
 
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```
 
 Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha app space-directory manifest scaffold` and the Android
-`UaidLiteral` parser apply the same trimming rules so governance reviews can
-cross-check values without ad hoc scripts.
+CLI helpers such as `iroha app space-directory manifest scaffold` and the
+Android `UaidLiteral` parser apply the same trimming and low-bit rules so
+governance reviews can cross-check values without ad hoc scripts.
 
 ## 3. Inspecting UAID holdings and manifests
 

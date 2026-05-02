@@ -163,7 +163,7 @@ impl IdentifierResolutionService {
         // Canonicalize onto the resolver's deterministic envelope so receipt
         // hashes stay stable across semantically equivalent BFV encryptions.
         let raw = self.decrypt_program_input(program_policy, ciphertext)?;
-        self.execute(program_policy, raw.as_bytes())
+        self.execute(program_policy, &raw)
     }
 
     fn execute_request_payload(
@@ -260,7 +260,8 @@ impl IdentifierResolutionService {
         ciphertext: &BfvIdentifierCiphertext,
     ) -> Result<String, IdentifierResolutionError> {
         let _ = policy;
-        self.decrypt_program_input(program_policy, ciphertext)
+        let plaintext = self.decrypt_program_input(program_policy, ciphertext)?;
+        String::from_utf8(plaintext).map_err(|_| IdentifierResolutionError::InvalidUtf8)
     }
 
     /// Decrypt BFV-wrapped program input published against the program commitment.
@@ -268,7 +269,7 @@ impl IdentifierResolutionService {
         &self,
         program_policy: &RamLfeProgramPolicy,
         ciphertext: &BfvIdentifierCiphertext,
-    ) -> Result<String, IdentifierResolutionError> {
+    ) -> Result<Vec<u8>, IdentifierResolutionError> {
         let runtime = self.runtime(program_policy)?;
         let public_parameters = decode_bfv_public_parameters(program_policy)?;
         let associated_data = program_id_bytes(&program_policy.program_id);
@@ -281,8 +282,11 @@ impl IdentifierResolutionService {
         if expected_public_parameters != public_parameters {
             return Err(IdentifierResolutionError::FheKeyMismatch);
         }
-        let plaintext = decrypt_identifier(&public_parameters, &secret_key, ciphertext)?;
-        String::from_utf8(plaintext).map_err(|_| IdentifierResolutionError::InvalidUtf8)
+        Ok(decrypt_identifier(
+            &public_parameters,
+            &secret_key,
+            ciphertext,
+        )?)
     }
 
     /// Sign a receipt binding a derived opaque identifier to the current ledger target.
@@ -643,6 +647,47 @@ mod tests {
             .decrypt_input(&policy, &program_policy, &ciphertext)
             .expect("decrypt input");
         assert_eq!(decrypted, "+15551234567");
+    }
+
+    #[test]
+    fn encrypted_program_input_preserves_non_utf8_bytes() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (policy, program_policy) =
+            sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            signer,
+            Some(30_000),
+        );
+
+        let input = [0xff, 0x00, 0x80, 0x41];
+        let plaintext = service
+            .execute(&program_policy, &input)
+            .expect("plaintext execute");
+        let public_parameters =
+            decode_bfv_public_parameters(&program_policy).expect("decode BFV params");
+        let ciphertext =
+            encrypt_identifier_from_seed(&public_parameters, &input, b"non-utf8-program-input")
+                .expect("encrypt non-UTF8 input");
+
+        let decrypted = service
+            .decrypt_program_input(&program_policy, &ciphertext)
+            .expect("decrypt program input");
+        assert_eq!(decrypted, input);
+        let encrypted = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("encrypted execute");
+        assert_eq!(plaintext.output_hash, encrypted.output_hash);
+
+        let err = service
+            .decrypt_input(&policy, &program_policy, &ciphertext)
+            .expect_err("identifier input must still be UTF-8");
+        assert!(matches!(err, IdentifierResolutionError::InvalidUtf8));
     }
 
     #[test]

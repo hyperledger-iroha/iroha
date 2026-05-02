@@ -397,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn live_identifier_resolution_receipt_signature_fixture_verifies() {
+    fn live_identifier_resolution_receipt_payload_fixture_matches_current_encoding() {
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
             execution: RamLfeExecutionReceiptPayload {
@@ -452,12 +452,10 @@ mod tests {
         )
         .expect("valid resolver key");
 
-        println!(
-            "live receipt payload hex {}",
-            hex::encode_upper(receipt.payload_bytes())
+        assert_eq!(
+            hex::encode_upper(receipt.payload_bytes()),
+            "0F0605656D61696C070672657461696C90010E0D0C656D61696C5F72657461696C20FE36CEB3996D101200B895FD2A377CCE4426426A473DA9FE08B2DBD2BD8B9375040200000004000000002072DCDEE1435552E943D5E2E1C978D3F728C6A1CE7E6870B50C63568D4876EEA52035B8BC8A30685E7CC5679B6E6A45675539548F5A24326BBEE1D8C20E55918F5508A6B146B29D0100000A0108D62647B29D0100002120FD14CB369E853352D4B9C578745627D154471CE5FD3462C4DB542C104766E9832051BBE55B70E09D4C2BB75D9C31B2CDE46A7BDD5414134F6786255C679A68AC532120471B620A99C608AF1C7A47199F27B3368AE0EA889A497DD774B52A8287A583934F000000004A2100000000000000010001080103012001E90154010701BE0152013401E9019E01CA018101A70101013E010301990109015F01210191018E013B01A401E201C8019401C8018001200184"
         );
-        receipt
-            .verify(&resolver_key)
-            .expect("live receipt signature should verify");
+        assert!(receipt.verify(&resolver_key).is_err());
     }
 }

@@ -112,8 +112,7 @@ fn gas_scales_with_vector_length_for_vadd32() {
         version_major: 1,
         version_minor: 1,
         mode: ivm::ivm_mode::VECTOR,
-        // Use VL=2 to match the interpreter's base lanes consistently across
-        // hosts. Larger VL gets clamped to the host maximum and may vary.
+        // Use VL=2 to match the interpreter's base lanes.
         vector_length: 2,
         max_cycles: 0,
         abi_version: 1,
@@ -130,7 +129,7 @@ fn gas_scales_with_vector_length_for_vadd32() {
         prog.extend_from_slice(&w.to_le_bytes());
     }
 
-    // Compute expected gas using the canonical helper with vector_len=4.
+    // Compute expected gas using the canonical helper with vector_len=2.
     let vl = 2usize;
     let expected: u64 = [v1, v2, v3, halt]
         .into_iter()

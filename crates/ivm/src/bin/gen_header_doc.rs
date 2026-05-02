@@ -28,7 +28,7 @@ fn render_header_policy_markdown() -> String {
     // First release: only ABI v1 is accepted.
     md.push_str("| abi_version | 1 |\n");
     md.push_str(&format!(
-        "| vector_length | 0 or 1..={vector_len_max} (advisory; independent of VECTOR bit) |\n"
+        "| vector_length | 0 or 1..={vector_len_max} (0 selects runtime default; independent of VECTOR bit) |\n"
     ));
     md
 }

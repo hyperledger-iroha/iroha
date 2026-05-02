@@ -40,7 +40,7 @@ test("ConnectJournalRecord header matches Norito v1 defaults", () => {
   assert.equal(encoded[4], 0);
   assert.equal(encoded[5], 0);
   const schemaHex = Buffer.from(encoded.subarray(6, 22)).toString("hex");
-  assert.equal(schemaHex, "bcf2f58a15121190bcf2f58a15121190");
+  assert.equal(schemaHex, "94edb5aca5951d6089a2a6305326429e");
 });
 
 test("fromCiphertext applies retention automatically", () => {

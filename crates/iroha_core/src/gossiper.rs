@@ -1501,7 +1501,6 @@ impl TransactionGossiper {
             #[derive(Clone, Copy)]
             struct Ed25519BatchItem {
                 idx: usize,
-                public_key: iroha_crypto::Ed25519ParsedPublicKey,
             }
 
             fn verify_ed25519_batch_slices(
@@ -1519,42 +1518,6 @@ impl TransactionGossiper {
                 )
             }
 
-            fn first_bad_ed25519_slice(
-                messages: &[&[u8]],
-                signatures: &[&[u8]],
-                public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
-                scratch: &mut iroha_crypto::Ed25519BatchScratch,
-            ) -> Option<(usize, String)> {
-                if messages.is_empty()
-                    || verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
-                        .is_ok()
-                {
-                    return None;
-                }
-                if messages.len() == 1 {
-                    let detail =
-                        verify_ed25519_batch_slices(messages, signatures, public_keys, scratch)
-                            .expect_err("single invalid Ed25519 item must fail")
-                            .to_string();
-                    return Some((0, detail));
-                }
-
-                let split = messages.len() / 2;
-                let (left_messages, right_messages) = messages.split_at(split);
-                let (left_signatures, right_signatures) = signatures.split_at(split);
-                let (left_public_keys, right_public_keys) = public_keys.split_at(split);
-                first_bad_ed25519_slice(left_messages, left_signatures, left_public_keys, scratch)
-                    .or_else(|| {
-                        first_bad_ed25519_slice(
-                            right_messages,
-                            right_signatures,
-                            right_public_keys,
-                            scratch,
-                        )
-                        .map(|(idx, detail)| (idx + split, detail))
-                    })
-            }
-
             fn signature_error(tx: &SignedTransaction, detail: String) -> AcceptTransactionFail {
                 AcceptTransactionFail::SignatureVerification(SignatureVerificationFail::new(
                     tx.signature().clone(),
@@ -1563,73 +1526,79 @@ impl TransactionGossiper {
                 ))
             }
 
-            let batch_items: Vec<_> = materialized
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, candidate)| {
-                    let TransactionEntrypoint::External(signed) = &candidate.entrypoint else {
-                        return None;
-                    };
-                    if signed.signature().payload().payload().len()
-                        != crate::tx::ED25519_SIGNATURE_LENGTH
-                    {
-                        return None;
-                    }
-                    let public_key = candidate.prepared.as_ref()?.single_ed25519_key?;
-                    Some(Ed25519BatchItem { idx, public_key })
-                })
-                .collect();
+            let mut batch_items = Vec::new();
+            let mut messages = Vec::new();
+            let mut signatures = Vec::new();
+            let mut public_keys = Vec::new();
+            for (idx, candidate) in materialized.iter().enumerate() {
+                let TransactionEntrypoint::External(signed) = &candidate.entrypoint else {
+                    continue;
+                };
+                let signature = signed.signature().payload().payload();
+                if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
+                    continue;
+                }
+                let Some(prepared) = candidate.prepared.as_ref() else {
+                    continue;
+                };
+                let Some(public_key) = prepared.single_ed25519_key else {
+                    continue;
+                };
+                let message: &[u8] = prepared.payload_hash.as_ref();
+                batch_items.push(Ed25519BatchItem { idx });
+                messages.push(message);
+                signatures.push(signature);
+                public_keys.push(public_key);
+            }
             let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
+            let mut prechecked_indices = Vec::new();
+            let mut precheck_rejections = Vec::new();
             for range_start in (0..batch_items.len()).step_by(ed25519_batch_cap) {
                 let range_end = range_start
                     .saturating_add(ed25519_batch_cap)
                     .min(batch_items.len());
                 let batch = &batch_items[range_start..range_end];
-                let batch_result = {
-                    let mut messages = Vec::with_capacity(batch.len());
-                    let mut signatures = Vec::with_capacity(batch.len());
-                    let mut public_keys = Vec::with_capacity(batch.len());
-                    for item in batch {
-                        let candidate = &materialized[item.idx];
-                        let TransactionEntrypoint::External(signed) = &candidate.entrypoint else {
-                            continue;
-                        };
-                        let prepared = candidate
-                            .prepared
-                            .as_ref()
-                            .expect("batch candidates have prepared metadata");
-                        messages.push(prepared.payload_hash.as_ref().as_slice());
-                        signatures.push(signed.signature().payload().payload());
-                        public_keys.push(item.public_key);
-                    }
-
-                    verify_ed25519_batch_slices(&messages, &signatures, &public_keys, &mut scratch)
-                        .map_err(|err| {
-                            first_bad_ed25519_slice(
-                                &messages,
-                                &signatures,
-                                &public_keys,
-                                &mut scratch,
-                            )
-                            .map_or_else(|| (0, err.to_string()), |bad| bad)
-                        })
-                };
+                let batch_messages = &messages[range_start..range_end];
+                let batch_signatures = &signatures[range_start..range_end];
+                let batch_public_keys = &public_keys[range_start..range_end];
+                let batch_result = verify_ed25519_batch_slices(
+                    batch_messages,
+                    batch_signatures,
+                    batch_public_keys,
+                    &mut scratch,
+                )
+                .map_err(|err| {
+                    iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                        batch_messages,
+                        batch_signatures,
+                        batch_public_keys,
+                        [0; 32],
+                        &mut scratch,
+                    )
+                    .map_or_else(|| (0, err.to_string()), |bad| bad)
+                });
                 match batch_result {
-                    Ok(()) => {
-                        for item in batch {
-                            materialized[item.idx].ed25519_prechecked = true;
-                        }
-                    }
+                    Ok(()) => prechecked_indices.extend(batch.iter().map(|item| item.idx)),
                     Err((relative_idx, detail)) => {
-                        if let Some(item) = batch.get(relative_idx) {
-                            let candidate = &mut materialized[item.idx];
-                            if let TransactionEntrypoint::External(signed) = &candidate.entrypoint {
-                                candidate.precheck_rejection =
-                                    Some(signature_error(signed, detail));
-                            }
+                        if let Some(item) = batch.get(relative_idx)
+                            && let TransactionEntrypoint::External(signed) =
+                                &materialized[item.idx].entrypoint
+                        {
+                            precheck_rejections.push((item.idx, signature_error(signed, detail)));
                         }
                     }
                 }
+            }
+            drop(batch_items);
+            drop(messages);
+            drop(signatures);
+            drop(public_keys);
+
+            for idx in prechecked_indices {
+                materialized[idx].ed25519_prechecked = true;
+            }
+            for (idx, err) in precheck_rejections {
+                materialized[idx].precheck_rejection = Some(err);
             }
         }
 

@@ -1,4 +1,4 @@
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use iroha_data_model::nexus::{AxtFastpqBinding, DataSpaceId, LaneId};
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
     axt::{
@@ -32,6 +32,52 @@ fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     let tlv = make_tlv(ty, value);
     vm.alloc_input_tlv(&tlv).expect("alloc input")
+}
+
+fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(domain);
+    for part in parts {
+        payload.extend_from_slice(part);
+    }
+    iroha_crypto::Hash::new(payload)
+}
+
+fn proof_blob_for(dsid: DataSpaceId, manifest_root: [u8; 32], proof_seed: &[u8]) -> ProofBlob {
+    let source_tx_commitment = test_digest(b"ivm-host-test:source-tx", &[proof_seed]);
+    let claim_digest = test_digest(b"ivm-host-test:claim", &[proof_seed]);
+    let witness_commitment = test_digest(b"ivm-host-test:witness", &[proof_seed]);
+    let policy_commitment = test_digest(b"ivm-host-test:policy", &[&manifest_root]);
+    let proof_digest = test_digest(b"ivm-host-test:proof", &[proof_seed, &manifest_root]);
+    let envelope = axt::AxtProofEnvelope {
+        dsid,
+        manifest_root,
+        da_commitment: None,
+        proof: proof_digest.as_ref().to_vec(),
+        fastpq_binding: Some(AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_string(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: "ivm-host-test-dataspace".to_string(),
+            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_string(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "test_effect".to_string(),
+            corridor: "ivm-host-test-corridor".to_string(),
+            verifier_id: "fastpq".to_string(),
+            verifier_version: "v1".to_string(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }),
+        committed_amount: None,
+        amount_commitment: None,
+    };
+    ProofBlob {
+        payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
+        expiry_slot: None,
+    }
 }
 
 #[test]
@@ -80,10 +126,7 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
         Ok(0)
     );
 
-    let proof = ProofBlob {
-        payload: vec![9, 9, 9],
-        expiry_slot: None,
-    };
+    let proof = proof_blob_for(dsid, [1; 32], b"default-host-sequence");
     let proof_ptr = store_tlv(
         &mut vm,
         PointerType::ProofBlob,
@@ -115,7 +158,7 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
         },
         target_lane: LaneId::new(0),
         axt_binding: binding.to_vec(),
-        manifest_view_root: vec![0; 32],
+        manifest_view_root: vec![1; 32],
         expiry_slot: 10,
         max_clock_skew_ms: Some(0),
     };

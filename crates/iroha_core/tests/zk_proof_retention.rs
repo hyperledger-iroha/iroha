@@ -34,7 +34,7 @@ fn proof_records_pruned_to_cap_per_backend() {
     let exec = Executor::default();
 
     // Prepare 5 different proof attachments for same backend
-    let backend = "debug/reject".to_string();
+    let backend = "groth16/bn254".to_string();
     for i in 0u8..5 {
         let proof_box = iroha_data_model::proof::ProofBox::new(backend.clone(), vec![i]);
         let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(backend.clone(), vec![i; 8]);
@@ -79,7 +79,7 @@ fn manual_prune_instruction_applies_new_cap() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let exec = Executor::default();
-    let backend = "debug/reject".to_string();
+    let backend = "groth16/bn254".to_string();
     for i in 0u8..4 {
         let proof_box = iroha_data_model::proof::ProofBox::new(backend.clone(), vec![i]);
         let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(backend.clone(), vec![i; 8]);

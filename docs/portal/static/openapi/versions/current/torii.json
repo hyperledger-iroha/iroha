@@ -1,6 +1,55 @@
 {
   "components": {
     "schemas": {
+      "AccountOnboardingRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "account_id"
+            ]
+          },
+          {
+            "required": [
+              "public_key_hex"
+            ]
+          }
+        ],
+        "properties": {
+          "account_id": {
+            "description": "Canonical I105 account id to register. Mutually exclusive with generated `public_key_hex` onboarding material.",
+            "type": "string"
+          },
+          "alias": {
+            "description": "Account alias literal such as `alice@universal` or `merchant@domain.dataspace`.",
+            "type": "string"
+          },
+          "identity_commitment_hex": {
+            "description": "Optional 64-hex digest commitment to off-chain identity evidence. Raw identity metadata is not accepted.",
+            "type": "string"
+          },
+          "permissions": {
+            "description": "Optional permission literals requested from the onboarding allowlist.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "public_key_hex": {
+            "description": "Raw 32-byte Ed25519 public key bytes as 64 hex characters; Torii derives the canonical account id from this key.",
+            "type": "string"
+          },
+          "uaid": {
+            "description": "Explicit UAID literal (`uaid:<hex>` or raw 64-hex digest with the canonical low bit set).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "uaid"
+        ],
+        "type": "object"
+      },
       "AccountReadResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2619,10 +2668,6 @@
             "description": "Hash of the plaintext output bytes.",
             "type": "string"
           },
-          "output_hex": {
-            "description": "Hex-encoded plaintext output bytes.",
-            "type": "string"
-          },
           "program_id": {
             "description": "RAM-LFE program identifier.",
             "type": "string"
@@ -2643,7 +2688,6 @@
           "program_id",
           "opaque_hash",
           "receipt_hash",
-          "output_hex",
           "output_hash",
           "associated_data_hash",
           "executed_at_ms",
@@ -3189,6 +3233,66 @@
         ],
         "type": "object"
       },
+      "SumeragiVrfCommitRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bls_sig_hex": {
+            "description": "BLS signature over the Sumeragi VRF commit preimage, encoded as non-empty hex.",
+            "type": "string"
+          },
+          "commitment_hex": {
+            "description": "32-byte VRF reveal commitment encoded as hex.",
+            "type": "string"
+          },
+          "epoch": {
+            "description": "Sumeragi VRF epoch number.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "signer": {
+            "description": "Validator index in the active topology for the epoch height.",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "signer",
+          "commitment_hex",
+          "bls_sig_hex"
+        ],
+        "type": "object"
+      },
+      "SumeragiVrfRevealRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bls_sig_hex": {
+            "description": "BLS signature over the Sumeragi VRF reveal preimage, encoded as non-empty hex.",
+            "type": "string"
+          },
+          "epoch": {
+            "description": "Sumeragi VRF epoch number.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "reveal_hex": {
+            "description": "32-byte VRF reveal value encoded as hex.",
+            "type": "string"
+          },
+          "signer": {
+            "description": "Validator index in the active topology for the epoch height.",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "signer",
+          "reveal_hex",
+          "bls_sig_hex"
+        ],
+        "type": "object"
+      },
       "TimeHealth": {
         "additionalProperties": false,
         "properties": {
@@ -3469,7 +3573,8 @@
         "summary": "Fetch the active API version.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/block/stream": {
@@ -3490,7 +3595,8 @@
         "summary": "Connect to the block stream WebSocket.",
         "tags": [
           "Streams"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/configuration": {
@@ -3511,7 +3617,8 @@
         "summary": "Fetch Torii configuration snapshot.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Submit configuration overrides for live reload.",
@@ -3540,7 +3647,8 @@
         "summary": "Update Torii configuration.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/debug/pprof/profile": {
@@ -3562,7 +3670,8 @@
         "summary": "Capture a CPU profile.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/events": {
@@ -3583,7 +3692,8 @@
         "summary": "Connect to the event WebSocket.",
         "tags": [
           "Streams"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/health": {
@@ -3606,7 +3716,8 @@
         "summary": "Check Torii liveness.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/metrics": {
@@ -3627,7 +3738,8 @@
         "summary": "Fetch Prometheus metrics.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/openapi": {
@@ -3648,7 +3760,8 @@
         "summary": "Fetch the OpenAPI specification.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/openapi.json": {
@@ -3669,7 +3782,8 @@
         "summary": "Fetch the OpenAPI specification as JSON.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/p2p": {
@@ -3690,7 +3804,8 @@
         "summary": "Connect to the P2P relay WebSocket.",
         "tags": [
           "Streams"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/peers": {
@@ -3711,7 +3826,8 @@
         "summary": "List online peers.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/query": {
@@ -3750,7 +3866,8 @@
         "summary": "Submit a signed query.",
         "tags": [
           "Queries"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/schema": {
@@ -3771,7 +3888,8 @@
         "summary": "Fetch the data model schema snapshot.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/status": {
@@ -3792,7 +3910,8 @@
         "summary": "Fetch node status snapshot.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/status/{tail}": {
@@ -3824,7 +3943,8 @@
         "summary": "Fetch a status sub-path snapshot.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/transaction": {
@@ -3863,7 +3983,48 @@
         "summary": "Submit a versioned signed transaction.",
         "tags": [
           "Transactions"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/transaction/entrypoint": {
+      "post": {
+        "description": "Submit a versioned TransactionEntrypoint encoded as Norito bytes. This route accepts sealed commitment/reveal entrypoints and other non-legacy transaction envelopes.",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "description": "Binary Norito payload.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a versioned transaction entrypoint.",
+        "tags": [
+          "Transactions"
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts": {
@@ -3884,7 +4045,8 @@
         "summary": "List accounts.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/faucet": {
@@ -3915,7 +4077,8 @@
         "summary": "Request faucet funds.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts/faucet/puzzle": {
@@ -3936,17 +4099,18 @@
         "summary": "Fetch the faucet proof-of-work puzzle.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/onboard": {
       "post": {
-        "description": "Register or onboard an account; when the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
+        "description": "Register or onboard an account with an explicit canonical UAID. The request must provide `uaid` plus either `account_id` or `public_key_hex`; raw identity metadata is rejected, and optional identity evidence must be submitted only as `identity_commitment_hex`. When the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/AccountOnboardingRequest"
               }
             }
           },
@@ -3967,7 +4131,8 @@
         "summary": "Onboard an account.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts/query": {
@@ -3998,7 +4163,8 @@
         "summary": "Query accounts.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}": {
@@ -4045,7 +4211,8 @@
         "summary": "Fetch canonical account detail.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}/assets": {
@@ -4115,7 +4282,8 @@
         "summary": "List account assets.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}/assets/query": {
@@ -4157,7 +4325,8 @@
         "summary": "Query account assets.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts/{account_id}/identifiers/claim-receipt": {
@@ -4199,7 +4368,8 @@
         "summary": "Issue an identifier claim receipt.",
         "tags": [
           "Identifiers"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts/{account_id}/permissions": {
@@ -4231,7 +4401,8 @@
         "summary": "List account permissions.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}/transactions": {
@@ -4292,7 +4463,8 @@
         "summary": "List account transactions.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/accounts/{account_id}/transactions/query": {
@@ -4334,7 +4506,8 @@
         "summary": "Query account transactions.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/accounts/{uaid}/portfolio": {
@@ -4375,7 +4548,8 @@
         "summary": "Fetch account portfolio.",
         "tags": [
           "Accounts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/aliases/by_account": {
@@ -4457,7 +4631,8 @@
         "summary": "List aliases bound to an account across reachable dataspaces.",
         "tags": [
           "Aliases"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/aliases/resolve": {
@@ -4529,7 +4704,8 @@
         "summary": "Resolve an alias string into an account and index.",
         "tags": [
           "Aliases"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/aliases/resolve_index": {
@@ -4601,7 +4777,8 @@
         "summary": "Resolve an alias entry by deterministic index.",
         "tags": [
           "Aliases"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/aliases/voprf/evaluate": {
@@ -4653,7 +4830,8 @@
         "summary": "Evaluate the mock alias VOPRF helper.",
         "tags": [
           "Aliases"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/api/versions": {
@@ -4674,7 +4852,8 @@
         "summary": "List supported Torii API versions.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/assets/aliases/resolve": {
@@ -4736,7 +4915,8 @@
         "summary": "Resolve an asset alias into canonical asset definition fields.",
         "tags": [
           "Aliases"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/assets/definitions": {
@@ -4757,7 +4937,8 @@
         "summary": "List asset definitions.",
         "tags": [
           "Assets"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/assets/definitions/query": {
@@ -4788,7 +4969,8 @@
         "summary": "Query asset definitions.",
         "tags": [
           "Assets"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/assets/definitions/{asset}": {
@@ -4820,7 +5002,8 @@
         "summary": "Fetch one asset definition.",
         "tags": [
           "Assets"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/assets/{definition_id}/holders": {
@@ -4890,7 +5073,8 @@
         "summary": "List asset holders.",
         "tags": [
           "Assets"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/assets/{definition_id}/holders/query": {
@@ -4932,7 +5116,8 @@
         "summary": "Query asset holders.",
         "tags": [
           "Assets"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/bridge/finality/bundle/{height}": {
@@ -4986,7 +5171,8 @@
         "summary": "Return a bridge commitment + justification bundle for a block height.",
         "tags": [
           "Bridge"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/bridge/finality/{height}": {
@@ -5040,7 +5226,8 @@
         "summary": "Return a self-contained finality proof for a block height.",
         "tags": [
           "Bridge"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/confidential/assets/{definition_id}/transitions": {
@@ -5072,7 +5259,8 @@
         "summary": "Fetch confidential asset transitions.",
         "tags": [
           "Assets"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/connect/session": {
@@ -5103,17 +5291,27 @@
         "summary": "Open a Connect session.",
         "tags": [
           "Connect"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/connect/session/{sid}": {
       "delete": {
-        "description": "Terminate a Connect session by session id.",
+        "description": "Terminate a Connect session by session id. Requires `Authorization: Bearer <token_management>` from session creation.",
         "parameters": [
           {
             "description": "Connect session id.",
             "in": "path",
             "name": "sid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer management token returned by `/v1/connect/session`.",
+            "in": "header",
+            "name": "Authorization",
             "required": true,
             "schema": {
               "type": "string"
@@ -5135,12 +5333,33 @@
         "summary": "Close a Connect session.",
         "tags": [
           "Connect"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/connect/status": {
       "get": {
-        "description": "Return Connect relay status information.",
+        "description": "Return redacted aggregate Connect relay status. Add `sid` with `Authorization: Bearer <token_management>` for per-session status.",
+        "parameters": [
+          {
+            "description": "Optional Connect session id for token-gated per-session status.",
+            "in": "query",
+            "name": "sid",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer management token required when `sid` is supplied.",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5156,7 +5375,8 @@
         "summary": "Fetch Connect status.",
         "tags": [
           "Connect"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/connect/ws": {
@@ -5177,7 +5397,8 @@
         "summary": "Connect to the Connect WebSocket.",
         "tags": [
           "Connect"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/content/{bundle}/{path}": {
@@ -5219,7 +5440,8 @@
         "summary": "Fetch content bundle bytes.",
         "tags": [
           "Content"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/activity": {
@@ -5327,7 +5549,8 @@
         "summary": "List contract activity entries.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/aliases": {
@@ -5358,7 +5581,8 @@
         "summary": "Bind or clear a contract alias.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/aliases/resolve": {
@@ -5389,7 +5613,8 @@
         "summary": "Resolve a contract alias.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/call": {
@@ -5420,7 +5645,8 @@
         "summary": "Call a deployed contract.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/call/multisig/approve": {
@@ -5471,7 +5697,8 @@
         "summary": "Approve a multisig contract call proposal.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/call/multisig/propose": {
@@ -5522,7 +5749,8 @@
         "summary": "Propose a multisig contract call.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/call/simulate": {
@@ -5553,7 +5781,8 @@
         "summary": "Simulate a deployed contract call.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/code-bytes/{code_hash}": {
@@ -5585,7 +5814,8 @@
         "summary": "Fetch contract code bytes.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/code/{code_hash}": {
@@ -5617,7 +5847,8 @@
         "summary": "Fetch contract metadata.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/deploy": {
@@ -5648,7 +5879,8 @@
         "summary": "Deploy a public contract.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/events": {
@@ -5792,7 +6024,8 @@
         "summary": "List generic contract events.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/events/sse": {
@@ -5813,7 +6046,8 @@
         "summary": "Subscribe to contract event stream.",
         "tags": [
           "Streams"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/rollups/swaps/candles": {
@@ -5903,7 +6137,8 @@
         "summary": "List stitched trader swap candles.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/rollups/swaps/fills": {
@@ -5983,7 +6218,8 @@
         "summary": "List stitched trader swap fills.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/rollups/trader/account": {
@@ -6025,7 +6261,8 @@
         "summary": "Fetch trader account summary.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/rollups/trader/activity": {
@@ -6169,7 +6406,8 @@
         "summary": "List trader activity cards.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/state": {
@@ -6266,7 +6504,8 @@
         "summary": "Read smart contract state.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/view": {
@@ -6297,7 +6536,8 @@
         "summary": "Execute a read-only contract view.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/contracts/view/batch": {
@@ -6328,7 +6568,8 @@
         "summary": "Execute multiple read-only contract views.",
         "tags": [
           "Contracts"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/controls/asset-transfer/get": {
@@ -6359,7 +6600,8 @@
         "summary": "Fetch asset-transfer control state.",
         "tags": [
           "Controls"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/commitments": {
@@ -6401,7 +6643,8 @@
         "summary": "List DA commitments indexed by the node.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/commitments/prove": {
@@ -6443,7 +6686,8 @@
         "summary": "Fetch a DA commitment proof placeholder.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/commitments/verify": {
@@ -6485,7 +6729,8 @@
         "summary": "Stateless verification helper for DA commitments.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/ingest": {
@@ -6516,7 +6761,8 @@
         "summary": "Ingest DA payloads.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/da/manifests/{ticket}": {
@@ -6548,7 +6794,8 @@
         "summary": "Fetch DA manifest payload.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/pin_intents": {
@@ -6579,7 +6826,8 @@
         "summary": "List DA pin intents.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/pin_intents/prove": {
@@ -6610,7 +6858,8 @@
         "summary": "Fetch a DA pin intent proof placeholder.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/pin_intents/verify": {
@@ -6641,7 +6890,8 @@
         "summary": "Verify a DA pin intent proof.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/proof_policies": {
@@ -6662,7 +6912,8 @@
         "summary": "List DA proof policies.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/da/proof_policy_snapshot": {
@@ -6683,7 +6934,8 @@
         "summary": "Fetch the DA proof policy snapshot.",
         "tags": [
           "DataAvailability"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/debug/axt/cache": {
@@ -6704,7 +6956,8 @@
         "summary": "Inspect cached AXT proof state.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/domains": {
@@ -6725,7 +6978,8 @@
         "summary": "List domains.",
         "tags": [
           "Domains"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/domains/query": {
@@ -6756,7 +7010,8 @@
         "summary": "Query domains.",
         "tags": [
           "Domains"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/events/sse": {
@@ -6777,7 +7032,8 @@
         "summary": "Subscribe to event stream.",
         "tags": [
           "Streams"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/accounts": {
@@ -6798,7 +7054,8 @@
         "summary": "List accounts (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/accounts/{account_id}": {
@@ -6830,7 +7087,8 @@
         "summary": "Fetch account detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/accounts/{account_id}/qr": {
@@ -6863,7 +7121,8 @@
         "summary": "Fetch account QR code.",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/asset-definitions": {
@@ -6884,7 +7143,8 @@
         "summary": "List asset definitions (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/asset-definitions/{definition_id}": {
@@ -6916,7 +7176,8 @@
         "summary": "Fetch asset definition detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/asset-definitions/{definition_id}/econometrics": {
@@ -6948,7 +7209,8 @@
         "summary": "Fetch asset definition econometrics (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/asset-definitions/{definition_id}/snapshot": {
@@ -6980,7 +7242,8 @@
         "summary": "Fetch asset definition snapshot (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/assets": {
@@ -7050,7 +7313,8 @@
         "summary": "List assets (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/assets/{asset_id}": {
@@ -7082,7 +7346,8 @@
         "summary": "Fetch asset detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/blocks": {
@@ -7103,7 +7368,8 @@
         "summary": "List blocks (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/blocks/stream": {
@@ -7124,7 +7390,8 @@
         "summary": "Stream blocks (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/blocks/{identifier}": {
@@ -7156,7 +7423,8 @@
         "summary": "Fetch block detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/domains": {
@@ -7177,7 +7445,8 @@
         "summary": "List domains (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/domains/{domain_id}": {
@@ -7209,7 +7478,8 @@
         "summary": "Fetch domain detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/instructions": {
@@ -7316,7 +7586,8 @@
         "summary": "List instructions (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/instructions/stream": {
@@ -7337,7 +7608,8 @@
         "summary": "Stream instructions (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/instructions/{hash}/{index}": {
@@ -7379,7 +7651,8 @@
         "summary": "Fetch instruction detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/metrics": {
@@ -7400,7 +7673,8 @@
         "summary": "Fetch explorer metrics.",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/nfts": {
@@ -7421,7 +7695,8 @@
         "summary": "List NFTs (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/nfts/{nft_id}": {
@@ -7453,7 +7728,8 @@
         "summary": "Fetch NFT detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/rwas": {
@@ -7474,7 +7750,8 @@
         "summary": "List RWAs (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/rwas/{rwa_id}": {
@@ -7506,7 +7783,8 @@
         "summary": "Fetch RWA detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/transactions": {
@@ -7586,7 +7864,8 @@
         "summary": "List transactions (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/transactions/stream": {
@@ -7607,7 +7886,8 @@
         "summary": "Stream transactions (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/explorer/transactions/{hash}": {
@@ -7639,7 +7919,8 @@
         "summary": "Fetch transaction detail (explorer).",
         "tags": [
           "Explorer"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/ballots/plain": {
@@ -7670,7 +7951,8 @@
         "summary": "Submit a plain ballot.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/ballots/zk": {
@@ -7701,7 +7983,8 @@
         "summary": "Submit a ZK ballot.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/ballots/zk-v1": {
@@ -7732,7 +8015,8 @@
         "summary": "Submit a ZK ballot (v1).",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/ballots/zk-v1/ballot-proof": {
@@ -7763,7 +8047,8 @@
         "summary": "Submit a ballot proof.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/contracts/{contract_address}": {
@@ -7795,7 +8080,8 @@
         "summary": "Fetch a governed contract binding.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/council/audit": {
@@ -7816,7 +8102,8 @@
         "summary": "Audit council derivation.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/council/current": {
@@ -7837,7 +8124,8 @@
         "summary": "Fetch current council.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/council/derive-vrf": {
@@ -7868,7 +8156,8 @@
         "summary": "Derive council VRF inputs.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/council/persist": {
@@ -7899,7 +8188,8 @@
         "summary": "Persist a council roster.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/council/replace": {
@@ -7930,7 +8220,8 @@
         "summary": "Replace a council member.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/enact": {
@@ -7961,7 +8252,8 @@
         "summary": "Enact a referendum.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/finalize": {
@@ -7992,7 +8284,8 @@
         "summary": "Finalize a referendum.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/locks/{rid}": {
@@ -8024,7 +8317,8 @@
         "summary": "Fetch governance locks.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/proposals/deploy-contract": {
@@ -8055,7 +8349,8 @@
         "summary": "Propose contract deployment.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/gov/proposals/{id}": {
@@ -8087,7 +8382,8 @@
         "summary": "Fetch a proposal.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/protected-namespaces": {
@@ -8108,7 +8404,8 @@
         "summary": "List protected namespaces.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Submit protected namespace updates.",
@@ -8137,7 +8434,8 @@
         "summary": "Update protected namespaces.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/gov/referenda/{id}": {
@@ -8169,7 +8467,8 @@
         "summary": "Fetch a referendum.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/stream": {
@@ -8190,7 +8489,8 @@
         "summary": "Stream governance updates.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/tally/{id}": {
@@ -8222,7 +8522,8 @@
         "summary": "Fetch a tally snapshot.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/gov/unlocks/stats": {
@@ -8243,7 +8544,8 @@
         "summary": "Fetch unlock statistics.",
         "tags": [
           "Governance"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/identifier-policies": {
@@ -8264,7 +8566,8 @@
         "summary": "List identifier policies.",
         "tags": [
           "Identifiers"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/identifiers/receipts/{receipt_hash}": {
@@ -8296,7 +8599,8 @@
         "summary": "Look up an identifier claim by receipt hash.",
         "tags": [
           "Identifiers"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/identifiers/resolve": {
@@ -8327,7 +8631,8 @@
         "summary": "Resolve an identifier.",
         "tags": [
           "Identifiers"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/iso20022/pacs008": {
@@ -8358,7 +8663,8 @@
         "summary": "Submit ISO 20022 pacs.008 payload.",
         "tags": [
           "ISO20022"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/iso20022/pacs009": {
@@ -8389,7 +8695,8 @@
         "summary": "Submit ISO 20022 pacs.009 payload.",
         "tags": [
           "ISO20022"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/iso20022/status/{msg_id}": {
@@ -8421,7 +8728,8 @@
         "summary": "Fetch ISO 20022 message status.",
         "tags": [
           "ISO20022"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/kaigi/relays": {
@@ -8453,7 +8761,8 @@
         "summary": "List registered Kaigi relays with their latest health sample.",
         "tags": [
           "Kaigi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/kaigi/relays/events": {
@@ -8514,7 +8823,8 @@
         "summary": "Subscribe to Kaigi relay telemetry events (SSE).",
         "tags": [
           "Kaigi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/kaigi/relays/health": {
@@ -8546,7 +8856,8 @@
         "summary": "Aggregate Kaigi relay health counters across the network.",
         "tags": [
           "Kaigi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/kaigi/relays/{relay_id}": {
@@ -8609,7 +8920,8 @@
         "summary": "Fetch metadata and metrics for a specific Kaigi relay.",
         "tags": [
           "Kaigi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ledger/block/{height}/proof/{entry_hash}": {
@@ -8672,7 +8984,8 @@
         "summary": "Fetch Merkle proofs for a block entrypoint.",
         "tags": [
           "Ledger"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ledger/headers": {
@@ -8714,7 +9027,8 @@
         "summary": "Fetch recent block headers (newest first).",
         "tags": [
           "Ledger"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ledger/state-proof/{height}": {
@@ -8748,7 +9062,8 @@
         "summary": "Fetch execution state proof (QC) for a block height.",
         "tags": [
           "Ledger"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ledger/state/{height}": {
@@ -8782,7 +9097,8 @@
         "summary": "Fetch execution state root for a block height.",
         "tags": [
           "Ledger"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/mcp": {
@@ -8804,7 +9120,8 @@
         "summary": "Fetch MCP capabilities.",
         "tags": [
           "MCP"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Accepts JSON-RPC payloads for MCP tool discovery and invocation.",
@@ -8834,7 +9151,8 @@
         "summary": "Execute MCP JSON-RPC request.",
         "tags": [
           "MCP"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/ministry/agenda/proposals/draft": {
@@ -8865,7 +9183,8 @@
         "summary": "Draft a Ministry agenda proposal submission.",
         "tags": [
           "Ministry"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/ministry/agenda/proposals/{proposal_id}": {
@@ -8897,7 +9216,8 @@
         "summary": "Fetch a submitted Ministry agenda proposal.",
         "tags": [
           "Ministry"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/approvals/get": {
@@ -8948,7 +9268,8 @@
         "summary": "Fetch a multisig approval.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/approvals/get_for_authority": {
@@ -8999,7 +9320,8 @@
         "summary": "Fetch a caller-authority multisig approval.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/approvals/list": {
@@ -9050,7 +9372,8 @@
         "summary": "List multisig approvals.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/approvals/list_for_authority": {
@@ -9101,7 +9424,8 @@
         "summary": "List caller-authority multisig approvals.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/approve": {
@@ -9152,7 +9476,8 @@
         "summary": "Approve a multisig proposal.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/multisig/cancel": {
@@ -9203,7 +9528,8 @@
         "summary": "Cancel a multisig proposal.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/multisig/proposals/get": {
@@ -9254,7 +9580,8 @@
         "summary": "Fetch a multisig proposal.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/proposals/list": {
@@ -9305,7 +9632,8 @@
         "summary": "List active multisig proposals.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/multisig/propose": {
@@ -9356,7 +9684,8 @@
         "summary": "Propose a multisig instruction batch.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/multisig/spec": {
@@ -9407,7 +9736,8 @@
         "summary": "Fetch the active multisig spec.",
         "tags": [
           "Multisig"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
@@ -9460,7 +9790,8 @@
         "summary": "Summarize dataspaces for an account literal.",
         "tags": [
           "Nexus"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nexus/lifecycle": {
@@ -9491,7 +9822,8 @@
         "summary": "Apply a lane lifecycle plan.",
         "tags": [
           "Nexus"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
@@ -9563,7 +9895,8 @@
         "summary": "List pending rewards for a public lane account.",
         "tags": [
           "Nexus"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nexus/public_lanes/{lane_id}/stake": {
@@ -9616,7 +9949,8 @@
         "summary": "List bonded stake shares for a public lane.",
         "tags": [
           "Nexus"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nexus/public_lanes/{lane_id}/validators": {
@@ -9660,7 +9994,8 @@
         "summary": "List validators registered for a public lane.",
         "tags": [
           "Nexus"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nfts": {
@@ -9681,7 +10016,8 @@
         "summary": "List NFTs.",
         "tags": [
           "NFTs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/nfts/query": {
@@ -9712,7 +10048,8 @@
         "summary": "Query NFTs.",
         "tags": [
           "NFTs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/node/capabilities": {
@@ -9733,7 +10070,8 @@
         "summary": "Fetch node capabilities.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/node/query/projection/catalog/{resource}": {
@@ -9795,7 +10133,8 @@
         "summary": "Enumerate the live query projection shard catalog.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/node/query/projection/checkpoint": {
@@ -9816,7 +10155,8 @@
         "summary": "Fetch latest query projection checkpoint.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/node/query/projection/checkpoint/plan": {
@@ -9848,7 +10188,8 @@
         "summary": "Plan a rebuilt query projection checkpoint.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/node/query/projection/checkpoint/publish": {
@@ -9880,7 +10221,8 @@
         "summary": "Publish a rebuilt query projection checkpoint.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/node/query/projection/shards/{resource}/{partition_id}": {
@@ -9933,7 +10275,8 @@
         "summary": "Export a canonical query projection shard archive.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/notify/devices": {
@@ -9987,7 +10330,8 @@
         "summary": "Register a push device.",
         "tags": [
           "Push"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/offline/v2/readiness": {
@@ -10008,7 +10352,8 @@
         "summary": "Report Offline V2 feature readiness.",
         "tags": [
           "Offline"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/operator/auth/login/options": {
@@ -10070,7 +10415,8 @@
         "summary": "Start operator WebAuthn login.",
         "tags": [
           "OperatorAuth"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/operator/auth/login/verify": {
@@ -10142,7 +10488,8 @@
         "summary": "Finish operator WebAuthn login.",
         "tags": [
           "OperatorAuth"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/operator/auth/registration/options": {
@@ -10194,7 +10541,8 @@
         "summary": "Start operator WebAuthn registration.",
         "tags": [
           "OperatorAuth"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/operator/auth/registration/verify": {
@@ -10266,7 +10614,8 @@
         "summary": "Finish operator WebAuthn registration.",
         "tags": [
           "OperatorAuth"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/parameters": {
@@ -10287,7 +10636,8 @@
         "summary": "Fetch parameter snapshots.",
         "tags": [
           "Parameters"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/pipeline/recovery/{height}": {
@@ -10320,7 +10670,8 @@
         "summary": "Fetch pipeline recovery metadata.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/pipeline/transactions/status": {
@@ -10376,7 +10727,8 @@
         "summary": "Fetch pipeline transaction status.",
         "tags": [
           "Transactions"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/policy": {
@@ -10397,7 +10749,8 @@
         "summary": "Fetch node policy snapshot.",
         "tags": [
           "System"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/proofs/query": {
@@ -10428,7 +10781,8 @@
         "summary": "Query proof records.",
         "tags": [
           "Proofs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/proofs/retention": {
@@ -10449,7 +10803,8 @@
         "summary": "Fetch proof retention status.",
         "tags": [
           "Proofs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/proofs/{id}": {
@@ -10481,7 +10836,8 @@
         "summary": "Fetch a proof record.",
         "tags": [
           "Proofs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ram-lfe/program-policies": {
@@ -10502,7 +10858,8 @@
         "summary": "List RAM-LFE program policies.",
         "tags": [
           "RamLfe"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ram-lfe/programs/{program_id}/execute": {
@@ -10544,7 +10901,8 @@
         "summary": "Execute a RAM-LFE program.",
         "tags": [
           "RamLfe"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/ram-lfe/receipts/verify": {
@@ -10575,7 +10933,8 @@
         "summary": "Verify a RAM-LFE receipt.",
         "tags": [
           "RamLfe"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/repo/agreements": {
@@ -10634,7 +10993,8 @@
         "summary": "List active repo agreements",
         "tags": [
           "Settlement"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/repo/agreements/query": {
@@ -10665,7 +11025,8 @@
         "summary": "Query repo agreements with JSON envelope",
         "tags": [
           "Settlement"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/runtime/abi/active": {
@@ -10686,7 +11047,8 @@
         "summary": "Fetch the active ABI version.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/runtime/abi/hash": {
@@ -10707,7 +11069,8 @@
         "summary": "Fetch the active ABI hash.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/runtime/metrics": {
@@ -10728,7 +11091,8 @@
         "summary": "Fetch runtime metrics.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/runtime/upgrades": {
@@ -10749,7 +11113,8 @@
         "summary": "List runtime upgrades.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/runtime/upgrades/activate/{id}": {
@@ -10791,7 +11156,8 @@
         "summary": "Activate a runtime upgrade.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/runtime/upgrades/cancel/{id}": {
@@ -10833,7 +11199,8 @@
         "summary": "Cancel a runtime upgrade.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/runtime/upgrades/propose": {
@@ -10864,7 +11231,8 @@
         "summary": "Propose a runtime upgrade.",
         "tags": [
           "Runtime"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/rwas": {
@@ -10885,7 +11253,8 @@
         "summary": "List RWA lots.",
         "tags": [
           "RWAs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/rwas/query": {
@@ -10916,7 +11285,8 @@
         "summary": "Query RWA lots.",
         "tags": [
           "RWAs"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sccp/artifacts/message/{message_id}": {
@@ -10969,7 +11339,8 @@
         "summary": "Fetch a typed SCCP transparent proof artifact.",
         "tags": [
           "Bridge"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sccp/capabilities": {
@@ -11001,7 +11372,8 @@
         "summary": "Discover SCCP proof capabilities.",
         "tags": [
           "Bridge"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sccp/jobs/message/{message_id}": {
@@ -11054,7 +11426,8 @@
         "summary": "Fetch a normalized SCCP counterparty proof job.",
         "tags": [
           "Bridge"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sccp/manifests": {
@@ -11086,7 +11459,8 @@
         "summary": "Discover SCCP proof manifests.",
         "tags": [
           "Bridge"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sns/names": {
@@ -11117,7 +11491,8 @@
         "summary": "Register a SNS name lease.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sns/names/{namespace}/{literal}": {
@@ -11158,7 +11533,8 @@
         "summary": "Fetch a SNS name record.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sns/names/{namespace}/{literal}/controllers": {
@@ -11209,7 +11585,8 @@
         "summary": "Update SNS controllers.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sns/names/{namespace}/{literal}/freeze": {
@@ -11250,7 +11627,8 @@
         "summary": "Unfreeze a SNS name record.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       },
       "post": {
         "description": "Freeze a ledger-backed SNS name record.",
@@ -11299,7 +11677,8 @@
         "summary": "Freeze a SNS name record.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sns/names/{namespace}/{literal}/renew": {
@@ -11350,7 +11729,8 @@
         "summary": "Renew a SNS name record.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sns/names/{namespace}/{literal}/transfer": {
@@ -11401,7 +11781,8 @@
         "summary": "Transfer a SNS name record.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sns/policies/{suffix_id}": {
@@ -11433,7 +11814,8 @@
         "summary": "Fetch SNS policy.",
         "tags": [
           "SNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/soradns/directory/events": {
@@ -11454,7 +11836,8 @@
         "summary": "Stream directory events.",
         "tags": [
           "SoraDNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/soradns/directory/latest": {
@@ -11475,7 +11858,8 @@
         "summary": "Fetch latest directory snapshot.",
         "tags": [
           "SoraDNS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/aliases": {
@@ -11496,7 +11880,8 @@
         "summary": "List aliases.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/audit/repair/claim": {
@@ -11527,7 +11912,8 @@
         "summary": "Claim repair ticket.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/audit/repair/complete": {
@@ -11558,7 +11944,8 @@
         "summary": "Complete repair ticket.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/audit/repair/fail": {
@@ -11589,7 +11976,8 @@
         "summary": "Fail repair ticket.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/audit/repair/heartbeat": {
@@ -11620,7 +12008,8 @@
         "summary": "Repair heartbeat.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/audit/repair/report": {
@@ -11651,7 +12040,8 @@
         "summary": "Submit repair report.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/audit/repair/slash": {
@@ -11682,7 +12072,8 @@
         "summary": "Submit repair slash.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/audit/repair/status": {
@@ -11723,7 +12114,8 @@
         "summary": "List repair status.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/audit/repair/status/{manifest_hex}": {
@@ -11773,7 +12165,8 @@
         "summary": "Fetch repair status.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/capacity/complete": {
@@ -11804,7 +12197,8 @@
         "summary": "Submit a capacity completion.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/failure": {
@@ -11835,7 +12229,8 @@
         "summary": "Submit capacity failure report.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/por": {
@@ -11866,7 +12261,8 @@
         "summary": "Submit PoR capacity report.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/por-challenge": {
@@ -11897,7 +12293,8 @@
         "summary": "Submit PoR challenge.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/por-proof": {
@@ -11928,7 +12325,8 @@
         "summary": "Submit PoR proof.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/por-verdict": {
@@ -11959,7 +12357,8 @@
         "summary": "Submit PoR verdict.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/schedule": {
@@ -11990,7 +12389,8 @@
         "summary": "Submit a capacity schedule.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/capacity/state": {
@@ -12011,7 +12411,8 @@
         "summary": "Fetch capacity state.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/capacity/uptime": {
@@ -12042,7 +12443,8 @@
         "summary": "Submit capacity uptime.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/deal/settle": {
@@ -12073,7 +12475,8 @@
         "summary": "Submit deal settlement.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/deal/usage": {
@@ -12104,7 +12507,8 @@
         "summary": "Submit deal usage.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/pin": {
@@ -12125,7 +12529,8 @@
         "summary": "Fetch pin registry.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/pin/{digest_hex}": {
@@ -12157,7 +12562,8 @@
         "summary": "Fetch a pin manifest.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/por/export": {
@@ -12178,7 +12584,8 @@
         "summary": "Export PoR report.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/por/ingestion/{manifest_digest_hex}": {
@@ -12210,7 +12617,8 @@
         "summary": "Fetch PoR ingestion status.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/por/report/{iso_week}": {
@@ -12242,7 +12650,8 @@
         "summary": "Fetch PoR report.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/por/status": {
@@ -12263,7 +12672,8 @@
         "summary": "Fetch PoR status.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/proof/stream": {
@@ -12294,7 +12704,8 @@
         "summary": "Stream proofs.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/providers": {
@@ -12315,7 +12726,8 @@
         "summary": "List providers.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/providers/advert": {
@@ -12346,7 +12758,8 @@
         "summary": "Submit provider advert.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/replication": {
@@ -12367,7 +12780,8 @@
         "summary": "List replication orders.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/storage/car/{manifest_id}": {
@@ -12400,7 +12814,8 @@
         "summary": "Fetch CAR bytes.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}": {
@@ -12442,7 +12857,8 @@
         "summary": "Fetch storage chunk bytes.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/storage/fetch": {
@@ -12473,7 +12889,8 @@
         "summary": "Fetch storage content.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/manifest/{manifest_id}": {
@@ -12505,7 +12922,8 @@
         "summary": "Fetch storage manifest.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/storage/pin": {
@@ -12536,7 +12954,8 @@
         "summary": "Pin storage content.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/plan/{manifest_id}": {
@@ -12568,7 +12987,8 @@
         "summary": "Fetch storage plan.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/storage/por-challenge": {
@@ -12599,7 +13019,8 @@
         "summary": "Submit storage PoR challenge.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/por-proof": {
@@ -12630,7 +13051,8 @@
         "summary": "Submit storage PoR proof.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/por-sample": {
@@ -12661,7 +13083,8 @@
         "summary": "Request a PoR sample.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/por-verdict": {
@@ -12692,7 +13115,8 @@
         "summary": "Submit storage PoR verdict.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/state": {
@@ -12713,7 +13137,8 @@
         "summary": "Fetch storage state.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sorafs/storage/token": {
@@ -12744,7 +13169,8 @@
         "summary": "Request storage token.",
         "tags": [
           "SoraFS"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/soranet/privacy/event": {
@@ -12775,7 +13201,8 @@
         "summary": "Submit a privacy event.",
         "tags": [
           "SoraNet"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/soranet/privacy/share": {
@@ -12806,7 +13233,8 @@
         "summary": "Submit a privacy share payload.",
         "tags": [
           "SoraNet"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/space-directory/uaids/{uaid}": {
@@ -12838,7 +13266,8 @@
         "summary": "Fetch space directory bindings.",
         "tags": [
           "SpaceDirectory"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/space-directory/uaids/{uaid}/manifests": {
@@ -12870,7 +13299,8 @@
         "summary": "Fetch space directory manifests.",
         "tags": [
           "SpaceDirectory"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/subscriptions": {
@@ -12940,7 +13370,8 @@
         "summary": "List subscriptions.",
         "tags": [
           "Subscriptions"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/subscriptions/plans": {
@@ -12992,7 +13423,8 @@
         "summary": "List subscription plans.",
         "tags": [
           "Subscriptions"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/subscriptions/{subscription_id}": {
@@ -13024,7 +13456,8 @@
         "summary": "Fetch a subscription.",
         "tags": [
           "Subscriptions"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/bls_keys": {
@@ -13045,7 +13478,8 @@
         "summary": "Fetch consensus BLS keys.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/checkpoints": {
@@ -13066,7 +13500,8 @@
         "summary": "Fetch checkpoint snapshots.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/collectors": {
@@ -13087,7 +13522,8 @@
         "summary": "Fetch collector status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/commit-certificates": {
@@ -13139,7 +13575,8 @@
         "summary": "List recent commit certificates (newest first).",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/commit_qc/{hash}": {
@@ -13171,7 +13608,8 @@
         "summary": "Fetch commit QC.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/consensus-keys": {
@@ -13192,7 +13630,8 @@
         "summary": "Fetch consensus keys.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/evidence": {
@@ -13213,7 +13652,8 @@
         "summary": "List evidence entries.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Submit consensus evidence payloads.",
@@ -13242,7 +13682,8 @@
         "summary": "Submit evidence.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/evidence/count": {
@@ -13263,7 +13704,8 @@
         "summary": "Count evidence entries.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/key-lifecycle": {
@@ -13295,7 +13737,8 @@
         "summary": "List consensus key lifecycle records (newest first).",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/leader": {
@@ -13316,7 +13759,8 @@
         "summary": "Fetch current leader.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/new_view/json": {
@@ -13337,7 +13781,8 @@
         "summary": "Fetch new view status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/new_view/sse": {
@@ -13358,7 +13803,8 @@
         "summary": "Stream new view events.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/pacemaker": {
@@ -13379,7 +13825,8 @@
         "summary": "Fetch pacemaker status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/params": {
@@ -13400,7 +13847,8 @@
         "summary": "Fetch Sumeragi parameters.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/phases": {
@@ -13421,7 +13869,8 @@
         "summary": "Fetch phase status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/qc": {
@@ -13442,7 +13891,8 @@
         "summary": "Fetch QC snapshots.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/rbc": {
@@ -13463,7 +13913,8 @@
         "summary": "Fetch RBC status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/rbc/delivered/{height}/{view}": {
@@ -13506,7 +13957,8 @@
         "summary": "Fetch RBC delivered status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/rbc/sample": {
@@ -13537,7 +13989,8 @@
         "summary": "Sample RBC sessions.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/rbc/sessions": {
@@ -13558,7 +14011,8 @@
         "summary": "List RBC sessions.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/status": {
@@ -13579,7 +14033,8 @@
         "summary": "Fetch Sumeragi status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/status/sse": {
@@ -13600,7 +14055,8 @@
         "summary": "Stream Sumeragi status.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/telemetry": {
@@ -13621,7 +14077,8 @@
         "summary": "Fetch Sumeragi telemetry.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/validator-sets": {
@@ -13673,7 +14130,8 @@
         "summary": "List recent validator-set snapshots (newest first).",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/validator-sets/{height}": {
@@ -13727,17 +14185,18 @@
         "summary": "Fetch a validator-set snapshot by block height.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/vrf/commit": {
       "post": {
-        "description": "Submit VRF commit payload.",
+        "description": "Submit an authenticated VRF commit payload.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/SumeragiVrfCommitRequest"
               }
             }
           },
@@ -13758,7 +14217,8 @@
         "summary": "Submit VRF commit.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/sumeragi/vrf/epoch/{epoch}": {
@@ -13791,7 +14251,8 @@
         "summary": "Fetch VRF epoch data.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/vrf/penalties/{epoch}": {
@@ -13824,12 +14285,179 @@
         "summary": "Fetch VRF penalties.",
         "tags": [
           "Sumeragi"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/sumeragi/vrf/reveal": {
       "post": {
-        "description": "Submit VRF reveal payload.",
+        "description": "Submit an authenticated VRF reveal payload.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SumeragiVrfRevealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit VRF reveal.",
+        "tags": [
+          "Sumeragi"
+        ],
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/telemetry/live": {
+      "get": {
+        "description": "Stream peer and network telemetry updates via SSE.",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Event stream."
+          }
+        },
+        "summary": "Stream live telemetry updates.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/telemetry/peers-info": {
+      "get": {
+        "description": "Return the latest peer telemetry snapshot.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch peer telemetry summary.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/time/now": {
+      "get": {
+        "description": "Returns the best-effort network time with offset/confidence relative to UTC.",
+        "operationId": "timeNow",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeNowResponse"
+                }
+              }
+            },
+            "description": "Network time snapshot retrieved."
+          }
+        },
+        "summary": "Fetch the current network time snapshot.",
+        "tags": [
+          "Time"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/time/status": {
+      "get": {
+        "description": "Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.",
+        "operationId": "timeStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeStatusResponse"
+                }
+              }
+            },
+            "description": "Network time diagnostics collected."
+          }
+        },
+        "summary": "Inspect network time diagnostics.",
+        "tags": [
+          "Time"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/transactions/history": {
+      "get": {
+        "description": "Return the app-facing transaction history view for the active query filters.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List transaction history entries.",
+        "tags": [
+          "Transactions"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/vpn/profile": {
+      "get": {
+        "description": "Return the wallet-facing Sora VPN profile advertised by this node.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch the public VPN profile.",
+        "tags": [
+          "VPN"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/vpn/quotes": {
+      "post": {
+        "description": "Create a signed XOR escrow quote for a Sora VPN lease.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -13852,138 +14480,11 @@
             "description": "Successful response"
           }
         },
-        "summary": "Submit VRF reveal.",
-        "tags": [
-          "Sumeragi"
-        ]
-      }
-    },
-    "/v1/telemetry/live": {
-      "get": {
-        "description": "Stream peer and network telemetry updates via SSE.",
-        "responses": {
-          "200": {
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Event stream."
-          }
-        },
-        "summary": "Stream live telemetry updates.",
-        "tags": [
-          "System"
-        ]
-      }
-    },
-    "/v1/telemetry/peers-info": {
-      "get": {
-        "description": "Return the latest peer telemetry snapshot.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch peer telemetry summary.",
-        "tags": [
-          "System"
-        ]
-      }
-    },
-    "/v1/time/now": {
-      "get": {
-        "description": "Returns the best-effort network time with offset/confidence relative to UTC.",
-        "operationId": "timeNow",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TimeNowResponse"
-                }
-              }
-            },
-            "description": "Network time snapshot retrieved."
-          }
-        },
-        "summary": "Fetch the current network time snapshot.",
-        "tags": [
-          "Time"
-        ]
-      }
-    },
-    "/v1/time/status": {
-      "get": {
-        "description": "Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.",
-        "operationId": "timeStatus",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TimeStatusResponse"
-                }
-              }
-            },
-            "description": "Network time diagnostics collected."
-          }
-        },
-        "summary": "Inspect network time diagnostics.",
-        "tags": [
-          "Time"
-        ]
-      }
-    },
-    "/v1/transactions/history": {
-      "get": {
-        "description": "Return the app-facing transaction history view for the active query filters.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List transaction history entries.",
-        "tags": [
-          "Transactions"
-        ]
-      }
-    },
-    "/v1/vpn/profile": {
-      "get": {
-        "description": "Return the wallet-facing Sora VPN profile advertised by this node.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch the public VPN profile.",
+        "summary": "Create a VPN quote.",
         "tags": [
           "VPN"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/vpn/receipts": {
@@ -14004,12 +14505,43 @@
         "summary": "List VPN receipts.",
         "tags": [
           "VPN"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Settle an active VPN lease from relay and client usage evidence.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Submit a VPN receipt.",
+        "tags": [
+          "VPN"
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/vpn/sessions": {
       "post": {
-        "description": "Create a signed Sora VPN session for the active wallet account.",
+        "description": "Create a signed Sora VPN session from a quote and committed XOR escrow payment.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -14035,7 +14567,8 @@
         "summary": "Create a VPN session.",
         "tags": [
           "VPN"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/vpn/sessions/{session_id}": {
@@ -14067,7 +14600,8 @@
         "summary": "Delete a VPN session.",
         "tags": [
           "VPN"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       },
       "get": {
         "description": "Return the current status of a signed Sora VPN session.",
@@ -14097,7 +14631,8 @@
         "summary": "Fetch a VPN session.",
         "tags": [
           "VPN"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/webhooks": {
@@ -14118,7 +14653,8 @@
         "summary": "List webhooks.",
         "tags": [
           "Webhooks"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Create a webhook subscription.",
@@ -14147,7 +14683,8 @@
         "summary": "Create a webhook.",
         "tags": [
           "Webhooks"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/webhooks/{id}": {
@@ -14179,7 +14716,8 @@
         "summary": "Delete a webhook.",
         "tags": [
           "Webhooks"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/zk/attachments": {
@@ -14200,7 +14738,8 @@
         "summary": "List ZK attachments.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       },
       "post": {
         "description": "Upload a ZK attachment.",
@@ -14229,7 +14768,8 @@
         "summary": "Create a ZK attachment.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/zk/attachments/count": {
@@ -14250,7 +14790,8 @@
         "summary": "Count ZK attachments.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/attachments/{id}": {
@@ -14282,7 +14823,8 @@
         "summary": "Delete a ZK attachment.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       },
       "get": {
         "description": "Fetch a stored ZK attachment by id.",
@@ -14312,7 +14854,8 @@
         "summary": "Fetch a ZK attachment.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/ivm/prove": {
@@ -14343,7 +14886,8 @@
         "summary": "Prove IVM execution (job).",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/zk/ivm/prove/{job_id}": {
@@ -14375,7 +14919,8 @@
         "summary": "Delete an IVM prove job.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       },
       "get": {
         "description": "Fetch the status of an IVM proof generation job.",
@@ -14405,7 +14950,8 @@
         "summary": "Fetch an IVM prove job.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/proof-tags/{backend}/{hash}": {
@@ -14446,7 +14992,8 @@
         "summary": "Fetch proof tags.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/proof/{backend}/{hash}": {
@@ -14487,7 +15034,8 @@
         "summary": "Fetch a proof by backend and hash.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/proofs": {
@@ -14508,7 +15056,8 @@
         "summary": "List proofs.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/proofs/count": {
@@ -14529,7 +15078,8 @@
         "summary": "Count proofs.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/roots": {
@@ -14560,7 +15110,8 @@
         "summary": "Fetch ZK roots.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/submit-proof": {
@@ -14591,7 +15142,8 @@
         "summary": "Submit a ZK proof.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/zk/verify": {
@@ -14622,7 +15174,8 @@
         "summary": "Verify a ZK proof.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/vk": {
@@ -14643,7 +15196,8 @@
         "summary": "List verification keys.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/vk/{backend}/{name}": {
@@ -14684,7 +15238,8 @@
         "summary": "Fetch a verification key.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/zk/vote/tally": {
@@ -14715,7 +15270,8 @@
         "summary": "Compute ZK vote tally.",
         "tags": [
           "ZK"
-        ]
+        ],
+        "x-iroha-tool-effect": "read"
       }
     }
   },
@@ -14747,7 +15303,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline wallet, audit, and settlement endpoints under `/v1/offline/*`.",
+      "description": "Offline V2 readiness endpoint under `/v1/offline/v2/readiness`.",
       "name": "Offline"
     },
     {

@@ -1,14 +1,14 @@
-//! Transfer gadget scaffolding shared between the planner and trace builder.
+//! Transfer gadget validation shared between the planner and trace builder.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
     fastpq::{
-        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript,
-        normalized_numeric_to_u64,
+        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
+        TransferTranscript, normalized_numeric_to_u64,
     },
 };
 use iroha_primitives::numeric::Numeric;
@@ -17,26 +17,8 @@ use norito::{codec::Encode as NoritoEncode, decode_from_bytes};
 
 use crate::{Error, OperationKind, StateTransition};
 
-/// Height of the synthetic SMT used by the transfer gadget.
+/// Height of the V1 transfer SMT used by the transfer gadget.
 pub const TRANSFER_MERKLE_HEIGHT: usize = 32;
-
-/// Proof flavor used to derive deterministic SMT paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProofFlavor {
-    /// Sender-side balance entry.
-    Sender,
-    /// Receiver-side balance entry.
-    Receiver,
-}
-
-impl ProofFlavor {
-    fn salt(self) -> &'static [u8] {
-        match self {
-            ProofFlavor::Sender => b"fastpq:smt:from",
-            ProofFlavor::Receiver => b"fastpq:smt:to",
-        }
-    }
-}
 
 /// Witness describing a single transfer delta after validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +41,7 @@ pub struct TransferDeltaWitness {
     pub to_balance_after: u64,
     /// Poseidon digest used by the gadget commitment.
     pub poseidon_digest: Hash,
-    /// Optional SMT proofs captured from the host.
+    /// SMT proofs captured from the host.
     pub smt_proof: TransferSmtProof,
 }
 
@@ -104,7 +86,7 @@ impl TransferGadgetPlan {
         self.total_deltas
     }
 
-    /// Returns the estimated gadget row budget (placeholder until TF-3 lands the real constraints).
+    /// Returns the estimated gadget row budget used by the V1 planner.
     #[must_use]
     pub fn estimated_row_budget(&self) -> usize {
         const ROWS_PER_DELTA_ESTIMATE: usize = 2;
@@ -158,97 +140,139 @@ pub fn index_row_proofs(
         for delta in &witness.deltas {
             let sender_key = balance_key(&delta.asset_definition, &delta.from_account);
             let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
-            if let Some(proof) = &delta.smt_proof.from {
-                map.insert(
-                    TransferRowKey::new(
-                        sender_key.clone(),
-                        delta.from_balance_before.to_le_bytes().to_vec(),
-                        delta.from_balance_after.to_le_bytes().to_vec(),
-                    ),
-                    proof.clone(),
-                );
-            }
-            if let Some(proof) = &delta.smt_proof.to {
-                map.insert(
-                    TransferRowKey::new(
-                        receiver_key.clone(),
-                        delta.to_balance_before.to_le_bytes().to_vec(),
-                        delta.to_balance_after.to_le_bytes().to_vec(),
-                    ),
-                    proof.clone(),
-                );
-            }
+            map.insert(
+                TransferRowKey::new(
+                    sender_key.clone(),
+                    delta.from_balance_before.to_le_bytes().to_vec(),
+                    delta.from_balance_after.to_le_bytes().to_vec(),
+                ),
+                delta.smt_proof.from.clone(),
+            );
+            map.insert(
+                TransferRowKey::new(
+                    receiver_key.clone(),
+                    delta.to_balance_before.to_le_bytes().to_vec(),
+                    delta.to_balance_after.to_le_bytes().to_vec(),
+                ),
+                delta.smt_proof.to.clone(),
+            );
         }
     }
     map
 }
 
-/// Wrapper containing optional SMT proofs for both participants of a transfer.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Wrapper containing SMT update proofs for both participants of a transfer.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferSmtProof {
     /// Sender Merkle proof emitted by the host.
-    pub from: Option<TransferMerkleProof>,
+    pub from: TransferMerkleProof,
     /// Receiver Merkle proof emitted by the host.
-    pub to: Option<TransferMerkleProof>,
+    pub to: TransferMerkleProof,
 }
 
 impl TransferSmtProof {
-    fn from_transcript(from_bytes: Option<&[u8]>, to_bytes: Option<&[u8]>) -> Result<Self, Error> {
-        Ok(Self {
-            from: from_bytes.map(TransferMerkleProof::decode).transpose()?,
-            to: to_bytes.map(TransferMerkleProof::decode).transpose()?,
-        })
+    fn from_transcript(
+        delta: &TransferDeltaTranscript,
+        snapshot: &BalanceSnapshot,
+    ) -> Result<Self, Error> {
+        let from = TransferMerkleProof::from_witness(&delta.from_smt_witness)?;
+        from.verify_update(
+            &balance_key(&delta.asset_definition, &delta.from_account),
+            snapshot.from_before,
+            snapshot.from_after,
+            "sender",
+        )?;
+        let to = TransferMerkleProof::from_witness(&delta.to_smt_witness)?;
+        to.verify_update(
+            &balance_key(&delta.asset_definition, &delta.to_account),
+            snapshot.to_before,
+            snapshot.to_after,
+            "receiver",
+        )?;
+        Ok(Self { from, to })
     }
 
     /// Returns true if both sender and receiver proofs are present.
     #[must_use]
     pub fn has_paired_paths(&self) -> bool {
-        self.from.is_some() && self.to.is_some()
-    }
-
-    fn ensure_sender(&mut self, key: &[u8], balance_before: u64) {
-        if self.from.is_none() {
-            self.from = Some(synthesize_row_proof(
-                key,
-                balance_before,
-                ProofFlavor::Sender,
-            ));
-        }
-    }
-
-    fn ensure_receiver(&mut self, key: &[u8], balance_before: u64) {
-        if self.to.is_none() {
-            self.to = Some(synthesize_row_proof(
-                key,
-                balance_before,
-                ProofFlavor::Receiver,
-            ));
-        }
+        true
     }
 }
 
 /// Merkle proof payload describing the path for a single leaf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferMerkleProof {
+    /// Root before applying this update.
+    pub root_before: [u8; 32],
+    /// Root after applying this update.
+    pub root_after: [u8; 32],
     /// Bitset describing the direction taken at each level (LSB-first per byte).
     pub path_bits: Vec<u8>,
     /// Sibling node hashes encountered along the path.
-    pub siblings: Vec<Hash>,
+    pub siblings: Vec<[u8; 32]>,
 }
 
 impl TransferMerkleProof {
-    fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let blob: TransferMerkleProofBlob =
-            decode_from_bytes(bytes).map_err(|source| Error::TransferProofDecode { source })?;
-        if blob.version != TRANSFER_MERKLE_PROOF_VERSION {
-            return Err(Error::TransferProofUnsupportedVersion {
-                version: blob.version,
+    fn from_witness(witness: &TransferSmtWitness) -> Result<Self, Error> {
+        let required_path_bytes = TRANSFER_MERKLE_HEIGHT.div_ceil(8);
+        if witness.path_bits.len() != required_path_bytes {
+            return Err(Error::TransferInvariant {
+                details: format!(
+                    "transfer Merkle proof has {} path byte(s), expected {required_path_bytes}",
+                    witness.path_bits.len()
+                ),
+            });
+        }
+        if witness.siblings.len() != TRANSFER_MERKLE_HEIGHT {
+            return Err(Error::TransferInvariant {
+                details: format!(
+                    "transfer Merkle proof has {} sibling(s), expected {TRANSFER_MERKLE_HEIGHT}",
+                    witness.siblings.len()
+                ),
             });
         }
         Ok(Self {
-            path_bits: normalize_path_bits(blob.path_bits),
-            siblings: normalize_siblings(blob.siblings),
+            root_before: witness.root_before,
+            root_after: witness.root_after,
+            path_bits: witness.path_bits.clone(),
+            siblings: witness.siblings.clone(),
         })
+    }
+
+    fn verify_update(
+        &self,
+        key: &[u8],
+        value_before: u64,
+        value_after: u64,
+        role: &'static str,
+    ) -> Result<(), Error> {
+        let computed_before = self.compute_root(key, value_before);
+        if computed_before.as_ref() != self.root_before.as_ref() {
+            return Err(Error::TransferInvariant {
+                details: format!("transfer {role} SMT proof does not authenticate the pre-root"),
+            });
+        }
+        let computed_after = self.compute_root(key, value_after);
+        if computed_after.as_ref() != self.root_after.as_ref() {
+            return Err(Error::TransferInvariant {
+                details: format!("transfer {role} SMT proof does not authenticate the post-root"),
+            });
+        }
+        Ok(())
+    }
+
+    fn compute_root(&self, key: &[u8], balance: u64) -> Hash {
+        let mut current = leaf_hash(key, balance);
+        for level in 0..TRANSFER_MERKLE_HEIGHT {
+            let sibling = Hash::prehashed(self.sibling(level));
+            let (left, right) = if self.bit(level) == 0 {
+                (current, sibling)
+            } else {
+                (sibling, current)
+            };
+            current = internal_hash(&left, &right);
+        }
+        current
     }
 
     /// Returns the bit value for the given depth.
@@ -267,79 +291,34 @@ impl TransferMerkleProof {
         )
     }
 
-    /// Returns the sibling hash for the given depth, padding deterministically when missing.
+    /// Returns the sibling hash for the given depth.
     #[must_use]
-    pub fn sibling(&self, level: usize) -> Hash {
+    pub fn sibling(&self, level: usize) -> [u8; 32] {
         if level >= TRANSFER_MERKLE_HEIGHT {
-            return padding_hash(level);
+            return padding_hash(level).into();
         }
         self.siblings
             .get(level)
             .copied()
-            .unwrap_or_else(|| padding_hash(level))
+            .expect("validated transfer Merkle proof contains every sibling")
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-struct TransferMerkleProofBlob {
-    version: u16,
-    path_bits: Vec<u8>,
-    siblings: Vec<Hash>,
-}
+const KEY_DOMAIN: &[u8] = b"fastpq:v1:smt:key|";
+const VALUE_DOMAIN: &[u8] = b"fastpq:v1:smt:value|";
+const LEAF_DOMAIN: &[u8] = b"fastpq:v1:smt:leaf|";
+const NODE_DOMAIN: &[u8] = b"fastpq:v1:smt:node|";
+const PAD_DOMAIN: &[u8] = b"fastpq:v1:smt:pad|";
 
-const TRANSFER_MERKLE_PROOF_VERSION: u16 = 1;
-const KEY_DOMAIN: &[u8] = b"fastpq:smt:key|";
-const VALUE_DOMAIN: &[u8] = b"fastpq:smt:value|";
-const LEAF_DOMAIN: &[u8] = b"fastpq:smt:leaf|";
-const NODE_DOMAIN: &[u8] = b"fastpq:smt:node|";
-const SIBLING_DOMAIN: &[u8] = b"fastpq:smt:sibling|";
-const PAD_DOMAIN: &[u8] = b"fastpq:smt:pad|";
-
-/// Deterministically synthesise a Merkle proof for a transfer row.
-#[must_use]
-pub fn synthesize_row_proof(key: &[u8], balance: u64, flavor: ProofFlavor) -> TransferMerkleProof {
-    let key_hash = synthetic_key_hash(key, flavor);
-    let mut path_bits = vec![0u8; TRANSFER_MERKLE_HEIGHT.div_ceil(8)];
-    let mut siblings = Vec::with_capacity(TRANSFER_MERKLE_HEIGHT);
-    let key_bytes = key_hash.as_ref();
-    for level in 0..TRANSFER_MERKLE_HEIGHT {
-        let byte_index = level / 8;
-        let bit_index = level % 8;
-        let bit = (key_bytes[byte_index % key_bytes.len()] >> bit_index) & 1;
-        if bit == 1 {
-            path_bits[byte_index] |= 1 << bit_index;
-        }
-        siblings.push(synthetic_sibling_hash(
-            level,
-            key_hash.as_ref(),
-            balance,
-            flavor,
-        ));
-    }
-    TransferMerkleProof {
-        path_bits,
-        siblings,
-    }
-}
-
-pub(crate) fn synthetic_leaf_hash(key: &[u8], balance: u64, flavor: ProofFlavor) -> Hash {
+pub(crate) fn leaf_hash(key: &[u8], balance: u64) -> Hash {
     let mut payload = Vec::with_capacity(LEAF_DOMAIN.len() + 64);
     payload.extend_from_slice(LEAF_DOMAIN);
-    payload.extend_from_slice(synthetic_key_hash(key, flavor).as_ref());
-    payload.extend_from_slice(synthetic_value_hash(balance, flavor).as_ref());
+    payload.extend_from_slice(key_hash(key).as_ref());
+    payload.extend_from_slice(value_hash(balance).as_ref());
     Hash::new(payload)
 }
 
-pub(crate) fn synthetic_internal_hash(left: &Hash, right: &Hash) -> Hash {
+pub(crate) fn internal_hash(left: &Hash, right: &Hash) -> Hash {
     let mut payload = Vec::with_capacity(NODE_DOMAIN.len() + 64);
     payload.extend_from_slice(NODE_DOMAIN);
     payload.extend_from_slice(left.as_ref());
@@ -347,56 +326,18 @@ pub(crate) fn synthetic_internal_hash(left: &Hash, right: &Hash) -> Hash {
     Hash::new(payload)
 }
 
-fn synthetic_key_hash(key: &[u8], flavor: ProofFlavor) -> Hash {
-    let mut payload = Vec::with_capacity(KEY_DOMAIN.len() + flavor.salt().len() + key.len());
+fn key_hash(key: &[u8]) -> Hash {
+    let mut payload = Vec::with_capacity(KEY_DOMAIN.len() + key.len());
     payload.extend_from_slice(KEY_DOMAIN);
-    payload.extend_from_slice(flavor.salt());
     payload.extend_from_slice(key);
     Hash::new(payload)
 }
 
-fn synthetic_value_hash(balance: u64, flavor: ProofFlavor) -> Hash {
-    let mut payload = Vec::with_capacity(VALUE_DOMAIN.len() + flavor.salt().len() + 8);
+fn value_hash(balance: u64) -> Hash {
+    let mut payload = Vec::with_capacity(VALUE_DOMAIN.len() + 8);
     payload.extend_from_slice(VALUE_DOMAIN);
-    payload.extend_from_slice(flavor.salt());
     payload.extend_from_slice(&balance.to_le_bytes());
     Hash::new(payload)
-}
-
-fn synthetic_sibling_hash(
-    level: usize,
-    key_hash_bytes: &[u8],
-    balance: u64,
-    flavor: ProofFlavor,
-) -> Hash {
-    let mut payload = Vec::with_capacity(SIBLING_DOMAIN.len() + 64 + 8 + flavor.salt().len());
-    payload.extend_from_slice(SIBLING_DOMAIN);
-    payload.extend_from_slice(&(level as u64).to_le_bytes());
-    payload.extend_from_slice(key_hash_bytes);
-    payload.extend_from_slice(&balance.to_le_bytes());
-    payload.extend_from_slice(flavor.salt());
-    Hash::new(payload)
-}
-
-fn normalize_path_bits(mut bits: Vec<u8>) -> Vec<u8> {
-    let required = TRANSFER_MERKLE_HEIGHT.div_ceil(8);
-    if bits.len() < required {
-        bits.resize(required, 0);
-    } else if bits.len() > required {
-        bits.truncate(required);
-    }
-    bits
-}
-
-fn normalize_siblings(mut siblings: Vec<Hash>) -> Vec<Hash> {
-    if siblings.len() < TRANSFER_MERKLE_HEIGHT {
-        for level in siblings.len()..TRANSFER_MERKLE_HEIGHT {
-            siblings.push(padding_hash(level));
-        }
-    } else if siblings.len() > TRANSFER_MERKLE_HEIGHT {
-        siblings.truncate(TRANSFER_MERKLE_HEIGHT);
-    }
-    siblings
 }
 
 fn padding_hash(level: usize) -> Hash {
@@ -404,6 +345,193 @@ fn padding_hash(level: usize) -> Hash {
     payload.extend_from_slice(PAD_DOMAIN);
     payload.extend_from_slice(&(level as u64).to_le_bytes());
     Hash::new(payload)
+}
+
+/// Build real V1 SMT update witnesses for a sender debit followed by a receiver
+/// credit in the same transfer delta.
+///
+/// # Errors
+/// Returns [`Error::TransferInvariant`] if the two balance keys collide in the
+/// 32-bit V1 transfer tree.
+pub fn build_transfer_smt_witness_pair(
+    sender_key: &[u8],
+    sender_before: u64,
+    sender_after: u64,
+    receiver_key: &[u8],
+    receiver_before: u64,
+    receiver_after: u64,
+) -> Result<(TransferSmtWitness, TransferSmtWitness), Error> {
+    let mut state = TransferSmtState::default();
+    state.insert(sender_key, sender_before)?;
+    state.insert(receiver_key, receiver_before)?;
+    let sender = state.update_witness(sender_key, sender_before, sender_after)?;
+    let receiver = state.update_witness(receiver_key, receiver_before, receiver_after)?;
+    Ok((sender, receiver))
+}
+
+/// Attach chained V1 transfer SMT witnesses to all deltas in transcript order
+/// and return the resulting `(old_root, new_root)` pair.
+///
+/// This helper is intended for fixture builders and execution-captured V1 batch
+/// materialization. It does not synthesize independent row paths: every witness
+/// is derived from one shared transfer SMT and the returned roots must be used
+/// as the batch public roots.
+///
+/// # Errors
+/// Returns [`Error::TransferInvariant`] if a balance cannot be normalized or two
+/// leaves collide in the 32-bit V1 transfer tree.
+pub fn attach_transfer_smt_witnesses(
+    transcripts: &mut [TransferTranscript],
+) -> Result<([u8; 32], [u8; 32]), Error> {
+    let mut state = TransferSmtState::default();
+    let mut seeded_keys = BTreeSet::new();
+    let mut delta_count = 0usize;
+    for transcript in transcripts.iter() {
+        for delta in &transcript.deltas {
+            delta_count = delta_count.saturating_add(1);
+            let scale = delta.normalized_scale();
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            if seeded_keys.insert(from_key.clone()) {
+                state.insert(
+                    &from_key,
+                    numeric_to_u64("from_balance_before", &delta.from_balance_before, scale)?,
+                )?;
+            }
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            if seeded_keys.insert(to_key.clone()) {
+                state.insert(
+                    &to_key,
+                    numeric_to_u64("to_balance_before", &delta.to_balance_before, scale)?,
+                )?;
+            }
+        }
+    }
+    if delta_count == 0 {
+        return Err(Error::TransferInvariant {
+            details: "transfer SMT witness material requires at least one delta".into(),
+        });
+    }
+    let old_root = state.root().into();
+    for transcript in transcripts {
+        for delta in &mut transcript.deltas {
+            let scale = delta.normalized_scale();
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            delta.from_smt_witness = state.update_witness(
+                &from_key,
+                numeric_to_u64("from_balance_before", &delta.from_balance_before, scale)?,
+                numeric_to_u64("from_balance_after", &delta.from_balance_after, scale)?,
+            )?;
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            delta.to_smt_witness = state.update_witness(
+                &to_key,
+                numeric_to_u64("to_balance_before", &delta.to_balance_before, scale)?,
+                numeric_to_u64("to_balance_after", &delta.to_balance_after, scale)?,
+            )?;
+        }
+    }
+    Ok((old_root, state.root().into()))
+}
+
+#[derive(Default)]
+struct TransferSmtState {
+    leaves: BTreeMap<u32, Hash>,
+}
+
+impl TransferSmtState {
+    fn insert(&mut self, key: &[u8], value: u64) -> Result<(), Error> {
+        let path = path_index(key);
+        let leaf = leaf_hash(key, value);
+        if let Some(existing) = self.leaves.insert(path, leaf)
+            && existing != leaf
+        {
+            return Err(Error::TransferInvariant {
+                details: "transfer SMT key path collision".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn update_witness(
+        &mut self,
+        key: &[u8],
+        value_before: u64,
+        value_after: u64,
+    ) -> Result<TransferSmtWitness, Error> {
+        let path = path_index(key);
+        let expected_before = leaf_hash(key, value_before);
+        if self.leaves.get(&path) != Some(&expected_before) {
+            return Err(Error::TransferInvariant {
+                details: "transfer SMT pre-balance does not match current state".into(),
+            });
+        }
+        let root_before: [u8; 32] = self.root().into();
+        let siblings = self.siblings_for(path);
+        let path_bits = path.to_le_bytes().to_vec();
+        self.leaves.insert(path, leaf_hash(key, value_after));
+        let root_after: [u8; 32] = self.root().into();
+        Ok(TransferSmtWitness::new(
+            root_before,
+            root_after,
+            path_bits,
+            siblings,
+        ))
+    }
+
+    fn siblings_for(&self, path: u32) -> Vec<[u8; 32]> {
+        let mut siblings = Vec::with_capacity(TRANSFER_MERKLE_HEIGHT);
+        let mut level_nodes = self.leaves.clone();
+        let mut index = path;
+        for level in 0..TRANSFER_MERKLE_HEIGHT {
+            let sibling_index = index ^ 1;
+            let sibling = level_nodes
+                .get(&sibling_index)
+                .copied()
+                .unwrap_or_else(|| padding_hash(level));
+            siblings.push(sibling.into());
+            level_nodes = parent_level(&level_nodes, level);
+            index >>= 1;
+        }
+        siblings
+    }
+
+    fn root(&self) -> Hash {
+        if self.leaves.is_empty() {
+            return padding_hash(TRANSFER_MERKLE_HEIGHT);
+        }
+        let mut level_nodes = self.leaves.clone();
+        for level in 0..TRANSFER_MERKLE_HEIGHT {
+            level_nodes = parent_level(&level_nodes, level);
+        }
+        level_nodes
+            .get(&0)
+            .copied()
+            .unwrap_or_else(|| padding_hash(TRANSFER_MERKLE_HEIGHT))
+    }
+}
+
+fn parent_level(nodes: &BTreeMap<u32, Hash>, level: usize) -> BTreeMap<u32, Hash> {
+    let mut parents = BTreeMap::new();
+    for &index in nodes.keys() {
+        let parent = index >> 1;
+        parents.entry(parent).or_insert_with(|| {
+            let left = nodes
+                .get(&(parent << 1))
+                .copied()
+                .unwrap_or_else(|| padding_hash(level));
+            let right = nodes
+                .get(&((parent << 1) | 1))
+                .copied()
+                .unwrap_or_else(|| padding_hash(level));
+            internal_hash(&left, &right)
+        });
+    }
+    parents
+}
+
+fn path_index(key: &[u8]) -> u32 {
+    let hash = key_hash(key);
+    let bytes = hash.as_ref();
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
 /// Decode transfer transcripts embedded in the batch metadata.
@@ -428,50 +556,59 @@ pub fn decode_transcripts(
 /// the transcript fails arithmetic checks.
 pub fn transcripts_to_witnesses(
     transcripts: &[TransferTranscript],
+    expected_old_root: &[u8; 32],
+    expected_new_root: &[u8; 32],
 ) -> Result<Vec<TransferGadgetInput>, Error> {
-    transcripts
-        .iter()
-        .map(|transcript| {
-            if transcript.deltas.is_empty() {
-                return Err(Error::TransferInvariant {
-                    details: "transfer transcript must contain at least one delta".into(),
-                });
-            }
-            let authority_digest = transcript.authority_digest;
-            let mut deltas = Vec::with_capacity(transcript.deltas.len());
-            for delta in &transcript.deltas {
-                let snapshot = BalanceSnapshot::from_delta(delta)?;
-                let poseidon_digest = compute_poseidon_digest(delta, &transcript.batch_hash);
-                enforce_poseidon_policy(transcript, &poseidon_digest)?;
-                let sender_key = balance_key(&delta.asset_definition, &delta.from_account);
-                let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
-                let mut smt_proof = TransferSmtProof::from_transcript(
-                    delta.from_merkle_proof.as_deref(),
-                    delta.to_merkle_proof.as_deref(),
-                )?;
-                smt_proof.ensure_sender(&sender_key, snapshot.from_before);
-                smt_proof.ensure_receiver(&receiver_key, snapshot.to_before);
+    let mut current_root = *expected_old_root;
+    let mut inputs = Vec::with_capacity(transcripts.len());
+    for transcript in transcripts {
+        if transcript.deltas.is_empty() {
+            return Err(Error::TransferInvariant {
+                details: "transfer transcript must contain at least one delta".into(),
+            });
+        }
+        let authority_digest = transcript.authority_digest;
+        let mut deltas = Vec::with_capacity(transcript.deltas.len());
+        for delta in &transcript.deltas {
+            let snapshot = BalanceSnapshot::from_delta(delta)?;
+            let poseidon_digest = compute_poseidon_digest(delta, &transcript.batch_hash);
+            enforce_poseidon_policy(transcript, &poseidon_digest)?;
+            let smt_proof = TransferSmtProof::from_transcript(delta, &snapshot)?;
+            require_root(smt_proof.from.root_before, current_root, "sender pre-root")?;
+            current_root = smt_proof.from.root_after;
+            require_root(smt_proof.to.root_before, current_root, "receiver pre-root")?;
+            current_root = smt_proof.to.root_after;
 
-                deltas.push(TransferDeltaWitness {
-                    from_account: delta.from_account.clone(),
-                    to_account: delta.to_account.clone(),
-                    asset_definition: delta.asset_definition.clone(),
-                    amount: snapshot.transfer_amount(),
-                    from_balance_before: snapshot.from_before,
-                    from_balance_after: snapshot.from_after,
-                    to_balance_before: snapshot.to_before,
-                    to_balance_after: snapshot.to_after,
-                    poseidon_digest,
-                    smt_proof,
-                });
-            }
-            Ok(TransferGadgetInput {
-                batch_hash: transcript.batch_hash,
-                authority_digest,
-                deltas,
-            })
-        })
-        .collect()
+            deltas.push(TransferDeltaWitness {
+                from_account: delta.from_account.clone(),
+                to_account: delta.to_account.clone(),
+                asset_definition: delta.asset_definition.clone(),
+                amount: snapshot.transfer_amount(),
+                from_balance_before: snapshot.from_before,
+                from_balance_after: snapshot.from_after,
+                to_balance_before: snapshot.to_before,
+                to_balance_after: snapshot.to_after,
+                poseidon_digest,
+                smt_proof,
+            });
+        }
+        inputs.push(TransferGadgetInput {
+            batch_hash: transcript.batch_hash,
+            authority_digest,
+            deltas,
+        });
+    }
+    require_root(current_root, *expected_new_root, "final post-root")?;
+    Ok(inputs)
+}
+
+fn require_root(actual: [u8; 32], expected: [u8; 32], label: &'static str) -> Result<(), Error> {
+    if actual != expected {
+        return Err(Error::TransferInvariant {
+            details: format!("transfer SMT {label} mismatch"),
+        });
+    }
+    Ok(())
 }
 
 /// Verify arithmetic and digest invariants for transfer transcripts.
@@ -620,17 +757,17 @@ fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
 
 /// Compute the Poseidon digest committed by a transfer transcript entry.
 pub fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
-    let mut preimage = Vec::with_capacity(256);
-    append_encoded(&mut preimage, &delta.from_account);
-    append_encoded(&mut preimage, &delta.to_account);
-    append_encoded(&mut preimage, &delta.asset_definition);
-    append_encoded(&mut preimage, &delta.amount);
-    preimage.extend_from_slice(batch_hash.as_ref());
-    Hash::prehashed(poseidon::hash_bytes(&preimage))
+    let mut hasher = poseidon::PoseidonByteHasher::new();
+    append_encoded(&mut hasher, &delta.from_account);
+    append_encoded(&mut hasher, &delta.to_account);
+    append_encoded(&mut hasher, &delta.asset_definition);
+    append_encoded(&mut hasher, &delta.amount);
+    hasher.update(batch_hash.as_ref());
+    Hash::prehashed(hasher.finalize())
 }
 
-fn append_encoded(buffer: &mut Vec<u8>, value: &impl NoritoEncode) {
-    buffer.extend_from_slice(&value.encode());
+fn append_encoded<W: std::io::Write>(writer: &mut W, value: &impl NoritoEncode) {
+    value.encode_to(writer);
 }
 
 struct BalanceSnapshot {
@@ -781,6 +918,23 @@ mod tests {
     }
 
     #[test]
+    fn compute_poseidon_digest_matches_canonical_encoded_preimage() {
+        let transcript = sample_transcript();
+        let delta = &transcript.deltas[0];
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(&delta.from_account.encode());
+        preimage.extend_from_slice(&delta.to_account.encode());
+        preimage.extend_from_slice(&delta.asset_definition.encode());
+        preimage.extend_from_slice(&delta.amount.encode());
+        preimage.extend_from_slice(transcript.batch_hash.as_ref());
+
+        assert_eq!(
+            compute_poseidon_digest(delta, &transcript.batch_hash),
+            Hash::prehashed(poseidon::hash_bytes(&preimage))
+        );
+    }
+
+    #[test]
     fn verify_transcripts_rejects_unmatched_transfer_rows() {
         let transcript = sample_transcript();
         let mut transitions = sample_transitions(&transcript);
@@ -802,7 +956,7 @@ mod tests {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let delta = TransferDeltaTranscript {
+        let mut delta = TransferDeltaTranscript {
             from_account: alice.clone(),
             to_account: bob.clone(),
             asset_definition: asset.clone(),
@@ -811,9 +965,10 @@ mod tests {
             from_balance_after: Numeric::from(158u32),
             to_balance_before: Numeric::from(1u32),
             to_balance_after: Numeric::from(43u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
+        attach_delta_witnesses(&mut delta);
         let batch_hash = Hash::prehashed([0x11; 32]);
         let digest = compute_poseidon_digest(&delta, &batch_hash);
         TransferTranscript {
@@ -850,7 +1005,9 @@ mod tests {
     #[test]
     fn transcripts_to_witnesses_emit_structured_witness() {
         let transcript = sample_transcript();
-        let inputs = transcripts_to_witnesses(&[transcript]).expect("witnesses");
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let inputs =
+            transcripts_to_witnesses(&[transcript], &old_root, &new_root).expect("witnesses");
         assert_eq!(inputs.len(), 1);
         let gadget = &inputs[0];
         assert_eq!(gadget.deltas.len(), 1);
@@ -864,8 +1021,10 @@ mod tests {
     #[test]
     fn transcripts_to_witnesses_accept_multi_delta_batches() {
         let transcript = sample_multi_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
         let witnesses =
-            transcripts_to_witnesses(std::slice::from_ref(&transcript)).expect("witnesses");
+            transcripts_to_witnesses(std::slice::from_ref(&transcript), &old_root, &new_root)
+                .expect("witnesses");
         assert_eq!(witnesses.len(), 1);
         assert_eq!(witnesses[0].deltas.len(), transcript.deltas.len());
         assert!(
@@ -877,35 +1036,45 @@ mod tests {
     }
 
     #[test]
-    fn transcripts_to_witnesses_decode_merkle_proofs() {
-        let mut transcript = sample_transcript();
-        let proof_bytes = sample_merkle_proof_bytes(TRANSFER_MERKLE_PROOF_VERSION);
-        transcript.deltas[0].from_merkle_proof = Some(proof_bytes.clone());
-        transcript.deltas[0].to_merkle_proof = Some(proof_bytes);
-        let witnesses = transcripts_to_witnesses(&[transcript]).expect("witnesses");
+    fn transcripts_to_witnesses_decodes_smt_witnesses() {
+        let transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let witnesses =
+            transcripts_to_witnesses(&[transcript], &old_root, &new_root).expect("witnesses");
         let smt = &witnesses[0].deltas[0].smt_proof;
         assert!(smt.has_paired_paths());
-        assert_eq!(
-            smt.from.as_ref().expect("from proof").path_bits.as_slice(),
-            &[0x5A, 0x00, 0x00, 0x00]
-        );
-        assert_eq!(
-            smt.to.as_ref().expect("to proof").siblings.len(),
-            TRANSFER_MERKLE_HEIGHT
-        );
+        assert_eq!(smt.from.path_bits.len(), TRANSFER_MERKLE_HEIGHT.div_ceil(8));
+        assert_eq!(smt.to.siblings.len(), TRANSFER_MERKLE_HEIGHT);
     }
 
     #[test]
-    fn transcripts_to_witnesses_reject_unknown_merkle_proof_version() {
+    fn transcripts_to_witnesses_reject_wrong_final_root() {
+        let transcript = sample_transcript();
+        let (old_root, mut new_root) = transcript_roots(&transcript);
+        new_root[0] ^= 0x01;
+        let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("wrong final root");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_reject_wrong_sibling() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].from_merkle_proof =
-            Some(sample_merkle_proof_bytes(TRANSFER_MERKLE_PROOF_VERSION + 1));
-        let err = transcripts_to_witnesses(&[transcript]).expect_err("invalid version");
-        assert!(matches!(
-            err,
-            Error::TransferProofUnsupportedVersion { version }
-                if version == TRANSFER_MERKLE_PROOF_VERSION + 1
-        ));
+        let (old_root, new_root) = transcript_roots(&transcript);
+        transcript.deltas[0].from_smt_witness.siblings[0][0] ^= 0x01;
+        let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("wrong sibling");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_reject_truncated_merkle_proofs() {
+        let mut transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        transcript.deltas[0].from_smt_witness.path_bits.truncate(1);
+        let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("truncated proof");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
     }
 
     #[test]
@@ -913,7 +1082,9 @@ mod tests {
         let mut transcript = sample_multi_transcript();
         let digest = compute_poseidon_digest(&transcript.deltas[0], &transcript.batch_hash);
         transcript.poseidon_preimage_digest = Some(digest);
-        let err = transcripts_to_witnesses(&[transcript]).expect_err("must fail");
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let err =
+            transcripts_to_witnesses(&[transcript], &old_root, &new_root).expect_err("must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
 
@@ -944,8 +1115,10 @@ mod tests {
     #[test]
     fn transfer_plan_summarises_witnesses() {
         let transcript = sample_multi_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
         let witnesses =
-            transcripts_to_witnesses(std::slice::from_ref(&transcript)).expect("witnesses");
+            transcripts_to_witnesses(std::slice::from_ref(&transcript), &old_root, &new_root)
+                .expect("witnesses");
         let plan = TransferGadgetPlan::from_inputs(&witnesses);
         assert_eq!(plan.batch_count(), 1);
         assert_eq!(plan.total_deltas(), transcript.deltas.len());
@@ -956,8 +1129,10 @@ mod tests {
     #[test]
     fn row_proof_index_contains_sender_and_receiver_entries() {
         let transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
         let witnesses =
-            transcripts_to_witnesses(std::slice::from_ref(&transcript)).expect("witnesses");
+            transcripts_to_witnesses(std::slice::from_ref(&transcript), &old_root, &new_root)
+                .expect("witnesses");
         let index = index_row_proofs(&witnesses);
         assert_eq!(index.len(), 2);
         let delta = &transcript.deltas[0];
@@ -989,21 +1164,86 @@ mod tests {
             from_balance_after: Numeric::from(83u32),
             to_balance_before: Numeric::from(5u32),
             to_balance_after: Numeric::from(12u32),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
         transcript.deltas.push(second_delta);
         transcript.poseidon_preimage_digest = None;
+        attach_transcript_witnesses(&mut transcript);
         transcript
     }
 
-    fn sample_merkle_proof_bytes(version: u16) -> Vec<u8> {
-        let blob = TransferMerkleProofBlob {
-            version,
-            path_bits: vec![0x5A],
-            siblings: vec![Hash::prehashed([0x23; 32])],
-        };
-        to_bytes(&blob).expect("encode proof blob")
+    fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
+        let (from_witness, to_witness) = build_transfer_smt_witness_pair(
+            &balance_key(&delta.asset_definition, &delta.from_account),
+            numeric_to_u64(&delta.from_balance_before, delta.normalized_scale()),
+            numeric_to_u64(&delta.from_balance_after, delta.normalized_scale()),
+            &balance_key(&delta.asset_definition, &delta.to_account),
+            numeric_to_u64(&delta.to_balance_before, delta.normalized_scale()),
+            numeric_to_u64(&delta.to_balance_after, delta.normalized_scale()),
+        )
+        .expect("valid transfer witness");
+        delta.from_smt_witness = from_witness;
+        delta.to_smt_witness = to_witness;
+    }
+
+    fn attach_transcript_witnesses(transcript: &mut TransferTranscript) {
+        let mut state = TransferSmtState::default();
+        let mut seeded_keys = BTreeSet::new();
+        for delta in &transcript.deltas {
+            let scale = delta.normalized_scale();
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            if seeded_keys.insert(from_key.clone()) {
+                state
+                    .insert(&from_key, numeric_to_u64(&delta.from_balance_before, scale))
+                    .expect("sender leaf");
+            }
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            if seeded_keys.insert(to_key.clone()) {
+                state
+                    .insert(&to_key, numeric_to_u64(&delta.to_balance_before, scale))
+                    .expect("receiver leaf");
+            }
+        }
+        for delta in &mut transcript.deltas {
+            let scale = delta.normalized_scale();
+            let from_key = balance_key(&delta.asset_definition, &delta.from_account);
+            delta.from_smt_witness = state
+                .update_witness(
+                    &from_key,
+                    numeric_to_u64(&delta.from_balance_before, scale),
+                    numeric_to_u64(&delta.from_balance_after, scale),
+                )
+                .expect("sender update");
+            let to_key = balance_key(&delta.asset_definition, &delta.to_account);
+            delta.to_smt_witness = state
+                .update_witness(
+                    &to_key,
+                    numeric_to_u64(&delta.to_balance_before, scale),
+                    numeric_to_u64(&delta.to_balance_after, scale),
+                )
+                .expect("receiver update");
+        }
+    }
+
+    fn transcript_roots(transcript: &TransferTranscript) -> ([u8; 32], [u8; 32]) {
+        let old_root = transcript
+            .deltas
+            .first()
+            .expect("sample has delta")
+            .from_smt_witness
+            .root_before;
+        let new_root = transcript
+            .deltas
+            .last()
+            .expect("sample has delta")
+            .to_smt_witness
+            .root_after;
+        (old_root, new_root)
+    }
+
+    fn numeric_to_u64(value: &Numeric, target_scale: u32) -> u64 {
+        normalized_numeric_to_u64(value, target_scale).expect("numeric fits u64")
     }
 
     fn numeric_to_le_bytes(value: &Numeric, target_scale: u32) -> Vec<u8> {

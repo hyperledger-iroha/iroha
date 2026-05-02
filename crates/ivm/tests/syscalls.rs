@@ -1,8 +1,16 @@
 use std::collections::BTreeMap;
 
-use iroha_crypto::{Hash, HashOf, MerkleProof};
+use iroha_crypto::{
+    Hash, HashOf, MerkleProof,
+    blake2::{
+        Blake2bVar,
+        digest::{Update as Blake2Update, VariableOutput},
+    },
+};
 use iroha_data_model::{name::Name, prelude::AccountId};
-use ivm::{IVM, PointerType, VMError, encoding, instruction, syscalls};
+use ivm::{ExecutionProof, IVM, PointerType, VMError, encoding, instruction, syscalls};
+use sha2::Digest as Sha2Digest;
+use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
 mod common;
 use common::assemble;
 
@@ -36,6 +44,16 @@ fn sample_account() -> AccountId {
             .parse()
             .expect("public key"),
     )
+}
+
+fn raw_blake2b256(payload: &[u8]) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    let mut hasher = Blake2bVar::new(32).expect("32-byte Blake2b output size");
+    hasher.update(payload);
+    hasher
+        .finalize_variable(&mut digest)
+        .expect("fixed output buffer has the requested length");
+    digest
 }
 
 #[test]
@@ -107,6 +125,39 @@ fn debug_log_accepts_json_tlv() {
     let prog = assemble_syscall(syscalls::SYSCALL_DEBUG_LOG as u8);
     vm.load_program(&prog).unwrap();
     vm.run().expect("debug log should succeed");
+}
+
+#[test]
+fn hash_syscalls_return_expected_digest_blobs() {
+    let message = b"ivm deterministic hash syscalls";
+    let sha256 = sha2::Sha256::digest(message).to_vec();
+    let sha3 = <Sha3_256 as Sha3Digest>::digest(message).to_vec();
+    let blake2b = raw_blake2b256(message).to_vec();
+    let keccak = <Keccak256 as Sha3Digest>::digest(message).to_vec();
+    let iroha_hash: [u8; 32] = Hash::new(message).into();
+
+    for (syscall, expected) in [
+        (syscalls::SYSCALL_SHA256_HASH, sha256),
+        (syscalls::SYSCALL_SHA3_HASH, sha3),
+        (syscalls::SYSCALL_BLAKE2B256_HASH, blake2b),
+        (syscalls::SYSCALL_KECCAK256_HASH, keccak),
+        (syscalls::SYSCALL_IROHA_HASH, iroha_hash.to_vec()),
+    ] {
+        let mut vm = IVM::new(10_000);
+        let tlv = make_tlv(PointerType::Blob as u16, message);
+        let ptr = vm.alloc_input_tlv(&tlv).expect("alloc input blob");
+        vm.set_register(10, ptr);
+        let prog = assemble_syscall(syscall as u8);
+        vm.load_program(&prog).expect("load program");
+        vm.run().expect("hash syscall should succeed");
+
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("validate hash output");
+        assert_eq!(out.type_id, PointerType::Blob);
+        assert_eq!(out.payload, expected.as_slice());
+    }
 }
 
 #[test]
@@ -300,17 +351,32 @@ fn test_verify_proof_syscall() {
 }
 
 #[test]
-fn test_prove_execution_syscall() {
+fn test_prove_execution_syscall_returns_deterministic_summary() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_PROVE_EXECUTION as u8);
     vm.load_program(&prog).unwrap();
-    let err = vm
-        .run()
-        .expect_err("PROVE_EXECUTION should be unimplemented");
-    assert!(matches!(
-        err,
-        VMError::NotImplemented { syscall } if syscall == syscalls::SYSCALL_PROVE_EXECUTION
-    ));
+    vm.run().expect("PROVE_EXECUTION should produce a summary");
+    assert_eq!(vm.register(11), 0);
+    let ptr = vm.register(10);
+    let tlv = vm.memory.validate_tlv(ptr).expect("proof tlv");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let proof: ExecutionProof = norito::decode_from_bytes(tlv.payload).expect("decode proof");
+    assert_eq!(proof.version, ivm::EXECUTION_PROOF_VERSION_V1);
+    assert_eq!(proof.code_hash, vm.code_hash());
+    assert!(proof.gas_used > 0);
+    let first_payload = tlv.payload.to_vec();
+
+    let mut vm_again = IVM::new(u64::MAX);
+    vm_again.load_program(&prog).unwrap();
+    vm_again.run().expect("second proof run");
+    let tlv_again = vm_again
+        .memory
+        .validate_tlv(vm_again.register(10))
+        .expect("second proof tlv");
+    assert_eq!(
+        first_payload, tlv_again.payload,
+        "execution proof summaries must be byte-identical for identical input"
+    );
 }
 
 #[test]

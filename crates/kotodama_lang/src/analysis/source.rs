@@ -632,7 +632,7 @@ mod tests {
 
             fn withdraw() {
                 balances[1] = 0;
-                host::call_contract();
+                call_contract("escrow", "release", json("{}"));
             }
         "#,
         );
@@ -679,7 +679,7 @@ mod tests {
 
             fn withdraw() {
                 balances[1] = balances[1] - 1;
-                host::call_contract();
+                call_contract("escrow", "release", json("{}"));
             }
         "#,
         );
@@ -696,7 +696,7 @@ mod tests {
             state Map<int, int> balances;
 
             fn withdraw_safe() {
-                host::call_contract();
+                call_contract("escrow", "release", json("{}"));
                 balances[1] = balances[1] - 1;
             }
         "#,

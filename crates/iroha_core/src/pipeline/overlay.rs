@@ -440,7 +440,7 @@ fn compute_program_hashes(
     (code_hash, abi_hash)
 }
 
-const PREEXEC_OPCODE_DENYLIST: &[u8] = &[ivm::instruction::wide::system::SYSTEM];
+const PREEXEC_OPCODE_DENYLIST: &[u8] = &[];
 
 pub(crate) fn enforce_pre_execution_policy(
     ivm_max_cycles_upper_bound: u64,
@@ -4071,7 +4071,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_execution_policy_denies_system_opcode() {
+    fn pre_execution_policy_allows_scallx_opcode() {
         use std::sync::Arc;
 
         use iroha_crypto::KeyPair;
@@ -4100,8 +4100,7 @@ mod tests {
         };
         let mut program = meta.encode();
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SYSTEM, 0)
-                .to_le_bytes(),
+            &ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DEBUG_PRINT).to_le_bytes(),
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
@@ -4115,12 +4114,7 @@ mod tests {
             .sign(kp.private_key());
 
         let res = build_overlay_for_transaction(&tx, &state.view());
-        assert!(matches!(
-            res,
-            Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(msg)
-            )) if msg.contains("denied by pre-execution policy")
-        ));
+        assert!(res.is_ok(), "SCALLX is part of the first-release ABI");
     }
 
     #[test]

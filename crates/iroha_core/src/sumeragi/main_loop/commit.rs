@@ -4988,15 +4988,58 @@ impl Actor {
             epoch,
             &signature_topology,
         );
+        let npos_stake_roster = if matches!(consensus_mode, ConsensusMode::Npos) {
+            let stake_roster =
+                self.npos_stake_roster_for_qc(&topology, &topology, &signature_topology, height);
+            if stake_roster.is_empty() {
+                return CommitQuorumStatus {
+                    vote_count: signers.len(),
+                    quorum_reached: false,
+                    stake_quorum_missing: !signers.is_empty(),
+                };
+            }
+            Some(stake_roster)
+        } else {
+            None
+        };
         if !signers.is_empty() {
-            let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &accepted_votes,
-                block_hash,
-                height,
-                view,
-                epoch,
-                &signers,
-            );
+            let filtered = match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    let (filtered, _groups) = super::qc::select_commit_root_signers(
+                        &accepted_votes,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        &signers,
+                    );
+                    filtered
+                }
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                        return CommitQuorumStatus {
+                            vote_count: signers.len(),
+                            quorum_reached: false,
+                            stake_quorum_missing: true,
+                        };
+                    };
+                    let world = self.state.world_view();
+                    match super::qc::select_commit_root_signers_by_stake(
+                        &accepted_votes,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        &signers,
+                        &signature_topology,
+                        &world,
+                        stake_roster,
+                    ) {
+                        Ok((filtered, _groups)) => filtered,
+                        Err(_) => BTreeSet::new(),
+                    }
+                }
+            };
             accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
@@ -5006,7 +5049,10 @@ impl Actor {
             ConsensusMode::Permissioned => vote_count >= signature_topology.min_votes_for_commit(),
             ConsensusMode::Npos => {
                 let result = (|| {
-                    let roster_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
+                    let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                        return Ok(false);
+                    };
+                    let roster_set: BTreeSet<_> = stake_roster.iter().cloned().collect();
                     let mut signer_peers = BTreeSet::new();
                     for signer in &signers {
                         let idx = usize::try_from(*signer).map_err(|_| {
@@ -5024,7 +5070,7 @@ impl Actor {
                     let world = self.state.world_view();
                     super::stake_snapshot::stake_quorum_reached_for_world(
                         &world,
-                        &commit_topology,
+                        stake_roster,
                         &signer_peers,
                     )
                 })();
@@ -5965,15 +6011,67 @@ impl Actor {
             qc.epoch,
             &signature_topology,
         );
+        let npos_stake_roster = if matches!(consensus_mode, ConsensusMode::Npos) {
+            let stake_roster =
+                self.npos_stake_roster_for_qc(&topology, &topology, &signature_topology, qc.height);
+            if stake_roster.is_empty() {
+                debug!(
+                    height = qc.height,
+                    view = qc.view,
+                    phase = ?qc.phase,
+                    block = %qc.subject_block_hash,
+                    "skipping QC materialization: active NPoS stake roster unavailable"
+                );
+                return None;
+            }
+            Some(stake_roster)
+        } else {
+            None
+        };
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && !signers.is_empty() {
-            let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &accepted_votes,
-                qc.subject_block_hash,
-                qc.height,
-                qc.view,
-                qc.epoch,
-                &signers,
-            );
+            let filtered = match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    let (filtered, _groups) = super::qc::select_commit_root_signers(
+                        &accepted_votes,
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                        qc.epoch,
+                        &signers,
+                    );
+                    filtered
+                }
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                        return None;
+                    };
+                    let world = self.state.world_view();
+                    match super::qc::select_commit_root_signers_by_stake(
+                        &accepted_votes,
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                        qc.epoch,
+                        &signers,
+                        &signature_topology,
+                        &world,
+                        stake_roster,
+                    ) {
+                        Ok((filtered, _groups)) => filtered,
+                        Err(err) => {
+                            debug!(
+                                ?err,
+                                height = qc.height,
+                                view = qc.view,
+                                phase = ?qc.phase,
+                                block = %qc.subject_block_hash,
+                                "skipping QC materialization: failed to select commit root signers"
+                            );
+                            return None;
+                        }
+                    }
+                }
+            };
             accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
@@ -6009,9 +6107,12 @@ impl Actor {
                         }
                     };
                 let world = self.state.world_view();
+                let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                    return None;
+                };
                 super::stake_snapshot::stake_quorum_reached_for_world(
                     &world,
-                    topology.as_ref(),
+                    stake_roster,
                     &signer_peers,
                 )
                 .unwrap_or(false)
@@ -7454,6 +7555,24 @@ mod tests {
         }
     }
 
+    fn execute_commit_work_on_sumeragi_thread(
+        state: &State,
+        kura: &Kura,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+        work: CommitWork,
+    ) -> (CommitOutcome, CommitStageTimings) {
+        std::thread::scope(|scope| {
+            crate::sumeragi::sumeragi_thread_builder("sumeragi-commit-test")
+                .spawn_scoped(scope, || {
+                    execute_commit_work(state, kura, chain_id, genesis_account, work)
+                })
+                .expect("spawn commit test worker")
+                .join()
+                .expect("commit test worker should not panic")
+        })
+    }
+
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
         for (byte_idx, byte) in signers_bitmap.iter().enumerate() {
@@ -7585,8 +7704,13 @@ mod tests {
             events_sender,
         };
 
-        let (outcome, timings) =
-            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
+            &state,
+            kura.as_ref(),
+            &chain_id,
+            &genesis_account_id,
+            work,
+        );
         let CommitOutcome::Success {
             pipeline_events, ..
         } = outcome
@@ -7707,8 +7831,13 @@ mod tests {
             events_sender,
         };
 
-        let (outcome, _timings) =
-            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let (outcome, _timings) = execute_commit_work_on_sumeragi_thread(
+            &state,
+            kura.as_ref(),
+            &chain_id,
+            &genesis_account_id,
+            work,
+        );
         match &outcome {
             CommitOutcome::Success { .. } => {}
             CommitOutcome::Rejected { error, .. } => {
@@ -7799,8 +7928,13 @@ mod tests {
             events_sender,
         };
 
-        let (outcome, timings) =
-            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
+            &state,
+            kura.as_ref(),
+            &chain_id,
+            &genesis_account_id,
+            work,
+        );
         let CommitOutcome::KuraStoreFailed { error: _, .. } = outcome else {
             panic!("expected Kura store failure");
         };
@@ -7852,8 +7986,13 @@ mod tests {
             events_sender,
         };
 
-        let (outcome, timings) =
-            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
+            &state,
+            kura.as_ref(),
+            &chain_id,
+            &genesis_account_id,
+            work,
+        );
         let CommitOutcome::Success {
             committed_block, ..
         } = outcome
@@ -7885,7 +8024,7 @@ mod tests {
             .expect("pre-store committed block in Kura");
         let lengths_before = fixture.kura.block_file_lengths_for_tests();
 
-        let (outcome, timings) = execute_commit_work(
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
             &fixture.state,
             fixture.kura.as_ref(),
             &fixture.chain_id,
@@ -7936,7 +8075,7 @@ mod tests {
             .store_block(stored)
             .expect("pre-store conflicting block in Kura");
 
-        let (outcome, timings) = execute_commit_work(
+        let (outcome, timings) = execute_commit_work_on_sumeragi_thread(
             &fixture.state,
             fixture.kura.as_ref(),
             &fixture.chain_id,

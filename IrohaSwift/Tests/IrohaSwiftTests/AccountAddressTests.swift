@@ -266,14 +266,37 @@ final class AccountAddressTests: XCTestCase {
     func testUnsupportedAlgorithmRejected() {
         XCTAssertThrowsError(
             try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAA, count: 32),
-                algorithm: "sm2"
+                algorithm: "future-curve"
             )
         ) { error in
             guard case let AccountAddressError.unsupportedAlgorithm(name) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertEqual(name.lowercased(), "sm2")
+            XCTAssertEqual(name.lowercased(), "future-curve")
         }
+    }
+
+    func testAccountControllerNoritoUsesAlgorithmTaggedPublicKeyBytes() throws {
+        let publicKey = Data(repeating: 0x42, count: 32)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey)
+        var algorithmAndPayload = Data([SigningAlgorithm.ed25519.noritoDiscriminant])
+        algorithmAndPayload.append(publicKey)
+
+        var expected = OfflineNoritoWriter()
+        expected.writeUInt32LE(0)
+        expected.writeField(OfflineNorito.encodeConstVec(algorithmAndPayload))
+        XCTAssertEqual(try address.noritoAccountControllerPayload(), expected.data)
+
+        var compactPublicKey = OfflineCompactNoritoWriter()
+        compactPublicKey.writeUInt64LE(UInt64(algorithmAndPayload.count))
+        for byte in algorithmAndPayload {
+            compactPublicKey.writeLength(1)
+            compactPublicKey.writeUInt8(byte)
+        }
+        var expectedCompact = OfflineCompactNoritoWriter()
+        expectedCompact.writeUInt32LE(0)
+        expectedCompact.writeField(compactPublicKey.data)
+        XCTAssertEqual(try address.compactNoritoAccountControllerPayload(), expectedCompact.data)
     }
 
     func testComplianceVectorsFixture() throws {

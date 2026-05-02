@@ -12,7 +12,7 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - canonical Torii request signing headers
 - a `LedgerClient` plus `TransactionBuilder` that can build, sign, and submit canonical asset/domain/asset-definition/NFT transfer transactions, asset mint/burn transactions, `SetAssetKeyValue`, `RemoveAssetKeyValue`, `SetDomainKeyValue`, `RemoveDomainKeyValue`, `SetAccountKeyValue`, `RemoveAccountKeyValue`, `SetAssetDefinitionKeyValue`, `RemoveAssetDefinitionKeyValue`, `SetNftKeyValue`, `RemoveNftKeyValue`, `SetTriggerKeyValue`, `RemoveTriggerKeyValue`, `MintTriggerRepetitions`, `BurnTriggerRepetitions`, and `ExecuteTrigger` transactions with deterministic hashes and pipeline-status polling
 - typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer account/domain/asset inventory pages and details, explorer QR snapshots, explorer asset-definition econometrics and holder snapshots, explorer block/transaction/instruction pages, details, latest snapshots, health, metrics, and instruction contract-view reads, typed contract metadata/code-bytes/instance/state reads, write-side contract deploy/instance-activate/call/multisig propose/approve helpers, read-only contract-view execution under `/v1/contracts/view`, typed verified-source job submit/status helpers, typed contract code-view reads under `/v1/contracts/code/{code_hash}/contract-view`, asset balances, transaction summaries, permissions, identifier policy listing, identifier resolution, reverse alias lookup, account and contract alias resolution, alias-index lookup, account onboarding, faucet puzzle and claim flows, multisig onboarding, UAID portfolio reads, and space-directory bindings and manifest inventory reads
-- typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed `/v1/vpn/sessions`, `/v1/sorafs/cid/{cid}`, `/v1/sorafs/denylist/catalog`, `/v1/sorafs/denylist/packs/{pack_id}`, and CID content reads under `/sorafs/cid/{cid}/...`
+- typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed VPN quote/session/receipt flows under `/v1/vpn/quotes`, `/v1/vpn/sessions`, and `/v1/vpn/receipts`, `/v1/sorafs/cid/{cid}`, `/v1/sorafs/denylist/catalog`, `/v1/sorafs/denylist/packs/{pack_id}`, and CID content reads under `/sorafs/cid/{cid}/...`
 - low-level `ToriiClient.SubmitSignedQueryAsync(...)`, `OpenEventSseAsync(...)`, and parsed `StreamEventsAsync(...)` helpers plus a managed `SignedQueryBuilder` for the full current singular-query set (`FindExecutorDataModel`, `FindParameters`, `FindAliasesByAccountId`, `FindProofRecordById`, `FindContractManifestByCodeHash`, `FindAbiVersion`, `FindAssetById`, `FindAssetDefinitionById`, `FindTwitterBindingByHash`, `FindDomainEndorsements`, `FindDomainEndorsementPolicy`, `FindDomainCommittee`, `FindDaPinIntentByTicket`, `FindDaPinIntentByManifest`, `FindDaPinIntentByAlias`, `FindDaPinIntentByLaneEpochSequence`, `FindSorafsProviderOwner`, `FindDataspaceNameOwnerById`), a managed `SignedIterableQueryBuilder` for the current fast_dsl iterable subset (`FindDomains`, `FindAccounts`, `FindAssets`, `FindAssetDefinitions`, `FindRepoAgreements`, `FindNfts`, `FindRwas`, `FindTransactions`, `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`, `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`, `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`, `FindProofRecords`, and cursor `Continue(...)`), and typed `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` plus typed explorer block/transaction/instruction SSE projections
 - a managed faucet PoW solver for `scrypt-leading-zero-bits-v1`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for an account id
 - `ToriiApiException` for non-success HTTP responses, preserving status code, request URI, and response body
@@ -21,9 +21,14 @@ This initial slice provides the foundation needed for a usable managed SDK:
 
 Broader iterable families beyond the current fast_dsl subset, richer typed event coverage beyond the current pipeline/proof/explorer SSE projections, broader contract admin/lifecycle helpers beyond deploy/activate/call/multisig plus verified-source job helpers, Connect, Nexus, and the remaining parity work are still planned.
 
-`CreateVpnSessionAsync(...)` and `DeleteVpnSessionAsync(...)` call signed Torii
+`CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`,
+`SubmitVpnReceiptAsync(...)`, and `DeleteVpnSessionAsync(...)` call signed Torii
 routes, so set `ToriiClientOptions.CanonicalRequestCredentials` before using
-those helpers.
+those helpers. Session creation requires the quote id, committed
+`OpenVpnLeaseEscrow` transaction hash, and the same metering public key that was
+bound into the quote. Session deletion and operator receipt submission return
+canonical receipt DTOs with earned/refund XOR fields and any `SettleVpnLease`
+instruction skeleton Torii produced.
 
 For SoraFS content, use `OpenSoraFsCidContentAsync(...)` when you want the raw
 HTTP response/stream, or `GetSoraFsCidContentAsync(...)` when buffering the
@@ -63,7 +68,7 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_CONTRACT_NAMESPACE` to override the default contract-instance namespace (`universal`)
 - `IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH` to override the code hash used for `/v1/contracts/code/{code_hash}`, `/v1/contracts/code-bytes/{code_hash}`, and `/v1/contracts/code/{code_hash}/contract-view`
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
-- `IROHA_CSHARP_CANONICAL_ACCOUNT_ID` plus `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX` to also create and delete a signed VPN session
+- `IROHA_CSHARP_CANONICAL_ACCOUNT_ID` plus `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX` to also create a signed VPN quote and verify that Torii returns an `OpenVpnLeaseEscrow` instruction skeleton
 
 ## Sample
 

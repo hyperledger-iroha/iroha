@@ -123,15 +123,67 @@ fn make_policy_snapshot(
 fn proof_blob_for(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
-    proof_bytes: Vec<u8>,
+    proof_seed: Vec<u8>,
     expiry_slot: u64,
 ) -> axt::ProofBlob {
+    let source_tx_commitment = test_digest(b"axt-test:source-tx", &[&proof_seed]);
+    let claim_digest = test_digest(b"axt-test:claim", &[&proof_seed]);
+    let witness_commitment = test_digest(b"axt-test:witness", &[&proof_seed]);
+    let policy_commitment = test_digest(b"axt-test:policy", &[&manifest_root]);
+    let binding = iroha_data_model::nexus::AxtFastpqBinding {
+        parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_string(),
+        source_dsid: dsid.as_u64(),
+        source_dataspace: "test-dataspace".to_string(),
+        source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+        source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+        claim_type: "authorization".to_string(),
+        claim_digest: hex::encode(claim_digest.as_ref()),
+        witness_commitment: hex::encode(witness_commitment.as_ref()),
+        policy_commitment: hex::encode(policy_commitment.as_ref()),
+        verified_effect_type: "test_effect".to_string(),
+        corridor: "test-corridor".to_string(),
+        verifier_id: "fastpq".to_string(),
+        verifier_version: "v1".to_string(),
+        target_dsids: vec![dsid.as_u64()],
+        effect_binding: None,
+    };
+    let mut dsid_bytes = [0_u8; 16];
+    dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+    let mut batch = fastpq_prover::TransitionBatch::new(
+        fastpq_prover::AXT_DEFAULT_PARAMETER,
+        fastpq_prover::PublicInputs {
+            dsid: dsid_bytes,
+            slot: expiry_slot,
+            old_root: test_digest(b"axt-test:old-root", &[&proof_seed]).into(),
+            new_root: manifest_root,
+            perm_root: test_digest(b"axt-test:perm-root", &[&proof_seed]).into(),
+            tx_set_hash: test_digest(b"axt-test:tx-set", &[&proof_seed]).into(),
+        },
+    );
+    batch.push(fastpq_prover::StateTransition::new(
+        b"axt/test/proof".to_vec(),
+        proof_seed,
+        manifest_root.to_vec(),
+        fastpq_prover::OperationKind::MetaSet,
+    ));
+    batch.sort();
+    batch.metadata.insert(
+        "entry_hash".to_string(),
+        source_tx_commitment.as_ref().to_vec(),
+    );
+    fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT test batch");
+    let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+        .expect("FASTPQ prover")
+        .prove(&batch)
+        .expect("FASTPQ proof");
+    let fastpq_payload =
+        fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
     let envelope = axt::AxtProofEnvelope {
         dsid,
         manifest_root,
         da_commitment: None,
-        proof: proof_bytes,
-        fastpq_binding: None,
+        proof: fastpq_payload,
+        fastpq_binding: Some(binding),
         committed_amount: None,
         amount_commitment: None,
     };
@@ -139,6 +191,28 @@ fn proof_blob_for(
         payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
         expiry_slot: Some(expiry_slot),
     }
+}
+
+fn model_proof_blob_for(
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+    proof_seed: &[u8],
+    expiry_slot: u64,
+) -> iroha_data_model::nexus::ProofBlob {
+    let proof = proof_blob_for(dsid, manifest_root, proof_seed.to_vec(), expiry_slot);
+    iroha_data_model::nexus::ProofBlob {
+        payload: proof.payload,
+        expiry_slot: proof.expiry_slot,
+    }
+}
+
+fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(domain);
+    for part in parts {
+        payload.extend_from_slice(part);
+    }
+    iroha_crypto::Hash::new(payload)
 }
 
 fn host_with_policy(
@@ -650,9 +724,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             AxtHandleFragment as ModelAxtHandleFragment, AxtHandleReplayKey,
             AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
             GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
-            HandleSubject as ModelHandleSubject, ProofBlob as ModelProofBlob,
-            RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
-            TouchManifest as ModelTouchManifest,
+            HandleSubject as ModelHandleSubject, RemoteSpendIntent as ModelRemoteSpendIntent,
+            SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
         },
         peer::PeerId,
         transaction::TransactionEntrypoint,
@@ -742,10 +815,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         }],
         proofs: vec![ModelAxtProofFragment {
             dsid,
-            proof: ModelProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(10_000),
-            },
+            proof: model_proof_blob_for(dsid, manifest_root, b"kura-replay", 10_000),
         }],
         handles: vec![ModelAxtHandleFragment {
             handle: ModelAssetHandle {
@@ -1552,10 +1622,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     };
     let proof_fragment = ModelAxtProofFragment {
         dsid,
-        proof: iroha_data_model::nexus::ProofBlob {
-            payload: manifest_root.to_vec(),
-            expiry_slot: Some(50),
-        },
+        proof: model_proof_blob_for(dsid, manifest_root, b"policy-reset", 50),
     };
     let handle_fragment = ModelAxtHandleFragment {
         handle: ModelAssetHandle {
@@ -1685,8 +1752,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
         AxtTouchSpec as ModelAxtTouchSpec, GroupBinding as ModelGroupBinding,
         HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject,
-        ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
-        SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
+        RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
+        TouchManifest as ModelTouchManifest,
     };
 
     let authority = fixture_authority();
@@ -1748,10 +1815,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     };
     let proof_fragment = ModelAxtProofFragment {
         dsid,
-        proof: ModelProofBlob {
-            payload: manifest_root.to_vec(),
-            expiry_slot: Some(200),
-        },
+        proof: model_proof_blob_for(dsid, manifest_root, b"apply-without-execution", 200),
     };
     let handle_fragment = ModelAxtHandleFragment {
         handle: ModelAssetHandle {
@@ -3177,13 +3241,22 @@ fn core_host_binds_proof_to_manifest_root() {
     vm.set_register(11, bad_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::PermissionDenied)
+        Err(VMError::NoritoInvalid)
     );
 
-    let ok_proof = axt::ProofBlob {
+    let raw_root_proof = axt::ProofBlob {
         payload: manifest_root.to_vec(),
         expiry_slot: Some(10),
     };
+    let raw_root_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &raw_root_proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, raw_root_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+
+    let ok_proof = proof_blob_for(dsid, manifest_root, vec![0x03, 0x04], 10);
     let ok_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ok_proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, ok_ptr);
@@ -3618,8 +3691,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         AxtHandleFragment as ModelAxtHandleFragment, AxtProofFragment as ModelAxtProofFragment,
         AxtTouchFragment as ModelAxtTouchFragment, GroupBinding as ModelGroupBinding,
         HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject, LaneConfig,
-        ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
-        SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
+        RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
+        TouchManifest as ModelTouchManifest,
     };
 
     let authority = fixture_authority();
@@ -3704,10 +3777,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         }],
         proofs: vec![ModelAxtProofFragment {
             dsid,
-            proof: ModelProofBlob {
-                payload: manifest_root.to_vec(),
-                expiry_slot: Some(10),
-            },
+            proof: model_proof_blob_for(dsid, manifest_root, b"sub-nonce-floor", 10),
         }],
         handles: vec![ModelAxtHandleFragment {
             handle: ModelAssetHandle {

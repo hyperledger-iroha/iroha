@@ -11,7 +11,7 @@ use crate::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
         },
-        verifying_keys, zk,
+        verifying_keys, vpn, zk,
     },
     prelude::*,
 };
@@ -123,6 +123,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<escrow::CancelAnonymousAssetEscrow>,
     InstructionRegistry::register::<escrow::OpenAnonymousEscrowDispute>,
     InstructionRegistry::register::<escrow::ResolveAnonymousEscrowDispute>,
+    InstructionRegistry::register::<vpn::OpenVpnLeaseEscrow>,
+    InstructionRegistry::register::<vpn::SettleVpnLease>,
+    InstructionRegistry::register::<vpn::RefundExpiredVpnLease>,
     InstructionRegistry::register::<soracloud::DeploySoracloudService>,
     InstructionRegistry::register::<soracloud::UpgradeSoracloudService>,
     InstructionRegistry::register::<soracloud::RollbackSoracloudService>,

@@ -18,6 +18,8 @@ mod backend;
 mod batch;
 mod bn254;
 mod bn254_poseidon;
+#[cfg(feature = "fastpq-gpu")]
+mod bn254_poseidon_params;
 mod cyclotomic;
 mod digest;
 mod error;
@@ -44,8 +46,10 @@ mod gpu;
 mod fft;
 
 pub use axt_binding::{
-    AXT_FASTPQ_BINDING_METADATA_KEY, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER,
-    batch_manifest_sha256, build_batch_from_binding, canonicalize_binding,
+    AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY, AxtFastpqProofPayload,
+    AxtVerifiedProof, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, batch_manifest_sha256,
+    bind_axt_batch, canonicalize_binding, encode_axt_fastpq_payload, transition_batch_from_model,
+    transition_batch_to_model, verify_axt_proof_envelope,
 };
 pub use backend::{
     Backend, BackendConfig, ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,

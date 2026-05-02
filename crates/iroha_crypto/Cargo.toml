@@ -166,3 +166,7 @@ required-features = ["sm"]
 [[bench]]
 name = "soranet_handshake"
 harness = false
+
+[[bench]]
+name = "ed25519_hotpaths"
+harness = false

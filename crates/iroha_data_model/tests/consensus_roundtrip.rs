@@ -376,6 +376,7 @@ fn rng_vrf_commit(rng: &mut DeterministicRng) -> VrfCommit {
         epoch: rng.next_u64(),
         commitment: rng.array32(),
         signer: rng.next_u32(),
+        bls_sig: rng.bytes(96),
     }
 }
 
@@ -384,6 +385,7 @@ fn rng_vrf_reveal(rng: &mut DeterministicRng) -> VrfReveal {
         epoch: rng.next_u64(),
         reveal: rng.array32(),
         signer: rng.next_u32(),
+        bls_sig: rng.bytes(96),
     }
 }
 
@@ -2033,11 +2035,13 @@ fn consensus_messages_norito_roundtrip() {
         epoch: 3,
         commitment: [0x33; 32],
         signer: 5,
+        bls_sig: vec![0x35; 96],
     };
     let vrf_reveal = VrfReveal {
         epoch: 3,
         reveal: [0x44; 32],
         signer: 5,
+        bls_sig: vec![0x45; 96],
     };
     let peer_ids = vec![
         PeerId::from(KeyPair::random().public_key().clone()),

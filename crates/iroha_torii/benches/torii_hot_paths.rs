@@ -306,6 +306,15 @@ fn bench_rate_limiter(c: &mut Criterion) {
             std::hint::black_box(allowed);
         });
     });
+
+    let same_key_batch_limiter = BenchRateLimiter::new(Some(1_000_000), Some(1_000_000));
+    c.bench_function("torii_rate_limiter_same_key_batch_32", |b| {
+        b.iter(|| {
+            let allowed = runtime
+                .block_on(same_key_batch_limiter.allow_repeated("torii-hot-path-bench-batch", 32));
+            std::hint::black_box(allowed);
+        });
+    });
 }
 
 fn smoke_profile_output() {

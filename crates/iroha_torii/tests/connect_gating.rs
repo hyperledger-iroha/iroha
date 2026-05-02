@@ -241,6 +241,7 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
+            cors: A::ToriiCors::default(),
             ram_lfe: None,
             tx_history: None,
             // minimal defaults

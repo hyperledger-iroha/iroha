@@ -546,6 +546,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
+            cors: A::ToriiCors::default(),
             ram_lfe: None,
             faucet: None,
             offline_issuer: None,

@@ -8,3 +8,4 @@ OpenAPI signing
   1. Update `allowed_signers.json` with the new public key.
   2. Regenerate/sign the spec: `NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi --output docs/portal/static/openapi/torii.json --sign <ed25519-key-hex-path>`.
   3. Re-run `ci/check_openapi_spec.sh` (or `cargo xtask openapi-verify` manually) to confirm the manifest matches the allowlist.
+- If the signing key is held outside the checkout, generate the spec first, have the operator sign the exact bytes of `docs/portal/static/openapi/torii.json`, then refresh the manifest with `NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi --output docs/portal/static/openapi/torii.json --signature-envelope <signature-envelope-json>`. The detached envelope must be JSON shaped as `{"algorithm":"ed25519","public_key_hex":"...","signature_hex":"..."}` and is verified before `manifest.json` is written.

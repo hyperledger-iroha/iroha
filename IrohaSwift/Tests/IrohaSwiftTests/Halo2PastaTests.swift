@@ -1316,10 +1316,10 @@ final class Halo2PastaTests: XCTestCase {
 
         let auditValues = try OfflineNoteV2InstanceBuilder.auditInstanceValues(for: audit)
         XCTAssertEqual(auditValues.publicValues, [
-            10_903_869_479_213_959_155,
-            964_545_862_331_868_624,
-            62_073_266_647_774_258,
-            10_177_727_713_799_530_712,
+            8_321_062_670_969_697_187,
+            14_032_788_566_816_035_760,
+            12_740_889_162_961_471_080,
+            17_385_215_488_047_089_075,
             2,
             1,
             2,
@@ -1327,24 +1327,24 @@ final class Halo2PastaTests: XCTestCase {
             52,
             7_774_543_532_909_120_318,
             13_773_009_191_653_973_469,
-            9_169_562_048_745_222_370,
+            14_301_997_445_998_398_819,
             16_854_595_775_279_027_198,
-            13_453_331_281_027_170_942,
-            323_649_634_537_089_673,
+            705_679_780_769_464_635,
+            11_729_321_626_328_609_928,
             0,
         ])
         XCTAssertEqual(auditValues.inputAmounts, [52, 0, 0, 0])
         XCTAssertEqual(auditValues.outputAmounts, [5, 47])
         XCTAssertEqual(auditValues.publicInstanceColumns()[0], [OfflineNoteV2InstanceValues.instanceScalarBytes(
-            10_903_869_479_213_959_155
+            8_321_062_670_969_697_187
         )])
 
         let redeemValues = try OfflineNoteV2InstanceBuilder.redeemInstanceValues(for: redeem)
         XCTAssertEqual(redeemValues.publicValues, [
-            10_581_903_064_317_986_161,
-            14_339_039_858_142_495_484,
-            15_374_235_055_253_948_207,
-            4_155_438_619_149_796_958,
+            13_893_682_335_800_712_956,
+            5_640_719_350_758_644_622,
+            10_982_672_108_852_667_244,
+            3_166_852_510_604_731_681,
             1,
             1,
             1,
@@ -1352,9 +1352,9 @@ final class Halo2PastaTests: XCTestCase {
             5,
             12_627_440_414_421_573_188,
             0,
-            13_363_141_946_654_618_346,
+            1_820_988_789_059_089_119,
             9_816_966_047_697_816_686,
-            298_900_535_230_543_113,
+            15_760_987_546_034_487_607,
             0,
             0,
         ])

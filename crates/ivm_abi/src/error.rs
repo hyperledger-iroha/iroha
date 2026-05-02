@@ -41,6 +41,8 @@ pub enum VmTrapKind {
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
+    InvalidVectorLength,
+    MissingHalt,
     PermissionDenied,
     PrivacyViolation,
     RegisterOutOfBounds,
@@ -125,6 +127,11 @@ pub enum VMError {
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
+    InvalidVectorLength {
+        vector_length: usize,
+    },
+    /// Program reached the end of the executable region without an explicit terminating syscall or HALT.
+    MissingHalt,
     VectorExtensionDisabled,
     ZkExtensionDisabled,
     NullifierAlreadyUsed,
@@ -179,6 +186,10 @@ impl fmt::Display for VMError {
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),
+            VMError::InvalidVectorLength { vector_length } => {
+                write!(f, "invalid vector length {vector_length}")
+            }
+            VMError::MissingHalt => write!(f, "program terminated without HALT, EXIT, or ABORT"),
             VMError::VectorExtensionDisabled => write!(f, "vector extension not enabled"),
             VMError::ZkExtensionDisabled => write!(f, "zk extension not enabled"),
             VMError::NullifierAlreadyUsed => write!(f, "nullifier already used"),

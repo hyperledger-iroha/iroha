@@ -70,22 +70,24 @@ pub struct TransferDeltaTranscript {
     pub to_balance_before: Numeric,
     /// Receiver balance after the transfer.
     pub to_balance_after: Numeric,
-    /// Placeholder for the sender's Merkle proof.
-    ///
-    /// Populated with the sender's sparse Merkle proof once the witness plumbing lands.
-    pub from_merkle_proof: Option<Vec<u8>>,
-    /// Placeholder for the receiver's Merkle proof.
-    ///
-    /// Populated with the receiver's sparse Merkle proof once the witness plumbing lands.
-    pub to_merkle_proof: Option<Vec<u8>>,
+    /// Sender sparse-Merkle update witness from the batch root before the debit
+    /// to the intermediate root after the debit.
+    pub from_smt_witness: TransferSmtWitness,
+    /// Receiver sparse-Merkle update witness from the intermediate root after
+    /// the debit to the batch root after the credit.
+    pub to_smt_witness: TransferSmtWitness,
 }
 
 impl TransferDeltaTranscript {
-    /// Attach sparse Merkle proofs for sender and receiver accounts.
+    /// Attach sparse Merkle update witnesses for sender and receiver accounts.
     #[must_use]
-    pub fn with_merkle_proofs(mut self, from_proof: Vec<u8>, to_proof: Vec<u8>) -> Self {
-        self.from_merkle_proof = Some(from_proof);
-        self.to_merkle_proof = Some(to_proof);
+    pub fn with_smt_witnesses(
+        mut self,
+        from_witness: TransferSmtWitness,
+        to_witness: TransferSmtWitness,
+    ) -> Self {
+        self.from_smt_witness = from_witness;
+        self.to_smt_witness = to_witness;
         self
     }
 
@@ -102,6 +104,50 @@ impl TransferDeltaTranscript {
         .into_iter()
         .max()
         .unwrap_or(0)
+    }
+}
+
+/// Sparse-Merkle update witness for one transfer participant.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+    IntoSchema,
+)]
+pub struct TransferSmtWitness {
+    /// Root before applying this participant update.
+    pub root_before: [u8; 32],
+    /// Root after applying this participant update.
+    pub root_after: [u8; 32],
+    /// Bitset describing the direction taken at each level (LSB-first per byte).
+    pub path_bits: Vec<u8>,
+    /// Sibling node hashes encountered along the path.
+    pub siblings: Vec<[u8; 32]>,
+}
+
+impl TransferSmtWitness {
+    /// Construct a typed sparse-Merkle update witness.
+    #[must_use]
+    pub fn new(
+        root_before: [u8; 32],
+        root_after: [u8; 32],
+        path_bits: Vec<u8>,
+        siblings: Vec<[u8; 32]>,
+    ) -> Self {
+        Self {
+            root_before,
+            root_after,
+            path_bits,
+            siblings,
+        }
     }
 }
 
@@ -292,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn transfer_delta_transcript_attaches_merkle_proofs() {
+    fn transfer_delta_transcript_attaches_smt_witnesses() {
         let delta = TransferDeltaTranscript {
             from_account: account("alice"),
             to_account: account("bob"),
@@ -302,12 +348,14 @@ mod tests {
             from_balance_after: Numeric::new(90, 0),
             to_balance_before: Numeric::new(50, 0),
             to_balance_after: Numeric::new(60, 0),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
-        let updated = delta.with_merkle_proofs(vec![1, 2, 3], vec![4, 5, 6]);
-        assert_eq!(updated.from_merkle_proof.as_deref(), Some(&[1, 2, 3][..]));
-        assert_eq!(updated.to_merkle_proof.as_deref(), Some(&[4, 5, 6][..]));
+        let from_witness = TransferSmtWitness::new([1; 32], [2; 32], vec![0xAA], vec![[3; 32]]);
+        let to_witness = TransferSmtWitness::new([2; 32], [4; 32], vec![0x55], vec![[5; 32]]);
+        let updated = delta.with_smt_witnesses(from_witness.clone(), to_witness.clone());
+        assert_eq!(updated.from_smt_witness, from_witness);
+        assert_eq!(updated.to_smt_witness, to_witness);
     }
 
     #[test]
@@ -321,8 +369,8 @@ mod tests {
             from_balance_after: Numeric::new(5, 1),
             to_balance_before: Numeric::new(0, 0),
             to_balance_after: Numeric::new(5, 1),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
 
         assert_eq!(delta.normalized_scale(), 1);
@@ -339,8 +387,8 @@ mod tests {
             from_balance_after: Numeric::new(119_999_989_000_000_000_000_000_i128, 18),
             to_balance_before: Numeric::zero(),
             to_balance_after: Numeric::new(11_000_000_000_000_000_i128, 18),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
+            from_smt_witness: TransferSmtWitness::default(),
+            to_smt_witness: TransferSmtWitness::default(),
         };
 
         assert_eq!(delta.normalized_scale(), 3);

@@ -109,7 +109,7 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 |----:|----------|-------------|
 | 0x60 | `SCALL` | Invoke host syscall |
 | 0x61 | `GETGAS` | Read remaining gas |
-| 0x62 | `SYSTEM` | System helpers (host-defined) |
+| 0x62 | `SYSTEM` | Extended syscall (`SCALLX`) carrying a 24-bit host syscall id |
 
 ## Cryptography and SIMD
 
@@ -121,7 +121,7 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x73 | `VXOR` | Vector XOR |
 | 0x74 | `VOR` | Vector OR |
 | 0x75 | `VROT32` | Vector rotate left 32 |
-| 0x76 | `SETVL` | Set logical vector length (I-type imm; 0 → 1; clamped to host max) |
+| 0x76 | `SETVL` | Set logical vector length (I-type imm; 0 → 1; 1..=64 accepted) |
 | 0x77 | `PARBEGIN` | Begin parallel region hint *(reserved)* |
 | 0x78 | `PAREND` | End parallel region hint *(reserved)* |
 | 0x80 | `SHA256BLOCK` | SHA-256 compression round |
@@ -189,8 +189,9 @@ Gas policy notes
 
 ## Selected Syscall Numbers
 
-The `SCALL` instruction uses an 8‑bit identifier to call host services.  A few
-new helpers are available:
+The `SCALL` instruction uses an 8-bit identifier to call host services. The
+`SYSTEM` opcode is the extended `SCALLX` encoding for 24-bit syscall ids. A few
+helpers are available:
 
 | Hex | Constant | Description |
 |----:|----------|-------------|
@@ -198,6 +199,8 @@ new helpers are available:
 | 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes |
 | 0xF6 | `SYSCALL_VERIFY_PROOF` | Reserved (execution-proof verification integration; currently not implemented by default hosts) |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |
+| 0x010000 | `SYSCALL_QUERY_EXECUTE_NORITO` | Execute a Norito-encoded read-only query request |
+| 0x010020..0x010025 | `SYSCALL_SYSVAR_*` | Read deterministic chain/block/authority/contract context |
 
 ### NFT syscall naming alignment
 

@@ -114,12 +114,21 @@ pub fn session_receipt(
 ) -> Result<VpnSessionReceiptV1, VpnConfigError> {
     Ok(VpnSessionReceiptV1 {
         session_id,
+        quote_id: [0u8; 32],
+        payment_tx_hash: [0u8; 32],
+        account_hash: [0u8; 32],
+        relay_id: [0u8; 32],
         ingress_bytes,
         egress_bytes,
         cover_bytes,
         uptime_secs,
+        started_at_ms: 0,
+        ended_at_ms: 0,
         exit_class: exit_class_from_label(&cfg.exit_class)?,
         meter_hash,
+        earned_fee_nanos: 0,
+        highest_voucher_sequence: 0,
+        client_voucher_hash: [0u8; 32],
     })
 }
 

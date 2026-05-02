@@ -35,8 +35,6 @@ use std::sync::MutexGuard;
     feature = "zk-halo2-ipa"
 ))]
 use std::sync::OnceLock;
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::BTreeSet,
     io,
@@ -5123,15 +5121,6 @@ pub fn preverify_with_budget(
 /// Minimal verifier selector. Dispatches to concrete verifiers behind feature flags.
 ///
 /// Backends without a real verifier return `false` (unsupported).
-#[cfg(test)]
-static DEBUG_SLEEP_MS: AtomicU64 = AtomicU64::new(0);
-
-/// Configure the amount of time the `debug/sleep` backend should spend inside `verify_backend`.
-#[cfg(test)]
-pub fn set_debug_verify_sleep_ms(ms: u64) {
-    DEBUG_SLEEP_MS.store(ms, Ordering::Relaxed);
-}
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn halo2_ipa_backend_from_circuit_id(circuit_id: &str) -> Option<String> {
     let trimmed = circuit_id.trim();
@@ -5356,23 +5345,6 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
 
 /// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
 pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
-    // Explicit debug backends for deterministic test results.
-    if backend == "debug/ok" {
-        return true;
-    }
-    if backend == "debug/reject" {
-        return false;
-    }
-
-    #[cfg(test)]
-    if backend == "debug/sleep" {
-        let ms = DEBUG_SLEEP_MS.load(Ordering::Relaxed);
-        if ms > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-        }
-        return true;
-    }
-
     // Prefer built-in registry when available
     if let Some(ok) = verify_with_registry(backend, proof, vk) {
         return ok;
@@ -5439,11 +5411,12 @@ mod debug_backend_tests {
     use super::*;
 
     #[test]
-    fn debug_ok_backend_verifies() {
-        let backend = "debug/ok";
-        let proof = ProofBox::new(backend.into(), vec![0x01]);
-        let vk = VerifyingKeyBox::new(backend.into(), vec![0x02]);
-        assert!(verify_backend(backend, &proof, Some(&vk)));
+    fn debug_backends_are_unsupported() {
+        for backend in ["debug/ok", "debug/reject", "debug/sleep"] {
+            let proof = ProofBox::new(backend.into(), vec![0x01]);
+            let vk = VerifyingKeyBox::new(backend.into(), vec![0x02]);
+            assert!(!verify_backend(backend, &proof, Some(&vk)));
+        }
     }
 }
 

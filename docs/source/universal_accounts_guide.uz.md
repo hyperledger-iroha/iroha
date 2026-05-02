@@ -111,7 +111,7 @@ marshrut domen segmentini olib yuradi.
 Joriy Torii marshrutlari:| Marshrut | Maqsad |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | Faol va nofaol RAM-LFE dastur siyosatlari hamda ularning ochiq ijro metamaʼlumotlari, jumladan, ixtiyoriy BFV `input_encryption` parametrlari va dasturlashtirilgan orqa qism `ram_fhe_profile` roʻyxati. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` yoki `{ encrypted_input }` dan birini qabul qiladi va tanlangan dastur uchun fuqaroligi bo'lmagan `RamLfeExecutionReceipt` va `{ output_hex, output_hash, receipt_hash }`ni qaytaradi. Joriy Torii ish vaqti dasturlashtirilgan BFV backend uchun kvitansiyalarni chiqaradi. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` yoki `{ encrypted_input }` dan birini qabul qiladi va tanlangan dastur uchun fuqaroligi bo'lmagan `RamLfeExecutionReceipt` va `{ output_hash, receipt_hash }`ni qaytaradi. Torii RAM-LFE ochiq matn chiqishini qaytarmaydi. Joriy Torii ish vaqti dasturlashtirilgan BFV backend uchun kvitansiyalarni chiqaradi. |
 | `POST /v1/ram-lfe/receipts/verify` | `RamLfeExecutionReceipt` ni eʼlon qilingan zanjirli dastur siyosatiga nisbatan fuqaroligisiz tasdiqlaydi va ixtiyoriy ravishda qoʻngʻiroq qiluvchi tomonidan taqdim etilgan `output_hex` `output_hash` kvitansiyasiga mos kelishini tekshiradi. |
 | `GET /v1/identifier-policies` | Faol va nofaol yashirin funksiyali siyosat nom maydonlarini hamda ularning umumiy metamaʼlumotlarini, jumladan, ixtiyoriy BFV `input_encryption` parametrlarini, mijoz tomonidan shifrlangan kiritish uchun zarur `normalization` rejimini va dasturlashtirilgan BFV siyosatlari uchun `ram_fhe_profile` roʻyxati. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` yoki `{ encrypted_input }` dan aynan birini qabul qiladi. Oddiy matn `input` server tomonida normallashtirilgan; BFV `encrypted_input` allaqachon nashr etilgan siyosat rejimiga muvofiq normallashtirilgan bo'lishi kerak. Keyin oxirgi nuqta `opaque:` tutqichini oladi va `ClaimIdentifier` zanjirda yuborishi mumkin bo'lgan imzolangan kvitansiyani qaytaradi, shu jumladan xom `signature_payload_hex` va tahlil qilingan `signature_payload`. || `POST /v1/identifiers/resolve` | `{ input }` yoki `{ encrypted_input }` dan birini qabul qiladi. Oddiy matn `input` server tomonida normallashtirilgan; BFV `encrypted_input` allaqachon nashr etilgan siyosat rejimiga muvofiq normallashtirilgan bo'lishi kerak. Faol da'vo mavjud bo'lganda oxirgi nuqta identifikatorni `{ opaque_id, receipt_hash, uaid, account_id, signature }` ga o'chiradi va kanonik imzolangan foydali yukni `{ signature_payload_hex, signature_payload }` sifatida qaytaradi. |
@@ -227,8 +227,9 @@ UAID olishning uchta qo'llab-quvvatlanadigan usuli mavjud:
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```Har doim harfni kichik harflarda saqlang va xeshlashdan oldin bo'sh joyni normalizatsiya qiling.
 `iroha app space-directory manifest scaffold` va Android kabi CLI yordamchilari
 `UaidLiteral` tahlilchisi boshqaruvni ko'rib chiqish uchun bir xil kesish qoidalarini qo'llaydi

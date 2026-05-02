@@ -40,7 +40,7 @@ pub trait VmEngine {
     /// and should enforce any execution policy required by the deployment. The
     /// generic parameter ensures strongly typed hosts can be attached without
     /// forcing callers to allocate trait objects themselves.
-    fn set_host<H: IVMHost + Send + 'static>(&mut self, host: H);
+    fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H);
 
     /// Load a compiled program (`.to` bytecode) into the VM. Implementations
     /// must preserve the existing INPUT buffer so that hosts can preload TLVs
@@ -57,7 +57,7 @@ pub trait VmEngine {
     /// Convenience helper that sets a host, loads a program and immediately
     /// executes it. Useful for embedding scenarios where the host lifecycle is
     /// scoped to a single call.
-    fn execute_with_host<H: IVMHost + Send + 'static>(
+    fn execute_with_host<H: IVMHost + Send + Sync + 'static>(
         &mut self,
         host: H,
         program: &[u8],
@@ -69,7 +69,7 @@ pub trait VmEngine {
 }
 
 impl VmEngine for IVM {
-    fn set_host<H: IVMHost + Send + 'static>(&mut self, host: H) {
+    fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
         IVM::set_host(self, host);
     }
 
@@ -118,10 +118,14 @@ impl<H> SyscallDispatcher<H> {
 
 impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        if !syscalls::is_syscall_allowed(vm.syscall_policy(), number) {
+        if !self.allows_syscall(vm.syscall_policy(), number) {
             return Err(VMError::UnknownSyscall(number));
         }
         self.inner.syscall(number, vm)
+    }
+
+    fn allows_syscall(&mut self, policy: crate::SyscallPolicy, number: u32) -> bool {
+        self.inner.allows_syscall(policy, number)
     }
 
     fn as_any(&mut self) -> &mut dyn Any
@@ -158,11 +162,11 @@ impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
 
 /// Shared host wrapper used when cloning VMs across worker threads.
 pub(crate) struct SharedHost {
-    inner: Arc<Mutex<Option<Box<dyn IVMHost + Send>>>>,
+    inner: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>,
 }
 
 impl SharedHost {
-    fn new(inner: Arc<Mutex<Option<Box<dyn IVMHost + Send>>>>) -> Self {
+    fn new(inner: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>) -> Self {
         Self { inner }
     }
 }
@@ -174,6 +178,14 @@ impl IVMHost for SharedHost {
             return Err(VMError::HostUnavailable);
         };
         host.syscall(number, vm)
+    }
+
+    fn allows_syscall(&mut self, policy: crate::SyscallPolicy, number: u32) -> bool {
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        guard
+            .as_mut()
+            .map(|h| h.allows_syscall(policy, number))
+            .unwrap_or_else(|| syscalls::is_syscall_allowed(policy, number))
     }
 
     fn as_any(&mut self) -> &mut dyn Any
@@ -228,7 +240,7 @@ impl IVMHost for SharedHost {
 
 impl SyscallDispatcher<SharedHost> {
     /// Clone-safe dispatcher that forwards calls through a shared host.
-    pub fn shared(host: Arc<Mutex<Option<Box<dyn IVMHost + Send>>>>) -> Self {
+    pub fn shared(host: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>) -> Self {
         Self::new(SharedHost::new(host))
     }
 }

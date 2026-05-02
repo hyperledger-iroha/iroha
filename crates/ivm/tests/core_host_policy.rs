@@ -110,18 +110,47 @@ fn make_policy_snapshot(
     }
 }
 
+fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(domain);
+    for part in parts {
+        payload.extend_from_slice(part);
+    }
+    iroha_crypto::Hash::new(payload)
+}
+
 fn proof_blob_for(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
     proof_bytes: Vec<u8>,
     expiry_slot: u64,
 ) -> ProofBlob {
+    let source_tx_commitment = test_digest(b"ivm-core-host-test:source-tx", &[&proof_bytes]);
+    let claim_digest = test_digest(b"ivm-core-host-test:claim", &[&proof_bytes]);
+    let witness_commitment = test_digest(b"ivm-core-host-test:witness", &[&proof_bytes]);
+    let policy_commitment = test_digest(b"ivm-core-host-test:policy", &[&manifest_root]);
     let envelope = AxtProofEnvelope {
         dsid,
         manifest_root,
         da_commitment: None,
         proof: proof_bytes,
-        fastpq_binding: None,
+        fastpq_binding: Some(model::AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_string(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: "ivm-core-host-test-dataspace".to_string(),
+            source_receipt_id: format!("receipt-{}", hex::encode(source_tx_commitment.as_ref())),
+            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+            claim_type: "authorization".to_string(),
+            claim_digest: hex::encode(claim_digest.as_ref()),
+            witness_commitment: hex::encode(witness_commitment.as_ref()),
+            policy_commitment: hex::encode(policy_commitment.as_ref()),
+            verified_effect_type: "test_effect".to_string(),
+            corridor: "ivm-core-host-test-corridor".to_string(),
+            verifier_id: "fastpq".to_string(),
+            verifier_version: "v1".to_string(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }),
         committed_amount: None,
         amount_commitment: None,
     };

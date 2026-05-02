@@ -111,7 +111,7 @@ UAID-ები ახლა არის მეორე იდენტურ�
 მიმდინარე Torii მარშრუტები:| მარშრუტი | დანიშნულება |
 |-------|---------|
 | `GET /v1/ram-lfe/program-policies` | ჩამოთვლილია აქტიური და არააქტიური RAM-LFE პროგრამის პოლიტიკა, პლუს მათი საჯარო აღსრულების მეტამონაცემები, მათ შორის არჩევითი BFV `input_encryption` პარამეტრები და დაპროგრამებული სარეზერვო `ram_fhe_profile`. |
-| `POST /v1/ram-lfe/programs/{program_id}/execute` | იღებს ზუსტად ერთს `{ input_hex }`-დან ან `{ encrypted_input }`-დან და აბრუნებს მოქალაქეობის არმქონე `RamLfeExecutionReceipt` პლუს `{ output_hex, output_hash, receipt_hash }` არჩეული პროგრამისთვის. მიმდინარე Torii გაშვების დრო გასცემს ქვითრებს დაპროგრამებული BFV backend-ისთვის. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | იღებს ზუსტად ერთს `{ input_hex }`-დან ან `{ encrypted_input }`-დან და აბრუნებს მოქალაქეობის არმქონე `RamLfeExecutionReceipt` პლუს `{ output_hash, receipt_hash }` არჩეული პროგრამისთვის. Torii არ აბრუნებს RAM-LFE-ის ღია ტექსტურ გამომავალს. მიმდინარე Torii გაშვების დრო გასცემს ქვითრებს დაპროგრამებული BFV backend-ისთვის. |
 | `POST /v1/ram-lfe/receipts/verify` | მოქალაქეობის გარეშე ამოწმებს `RamLfeExecutionReceipt` გამოქვეყნებულ ჯაჭვზე პროგრამის პოლიტიკას და სურვილისამებრ ამოწმებს, რომ აბონენტის მიერ მიწოდებული `output_hex` ემთხვევა `output_hash` ქვითარს. |
 | `GET /v1/identifier-policies` | ჩამოთვლილია აქტიური და არააქტიური ფარული ფუნქციების პოლიტიკის სახელთა სივრცეები პლუს მათი საჯარო მეტამონაცემები, მათ შორის არჩევითი BFV `input_encryption` პარამეტრები, საჭირო `normalization` რეჟიმი დაშიფრული კლიენტის მხრიდან და `ram_fhe_profile` დაპროგრამებული BFV პოლიტიკისთვის. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | იღებს ზუსტად ერთს `{ input }` ან `{ encrypted_input }`-დან. Plaintext `input` არის ნორმალიზებული სერვერის მხრიდან; BFV `encrypted_input` უკვე უნდა იყოს ნორმალიზებული გამოქვეყნებული პოლიტიკის რეჟიმის მიხედვით. შემდეგ საბოლოო წერტილი გამოიმუშავებს `opaque:` სახელურს და აბრუნებს ხელმოწერილ ქვითარს, რომელიც `ClaimIdentifier`-ს შეუძლია წარადგინოს ჯაჭვზე, მათ შორის როგორც ნედლი `signature_payload_hex`, ასევე გაანალიზებული `signature_payload`. || `POST /v1/identifiers/resolve` | იღებს ზუსტად ერთს `{ input }` ან `{ encrypted_input }`-დან. Plaintext `input` არის ნორმალიზებული სერვერის მხრიდან; BFV `encrypted_input` უკვე უნდა იყოს ნორმალიზებული გამოქვეყნებული პოლიტიკის რეჟიმის მიხედვით. საბოლოო წერტილი ანაწილებს იდენტიფიკატორს `{ opaque_id, receipt_hash, uaid, account_id, signature }`-ში, როდესაც აქტიური პრეტენზია არსებობს და ასევე აბრუნებს კანონიკურ ხელმოწერილ დატვირთვას, როგორც `{ signature_payload_hex, signature_payload }`. |
@@ -227,8 +227,9 @@ UAID-ის მისაღებად სამი მხარდაჭერ
    ```python
    import hashlib
    seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
+   digest = bytearray(hashlib.blake2b(seed, digest_size=32).digest())
+   digest[-1] |= 1
+   print(f"uaid:{digest.hex()}")
    ```ყოველთვის შეინახეთ ლიტერალი მცირე ასოებით და დაარეგულირეთ სივრცე ჰეშირების წინ.
 CLI დამხმარეები, როგორიცაა `iroha app space-directory manifest scaffold` და Android
 `UaidLiteral` პარსერი იყენებს იგივე მორთვის წესებს, რათა მმართველობის მიმოხილვამ შეძლოს

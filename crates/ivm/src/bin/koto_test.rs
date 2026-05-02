@@ -27,11 +27,12 @@ use norito::json::{self, Value};
 const DEFAULT_CALLER: &str =
     "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const ENTRYPOINT_IMPL_PREFIX: &str = "__entrypoint_impl__";
-const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = 0xF8;
-const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = 0xF9;
-const TEST_SYSCALL_ACTOR_SIGN: u32 = 0xFA;
-const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u32 = 0xFB;
-const TEST_SYSCALL_EXPECT_REJECT_AS: u32 = 0xFC;
+const TEST_SYSCALL_ACTOR_ACCOUNT: u32 = ivm::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT;
+const TEST_SYSCALL_ACTOR_PUBLIC_KEY: u32 = ivm::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY;
+const TEST_SYSCALL_ACTOR_SIGN: u32 = ivm::syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN;
+const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u32 =
+    ivm::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
+const TEST_SYSCALL_EXPECT_REJECT_AS: u32 = ivm::syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS;
 
 #[derive(Clone)]
 struct FixtureActor {
@@ -546,11 +547,12 @@ fn execute_suite(
     let parsed = ProgramMetadata::parse(&compiled.code)
         .map_err(|err| format!("failed to parse compiled suite metadata: {err:?}"))?;
     let suite_return_pc = (compiled.code.len().saturating_sub(parsed.header_len)) as u64;
+    let suite_program = with_return_halt(&compiled.code);
     let mut results = Vec::with_capacity(compiled.tests.len());
     for test in &compiled.tests {
         let mut host = build_host_for_fixture(compiled, test.fixture.as_deref())?;
         let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&compiled.code)
+        vm.load_program(&suite_program)
             .map_err(|err| format!("failed to load compiled suite: {err:?}"))?;
         vm.set_register(1, suite_return_pc);
         vm.set_program_counter(test.pc)
@@ -580,6 +582,12 @@ fn execute_suite(
         });
     }
     Ok(results)
+}
+
+fn with_return_halt(program: &[u8]) -> Vec<u8> {
+    let mut with_halt = program.to_vec();
+    with_halt.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    with_halt
 }
 
 fn build_host_for_fixture(
@@ -995,11 +1003,12 @@ impl KotoTestHost {
             .memory
             .preload_input(0, &clear)
             .map_err(|_| ivm::VMError::DecodeError)?;
+        let runtime_program = with_return_halt(&self.program);
         nested_vm
-            .load_program(&self.program)
+            .load_program(&runtime_program)
             .map_err(|_| ivm::VMError::DecodeError)?;
         nested_vm.set_program_counter(entry_pc)?;
-        nested_vm.set_register(1, nested_vm.memory.code_len());
+        nested_vm.set_register(1, nested_vm.memory.code_len().saturating_sub(4));
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
         let nested_outcome = nested_vm.run_with_host(&mut self.inner);
@@ -1102,6 +1111,11 @@ impl IVMHost for KotoTestHost {
             TEST_SYSCALL_EXPECT_REJECT_AS => self.invoke_entrypoint(vm, true),
             _ => self.inner.syscall(number, vm),
         }
+    }
+
+    fn allows_syscall(&mut self, policy: ivm::SyscallPolicy, number: u32) -> bool {
+        ivm::syscalls::is_koto_test_syscall(number)
+            || ivm::syscalls::is_syscall_allowed(policy, number)
     }
 
     fn as_any(&mut self) -> &mut dyn Any

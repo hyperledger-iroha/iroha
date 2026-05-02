@@ -538,6 +538,92 @@ pub struct ProofBlob {
     pub expiry_slot: Option<u64>,
 }
 
+/// Preflight the structural FastPQ V1 binding carried by an AXT proof envelope.
+///
+/// This checks only envelope routing and metadata. It does not verify FastPQ
+/// proof contents and must never be treated as proof acceptance.
+///
+/// # Errors
+///
+/// Returns [`VMError::PermissionDenied`] when the envelope does not bind to the
+/// expected dataspace/manifest or does not advertise FastPQ V1 proof material.
+pub fn preflight_fastpq_v1_proof_envelope_for_manifest(
+    envelope: &AxtProofEnvelope,
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+) -> Result<(), VMError> {
+    preflight_fastpq_v1_proof_envelope(envelope, dsid)?;
+    if envelope.manifest_root != manifest_root {
+        return Err(VMError::PermissionDenied);
+    }
+    Ok(())
+}
+
+/// Preflight an AXT proof envelope as FastPQ V1 material without pinning a
+/// manifest root.
+///
+/// This is diagnostic routing/metadata validation only. A host must still call
+/// a real FastPQ verifier before accepting the envelope as proof material.
+///
+/// # Errors
+///
+/// Returns [`VMError::PermissionDenied`] when the envelope does not bind to the
+/// expected dataspace or does not advertise FastPQ V1 proof material.
+pub fn preflight_fastpq_v1_proof_envelope(
+    envelope: &AxtProofEnvelope,
+    dsid: DataSpaceId,
+) -> Result<(), VMError> {
+    let Some(binding) = envelope.fastpq_binding.as_ref() else {
+        return Err(VMError::PermissionDenied);
+    };
+    if envelope.dsid != dsid
+        || envelope.manifest_root.iter().all(|byte| *byte == 0)
+        || envelope.proof.is_empty()
+        || binding.source_dsid != dsid.as_u64()
+        || binding.verifier_id != "fastpq"
+        || binding.verifier_version != "v1"
+        || !fastpq_binding_shape_is_concrete(binding)
+    {
+        return Err(VMError::PermissionDenied);
+    }
+    Ok(())
+}
+
+fn fastpq_binding_shape_is_concrete(binding: &iroha_data_model::nexus::AxtFastpqBinding) -> bool {
+    binding_string_is_present(&binding.parameter)
+        && binding_string_is_present(&binding.source_dataspace)
+        && binding_string_is_present(&binding.source_receipt_id)
+        && binding_hex_digest_is_present(&binding.source_tx_commitment)
+        && fastpq_claim_type_is_supported(&binding.claim_type)
+        && binding_hex_digest_is_present(&binding.claim_digest)
+        && binding_hex_digest_is_present(&binding.witness_commitment)
+        && binding_hex_digest_is_present(&binding.policy_commitment)
+        && binding_string_is_present(&binding.verified_effect_type)
+        && !binding.target_dsids.is_empty()
+        && binding
+            .target_dsids
+            .iter()
+            .enumerate()
+            .all(|(idx, value)| !binding.target_dsids[..idx].contains(value))
+}
+
+fn binding_string_is_present(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+fn binding_hex_digest_is_present(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn fastpq_claim_type_is_supported(value: &str) -> bool {
+    let value = value.trim();
+    value.eq_ignore_ascii_case("authorization")
+        || value.eq_ignore_ascii_case("compliance")
+        || value.eq_ignore_ascii_case("tx_predicate")
+        || value.eq_ignore_ascii_case("value_conservation")
+}
+
 /// Compute the canonical descriptor binding used by asset handles.
 ///
 /// The current implementation prefixes the descriptor bytes with a stable
@@ -1083,6 +1169,26 @@ mod tests {
         }
     }
 
+    fn sample_fastpq_binding(dsid: DataSpaceId) -> iroha_data_model::nexus::AxtFastpqBinding {
+        iroha_data_model::nexus::AxtFastpqBinding {
+            parameter: "fastpq-lane-balanced".to_string(),
+            source_dsid: dsid.as_u64(),
+            source_dataspace: "ivm-abi-test".to_string(),
+            source_receipt_id: format!("receipt-{}", dsid.as_u64()),
+            source_tx_commitment: "aa".repeat(32),
+            claim_type: "authorization".to_string(),
+            claim_digest: "bb".repeat(32),
+            witness_commitment: "cc".repeat(32),
+            policy_commitment: "dd".repeat(32),
+            verified_effect_type: "test_effect".to_string(),
+            corridor: "ivm-abi-test".to_string(),
+            verifier_id: "fastpq".to_string(),
+            verifier_version: "v1".to_string(),
+            target_dsids: vec![dsid.as_u64()],
+            effect_binding: None,
+        }
+    }
+
     fn proof_with_amount(
         dsid: DataSpaceId,
         committed_amount: Option<u128>,
@@ -1093,7 +1199,7 @@ mod tests {
             manifest_root: [0xAB; 32],
             da_commitment: None,
             proof: vec![0x01, 0x02],
-            fastpq_binding: None,
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
             committed_amount,
             amount_commitment,
         })
@@ -1102,6 +1208,95 @@ mod tests {
             payload,
             expiry_slot: Some(10),
         }
+    }
+
+    #[test]
+    fn preflight_fastpq_v1_proof_envelope_rejects_mislabeled_binding() {
+        let dsid = DataSpaceId::new(90);
+        let manifest_root = [0xAB; 32];
+        let mut envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0x01, 0x02],
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root)
+            .expect("valid FastPQ V1 envelope preflight");
+
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("binding")
+            .verifier_id = "synthetic".to_string();
+        assert!(matches!(
+            preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
+            Err(VMError::PermissionDenied)
+        ));
+
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("binding")
+            .verifier_id = "fastpq".to_string();
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("binding")
+            .verifier_version = "v2".to_string();
+        assert!(matches!(
+            preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
+            Err(VMError::PermissionDenied)
+        ));
+    }
+
+    #[test]
+    fn preflight_fastpq_v1_proof_envelope_rejects_synthetic_binding() {
+        let dsid = DataSpaceId::new(91);
+        let manifest_root = [0xAC; 32];
+        let mut envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0x01, 0x02],
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("binding")
+            .claim_digest = String::new();
+        assert!(matches!(
+            preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
+            Err(VMError::PermissionDenied)
+        ));
+
+        envelope.fastpq_binding = Some(sample_fastpq_binding(dsid));
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("binding")
+            .claim_type = "synthetic".to_string();
+        assert!(matches!(
+            preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
+            Err(VMError::PermissionDenied)
+        ));
+
+        envelope.fastpq_binding = Some(sample_fastpq_binding(dsid));
+        envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("binding")
+            .target_dsids
+            .clear();
+        assert!(matches!(
+            preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
+            Err(VMError::PermissionDenied)
+        ));
     }
 
     #[test]

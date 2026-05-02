@@ -10,6 +10,7 @@ import java.security.KeyPairGenerator;
 import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -93,6 +94,9 @@ public final class HttpClientTransportTests {
     ramLfeExecuteRequestParsesResponse();
     ramLfeExecuteRequestAllowsNotFound();
     ramLfeReceiptVerifyUsesRawReceipt();
+    vpnProfileRequestParsesNativeLeaseFields();
+    vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
+    vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
     deployContractRequestParsesResponse();
     callContractRequestParsesResponse();
     callContractRejectsAmbiguousTarget();
@@ -1373,7 +1377,6 @@ public final class HttpClientTransportTests {
             + "\"program_id\":\"identifier_lookup_retail\","
             + "\"opaque_hash\":\"opaque-hash-literal\","
             + "\"receipt_hash\":\"receipt-hash-literal\","
-            + "\"output_hex\":\"c0ffee\","
             + "\"output_hash\":\"output-hash-literal\","
             + "\"associated_data_hash\":\"associated-data-hash-literal\","
             + "\"executed_at_ms\":42,"
@@ -1414,7 +1417,7 @@ public final class HttpClientTransportTests {
     assert response.isPresent() : "Expected RAM-LFE execute response";
     final RamLfeExecuteResponse execute = response.orElseThrow();
     assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
-    assert "c0ffee".equals(execute.outputHex()) : "Output hex mismatch";
+    assert "output-hash-literal".equals(execute.outputHash()) : "Output hash mismatch";
     assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
     assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
 
@@ -1496,6 +1499,171 @@ public final class HttpClientTransportTests {
     assert "c0ffee".equals(requestPayload.get("output_hex")) : "Verify output_hex mismatch";
     assert requestPayload.get("receipt") instanceof Map<?, ?>
         : "Verify request must preserve raw receipt";
+  }
+
+  private static void vpnProfileRequestParsesNativeLeaseFields() {
+    final String json =
+        "{"
+            + "\"available\":true,"
+            + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
+            + "\"supported_exit_classes\":[\"standard\",\"low-latency\"],"
+            + "\"default_exit_class\":\"standard\","
+            + "\"lease_secs\":600,"
+            + "\"dns_push_interval_secs\":60,"
+            + "\"meter_family\":\"soranet.vpn.standard\","
+            + "\"route_pushes\":[\"0.0.0.0/0\"],"
+            + "\"excluded_routes\":[\"10.0.0.0/8\"],"
+            + "\"dns_servers\":[\"1.1.1.1\"],"
+            + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
+            + "\"mtu_bytes\":1024,"
+            + "\"display_billing_label\":\"standard XOR\","
+            + "\"fee_asset_id\":\"xor#universal.universal\","
+            + "\"escrow_account_id\":\"sorauEscrow\","
+            + "\"operator_account_id\":\"sorauOperator\","
+            + "\"lease_fee_nanos\":1000000,"
+            + "\"settlement_grace_secs\":120,"
+            + "\"flow_label_bits\":24,"
+            + "\"padding_budget_ms\":15,"
+            + "\"relay_tls_spki_sha256_hex\":\""
+            + "ab".repeat(32)
+            + "\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final VpnProfile profile = transport.getVpnProfile().join();
+
+    assert profile.available() : "VPN profile should be available";
+    assert "xor#universal.universal".equals(profile.feeAssetId()) : "VPN fee asset mismatch";
+    assert "sorauEscrow".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
+    assert "sorauOperator".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
+    assert profile.leaseFeeNanos() == 1_000_000L : "VPN lease fee mismatch";
+    assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
+    assert "ab".repeat(32).equals(profile.relayTlsSpkiSha256Hex()) : "VPN TLS pin mismatch";
+    assert "GET".equals(executor.lastRequest().method()) : "VPN profile must use GET";
+    assert executor.lastRequest().uri().toString().equals("https://torii.example/v1/vpn/profile")
+        : "VPN profile URI mismatch";
+  }
+
+  private static void vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction()
+      throws Exception {
+    final String quoteId = "11".repeat(32);
+    final String meteringKey = "22".repeat(32);
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            201, vpnQuoteJson(quoteId, meteringKey).getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        new ToriiCanonicalRequestAuth("alice", keyPair.getPrivate(), 1_700_000_000_000L, "vpn-nonce-1");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final VpnQuote quote =
+        transport.createVpnQuote(new VpnQuoteCreateRequest("low-latency", "0x" + meteringKey), auth)
+            .join();
+
+    assert quoteId.equals(quote.quoteId()) : "VPN quote id mismatch";
+    assert quoteId.equals(quote.leaseIdHex()) : "VPN lease id mismatch";
+    assert meteringKey.equals(quote.meteringPublicKeyHex()) : "VPN metering key mismatch";
+    assert quote.openLeaseInstruction() != null : "VPN quote must include open lease instruction";
+    assert "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow"
+        .equals(quote.openLeaseInstruction().wireId()) : "Open lease wire id mismatch";
+    assert quote.txInstructions().size() == 1 : "VPN quote should have one native instruction";
+
+    final TransportRequest request = executor.lastRequest();
+    assert "POST".equals(request.method()) : "VPN quote must use POST";
+    assert request.uri().toString().equals("https://torii.example/api/v1/vpn/quotes")
+        : "VPN quote URI mismatch";
+    assert readBody(request)
+        .equals("{\"exit_class\":\"low-latency\",\"metering_public_key_hex\":\"" + meteringKey + "\"}")
+        : "VPN quote body mismatch";
+    assert "alice".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
+        : "VPN quote account header mismatch";
+    assert "1700000000000"
+        .equals(request.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).get(0))
+        : "VPN quote timestamp header mismatch";
+    assert "vpn-nonce-1".equals(request.headers().get(CanonicalRequestSigner.HEADER_NONCE).get(0))
+        : "VPN quote nonce header mismatch";
+    assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_000L, "vpn-nonce-1");
+  }
+
+  private static void vpnSessionAndReceiptRequestsUseNativeLeaseDtos() throws Exception {
+    final String sessionId = "33".repeat(32);
+    final String paymentTxHash = "44".repeat(32);
+    final String meteringKey = "55".repeat(32);
+    final String settledReceipt = vpnReceiptJson(sessionId, paymentTxHash, true);
+    final QueueResponseExecutor executor =
+        new QueueResponseExecutor(
+            List.of(
+                new QueuedResponse(201, vpnSessionJson(sessionId, paymentTxHash)),
+                new QueuedResponse(200, vpnSessionJson(sessionId, paymentTxHash)),
+                new QueuedResponse(200, vpnReceiptJson(sessionId, paymentTxHash, false)),
+                new QueuedResponse(201, settledReceipt),
+                new QueuedResponse(200, "{\"items\":[" + settledReceipt + "],\"total\":1}")));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        new ToriiCanonicalRequestAuth("alice", keyPair.getPrivate(), 1_700_000_000_001L, "vpn-nonce-2");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final VpnSession session =
+        transport
+            .createVpnSession(
+                new VpnSessionCreateRequest("standard", sessionId, "0x" + paymentTxHash, meteringKey),
+                auth)
+            .join();
+    final Optional<VpnSession> fetched = transport.getVpnSession(sessionId, auth).join();
+    final Optional<VpnReceipt> deleted = transport.deleteVpnSession("0x" + sessionId, auth).join();
+    final VpnReceipt submitted =
+        transport
+            .submitVpnReceipt(new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + sessionId), auth)
+            .join();
+    final VpnReceiptListResponse receipts = transport.listVpnReceipts(auth).join();
+
+    assert sessionId.equals(session.sessionId()) : "VPN session id mismatch";
+    assert fetched.isPresent() : "VPN session lookup should be present";
+    assert deleted.isPresent() : "VPN delete receipt should be present";
+    assert "disconnected".equals(deleted.get().status()) : "VPN delete status mismatch";
+    assert "settled".equals(submitted.status()) : "VPN settled receipt status mismatch";
+    assert submitted.earnedFeeNanos() == 750_000L : "VPN earned fee mismatch";
+    assert submitted.refundedFeeNanos() == 250_000L : "VPN refund mismatch";
+    assert submitted.settleLeaseInstruction() != null : "VPN settled receipt must include settle instruction";
+    assert "iroha_data_model::isi::vpn::SettleVpnLease"
+        .equals(submitted.settleLeaseInstruction().wireId()) : "VPN settle wire id mismatch";
+    assert receipts.total() == 1L : "VPN receipt list total mismatch";
+    assert sessionId.equals(receipts.items().get(0).leaseIdHex()) : "VPN receipt lease id mismatch";
+
+    assert readBody(executor.requests().get(0))
+        .equals(
+            "{\"exit_class\":\"standard\",\"metering_public_key_hex\":\""
+                + meteringKey
+                + "\",\"payment_tx_hash\":\""
+                + paymentTxHash
+                + "\",\"quote_id\":\""
+                + sessionId
+                + "\"}")
+        : "VPN session create body mismatch";
+    assert "GET".equals(executor.requests().get(1).method()) : "VPN session lookup method mismatch";
+    assert executor.requests().get(1).uri().toString()
+        .equals("https://torii.example/v1/vpn/sessions/" + sessionId)
+        : "VPN session lookup URI mismatch";
+    assert "DELETE".equals(executor.requests().get(2).method()) : "VPN delete method mismatch";
+    assert readBody(executor.requests().get(3))
+        .equals(
+            "{\"client_voucher_hex\":\"beef\",\"lease_id_hex\":\""
+                + sessionId
+                + "\",\"relay_receipt_hex\":\"cafe\"}")
+        : "VPN receipt submit body mismatch";
+    assert executor.requests().get(4).uri().toString().equals("https://torii.example/v1/vpn/receipts")
+        : "VPN receipt list URI mismatch";
   }
 
   private static void deployContractRequestParsesResponse() {
@@ -1894,7 +2062,7 @@ public final class HttpClientTransportTests {
             null);
     final byte[] seed = hexToBytes("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF");
     final String expected =
-        "4e525430000035a9bf76d68dbb0c35a9bf76d68dbb0c00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000";
+        "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000";
 
     assert expected.equals(policy.encryptInput("ab", seed))
         : "Deterministic BFV ciphertext mismatch";
@@ -1951,6 +2119,150 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
     transport.invalidateAndCancel();
     assert executor.invalidated : "invalidateAndCancel should reach the executor";
+  }
+
+  private static void assertCanonicalSignature(
+      final TransportRequest request,
+      final java.security.PublicKey publicKey,
+      final long timestampMs,
+      final String nonce) throws Exception {
+    final byte[] signature =
+        Base64.getDecoder()
+            .decode(request.headers().get(CanonicalRequestSigner.HEADER_SIGNATURE).get(0));
+    final byte[] message =
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            request.method(), request.uri(), request.body(), timestampMs, nonce);
+    final Signature verifier = Signature.getInstance("Ed25519");
+    verifier.initVerify(publicKey);
+    verifier.update(message);
+    assert verifier.verify(signature) : "canonical request signature mismatch";
+  }
+
+  private static String vpnQuoteJson(final String quoteId, final String meteringKey) {
+    return "{"
+        + "\"quote_id\":\""
+        + quoteId
+        + "\",\"lease_id_hex\":\""
+        + quoteId
+        + "\",\"session_id_hex\":\""
+        + "aa".repeat(16)
+        + "\",\"payment_reference\":\""
+        + quoteId
+        + "\",\"account_id\":\"alice\","
+        + "\"exit_class\":\"low-latency\","
+        + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
+        + "\"lease_secs\":600,"
+        + "\"quote_expires_at_ms\":1700000600000,"
+        + "\"fee_asset_id\":\"xor#universal.universal\","
+        + "\"escrow_account_id\":\"sorauEscrow\","
+        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"lease_fee_nanos\":1000000,"
+        + "\"route_pushes\":[\"0.0.0.0/0\"],"
+        + "\"excluded_routes\":[],"
+        + "\"dns_servers\":[\"1.1.1.1\"],"
+        + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
+        + "\"mtu_bytes\":1024,"
+        + "\"meter_family\":\"soranet.vpn.standard\","
+        + "\"flow_label_bits\":24,"
+        + "\"padding_budget_ms\":15,"
+        + "\"relay_tls_spki_sha256_hex\":\""
+        + "ab".repeat(32)
+        + "\",\"metering_public_key_hex\":\""
+        + meteringKey
+        + "\",\"open_lease_instruction\":{"
+        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
+        + "\"payload_hex\":\"cafe\"},"
+        + "\"tx_instructions\":[{"
+        + "\"wire_id\":\"iroha_data_model::isi::vpn::OpenVpnLeaseEscrow\","
+        + "\"payload_hex\":\"cafe\"}]"
+        + "}";
+  }
+
+  private static String vpnSessionJson(final String sessionId, final String paymentTxHash) {
+    return "{"
+        + "\"session_id\":\""
+        + sessionId
+        + "\",\"account_id\":\"alice\","
+        + "\"exit_class\":\"standard\","
+        + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
+        + "\"lease_secs\":600,"
+        + "\"expires_at_ms\":1700000600000,"
+        + "\"connected_at_ms\":1700000000000,"
+        + "\"meter_family\":\"soranet.vpn.standard\","
+        + "\"quote_id\":\""
+        + sessionId
+        + "\",\"payment_reference\":\""
+        + sessionId
+        + "\",\"payment_tx_hash\":\""
+        + paymentTxHash
+        + "\",\"fee_asset_id\":\"xor#universal.universal\","
+        + "\"escrow_account_id\":\"sorauEscrow\","
+        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"lease_fee_nanos\":1000000,"
+        + "\"flow_label_bits\":24,"
+        + "\"padding_budget_ms\":15,"
+        + "\"relay_tls_spki_sha256_hex\":\""
+        + "ab".repeat(32)
+        + "\",\"route_pushes\":[\"0.0.0.0/0\"],"
+        + "\"excluded_routes\":[],"
+        + "\"dns_servers\":[\"1.1.1.1\"],"
+        + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
+        + "\"mtu_bytes\":1024,"
+        + "\"helper_ticket_hex\":\"cafe\","
+        + "\"bytes_in\":0,"
+        + "\"bytes_out\":0,"
+        + "\"status\":\"active\""
+        + "}";
+  }
+
+  private static String vpnReceiptJson(
+      final String sessionId, final String paymentTxHash, final boolean settled) {
+    final String status = settled ? "settled" : "disconnected";
+    final String source = settled ? "relay" : "torii";
+    final long earned = settled ? 750_000L : 0L;
+    final long refunded = settled ? 250_000L : 1_000_000L;
+    final String settlement =
+        settled
+            ? ",\"settle_lease_instruction\":{"
+                + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
+                + "\"payload_hex\":\"f00d\"},"
+                + "\"tx_instructions\":[{"
+                + "\"wire_id\":\"iroha_data_model::isi::vpn::SettleVpnLease\","
+                + "\"payload_hex\":\"f00d\"}]"
+            : ",\"settle_lease_instruction\":null,\"tx_instructions\":[]";
+    return "{"
+        + "\"session_id\":\""
+        + sessionId
+        + "\",\"account_id\":\"alice\","
+        + "\"exit_class\":\"standard\","
+        + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
+        + "\"meter_family\":\"soranet.vpn.standard\","
+        + "\"connected_at_ms\":1700000000000,"
+        + "\"disconnected_at_ms\":1700000010000,"
+        + "\"duration_ms\":10000,"
+        + "\"bytes_in\":1024,"
+        + "\"bytes_out\":2048,"
+        + "\"status\":\""
+        + status
+        + "\",\"receipt_source\":\""
+        + source
+        + "\",\"quote_id\":\""
+        + sessionId
+        + "\",\"payment_tx_hash\":\""
+        + paymentTxHash
+        + "\",\"fee_asset_id\":\"xor#universal.universal\","
+        + "\"escrow_account_id\":\"sorauEscrow\","
+        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"lease_fee_nanos\":1000000,"
+        + "\"earned_fee_nanos\":"
+        + earned
+        + ",\"refunded_fee_nanos\":"
+        + refunded
+        + ",\"lease_id_hex\":\""
+        + sessionId
+        + "\""
+        + settlement
+        + "}";
   }
 
   private static String hex(final byte[] bytes) {
@@ -2146,6 +2458,33 @@ public final class HttpClientTransportTests {
 
     TransportRequest lastRequest() {
       return lastRequest;
+    }
+  }
+
+  private record QueuedResponse(int statusCode, String body) {}
+
+  private static final class QueueResponseExecutor implements HttpTransportExecutor {
+    private final java.util.ArrayDeque<QueuedResponse> responses;
+    private final List<TransportRequest> requests = new ArrayList<>();
+
+    private QueueResponseExecutor(final List<QueuedResponse> responses) {
+      this.responses = new java.util.ArrayDeque<>(responses);
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      requests.add(request);
+      final QueuedResponse response = responses.removeFirst();
+      return CompletableFuture.completedFuture(
+          new TransportResponse(
+              response.statusCode(),
+              response.body().getBytes(StandardCharsets.UTF_8),
+              "ok",
+              Map.of()));
+    }
+
+    List<TransportRequest> requests() {
+      return requests;
     }
   }
 
