@@ -147,7 +147,7 @@ jobs:
 
   taira_image:
     if: ${{ inputs.image_type == 'iroha3-taira' }}
-    runs-on: [self-hosted, Linux, iroha2]
+    runs-on: ubuntu-latest
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 90
