@@ -2,6 +2,17 @@
 
 Last updated: 2026-05-02
 
+## 2026-05-02 Kotodama source analysis fixture refresh
+
+- Updated the reentrancy-analysis test snippets to call
+  `host::call_contract` with the current `(String|Blob, String|Blob, Json)`
+  signature, preserving the write-before-call and call-before-write scenarios
+  under test.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang reentrancy -- --nocapture`
+  - `cargo test -p kotodama_lang`
+
 ## 2026-05-02 Iroha Connect Android approve fixture refresh
 
 - Refreshed the Android-emitted Connect approve frame fixture to carry the
