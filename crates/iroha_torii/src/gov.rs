@@ -2405,7 +2405,7 @@ pub async fn handle_gov_council_current(
         alternates,
         candidate_count: total_candidates,
         verified: 0,
-        derived_by: CouncilDerivationKind::Fallback,
+        derived_by: CouncilDerivationKind::Vrf,
     }))
 }
 
