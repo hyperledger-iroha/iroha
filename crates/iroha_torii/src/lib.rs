@@ -388,9 +388,10 @@ pub mod test_utils;
 pub use gov::{
     AtWindowDto, CouncilDeriveVrfRequest, EnactDto, GovernedContractResponse, LocksGetResponse,
     ProposalGetResponse, ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse,
-    handle_gov_contract_get, handle_gov_council_current, handle_gov_enact, handle_gov_get_locks,
-    handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
-    handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
+    handle_gov_citizen_status, handle_gov_contract_get, handle_gov_council_current,
+    handle_gov_enact, handle_gov_get_locks, handle_gov_get_proposal, handle_gov_get_referendum,
+    handle_gov_get_tally, handle_gov_protected_get, handle_gov_protected_set,
+    handle_gov_unlock_stats,
 };
 #[cfg(all(feature = "app_api", feature = "gov_vrf"))]
 pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_council_persist};
@@ -3525,6 +3526,24 @@ async fn handler_gov_council_current(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/council/current").await?;
     crate::gov::handle_gov_council_current(app.state.clone()).await
+}
+
+async fn handler_gov_citizen_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    account_id: AxPath<String>,
+) -> Result<JsonBody<crate::gov::CitizenStatusResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/citizens/{account_id}",
+    )
+    .await?;
+    crate::gov::handle_gov_citizen_status(app.state.clone(), account_id, app.telemetry.clone())
+        .await
 }
 
 async fn handler_gov_proposal_get(
@@ -33618,6 +33637,10 @@ impl Torii {
                 .route(
                     iroha_torii_shared::uri::GOV_COUNCIL_CURRENT,
                     get(handler_gov_council_current),
+                )
+                .route(
+                    iroha_torii_shared::uri::GOV_CITIZEN_STATUS,
+                    get(handler_gov_citizen_status),
                 );
             // Persist council (app API; feature gov_vrf)
             {
