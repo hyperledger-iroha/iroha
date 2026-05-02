@@ -14,7 +14,7 @@ use tower::ServiceExt as _;
 
 fn vrf_penalties_router() -> Router {
     Router::new().route(
-        "/v1/sumeragi/vrf/penalties/:epoch",
+        "/v1/sumeragi/vrf/penalties/{epoch}",
         get(|path: axum::extract::Path<String>| async move {
             iroha_torii::handle_v1_sumeragi_vrf_penalties(path)
                 .await
