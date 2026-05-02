@@ -326,12 +326,18 @@ impl PendingBlock {
     pub(super) fn note_local_commit_vote_emitted(&mut self) {
         if matches!(self.commit_stage, PendingCommitStage::AwaitingLocalVote) {
             self.commit_stage = PendingCommitStage::LocalVoteEmitted;
+            self.touch_progress(Instant::now());
         }
     }
 
     pub(super) fn note_commit_qc_observed(&mut self, epoch: u64) {
+        let progressed = !matches!(self.commit_stage, PendingCommitStage::CommitQcObserved)
+            || self.commit_qc_epoch != Some(epoch);
         self.commit_stage = PendingCommitStage::CommitQcObserved;
         self.commit_qc_epoch = Some(epoch);
+        if progressed {
+            self.touch_progress(Instant::now());
+        }
     }
 
     pub(super) fn retire_same_height(&mut self) {
@@ -738,6 +744,36 @@ mod tests {
 
         pending.note_local_commit_vote_emitted();
         assert_eq!(pending.commit_stage, PendingCommitStage::CommitQcObserved);
+    }
+
+    #[test]
+    fn local_commit_vote_counts_as_pending_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let stale = Instant::now() - Duration::from_secs(5);
+        pending.touch_progress(stale);
+
+        let before = pending.progress_age(Instant::now());
+        pending.note_local_commit_vote_emitted();
+        let after = pending.progress_age(Instant::now());
+
+        assert!(after < before);
+        assert!(after < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn commit_qc_observation_counts_as_pending_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let stale = Instant::now() - Duration::from_secs(5);
+        pending.touch_progress(stale);
+
+        let before = pending.progress_age(Instant::now());
+        pending.note_commit_qc_observed(7);
+        let after = pending.progress_age(Instant::now());
+
+        assert!(after < before);
+        assert!(after < Duration::from_secs(1));
     }
 
     #[test]

@@ -3641,7 +3641,7 @@ fn finish_submit_attempts_prefers_fatal_error_when_no_peer_accepts() {
     assert!(err.to_string().contains("submit flow"));
     assert!(
         err.chain()
-        .any(|cause| cause.to_string().contains("fatal peer error"))
+            .any(|cause| cause.to_string().contains("fatal peer error"))
     );
 }
 

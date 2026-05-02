@@ -50,9 +50,17 @@ use crate::{
 
 const HASH_GAS_BASE: u64 = 16;
 const HASH_GAS_PER_BYTE: u64 = 1;
+const JSON_GAS_BASE: u64 = 16;
+const JSON_GAS_PER_BYTE: u64 = 1;
+const NAME_DECODE_GAS_BASE: u64 = 16;
+const NAME_DECODE_GAS_PER_BYTE: u64 = 1;
 const NUMERIC_GAS: u64 = 16;
+const PATH_GAS_BASE: u64 = 16;
+const PATH_GAS_PER_BYTE: u64 = 1;
 const POINTER_GAS_BASE: u64 = 16;
 const POINTER_GAS_PER_BYTE: u64 = 1;
+const SCHEMA_GAS_BASE: u64 = 32;
+const SCHEMA_GAS_PER_BYTE: u64 = 1;
 const STATE_QUERY_GAS_BASE: u64 = 16;
 const SYSVAR_GAS_BASE: u64 = 16;
 const SYSVAR_GAS_PER_BYTE: u64 = 1;
@@ -1073,6 +1081,38 @@ impl CoreHost {
         STATE_QUERY_GAS_BASE.saturating_add(u64::try_from(total_count).unwrap_or(u64::MAX))
     }
 
+    fn byte_gas(base: u64, per_byte: u64, input_len: usize, output_len: usize) -> u64 {
+        let bytes = u64::try_from(input_len)
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::try_from(output_len).unwrap_or(u64::MAX));
+        base.saturating_add(per_byte.saturating_mul(bytes))
+    }
+
+    fn json_gas(input_len: usize, output_len: usize) -> u64 {
+        Self::byte_gas(JSON_GAS_BASE, JSON_GAS_PER_BYTE, input_len, output_len)
+    }
+
+    fn name_decode_gas(input_len: usize, output_len: usize) -> u64 {
+        Self::byte_gas(
+            NAME_DECODE_GAS_BASE,
+            NAME_DECODE_GAS_PER_BYTE,
+            input_len,
+            output_len,
+        )
+    }
+
+    fn numeric_payload_gas(input_len: usize, output_len: usize) -> u64 {
+        Self::byte_gas(NUMERIC_GAS, 1, input_len, output_len)
+    }
+
+    fn path_gas(input_len: usize, output_len: usize) -> u64 {
+        Self::byte_gas(PATH_GAS_BASE, PATH_GAS_PER_BYTE, input_len, output_len)
+    }
+
+    fn schema_gas(input_len: usize, output_len: usize) -> u64 {
+        Self::byte_gas(SCHEMA_GAS_BASE, SCHEMA_GAS_PER_BYTE, input_len, output_len)
+    }
+
     fn sysvar_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
         SYSVAR_GAS_BASE.saturating_add(SYSVAR_GAS_PER_BYTE.saturating_mul(bytes))
@@ -2010,6 +2050,7 @@ impl IVMHost for CoreHost {
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
                 let json: Json =
                     decode_from_bytes(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let input_len = v_tlv.payload.len();
                 if let Some(bytes) = self.schema.encode_json(&schema, json.get().as_bytes()) {
                     if crate::dev_env::decode_trace_enabled() {
                         // Try immediate roundtrip for known schemas to validate encoding
@@ -2053,7 +2094,7 @@ impl IVMHost for CoreHost {
                             len = bytes.len()
                         );
                     }
-                    Ok(0)
+                    Ok(Self::schema_gas(input_len, bytes.len()))
                 } else {
                     Err(VMError::NoritoInvalid)
                 }
@@ -2094,11 +2135,12 @@ impl IVMHost for CoreHost {
                     b_tlv
                 };
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
+                let input_len = b_tlv.payload.len();
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
                         "[CoreHost] SCHEMA_DECODE enter schema={} b_len={len}",
                         schema,
-                        len = b_tlv.payload.len()
+                        len = input_len
                     );
                 }
                 if let Some(min) = self.schema.decode_to_json(&schema, b_tlv.payload) {
@@ -2116,7 +2158,7 @@ impl IVMHost for CoreHost {
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
-                    Ok(0)
+                    Ok(Self::schema_gas(input_len, body.len()))
                 } else {
                     let fallback = self.build_schema_fallback(&schema, b_tlv.payload);
                     let json = Json::from(&fallback);
@@ -2130,7 +2172,7 @@ impl IVMHost for CoreHost {
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
-                    Ok(0)
+                    Ok(Self::schema_gas(input_len, body.len()))
                 }
             }
             syscalls::SYSCALL_SCHEMA_INFO | syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
@@ -2144,6 +2186,7 @@ impl IVMHost for CoreHost {
                     }
                     tlv
                 };
+                let input_len = tlv.payload.len();
                 let name = self.decode_name_payload(tlv.payload)?;
                 let raw = name.as_ref();
                 let base = raw
@@ -2186,11 +2229,11 @@ impl IVMHost for CoreHost {
                 out.push(1);
                 out.extend_from_slice(&(body.len() as u32).to_be_bytes());
                 out.extend_from_slice(&body);
-                let h: [u8; 32] = IrohaHash::new(body).into();
+                let h: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                Ok(0)
+                Ok(Self::schema_gas(input_len, body.len()))
             }
             syscalls::SYSCALL_NAME_DECODE => {
                 // r10 = &NoritoBytes (prefer Norito Name; legacy UTF-8 string is also accepted)
@@ -2854,6 +2897,62 @@ mod tests {
         vm.set_register(10, ptr);
         vm.run().expect("run");
         assert_eq!(vm.register(10), 12345);
+    }
+
+    #[test]
+    fn core_host_schema_helpers_charge_payload_bytes() {
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = CoreHost::new();
+        let schema: Name = "Order".parse().expect("schema name");
+        let json = Json::from_str_norito(r#"{"qty":10,"side":"buy"}"#).expect("json");
+        let schema_bytes = norito::to_bytes(&schema).expect("encode schema");
+        let json_bytes = norito::to_bytes(&json).expect("encode json");
+        let schema_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &schema_bytes))
+            .expect("alloc schema");
+        let json_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Json, &json_bytes))
+            .expect("alloc json");
+
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, json_ptr);
+        let encode_gas = host
+            .syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &mut vm)
+            .expect("schema encode");
+        let encoded_ptr = vm.register(10);
+        let encoded = vm.memory.validate_tlv(encoded_ptr).expect("encoded tlv");
+        assert_eq!(encoded.type_id, PointerType::NoritoBytes);
+        let encoded_len = encoded.payload.len();
+        assert_eq!(
+            encode_gas,
+            CoreHost::schema_gas(json_bytes.len(), encoded_len)
+        );
+
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, encoded_ptr);
+        let decode_gas = host
+            .syscall(syscalls::SYSCALL_SCHEMA_DECODE, &mut vm)
+            .expect("schema decode");
+        let decoded = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("decoded tlv");
+        assert_eq!(decoded.type_id, PointerType::Json);
+        assert_eq!(
+            decode_gas,
+            CoreHost::schema_gas(encoded_len, decoded.payload.len())
+        );
+
+        vm.set_register(10, schema_ptr);
+        let info_gas = host
+            .syscall(syscalls::SYSCALL_SCHEMA_INFO, &mut vm)
+            .expect("schema info");
+        let info = vm.memory.validate_tlv(vm.register(10)).expect("info tlv");
+        assert_eq!(info.type_id, PointerType::Json);
+        assert_eq!(
+            info_gas,
+            CoreHost::schema_gas(schema_bytes.len(), info.payload.len())
+        );
     }
 
     #[test]

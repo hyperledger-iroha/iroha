@@ -784,6 +784,28 @@ fn json_sort_string(value: &Value) -> String {
     norito::json::to_json(value).unwrap_or_else(|_| "null".to_owned())
 }
 
+fn json_key_string(value: &Value) -> String {
+    if value.is_null() {
+        "null".to_owned()
+    } else if let Some(value) = value.as_bool() {
+        if value {
+            "true".to_owned()
+        } else {
+            "false".to_owned()
+        }
+    } else if let Some(value) = value.as_str() {
+        let mut out = String::new();
+        norito::json::write_json_string(value, &mut out);
+        out
+    } else if let Some(value) = value.as_u64() {
+        value.to_string()
+    } else if let Some(value) = value.as_i64() {
+        value.to_string()
+    } else {
+        json_sort_string(value)
+    }
+}
+
 #[derive(Clone)]
 struct SortField {
     name: String,
@@ -1077,7 +1099,7 @@ impl MetricState {
                     .as_ref()
                     .ok_or_else(|| validation_error("distinct_count requires a field"))?;
                 if let Some(value) = row_field_value(row, &field.0) {
-                    values.insert(json_sort_string(value));
+                    values.insert(json_key_string(value));
                 }
                 Ok(())
             }
@@ -1175,22 +1197,26 @@ where
 {
     let mut groups: BTreeMap<Vec<String>, GroupState> = BTreeMap::new();
     for row in rows {
-        let group_values = aggregate
+        let group_key = aggregate
             .group_by
             .iter()
             .map(|field| {
-                let value = row_field_value(&row, &field.0)
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                (field.0.clone(), value)
+                row_field_value(&row, &field.0)
+                    .map(json_key_string)
+                    .unwrap_or_else(|| "null".to_owned())
             })
             .collect::<Vec<_>>();
-        let group_key = group_values
-            .iter()
-            .map(|(_, value)| json_sort_string(value))
-            .collect::<Vec<_>>();
         let entry = groups.entry(group_key).or_insert_with(|| GroupState {
-            group_values: group_values.clone(),
+            group_values: aggregate
+                .group_by
+                .iter()
+                .map(|field| {
+                    let value = row_field_value(&row, &field.0)
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    (field.0.clone(), value)
+                })
+                .collect(),
             metrics: aggregate.metrics.iter().map(MetricState::new).collect(),
         });
         for (state, metric) in entry.metrics.iter_mut().zip(&aggregate.metrics) {
@@ -1236,6 +1262,21 @@ mod tests {
             .expect("body")
             .to_bytes();
         norito::json::from_slice(&bytes).expect("json")
+    }
+
+    #[test]
+    fn json_key_string_preserves_json_scalar_identity() {
+        let string_one = Value::from("1");
+        let number_one = Value::from(1_u64);
+        let quoted = Value::from("a\"b");
+
+        assert_eq!(json_key_string(&Value::Null), "null");
+        assert_eq!(json_key_string(&Value::from(true)), "true");
+        assert_ne!(json_key_string(&string_one), json_key_string(&number_one));
+        assert_eq!(
+            json_key_string(&quoted),
+            norito::json::to_json(&quoted).expect("json")
+        );
     }
 
     #[tokio::test]
@@ -1307,6 +1348,39 @@ mod tests {
         .expect("aggregate response");
         let payload = response_json(response).await;
         assert_eq!(payload["items"][0]["users"].as_u64(), Some(2));
+    }
+
+    #[tokio::test]
+    async fn aggregate_distinct_count_preserves_json_scalar_identity() {
+        let envelope = QueryEnvelope {
+            aggregate: Some(AggregateSpec {
+                metrics: vec![AggregateMetric {
+                    alias: "ids".into(),
+                    r#fn: AggregateFn::DistinctCount,
+                    field: Some(FieldPath("id".into())),
+                }],
+                ..Default::default()
+            }),
+            pagination: Pagination {
+                limit: Some(10),
+                offset: 0,
+            },
+            ..Default::default()
+        };
+        let response = execute_query_envelope(
+            &ACCOUNTS_SPEC,
+            envelope,
+            vec![
+                row(&[("id", Value::from("1"))]),
+                row(&[("id", Value::from(1_u64))]),
+                row(&[("id", Value::from("1"))]),
+            ],
+            100,
+            QuerySnapshot::new(7, None, "live"),
+        )
+        .expect("aggregate response");
+        let payload = response_json(response).await;
+        assert_eq!(payload["items"][0]["ids"].as_u64(), Some(2));
     }
 
     #[tokio::test]

@@ -317,6 +317,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_schema",
+        asset_id: "asset:gas/G_schema@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_sci",
         asset_id: "asset:gas/G_sci@ivm.core/v2",
         unit: "gas",

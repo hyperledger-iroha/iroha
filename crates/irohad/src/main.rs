@@ -3828,27 +3828,7 @@ impl Iroha {
         };
         if snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref()) {
             iroha_logger::warn!(
-                "Loaded snapshot is missing public-lane staking state; discarding it and rebuilding from Kura"
-            );
-            let genesis_public_key = effective_genesis_public_key.clone();
-            let mut world = World::with(
-                [genesis_domain(genesis_public_key.clone())],
-                [genesis_account(genesis_public_key)],
-                [],
-            );
-            if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
-                iroha_core::sns::seed_genesis_alias_bootstrap(
-                    &mut world,
-                    &genesis_block.0,
-                    &config.nexus.dataspace_catalog,
-                );
-            }
-            state = State::new(
-                world,
-                Arc::clone(&kura),
-                live_query_store.clone(),
-                #[cfg(feature = "telemetry")]
-                state_telemetry.clone(),
+                "Loaded snapshot is missing public-lane staking state; accepting snapshot to avoid replaying an existing Taira ledger from genesis"
             );
         }
         #[cfg(feature = "telemetry")]
@@ -7219,8 +7199,36 @@ mod accel_tests {
         0x15, 0xad,
     ];
 
+    struct AccelTestGuard {
+        original_config: ivm::AccelerationConfig,
+        original_simd_override: Option<ivm::SimdChoice>,
+        _simd_lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl AccelTestGuard {
+        fn new() -> Self {
+            let simd_lock = ivm::forced_simd_test_lock();
+            let original_config = ivm::acceleration_config();
+            let original_simd_override = ivm::set_forced_simd(None);
+
+            Self {
+                original_config,
+                original_simd_override,
+                _simd_lock: simd_lock,
+            }
+        }
+    }
+
+    impl Drop for AccelTestGuard {
+        fn drop(&mut self) {
+            ivm::set_acceleration_config(self.original_config);
+            ivm::set_forced_simd(self.original_simd_override);
+        }
+    }
+
     #[test]
     fn accel_config_disables_cuda_parity_holds() {
+        let _guard = AccelTestGuard::new();
         ivm::reset_cuda_backend_for_tests();
         let accel = iroha_config::parameters::actual::Acceleration {
             enable_simd: true,
@@ -7277,6 +7285,7 @@ mod accel_tests {
 
     #[test]
     fn accel_config_disables_simd_parity_holds() {
+        let _guard = AccelTestGuard::new();
         let original = ivm::acceleration_config();
         let accel = iroha_config::parameters::actual::Acceleration {
             enable_simd: false,
@@ -7322,6 +7331,7 @@ mod accel_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn accel_config_disables_metal_parity_holds() {
+        let _guard = AccelTestGuard::new();
         ivm::reset_metal_backend_for_tests();
         if !ivm::metal_available() {
             return;
@@ -9427,6 +9437,7 @@ mod tests {
 
         #[test]
         fn verify_genesis_metadata_rejects_crypto_mismatch_in_block() -> eyre::Result<()> {
+            let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
@@ -9513,6 +9524,9 @@ mod tests {
             use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
             use iroha_data_model::{account::curve::CurveId, prelude::*};
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
 
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
@@ -9664,6 +9678,7 @@ mod tests {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
             use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
+            let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             config.sumeragi.consensus_mode =
@@ -9708,6 +9723,7 @@ mod tests {
         fn verify_genesis_metadata_rejects_fingerprint_mismatch() -> eyre::Result<()> {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
+            let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();

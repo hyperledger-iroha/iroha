@@ -64,12 +64,15 @@ fn guess_defaults(n: u32) -> (String, String, String) {
     } else if up.contains("SCHEMA_ENCODE") || n == 0x59 {
         args = "r10=&Name(schema), r11=&Json".into();
         ret = "ptr (&NoritoBytes)".into();
+        gas = "G_schema + bytes".into();
     } else if up.contains("SCHEMA_DECODE") || n == 0x5A {
         args = "r10=&Name(schema), r11=&NoritoBytes".into();
         ret = "ptr (&Json)".into();
+        gas = "G_schema + bytes".into();
     } else if up.contains("SCHEMA_INFO") || n == 0x5B {
         args = "r10=&Name(schema)".into();
         ret = "ptr (&Json{\"id\":...,\"version\":...})".into();
+        gas = "G_schema + bytes".into();
     } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
         args = "r10=&AccountId, r11=&AssetDefinitionId".into();
         ret = "ptr (&NoritoBytes(Numeric))".into();

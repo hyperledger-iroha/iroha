@@ -424,9 +424,9 @@ node enforces that policy unconditionally.
 | 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | - |
 | 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes) | asset:gas/G_json_encode@ivm.core/v2 |
 | 0x58 | JSON_DECODE | r10=&NoritoBytes(JSON bytes) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v2 |
-| 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | - |
-| 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | - |
-| 0x5B | SCHEMA_INFO | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
+| 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | asset:gas/G_schema@ivm.core/v2 + bytes |
+| 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | asset:gas/G_schema@ivm.core/v2 + bytes |
+| 0x5B | SCHEMA_INFO | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0x5C | NAME_DECODE | r10=&NoritoBytes(UTF-8 string) | ptr (&Name) | asset:gas/G_name_decode@ivm.core/v2 |
 | 0x5D | POINTER_TO_NORITO | r10=&PointerType<T> | ptr (&NoritoBytes(TLV envelope)) | asset:gas/G_pointer@ivm.core/v2 + bytes |
 | 0x5E | POINTER_FROM_NORITO | r10=&NoritoBytes(TLV envelope), r11=expected?:u16 | ptr (&PointerType<T>) | asset:gas/G_pointer@ivm.core/v2 + bytes |
@@ -478,7 +478,7 @@ node enforces that policy unconditionally.
 | 0x8C | JSON_SET_I64_DIRECT | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
 | 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
 | 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | - | u64=0 | - |
-| 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
+| 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x91 | SM2_VERIFY | r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)? | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
 | 0x92 | SM4_GCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext) | r10=ptr (&Blob(ciphertext || tag16)) | asset:gas/G_sm4@ivm.core/v2 + bytes |
@@ -500,25 +500,25 @@ node enforces that policy unconditionally.
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
 | 0xA9 | CALL_CONTRACT | - | u64=0 | - |
-| 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | - | u64=0 | - |
-| 0xAB | ANONYMOUS_ESCROW_ACCEPT | - | u64=0 | - |
-| 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | - | u64=0 | - |
-| 0xAD | ANONYMOUS_ESCROW_RELEASE | - | u64=0 | - |
-| 0xAE | ANONYMOUS_ESCROW_CANCEL | - | u64=0 | - |
-| 0xAF | ANONYMOUS_ESCROW_OPEN_DISPUTE | - | u64=0 | - |
+| 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | - |
+| 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | - |
+| 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | - |
+| 0xAD | ANONYMOUS_ESCROW_RELEASE | r10=&NoritoBytes(ReleaseAnonymousAssetEscrow) | u64=0 | - |
+| 0xAE | ANONYMOUS_ESCROW_CANCEL | r10=&NoritoBytes(CancelAnonymousAssetEscrow) | u64=0 | - |
+| 0xAF | ANONYMOUS_ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
 | 0xB2 | AXT_COMMIT | - | u64=0 | - |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | - |
-| 0xB8 | ESCROW_OPEN_OFFER | - | u64=0 | - |
-| 0xB9 | ESCROW_ACCEPT | - | u64=0 | - |
-| 0xBA | ESCROW_MARK_PAYMENT_SENT | - | u64=0 | - |
-| 0xBB | ESCROW_RELEASE | - | u64=0 | - |
-| 0xBC | ESCROW_CANCEL | - | u64=0 | - |
-| 0xBD | ESCROW_OPEN_DISPUTE | - | u64=0 | - |
-| 0xBE | ESCROW_RESOLVE_DISPUTE | - | u64=0 | - |
-| 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | - | u64=0 | - |
+| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | - |
+| 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | - |
+| 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | - |
+| 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | - |
+| 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | - |
 | 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) | - |
 | 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) | - |
 | 0xC2 | SORACLOUD_EMIT_MAILBOX_MESSAGE | r10=&SoracloudRequest(EmitMailboxMessage) | r10=&SoracloudResponse(EmitMailboxMessage) | - |
@@ -529,8 +529,8 @@ node enforces that policy unconditionally.
 | 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | - |
 | 0xC8 | SORACLOUD_READ_CONFIG | r10=&SoracloudRequest(ReadConfig) | r10=&SoracloudResponse(ReadConfig) | - |
 | 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) | - |
-| 0xD0 | SCHEMA_ENCODE_DIRECT | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | - |
-| 0xD1 | SCHEMA_DECODE_DIRECT | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | - |
+| 0xD0 | SCHEMA_ENCODE_DIRECT | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | asset:gas/G_schema@ivm.core/v2 + bytes |
+| 0xD1 | SCHEMA_DECODE_DIRECT | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0xD2 | NUMERIC_TO_INT_DIRECT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |
 | 0xD3 | NUMERIC_ADD_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
 | 0xD4 | NUMERIC_SUB_DIRECT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
@@ -621,7 +621,9 @@ Codec helpers
 - 0x53 DECODE_INT — Args: `r10=&NoritoBytes(Norito-framed i64)` → Return: `r10=i64`
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode
 - 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` or `r10=&Blob(JSON text)` → Return: `ptr (&Json)` — Gas: G_json_decode
-- 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes(Json)` → Return: `ptr (&Json)`
+- 0x59 SCHEMA_ENCODE — Args: `r10=&Name(schema), r11=&Json` → Return: `ptr (&NoritoBytes)` — Gas: G_schema + bytes
+- 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes(Json)` → Return: `ptr (&Json)` — Gas: G_schema + bytes
+- 0x5B SCHEMA_INFO — Args: `r10=&Name(schema)` → Return: `ptr (&Json{"id":...,"version":...})` — Gas: G_schema + bytes
 - 0x5F TLV_EQ — Args: `r10=&Tlv, r11=&Tlv` → Return: `r10=1 if equal else 0` — Gas: G_tlv_eq + bytes
   - Compares TLV type, version, and payload bytes exactly. Gas charges the fixed compare base plus the payload bytes inspected.
 - 0x77 TLV_LEN — Args: `r10=&Tlv` → Return: `r10=payload_len` — Gas: G_tlv_len + bytes

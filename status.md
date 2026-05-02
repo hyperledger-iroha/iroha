@@ -2,6 +2,40 @@
 
 Last updated: 2026-05-02
 
+## 2026-05-02 SoraFS pin registry metrics test isolation
+
+- The SoraFS pin registry metrics summary test now records its Prometheus
+  assertions against an isolated test metrics registry instead of the process
+  global registry, avoiding parallel-test interference from other telemetry
+  fixtures while keeping the summary assertions unchanged.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry sorafs::api::advert_tests::pin_registry_metrics_summary_tracks_counts -- --nocapture`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry -- --nocapture`
+
+## 2026-05-02 Kotodama source analysis fixture refresh
+
+- Updated the reentrancy-analysis test snippets to call
+  `host::call_contract` with the current `(String|Blob, String|Blob, Json)`
+  signature, preserving the write-before-call and call-before-write scenarios
+  under test.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang reentrancy -- --nocapture`
+  - `cargo test -p kotodama_lang`
+
+## 2026-05-02 Iroha Connect Android approve fixture refresh
+
+- Refreshed the Android-emitted Connect approve frame fixture to carry the
+  current canonical I105 account literal and matching nested Connect length
+  fields instead of the retired base58-style account literal.
+- The fixture reader now tolerates line-wrapped hex so long generated frames can
+  remain readable without changing the decoded byte stream.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii_shared --test connect_android_approve_fixture -- --nocapture`
+  - `cargo test -p iroha_torii_shared --lib -- --nocapture`
+
 ## 2026-05-02 Torii limiter existing-key lookup trim
 
 - Refactored Torii's sharded rate limiter so hot existing-key checks use one

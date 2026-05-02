@@ -2439,6 +2439,16 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/gov/citizens/{account_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Governance",
+            "Fetch account citizenship status.",
+            "Return whether an account is registered in the governance citizenship registry.",
+            "#/components/schemas/JsonValue",
+            vec![path_param("account_id", "Account id.")],
+        )),
+    );
+    paths.insert(
         "/v1/gov/council/persist".to_owned(),
         Value::Object(json_post_operation(
             "Governance",

@@ -687,6 +687,7 @@ impl Actor {
                 let pending_height = pending.height;
                 let pending_view = pending.view;
                 pending.validation_status = ValidationStatus::Valid;
+                pending.touch_progress(Instant::now());
                 self.pending.pending_blocks.insert(hash, pending);
                 self.replay_cached_precommit_qc_for_valid_block(
                     hash,
@@ -731,6 +732,7 @@ impl Actor {
                     let pending_height = pending.height;
                     let pending_view = pending.view;
                     pending.validation_status = ValidationStatus::Valid;
+                    pending.touch_progress(Instant::now());
                     self.pending.pending_blocks.insert(hash, pending);
                     self.replay_cached_precommit_qc_for_valid_block(
                         hash,
@@ -944,6 +946,7 @@ impl Actor {
                                 pending.validated_commit_artifact = None;
                             }
                             pending.validation_status = ValidationStatus::Valid;
+                            pending.touch_progress(Instant::now());
                             self.pending.pending_blocks.insert(hash, pending);
                             self.replay_cached_precommit_qc_for_valid_block(
                                 hash,
@@ -1003,6 +1006,7 @@ impl Actor {
                                     "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
                                 );
                                 pending.validation_status = ValidationStatus::Valid;
+                                pending.touch_progress(Instant::now());
                                 self.pending.pending_blocks.insert(hash, pending);
                                 self.replay_cached_precommit_qc_for_valid_block(
                                     hash,

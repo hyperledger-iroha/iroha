@@ -2320,6 +2320,12 @@ impl WsvHost {
             .saturating_add(2_u64.saturating_mul(u64::try_from(payload_len).unwrap_or(u64::MAX)))
     }
 
+    fn schema_gas(input_len: usize, output_len: usize) -> u64 {
+        32_u64
+            .saturating_add(u64::try_from(input_len).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(output_len).unwrap_or(u64::MAX))
+    }
+
     fn pointer_gas(payload_len: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
@@ -3536,7 +3542,21 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_BUILD_PATH_MAP_KEY => {
                 // r10 = &Name base; r11 = key (int) -> r10 = &Name("<base>/<key>")
-                let base_name = self.decode_name_reg(vm, 10)?;
+                let base_addr = vm.register(10);
+                let (base_name, input_len) = match vm.memory.validate_tlv(base_addr) {
+                    Ok(tlv) => {
+                        if tlv.type_id != PointerType::Name {
+                            return Err(VMError::NoritoInvalid);
+                        }
+                        (self.decode_name_payload(tlv.payload)?, tlv.payload.len())
+                    }
+                    Err(_) => {
+                        let name: Name =
+                            self.decode_tlv_from_code(vm, base_addr, PointerType::Name)?;
+                        let input_len = name.as_ref().len();
+                        (name, input_len)
+                    }
+                };
                 let key = vm.register(11) as i64;
                 let base = base_name.as_ref();
                 let mut s = String::with_capacity(base.len() + 1 + 20);
@@ -3555,7 +3575,7 @@ impl IVMHost for WsvHost {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                Ok(0)
+                Ok(Self::schema_gas(input_len, body.len()))
             }
             crate::syscalls::SYSCALL_ALLOC => {
                 let size = vm.register(10);
@@ -4196,6 +4216,7 @@ impl IVMHost for WsvHost {
                 let json: Json =
                     decode_from_bytes(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let json_bytes = json.get().as_bytes();
+                let input_len = v_tlv.payload.len();
                 if let Some(reg) = &self.schema
                     && let Some(bytes) = reg.encode_json(&schema, json_bytes)
                 {
@@ -4208,7 +4229,7 @@ impl IVMHost for WsvHost {
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
-                    return Ok(0);
+                    return Ok(Self::schema_gas(input_len, bytes.len()));
                 }
                 match schema.as_str() {
                     "Order" => {
@@ -4239,7 +4260,7 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
-                        Ok(0)
+                        Ok(Self::schema_gas(input_len, bytes.len()))
                     }
                     "TradeV1" => {
                         #[derive(norito::Decode, norito::Encode, Clone, Debug)]
@@ -4274,7 +4295,7 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
-                        Ok(0)
+                        Ok(Self::schema_gas(input_len, bytes.len()))
                     }
                     _ => {
                         let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
@@ -4287,7 +4308,7 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
-                        Ok(0)
+                        Ok(Self::schema_gas(input_len, body.len()))
                     }
                 }
             }
@@ -4312,6 +4333,7 @@ impl IVMHost for WsvHost {
                     });
                 }
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
+                let input_len = b_tlv.payload.len();
                 if let Some(reg) = &self.schema
                     && let Some(min) = reg.decode_to_json(&schema, b_tlv.payload)
                 {
@@ -4329,7 +4351,7 @@ impl IVMHost for WsvHost {
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
-                    return Ok(0);
+                    return Ok(Self::schema_gas(input_len, body.len()));
                 }
                 match schema.as_str() {
                     "Order" => {
@@ -4357,7 +4379,7 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
-                        Ok(0)
+                        Ok(Self::schema_gas(input_len, body.len()))
                     }
                     "TradeV1" => {
                         #[derive(norito::Decode, norito::Encode, Clone, Debug)]
@@ -4386,7 +4408,7 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
-                        Ok(0)
+                        Ok(Self::schema_gas(input_len, body.len()))
                     }
                     _ => {
                         let json: Json = norito::decode_from_bytes(b_tlv.payload)
@@ -4401,7 +4423,7 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
-                        Ok(0)
+                        Ok(Self::schema_gas(input_len, body.len()))
                     }
                 }
             }
@@ -4426,6 +4448,7 @@ impl IVMHost for WsvHost {
                 if version == 0 {
                     return Err(VMError::NoritoInvalid);
                 }
+                let input_len = tlv.payload.len();
                 let body_value = {
                     let mut map = njson::Map::new();
                     map.insert("id".to_owned(), njson::Value::from(id_hex));
@@ -4443,7 +4466,7 @@ impl IVMHost for WsvHost {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                Ok(0)
+                Ok(Self::schema_gas(input_len, body.len()))
             }
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
@@ -7441,5 +7464,64 @@ mod tests_null_decode {
         let err = call_syscall(&mut vm, syscalls::SYSCALL_SCHEMA_DECODE)
             .expect_err("blob should be rejected");
         assert!(matches!(err, VMError::NoritoInvalid));
+    }
+
+    #[test]
+    fn wsv_schema_helpers_charge_payload_bytes() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let schema: Name = "Order".parse().expect("schema name");
+        let json = Json::from_str_norito(r#"{"qty":10, "side":"buy"}"#).expect("json");
+        let schema_bytes = norito::to_bytes(&schema).expect("encode schema");
+        let json_bytes = norito::to_bytes(&json).expect("encode json");
+        let schema_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &schema_bytes))
+            .expect("alloc schema");
+        let json_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &json_bytes))
+            .expect("alloc json");
+
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, json_ptr);
+        let encode_gas =
+            call_syscall(&mut vm, syscalls::SYSCALL_SCHEMA_ENCODE).expect("schema encode");
+        let encoded_ptr = vm.register(10);
+        let encoded = vm.memory.validate_tlv(encoded_ptr).expect("encoded tlv");
+        assert_eq!(encoded.type_id, PointerType::NoritoBytes);
+        let encoded_len = encoded.payload.len();
+        assert_eq!(
+            encode_gas,
+            WsvHost::schema_gas(json_bytes.len(), encoded_len)
+        );
+
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, encoded_ptr);
+        let decode_gas =
+            call_syscall(&mut vm, syscalls::SYSCALL_SCHEMA_DECODE).expect("schema decode");
+        let decoded = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("decoded tlv");
+        assert_eq!(decoded.type_id, PointerType::Json);
+        assert_eq!(
+            decode_gas,
+            WsvHost::schema_gas(encoded_len, decoded.payload.len())
+        );
+
+        vm.set_register(10, schema_ptr);
+        let info_gas = call_syscall(&mut vm, syscalls::SYSCALL_SCHEMA_INFO).expect("schema info");
+        let info = vm.memory.validate_tlv(vm.register(10)).expect("info tlv");
+        assert_eq!(info.type_id, PointerType::Json);
+        assert_eq!(
+            info_gas,
+            WsvHost::schema_gas(schema_bytes.len(), info.payload.len())
+        );
     }
 }

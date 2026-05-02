@@ -302,19 +302,19 @@ gas = "G_json_decode"
 number = "0x59"
 args = "r10=&Name(schema), r11=&Json"
 ret = "ptr (&NoritoBytes)"
-gas = "-"
+gas = "G_schema + bytes"
 
 [[syscall]]
 number = "0x5A"
 args = "r10=&Name(schema), r11=&NoritoBytes"
 ret = "ptr (&Json)"
-gas = "-"
+gas = "G_schema + bytes"
 
 [[syscall]]
 number = "0x5B"
 args = "r10=&Name(schema)"
 ret = "ptr (&Json{\"id\":...,\"version\":...})"
-gas = "-"
+gas = "G_schema + bytes"
 
 [[syscall]]
 number = "0x5C"
@@ -613,6 +613,42 @@ ret = "ptr (&AccountId in INPUT)"
 gas = "G_alias_resolve"
 
 [[syscall]]
+number = "0xAA"
+args = "r10=&NoritoBytes(OpenAnonymousAssetEscrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xAB"
+args = "r10=&Name(escrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xAC"
+args = "r10=&Name(escrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xAD"
+args = "r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xAE"
+args = "r10=&NoritoBytes(CancelAnonymousAssetEscrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xAF"
+args = "r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
 number = "0xB0"
 args = "r10=&AxtDescriptor"
 ret = "u64=0"
@@ -639,6 +675,54 @@ gas = "G_verify"
 [[syscall]]
 number = "0xB4"
 args = "r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob?"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xB8"
+args = "r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xB9"
+args = "r10=&Name(escrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xBA"
+args = "r10=&Name(escrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xBB"
+args = "r10=&Name(escrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xBC"
+args = "r10=&Name(escrow)"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xBD"
+args = "r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xBE"
+args = "r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0"
+ret = "u64=0"
+gas = "-"
+
+[[syscall]]
+number = "0xBF"
+args = "r10=&NoritoBytes(ResolveAnonymousEscrowDispute)"
 ret = "u64=0"
 gas = "-"
 

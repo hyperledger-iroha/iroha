@@ -429,9 +429,16 @@ impl PoseidonByteHasher {
         if self.pending_len > 0 {
             self.absorb_word(Fr::from(u64::from_le_bytes(self.pending_bytes)));
         }
-        self.absorb_word(Fr::ONE);
-        if self.rate_len != 0 {
-            self.absorb_word(Fr::ZERO);
+        match self.rate_len {
+            0 => {
+                self.state[0] += Fr::ONE;
+                poseidon3_permute(&mut self.state);
+            }
+            1 => {
+                self.state[1] += Fr::ONE;
+                poseidon3_permute(&mut self.state);
+            }
+            _ => unreachable!("Poseidon byte hasher rate length cannot exceed the rate"),
         }
         field_to_bytes(self.state[0])
     }
@@ -482,7 +489,8 @@ fn field_to_bytes(f: Fr) -> [u8; 32] {
 }
 
 fn field_to_u64(f: Fr) -> u64 {
-    let bytes = field_to_bytes(f);
+    let repr = f.to_repr();
+    let bytes = repr.as_ref();
     u64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
