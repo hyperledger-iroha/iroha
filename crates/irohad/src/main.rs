@@ -3826,27 +3826,7 @@ impl Iroha {
         };
         if snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref()) {
             iroha_logger::warn!(
-                "Loaded snapshot is missing public-lane staking state; discarding it and rebuilding from Kura"
-            );
-            let genesis_public_key = effective_genesis_public_key.clone();
-            let mut world = World::with(
-                [genesis_domain(genesis_public_key.clone())],
-                [genesis_account(genesis_public_key)],
-                [],
-            );
-            if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
-                iroha_core::sns::seed_genesis_alias_bootstrap(
-                    &mut world,
-                    &genesis_block.0,
-                    &config.nexus.dataspace_catalog,
-                );
-            }
-            state = State::new(
-                world,
-                Arc::clone(&kura),
-                live_query_store.clone(),
-                #[cfg(feature = "telemetry")]
-                state_telemetry.clone(),
+                "Loaded snapshot is missing public-lane staking state; accepting snapshot to avoid replaying an existing Taira ledger from genesis"
             );
         }
         #[cfg(feature = "telemetry")]
