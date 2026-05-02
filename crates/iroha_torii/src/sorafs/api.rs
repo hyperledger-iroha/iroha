@@ -9629,7 +9629,7 @@ mod advert_tests {
 
         #[cfg(feature = "telemetry")]
         {
-            let telemetry = crate::routing::MaybeTelemetry::for_tests();
+            let telemetry = isolated_test_telemetry();
             record_pin_registry_metrics(&telemetry, &snapshot);
             let metrics_text = telemetry
                 .telemetry()
