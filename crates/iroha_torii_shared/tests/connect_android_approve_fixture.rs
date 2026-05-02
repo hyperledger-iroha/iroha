@@ -6,7 +6,9 @@ use iroha_torii_shared::connect::{ConnectControlV1, FrameKind, decode_connect_fr
 
 #[test]
 fn decodes_android_approve_frame_fixture() {
-    let hex = include_str!("fixtures/android_approve_frame.hex").trim();
+    let hex = include_str!("fixtures/android_approve_frame.hex")
+        .split_whitespace()
+        .collect::<String>();
     let bytes = hex::decode(hex).expect("fixture hex should decode");
     let frame = decode_connect_frame_bare(&bytes).expect("android approve frame should decode");
 
@@ -48,7 +50,9 @@ fn decodes_android_approve_frame_fixture() {
 
 #[test]
 fn fixture_base64_roundtrip_sanity() {
-    let hex = include_str!("fixtures/android_approve_frame.hex").trim();
+    let hex = include_str!("fixtures/android_approve_frame.hex")
+        .split_whitespace()
+        .collect::<String>();
     let bytes = hex::decode(hex).expect("fixture hex should decode");
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let decoded = base64::engine::general_purpose::STANDARD

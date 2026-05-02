@@ -1,6 +1,18 @@
 # Status
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
+
+## 2026-05-02 Iroha Connect Android approve fixture refresh
+
+- Refreshed the Android-emitted Connect approve frame fixture to carry the
+  current canonical I105 account literal and matching nested Connect length
+  fields instead of the retired base58-style account literal.
+- The fixture reader now tolerates line-wrapped hex so long generated frames can
+  remain readable without changing the decoded byte stream.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii_shared --test connect_android_approve_fixture -- --nocapture`
+  - `cargo test -p iroha_torii_shared --lib -- --nocapture`
 
 ## 2026-05-01 Soracloud generated auth state hardening
 
