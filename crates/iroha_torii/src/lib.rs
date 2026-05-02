@@ -3528,6 +3528,16 @@ async fn handler_gov_council_current(
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 
+async fn handler_gov_citizen_count(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<JsonBody<crate::gov::CitizenCountResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
+    crate::gov::handle_gov_citizen_count(app.state.clone()).await
+}
+
 async fn handler_gov_citizen_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -33637,6 +33647,10 @@ impl Torii {
                 .route(
                     iroha_torii_shared::uri::GOV_COUNCIL_CURRENT,
                     get(handler_gov_council_current),
+                )
+                .route(
+                    iroha_torii_shared::uri::GOV_CITIZENS_COUNT,
+                    get(handler_gov_citizen_count),
                 )
                 .route(
                     iroha_torii_shared::uri::GOV_CITIZEN_STATUS,
