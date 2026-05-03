@@ -936,7 +936,8 @@ mod da_tests {
             None,
             BuildLine::Iroha3,
         )?;
-        let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let genesis_account_id =
+            AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         let batches = manifest.parse()?;
         let grant_batch = batches
             .iter()

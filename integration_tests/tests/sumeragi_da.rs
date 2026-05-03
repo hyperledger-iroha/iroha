@@ -25,6 +25,7 @@ use iroha::{
             system::SumeragiNposParameters,
         },
         prelude::{HashOf, QueryBuilderExt},
+        query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
         transaction::SignedTransaction,
     },
@@ -428,6 +429,7 @@ const DA_KURA_EVICTION_PROGRESS_WAIT_SECS: u64 = 45;
 const DA_LANE_TEU_MIN_BYTES: usize = 256 * 1024;
 const DA_LANE_TEU_HEADROOM_BYTES: usize = 64 * 1024;
 const DA_FUSION_FLOOR_TEU_MIN: i64 = 128 * 1024;
+const DA_KURA_SOURCE_BLOCKS_IN_MEMORY: i64 = 64;
 
 fn generate_incompressible_payload(tag: &str, payload_bytes: usize) -> String {
     use std::hash::{Hash, Hasher};
@@ -474,6 +476,60 @@ fn da_kura_eviction_disk_budget_bytes(payload_bytes: usize) -> i64 {
         .saturating_mul(12)
         .saturating_add(DA_LANE_TEU_HEADROOM_BYTES.saturating_mul(2));
     i64::try_from(target).unwrap_or(i64::MAX)
+}
+
+fn da_kura_source_disk_budget_bytes(payload_bytes: usize) -> i64 {
+    da_kura_eviction_disk_budget_bytes(payload_bytes).saturating_mul(32)
+}
+
+fn kura_eviction_override_layer(payload_bytes: usize) -> Table {
+    let mut table = Table::new();
+    let mut writer = TomlWriter::new(&mut table);
+    writer.write(["kura", "blocks_in_memory"], 1_i64).write(
+        ["nexus", "storage", "max_disk_usage_bytes"],
+        da_kura_eviction_disk_budget_bytes(payload_bytes),
+    );
+    table
+}
+
+async fn start_network_with_primary_kura_source_or_skip(
+    builder: NetworkBuilder,
+    context: &str,
+    eviction_layer: Table,
+) -> Result<Option<sandbox::SerializedNetwork>> {
+    let Some(network) = sandbox::build_network_or_skip(builder, context) else {
+        return Ok(None);
+    };
+    let result = async {
+        let genesis = network.genesis();
+        let base_layers: Vec<ConfigLayer> = network
+            .config_layers()
+            .map(|layer| ConfigLayer(layer.into_owned()))
+            .collect();
+        let eviction_layer = ConfigLayer(eviction_layer);
+
+        for (index, peer) in network.peers().iter().enumerate() {
+            let mut layers = base_layers.clone();
+            if index != 0 {
+                layers.push(eviction_layer.clone());
+            }
+            peer.start_checked(layers.into_iter(), Some(&genesis))
+                .await
+                .wrap_err_with(|| format!("start peer {index} for {context}"))?;
+        }
+        network
+            .ensure_blocks(1)
+            .await
+            .wrap_err("reach block 1 after heterogeneous Kura startup")?;
+        Ok(())
+    }
+    .await;
+
+    if sandbox::handle_result(result, context)?.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(network))
 }
 
 fn best_persisted_rbc_summary_for_height(
@@ -774,7 +830,10 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 ["torii", "max_content_len"],
                 torii_max_content_len_for_payload(payload_bytes),
             )
-            .write(["kura", "blocks_in_memory"], 1_i64);
+            .write(
+                ["kura", "blocks_in_memory"],
+                DA_KURA_SOURCE_BLOCKS_IN_MEMORY,
+            );
     }
 
     let mut nexus = toml::map::Map::new();
@@ -822,7 +881,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let mut storage = toml::map::Map::new();
     storage.insert(
         "max_disk_usage_bytes".into(),
-        toml::Value::Integer(da_kura_eviction_disk_budget_bytes(payload_bytes)),
+        toml::Value::Integer(da_kura_source_disk_budget_bytes(payload_bytes)),
     );
     let mut weights = toml::map::Map::new();
     weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
@@ -838,6 +897,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         writer.write("nexus", toml::Value::Table(nexus));
     }
 
+    let eviction_layer = kura_eviction_override_layer(payload_bytes);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -850,7 +910,10 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             TransactionParameter::MaxDecompressedBytes(tx_limit_nz),
         )))
         .with_config_table(config_table);
-    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+    let Some(network) =
+        start_network_with_primary_kura_source_or_skip(builder, scenario_name, eviction_layer)
+            .await?
+    else {
         return Ok(());
     };
 
@@ -972,11 +1035,28 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             "missing durable block hash for evicted height {evicted_height}"
         );
 
-        let status_after = fetch_status(&client).await?;
+        let query_start = Instant::now();
+        let evicted_block = loop {
+            let query_peer = peers
+                .iter()
+                .find(|peer| peer.is_running())
+                .ok_or_else(|| eyre!("no running peers available for block query"))?;
+            let blocks = query_peer.client().query(FindBlocks).execute_all()?;
+            if let Some(block) = blocks
+                .iter()
+                .find(|block| block.header().height().get() == evicted_height)
+            {
+                break block.clone();
+            }
+            ensure!(
+                query_start.elapsed() < da_commit_wait_timeout(),
+                "missing block at evicted height {evicted_height}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        };
         ensure!(
-            status_after.blocks > evicted_height,
-            "consensus did not advance beyond evicted height {evicted_height}; latest height {}",
-            status_after.blocks
+            expected_hash == evicted_block.hash().as_ref(),
+            "rehydrated block hash mismatch at height {evicted_height}"
         );
 
         network.shutdown().await;
@@ -4414,7 +4494,10 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
                 true,
             )
-            .write(["kura", "blocks_in_memory"], 1i64);
+            .write(
+                ["kura", "blocks_in_memory"],
+                DA_KURA_SOURCE_BLOCKS_IN_MEMORY,
+            );
     }
 
     let mut nexus = toml::map::Map::new();
@@ -4462,7 +4545,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     let mut storage = toml::map::Map::new();
     storage.insert(
         "max_disk_usage_bytes".into(),
-        toml::Value::Integer(da_kura_eviction_disk_budget_bytes(payload_bytes)),
+        toml::Value::Integer(da_kura_source_disk_budget_bytes(payload_bytes)),
     );
     let mut weights = toml::map::Map::new();
     weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
@@ -4478,6 +4561,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         writer.write("nexus", toml::Value::Table(nexus));
     }
 
+    let eviction_layer = kura_eviction_override_layer(payload_bytes);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -4494,7 +4578,10 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         )))
         .with_config_table(config_table);
 
-    let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
+    let Some(network) =
+        start_network_with_primary_kura_source_or_skip(builder, scenario_name, eviction_layer)
+            .await?
+    else {
         return Ok(());
     };
 
@@ -4569,11 +4656,28 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         })?;
         let evicted_height = evicted_marker.height;
 
-        let status_after = fetch_status(&client).await?;
+        let query_start = Instant::now();
+        let evicted_block = loop {
+            let query_peer = peers
+                .iter()
+                .find(|peer| peer.is_running())
+                .ok_or_else(|| eyre!("no running peers available for block query"))?;
+            let blocks = query_peer.client().query(FindBlocks).execute_all()?;
+            if let Some(block) = blocks
+                .iter()
+                .find(|block| block.header().height().get() == evicted_height)
+            {
+                break block.clone();
+            }
+            ensure!(
+                query_start.elapsed() < da_commit_wait_timeout(),
+                "missing block at evicted height {evicted_height}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        };
         ensure!(
-            status_after.blocks > evicted_height,
-            "consensus did not advance beyond evicted height {evicted_height}; latest height {}",
-            status_after.blocks
+            evicted_block.external_transactions().len() > 0,
+            "expected rehydrated block to include transactions at height {evicted_height}"
         );
 
         network.shutdown().await;
