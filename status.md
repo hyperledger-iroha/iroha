@@ -1,6 +1,31 @@
 # Status
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03
+
+## 2026-05-03 Taira Inrou rollout fail-closed hardening
+
+- Taira's shipped systemd unit now starts the bundled `/opt/iroha/bin/irohad`
+  from the rollout bundle instead of an ambient `/usr/local/bin/irohad`, so the
+  release cannot accidentally keep running a binary built without
+  `embedded-soracloud-runtime`.
+- The checked-in Taira validator config now enables Soracloud production mode
+  with bounded fail-closed egress and non-proxy Inrou hosting, causing startup
+  to reject stub/non-production runtime posture instead of silently exposing an
+  empty runtime snapshot.
+- The Taira container path now installs PortableVm QEMU tooling, passes the
+  portable acceleration setting through, and exposes `/dev/kvm` when present.
+- Soracloud status now reports the runtime manager as unavailable when `irohad`
+  is compiled without `embedded-soracloud-runtime`, rather than presenting the
+  stub as an idle materializer.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh configs/soranexus/taira/build_taira_rollout_bundle.sh scripts/build_release_image.sh`
+  - `cargo test -p iroha_config soracloud_runtime_production_mode_accepts_bounded_posture --lib -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures taira_config_enables_untrusted_cid_hosting -- --nocapture`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_runtime_status_sections_report_unavailable_without_runtime -- --nocapture`
+  - `cargo test -p irohad --features embedded-soracloud-runtime --bin irohad manager_config_ -- --nocapture`
+  - `python3 scripts/tests/taira_validator_container_test.py`
+  - `configs/soranexus/taira/build_taira_rollout_bundle.sh --profile debug --allow-dirty`
 
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 

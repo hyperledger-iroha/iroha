@@ -10051,6 +10051,44 @@ fn soracloud_runtime_status_sections(
         );
     };
 
+    if !runtime.materialization_available() {
+        let snapshot = runtime.snapshot();
+        let state_dir = runtime.state_dir().display().to_string();
+        return (
+            json_object(vec![
+                json_entry("mode", "embedded_runtime_manager"),
+                json_entry("status", "unavailable"),
+                json_entry(
+                    "message",
+                    "irohad is compiled without the `embedded-soracloud-runtime` feature; hosted Inrou materialization is disabled",
+                ),
+                json_entry("observed_height", snapshot.observed_height),
+                json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
+                json_entry("state_dir", state_dir.clone()),
+                json_entry("service_revisions", 0_u64),
+                json_entry("healthy_service_revisions", 0_u64),
+                json_entry("hydrating_service_revisions", 0_u64),
+                json_entry("degraded_service_revisions", 0_u64),
+                json_entry("unavailable_service_revisions", 0_u64),
+                json_entry("apartments", 0_u64),
+                json_entry("running_apartments", 0_u64),
+                json_entry("expired_apartments", 0_u64),
+            ]),
+            json_object(vec![
+                json_entry("enabled", false),
+                json_entry("state_dir", state_dir.clone()),
+                json_entry("observed_height", snapshot.observed_height),
+                json_entry("service_revisions", 0_u64),
+                json_entry("apartments", 0_u64),
+            ]),
+            json_object(vec![
+                json_entry("available", false),
+                json_entry("state_dir", state_dir),
+                json_entry("snapshot", snapshot),
+            ]),
+        );
+    }
+
     let snapshot = runtime.snapshot();
     let state_dir = runtime.state_dir().display().to_string();
 
