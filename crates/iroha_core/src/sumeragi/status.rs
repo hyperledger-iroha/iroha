@@ -721,7 +721,7 @@ pub struct NexusFeeSnapshot {
     pub sponsor_cap_exceeded_total: u64,
     /// Failures due to config/asset parsing errors.
     pub config_errors_total: u64,
-    /// Failures while executing the fee transfer.
+    /// Failures while executing the fee debit.
     pub transfer_failures_total: u64,
     /// Last attempted fee amount if available.
     pub last_amount: Option<Numeric>,
@@ -770,7 +770,7 @@ pub enum NexusFeeEvent {
         /// Attempted fee.
         attempted_fee: Numeric,
     },
-    /// Fee transfer failed to apply.
+    /// Fee debit failed to apply.
     TransferFailed {
         /// Payer classification.
         payer_kind: NexusFeePayer,

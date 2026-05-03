@@ -32,7 +32,7 @@ use iroha_data_model::{
     nexus::DataSpaceId,
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, Domain, DomainId, Register, Transfer, Trigger},
+    prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -962,17 +962,22 @@ pub(crate) fn check_external_nexus_fee_admission(
         transaction.authority().clone()
     };
 
-    let sink_account = crate::block::parse_account_literal_with_world(
-        world,
-        world.dataspace_catalog(),
-        &nexus.fees.fee_sink_account_id,
-    )
-    .ok_or_else(|| {
-        NexusFeeAdmissionError::ConfigInvalid(
-            "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
-                .to_owned(),
+    if observation_time_ms < nexus.fees.burn_from_unix_timestamp_ms {
+        let sink_account = crate::block::parse_account_literal_with_world(
+            world,
+            world.dataspace_catalog(),
+            &nexus.fees.fee_sink_account_id,
         )
-    })?;
+        .ok_or_else(|| {
+            NexusFeeAdmissionError::ConfigInvalid(
+                "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
+                    .to_owned(),
+            )
+        })?;
+        if payer == sink_account {
+            return Ok(());
+        }
+    }
 
     let asset_def = crate::block::parse_asset_definition_literal_with_world(
         world,
@@ -987,9 +992,6 @@ pub(crate) fn check_external_nexus_fee_admission(
     })?;
 
     let payer_asset = AssetId::new(asset_def, payer.clone());
-    if payer == sink_account {
-        return Ok(());
-    }
     let Some(balance) = world.assets().get(&payer_asset) else {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "fee asset `{}` is missing for payer `{payer}`",
@@ -1423,21 +1425,6 @@ impl Executor {
             authority.clone()
         };
 
-        let sink_account = crate::block::parse_account_literal_with_world(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &cfg.fee_sink_account_id,
-        )
-        .ok_or_else(|| {
-            let reason =
-                "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
-                    .to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
-                reason: reason.clone(),
-            });
-            warn!(target: "economics", "nexus fee rejected: {reason}");
-            ValidationFail::NotPermitted(reason)
-        })?;
         let asset_def = crate::block::parse_asset_definition_literal_with_world(
             &state_transaction.world,
             &cfg.fee_asset_id,
@@ -1461,8 +1448,67 @@ impl Executor {
         };
         let payer_id = payer.to_string();
         let asset_label = payer_asset.definition().to_string();
-        let sink_label = sink_account.to_string();
-        if payer == sink_account {
+        if state_transaction.block_unix_timestamp_ms() < cfg.burn_from_unix_timestamp_ms {
+            let sink_account = crate::block::parse_account_literal_with_world(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                &cfg.fee_sink_account_id,
+            )
+            .ok_or_else(|| {
+                let reason =
+                    "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
+                        .to_owned();
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+                    reason: reason.clone(),
+                });
+                warn!(target: "economics", "nexus fee rejected: {reason}");
+                ValidationFail::NotPermitted(reason)
+            })?;
+            let sink_label = sink_account.to_string();
+            if payer == sink_account {
+                state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                    payer_kind,
+                    payer_id,
+                    amount: fee,
+                    asset_id: asset_label,
+                });
+                return Ok(());
+            }
+            let transfer = iroha_data_model::isi::Transfer::<
+                Asset,
+                Numeric,
+                iroha_data_model::account::Account,
+            >::asset_numeric(payer_asset, fee.clone(), sink_account);
+            let instr: DMInstructionBox = transfer.into();
+            let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
+            let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
+            state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            let fee_transfer_result = instr.execute(authority, state_transaction);
+            state_transaction.current_dataspace_id = previous_tx_dataspace_id;
+            state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
+            fee_transfer_result.map_err(|err| {
+                let reason = format!("nexus fee transfer failed to apply: {err}");
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
+                    payer_kind,
+                    payer_id: payer_id.clone(),
+                    amount: fee.clone(),
+                    asset_id: asset_label.clone(),
+                    reason: reason.clone(),
+                });
+                warn!(
+                    target: "economics",
+                    ?err,
+                    payer = %payer_id,
+                    payer_kind = payer_kind_label,
+                    fee_amount = %fee,
+                    asset = %asset_label,
+                    sink = %sink_label,
+                    "nexus fee transfer failed"
+                );
+                ValidationFail::from(err)
+            })?;
+
             state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
                 payer_kind,
                 payer_id,
@@ -1471,21 +1517,18 @@ impl Executor {
             });
             return Ok(());
         }
-        let transfer = iroha_data_model::isi::Transfer::<
-            Asset,
-            Numeric,
-            iroha_data_model::account::Account,
-        >::asset_numeric(payer_asset, fee.clone(), sink_account);
-        let instr: DMInstructionBox = transfer.into();
+
+        let burn = Burn::asset_numeric(fee.clone(), payer_asset);
+        let instr: DMInstructionBox = burn.into();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-        let fee_transfer_result = instr.execute(authority, state_transaction);
+        let fee_burn_result = instr.execute(authority, state_transaction);
         state_transaction.current_dataspace_id = previous_tx_dataspace_id;
         state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
-        fee_transfer_result.map_err(|err| {
-            let reason = format!("nexus fee transfer failed to apply: {err}");
+        fee_burn_result.map_err(|err| {
+            let reason = format!("nexus fee burn failed to apply: {err}");
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
                 payer_kind,
                 payer_id: payer_id.clone(),
@@ -1500,8 +1543,7 @@ impl Executor {
                 payer_kind = payer_kind_label,
                 fee_amount = %fee,
                 asset = %asset_label,
-                sink = %sink_label,
-                "nexus fee transfer failed"
+                "nexus fee burn failed"
             );
             ValidationFail::from(err)
         })?;
@@ -6326,6 +6368,7 @@ mod tests {
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6373,7 +6416,7 @@ mod tests {
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
-        assert_eq!(sink_balance_after, 1);
+        assert_eq!(sink_balance_after, 0);
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 0);
@@ -6387,6 +6430,183 @@ mod tests {
             snap.last_payer,
             Some(crate::sumeragi::status::NexusFeePayer::Sponsor)
         );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_is_burned_even_when_sponsor_is_fee_sink() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let sponsor_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+            Numeric::new(10_000, 0),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [ad],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let permission = CanUseFeeSponsor {
+            sponsor: sponsor_id.clone(),
+        };
+        Grant::account_permission(permission, authority_id.clone())
+            .execute(&sponsor_id, &mut stx)
+            .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let sponsor_balance_after = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, sponsor_id))
+            .expect("sponsor asset exists")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(sponsor_balance_after, 9_999);
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_self_fee_is_legacy_noop_before_burn_activation() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let sponsor_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+            Numeric::new(10_000, 0),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [asset_definition],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: sponsor_id.clone(),
+            },
+            authority_id.clone(),
+        )
+        .execute(&sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        super::Executor::Initial
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("legacy self-fee execution");
+
+        let sponsor_balance_after = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, sponsor_id))
+            .expect("sponsor asset exists")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(sponsor_balance_after, 10_000);
     }
 
     #[test]
@@ -6436,6 +6656,7 @@ mod tests {
             nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
@@ -6454,7 +6675,93 @@ mod tests {
     }
 
     #[test]
-    fn nexus_fee_non_universal_route_debits_global_fee_asset_bucket() {
+    fn nexus_fee_non_universal_route_burns_global_fee_asset_bucket() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), authority_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sink_account],
+            [ad],
+            [payer_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        stx.current_dataspace_id = Some(DataSpaceId::new(10));
+        stx.world.current_dataspace_id = Some(DataSpaceId::new(10));
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("non-universal route should debit global fee bucket");
+
+        let payer_asset_id = AssetId::of(asset_def_id.clone(), authority_id);
+        let sink_asset_id = AssetId::of(asset_def_id, sink_id);
+        let payer_balance = stx
+            .world
+            .asset(&payer_asset_id)
+            .expect("payer asset")
+            .value()
+            .as_ref()
+            .clone();
+        let sink_balance = stx
+            .world
+            .asset(&sink_asset_id)
+            .expect("sink asset")
+            .value()
+            .as_ref()
+            .clone();
+        assert_eq!(payer_balance, Numeric::from(9_u32));
+        assert_eq!(sink_balance, Numeric::zero());
+    }
+
+    #[test]
+    fn nexus_fee_before_burn_activation_transfers_to_legacy_sink() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
@@ -6510,22 +6817,27 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut stx = block.transaction();
-        stx.current_dataspace_id = Some(DataSpaceId::new(10));
-        stx.world.current_dataspace_id = Some(DataSpaceId::new(10));
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
 
         super::Executor::Initial
             .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
-            .expect("non-universal route should debit global fee bucket");
+            .expect("legacy fee transfer should execute");
 
-        let sink_asset_id = AssetId::of(asset_def_id, sink_id);
+        let payer_balance = stx
+            .world
+            .asset(&AssetId::of(asset_def_id.clone(), authority_id))
+            .expect("payer asset")
+            .value()
+            .as_ref()
+            .clone();
         let sink_balance = stx
             .world
-            .asset(&sink_asset_id)
+            .asset(&AssetId::of(asset_def_id, sink_id))
             .expect("sink asset")
             .value()
             .as_ref()
             .clone();
+        assert_eq!(payer_balance, Numeric::from(9_u32));
         assert_eq!(sink_balance, Numeric::from(1_u32));
     }
 
@@ -6777,6 +7089,7 @@ mod tests {
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let instruction: InstructionBox = Transfer::asset_numeric(
@@ -6825,7 +7138,7 @@ mod tests {
             .0
             .to_string();
 
-        assert_eq!(sink_balance, "0.01");
+        assert_eq!(sink_balance, "0");
         assert_eq!(payer_balance, "8.99");
         assert_eq!(recipient_balance, "1");
     }
@@ -6874,6 +7187,7 @@ mod tests {
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
@@ -6900,6 +7214,13 @@ mod tests {
             .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
             .expect("execution");
 
+        let payer_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), payer_id))
+            .expect("payer asset exists")
+            .0
+            .to_string();
         let sink_balance = stx
             .world
             .assets()
@@ -6907,7 +7228,8 @@ mod tests {
             .expect("sink asset exists")
             .0
             .to_string();
-        assert_eq!(sink_balance, "0.00435");
+        assert_eq!(payer_balance, "9.99565");
+        assert_eq!(sink_balance, "0");
     }
 
     #[cfg(feature = "telemetry")]
