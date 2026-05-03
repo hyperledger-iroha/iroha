@@ -64,6 +64,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The 2026-05-03 `cargo test -p iroha_core --lib` rerun is green
     (`5129` passed, `22` ignored) after fixing execution-witness recorder
     isolation and hardening the RBC sidecar cooldown fixture.
+  - The later 2026-05-03 restarted-peer commit-QC recovery fix is covered by a
+    focused unit regression and the confidential downtime plus timeout localnet
+    scenario. Rerun the full `cargo test -p iroha_core --lib` corridor after
+    the next main-loop edit or before opening the next full workspace sweep.
   - For the next consensus change, rerun the same broad window so the collector
     fallback, exact-frontier repair, cached-target, vote replay, roster
     recovery, future-new-view, and model-backed reschedule fixtures continue to
@@ -77,6 +81,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - For any additional fatal hang shape, first add a focused Rust regression,
     then add the corresponding finite formal dimension or mutation so the
     expected-failure suite proves the model would have caught it.
+  - If another restarted-peer catch-up issue appears in message admission or
+    deduplication, add a small finite admission-order bridge or mutation before
+    broadening the frontier model itself; the current model intentionally
+    abstracts network-message dedup away.
   - Keep this scoped to the observed hang surface; do not generalize the model
     into an arbitrary pipeline unless a new bug requires more than the active
     plus one-future-slot abstraction.
