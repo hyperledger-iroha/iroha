@@ -1,6 +1,19 @@
 # Status
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03
+
+## 2026-05-03 Nexus fee burn semantics
+
+- Nexus transaction fees are now burned from the fee payer or authorized fee
+  sponsor instead of being transferred to `nexus.fees.fee_sink_account_id`.
+  Sponsored fees still require `CanUseFeeSponsor`, but a sponsor that is also
+  configured as the fee sink no longer receives a self-fee no-op.
+- Admission checks now require the payer/sponsor fee asset balance even when
+  the payer equals the configured fee sink, matching the burn-on-execution
+  behavior.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
 
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 
