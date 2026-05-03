@@ -16104,6 +16104,7 @@ mod tests {
             nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
@@ -16221,6 +16222,7 @@ mod tests {
             nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         {
             let mut world = state.world.block();
