@@ -993,6 +993,9 @@ fn sandboxed_sanitizer_command_for_search_path(
         }
     }
 
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = search_path;
+
     // Fall back to a dedicated subprocess even when the platform-specific
     // wrapper is unavailable. The child still applies resource limits before
     // sanitizing and remains isolated from the main Torii process.
@@ -2291,6 +2294,40 @@ mod tests {
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
+        }));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandboxed_sanitizer_command_uses_sandbox_exec_on_macos() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let sandbox_exec = temp.path().join("sandbox-exec");
+        fs::write(&sandbox_exec, "").expect("write fake sandbox-exec");
+
+        let exe = PathBuf::from("attachment_sanitizer");
+        let cmd = super::sandboxed_sanitizer_command_for_search_path(
+            &exe,
+            "4096",
+            Some(temp.path().as_os_str()),
+        );
+        assert_eq!(cmd.get_program(), sandbox_exec.as_os_str());
+
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args.first().copied(), Some(OsStr::new("-p")));
+        assert!(
+            args.get(1)
+                .and_then(|arg| arg.to_str())
+                .is_some_and(|profile| profile.contains("(deny network*)"))
+        );
+        assert_eq!(args.last().copied(), Some(exe.as_os_str()));
+
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
+        }));
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(super::ATTACHMENT_SANITIZER_SANDBOXED_ENV)
+                && *value == Some(OsStr::new("1"))
         }));
     }
 

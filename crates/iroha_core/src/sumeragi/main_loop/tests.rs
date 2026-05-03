@@ -26185,7 +26185,9 @@ async fn tick_rebroadcasts_stalled_rbc_sidecars_and_respects_cooldown() {
         .rbc
         .ready_rebroadcast_last_sent
         .insert(key, cooldown_marker);
-    harness.actor.tick();
+    let _ = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
     let cooldown_sent_at = *harness
         .actor
         .subsystems
@@ -41465,6 +41467,49 @@ async fn record_rbc_session_roster_repeated_derived_snapshot_with_same_roster_is
     assert!(
         actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
         "same-roster authoritative snapshots should not clear pending stash state"
+    );
+    let ready_cooldown = Instant::now()
+        .checked_add(Duration::from_secs(60))
+        .expect("cooldown marker should fit in Instant range");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .ready_rebroadcast_last_sent
+        .insert(key, ready_cooldown);
+    let deliver_cooldown = Instant::now()
+        .checked_add(Duration::from_secs(60))
+        .expect("cooldown marker should fit in Instant range");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .deliver_rebroadcast_last_sent
+        .insert(key, deliver_cooldown);
+
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .get(&key)
+            .copied(),
+        Some(ready_cooldown),
+        "same-roster authoritative snapshots should preserve READY rebroadcast cooldowns"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_rebroadcast_last_sent
+            .get(&key)
+            .copied(),
+        Some(deliver_cooldown),
+        "same-roster authoritative snapshots should preserve DELIVER rebroadcast cooldowns"
     );
     let stored = actor
         .subsystems

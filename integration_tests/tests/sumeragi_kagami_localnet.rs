@@ -27,6 +27,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_POLL: Duration = Duration::from_millis(200);
 const LOCALNET_BLOCK_TIME_MS: u64 = 2_000;
 const LOCALNET_COMMIT_TIME_MS: u64 = 2_000;
+const LOG_TAIL_LINES: usize = 80;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
@@ -44,7 +45,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         let irohad_bin = Program::Irohad
             .resolve()
             .wrap_err("resolve irohad binary")?;
-        let _localnet = KagamiLocalnet::start(
+        let mut localnet = KagamiLocalnet::start(
             &out_dir,
             &irohad_bin,
             LOCALNET_PEERS,
@@ -52,7 +53,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         )?;
 
         let client = load_localnet_client(&out_dir)?;
-        wait_for_status_ready(&client, READY_TIMEOUT).await?;
+        wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
         let baseline = client.get_status()?.blocks_non_empty;
         client.submit_blocking(Log::new(Level::INFO, "kagami localnet smoke".to_string()))?;
         let status =
@@ -155,6 +156,24 @@ impl KagamiLocalnet {
             _port_reservations: port_reservations,
         })
     }
+
+    fn unexpected_exit_report(&mut self) -> Result<Option<String>> {
+        for (idx, child) in self.children.iter_mut().enumerate() {
+            let Some(status) = child
+                .try_wait()
+                .wrap_err_with(|| format!("poll irohad peer {idx}"))?
+            else {
+                continue;
+            };
+            let log_path = self.dir.join(format!("peer{idx}.log"));
+            let tail = log_tail(&log_path, LOG_TAIL_LINES);
+            return Ok(Some(format!(
+                "irohad peer {idx} exited before localnet became ready: status={status}; log tail from {}:\n{tail}",
+                log_path.display()
+            )));
+        }
+        Ok(None)
+    }
 }
 
 impl Drop for KagamiLocalnet {
@@ -236,7 +255,11 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     Ok(Client::new(config))
 }
 
-async fn wait_for_status_ready(client: &Client, timeout: Duration) -> Result<()> {
+async fn wait_for_status_ready(
+    client: &Client,
+    localnet: &mut KagamiLocalnet,
+    timeout: Duration,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         if Instant::now() >= deadline {
@@ -245,7 +268,21 @@ async fn wait_for_status_ready(client: &Client, timeout: Duration) -> Result<()>
         if client.get_status().is_ok() {
             return Ok(());
         }
+        if let Some(report) = localnet.unexpected_exit_report()? {
+            return Err(eyre!(report));
+        }
         sleep(READY_POLL).await;
+    }
+}
+
+fn log_tail(path: &Path, lines: usize) -> String {
+    match fs::read_to_string(path) {
+        Ok(contents) => {
+            let mut tail = contents.lines().rev().take(lines).collect::<Vec<_>>();
+            tail.reverse();
+            tail.join("\n")
+        }
+        Err(err) => format!("failed to read log {}: {err}", path.display()),
     }
 }
 

@@ -982,7 +982,10 @@ pub mod account {
         executor: &mut V,
         isi: &SetKeyValue<Account>,
     ) {
-        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
+        let is_multisig_spec_key = isi.key().as_ref() == "multisig/spec";
+        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key())
+            && !is_multisig_spec_key
+        {
             deny!(
                 executor,
                 ValidationFail::NotPermitted(format!(
