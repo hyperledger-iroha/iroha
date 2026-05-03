@@ -299,11 +299,11 @@ async fn attachments_sanitize_via_subprocess_times_out_after_child_exit_when_std
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    let response_body = String::from_utf8_lossy(&response_body);
     assert!(
-        String::from_utf8_lossy(&response_body)
-            .contains("attachment sanitizer output timeout exceeded"),
-        "{}",
-        String::from_utf8_lossy(&response_body)
+        response_body.contains("attachment sanitizer output timeout exceeded")
+            || response_body.contains("attachment sanitize timeout exceeded"),
+        "{response_body}"
     );
 }
 

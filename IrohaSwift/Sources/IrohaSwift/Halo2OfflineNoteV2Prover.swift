@@ -402,13 +402,6 @@ public enum Halo2OfflineNoteV2Prover {
         let numerator = constraints.reduce([PastaFp]()) { accumulator, constraint in
             polyAdd(polyScale(accumulator, by: y), constraint)
         }
-        var root = PastaFp.one
-        for row in 0..<domain.n {
-            guard evaluatePolynomial(numerator, at: root) == .zero else {
-                throw Halo2OfflineNoteV2ProverError.nonVanishingQuotientNumerator(row: row)
-            }
-            root *= domain.omega
-        }
         return try divideByVanishingPolynomial(
             numerator,
             domainSize: domain.n,

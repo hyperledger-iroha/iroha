@@ -1051,12 +1051,37 @@ if (resolved) {
   console.log(`${resolved.alias} → ${resolved.account_id}`);
 }
 
+const permissioned = await torii.resolveAlias("tidal-river-4160@mibank.bpng", {
+  canonicalAuth: {
+    accountId: operatorAccountId,
+    privateKey: operatorPrivateKey,
+  },
+});
+console.log(permissioned?.account_id);
+
 const indexed = await torii.resolveAliasByIndex(0);
 console.log(indexed?.source); // "iso_bridge"
 ```
 
 `resolveAlias*` returns `null` when the alias is missing and throws when the ISO
-bridge runtime is disabled, matching Torii’s semantics.
+bridge runtime is disabled, matching Torii’s semantics. Pass `canonicalAuth`
+when an alias namespace requires Torii request signatures.
+
+Browser wallets that keep private keys sealed can sign the same request through
+an async signer callback:
+
+```js
+import { buildCanonicalJsonRequest } from "@iroha/iroha-js/canonical-request";
+
+const request = await buildCanonicalJsonRequest({
+  accountId: operatorAccountIdOrAlias,
+  path: "/v1/aliases/resolve",
+  body: { alias: "tidal-river-4160@mibank.bpng" },
+  sign: ({ messageBase64 }) => signWithWalletKey(messageBase64),
+});
+
+const response = await fetch(`${toriiBaseUrl}/v1/aliases/resolve`, request);
+```
 
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
 > the VOPRF and lookup endpoints from the CLI. The script accepts

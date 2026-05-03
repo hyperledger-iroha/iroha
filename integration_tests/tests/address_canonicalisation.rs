@@ -25,7 +25,7 @@ use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Client;
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
