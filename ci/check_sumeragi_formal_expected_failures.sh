@@ -13,5 +13,7 @@ bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-clear
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-evidence-drop
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-promotion-reset
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-stale-owner
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-progress-touch
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-height-only-recovery
 
 echo "[formal] Sumeragi expected-failure checks behaved as expected"

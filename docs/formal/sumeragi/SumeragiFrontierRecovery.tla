@@ -13,6 +13,8 @@ pace or hide recovery:
 - stale vs. fresh frontier recovery ownership,
 - quorum-reschedule marker/window state,
 - future frontier evidence that can reanchor and promote the next slot,
+- age- and event-scoped pending progress bookkeeping,
+- stale frontier recovery ownership scoped by the subject view it rotated,
 - deterministic commit, retransmit, view-rotation, and zero-evidence drop
   outcomes after GST.
 ***************************************************************************)
@@ -28,6 +30,8 @@ CONSTANTS
   MaxView,
   \* @type: Int;
   RescheduleWindow,
+  \* @type: Int;
+  MaxProgressAge,
   \* @type: Bool;
   BugDisableStaleRecovery,
   \* @type: Bool;
@@ -45,7 +49,11 @@ CONSTANTS
   \* @type: Bool;
   BugPromoteWithoutReset,
   \* @type: Bool;
-  BugFutureStaleOwnerBlocksReanchor
+  BugFutureStaleOwnerBlocksReanchor,
+  \* @type: Bool;
+  BugDisablePendingProgressTouch,
+  \* @type: Bool;
+  BugHeightOnlyStaleRecoveryUnlock
 
 VARIABLES
   \* @type: Int;
@@ -74,6 +82,22 @@ VARIABLES
   quorumWindowAge,
   \* @type: Int;
   view,
+  \* @type: Int;
+  subjectView,
+  \* @type: Int;
+  progressAge,
+  \* @type: Str;
+  lastProgressKind,
+  \* @type: Str;
+  validationState,
+  \* @type: Bool;
+  localVoteEmitted,
+  \* @type: Bool;
+  commitQcObserved,
+  \* @type: Int;
+  recoveryLastRotationView,
+  \* @type: Bool;
+  staleRecoveryUnlocked,
   \* @type: Bool;
   payloadRecovered,
   \* @type: Bool;
@@ -117,6 +141,14 @@ vars == <<
   quorumRescheduleArmed,
   quorumWindowAge,
   view,
+  subjectView,
+  progressAge,
+  lastProgressKind,
+  validationState,
+  localVoteEmitted,
+  commitQcObserved,
+  recoveryLastRotationView,
+  staleRecoveryUnlocked,
   payloadRecovered,
   quorumRetransmitted,
   rotated,
@@ -136,6 +168,12 @@ vars == <<
 PayloadStates == {"Missing", "Local"}
 RecoveryOwners == {"None", "Local", "Remote", "Stale"}
 DropReasons == {"None", "ZeroEvidence", "ViewBound"}
+ValidationStates == {"Pending", "Valid"}
+ProgressEventKinds ==
+  {"Validation", "LocalVote", "CommitQc", "VoteDrain", "PayloadRecovery",
+   "StaleRecovery", "QuorumRetransmit", "FutureReanchor", "Promotion",
+   "ViewRotation"}
+ProgressKinds == ProgressEventKinds \cup {"None"}
 
 ActiveFrontier ==
   /\ pending
@@ -147,6 +185,24 @@ VoteBacked == commitVotes + queuedVotes > 0
 FullQuorum == commitVotes >= CommitQuorum
 PayloadAvailable == payloadState = "Local"
 FreshRecoveryOwner == recoveryOwner # "Stale"
+ValidationReady == validationState = "Valid"
+StaleRecoveryViewCovered == recoveryLastRotationView >= subjectView
+NextProgressAge == IF progressAge < MaxProgressAge THEN progressAge + 1 ELSE MaxProgressAge
+
+RecordProgress(kind) ==
+  /\ progressAge' = IF BugDisablePendingProgressTouch THEN progressAge ELSE 0
+  /\ lastProgressKind' = kind
+
+ClearProgressEvent ==
+  /\ progressAge' = progressAge
+  /\ lastProgressKind' = "None"
+
+AgeWithoutProgress ==
+  /\ progressAge' = NextProgressAge
+  /\ lastProgressKind' = "None"
+
+PendingProgressFlags == <<validationState, localVoteEmitted, commitQcObserved>>
+ViewRecoveryBookkeeping == <<subjectView, recoveryLastRotationView, staleRecoveryUnlocked>>
 
 FutureVoteBacked == futureCommitVotes + futureQueuedVotes > 0
 FutureFrontierEvidence ==
@@ -170,6 +226,8 @@ TypeInvariant ==
   /\ MaxBacklog \in 0..N
   /\ MaxView \in Nat
   /\ RescheduleWindow \in Nat
+  /\ MaxProgressAge \in Nat
+  /\ MaxProgressAge > 0
   /\ BugDisableStaleRecovery \in BOOLEAN
   /\ BugDisableQueueDrain \in BOOLEAN
   /\ BugDisablePayloadRecovery \in BOOLEAN
@@ -179,6 +237,8 @@ TypeInvariant ==
   /\ BugAllowFutureEvidenceDrop \in BOOLEAN
   /\ BugPromoteWithoutReset \in BOOLEAN
   /\ BugFutureStaleOwnerBlocksReanchor \in BOOLEAN
+  /\ BugDisablePendingProgressTouch \in BOOLEAN
+  /\ BugHeightOnlyStaleRecoveryUnlock \in BOOLEAN
   /\ frontierSlot \in 0..1
   /\ pending \in BOOLEAN
   /\ contiguous \in BOOLEAN
@@ -194,6 +254,17 @@ TypeInvariant ==
   /\ quorumWindowAge \in 0..RescheduleWindow
   /\ quorumRescheduleArmed \/ quorumWindowAge = 0
   /\ view \in 0..MaxView
+  /\ subjectView \in 0..MaxView
+  /\ pending => subjectView = view
+  /\ progressAge \in 0..MaxProgressAge
+  /\ lastProgressKind \in ProgressKinds
+  /\ validationState \in ValidationStates
+  /\ localVoteEmitted \in BOOLEAN
+  /\ commitQcObserved \in BOOLEAN
+  /\ commitQcObserved => FullQuorum
+  /\ recoveryLastRotationView \in 0..MaxView
+  /\ recoveryOwner = "Stale" /\ ~BugHeightOnlyStaleRecoveryUnlock => StaleRecoveryViewCovered
+  /\ staleRecoveryUnlocked \in BOOLEAN
   /\ payloadRecovered \in BOOLEAN
   /\ quorumRetransmitted \in BOOLEAN
   /\ rotated \in BOOLEAN
@@ -255,7 +326,19 @@ Init ==
   /\ IF quorumRescheduleArmed
      THEN quorumWindowAge \in 0..RescheduleWindow
      ELSE quorumWindowAge = 0
-  /\ view = 0
+  /\ view \in 0..MaxView
+  /\ subjectView = view
+  /\ progressAge \in 0..MaxProgressAge
+  /\ lastProgressKind = "None"
+  /\ validationState \in ValidationStates
+  /\ localVoteEmitted \in BOOLEAN
+  /\ commitQcObserved \in BOOLEAN
+  /\ commitQcObserved => commitVotes >= CommitQuorum
+  /\ recoveryLastRotationView \in 0..MaxView
+  /\ IF recoveryOwner = "Stale" /\ ~BugHeightOnlyStaleRecoveryUnlock
+     THEN recoveryLastRotationView \in subjectView..MaxView
+     ELSE TRUE
+  /\ staleRecoveryUnlocked = FALSE
   /\ payloadRecovered = FALSE
   /\ quorumRetransmitted = FALSE
   /\ rotated = FALSE
@@ -285,6 +368,30 @@ ClearStaleRecoveryEnabled ==
   /\ gst
   /\ ActiveFrontier
   /\ recoveryOwner = "Stale"
+  /\ StaleRecoveryViewCovered \/ BugHeightOnlyStaleRecoveryUnlock
+
+ValidatePendingEnabled ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ validationState = "Pending"
+
+EmitLocalCommitVoteEnabled ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ ValidationReady
+  /\ ~localVoteEmitted
+
+ObserveCommitQcEnabled ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ FullQuorum
+  /\ ~commitQcObserved
 
 DrainVoteQueueEnabled ==
   /\ ~BugDisableQueueDrain
@@ -308,6 +415,7 @@ CommitFrontierEnabled ==
   /\ ActiveFrontier
   /\ FreshRecoveryOwner
   /\ ~FutureReanchorReadyForCurrent
+  /\ ValidationReady
   /\ PayloadAvailable
   /\ FullQuorum
 
@@ -408,6 +516,9 @@ DropFutureFrontierEvidenceEnabled ==
 
 FrontierProgressEnabled ==
   \/ ClearStaleRecoveryEnabled
+  \/ ValidatePendingEnabled
+  \/ EmitLocalCommitVoteEnabled
+  \/ ObserveCommitQcEnabled
   \/ DrainVoteQueueEnabled
   \/ RecoverPayloadEnabled
   \/ CommitFrontierEnabled
@@ -440,6 +551,14 @@ GstElapsed ==
       quorumRescheduleArmed,
       quorumWindowAge,
       view,
+      subjectView,
+      progressAge,
+      lastProgressKind,
+      validationState,
+      localVoteEmitted,
+      commitQcObserved,
+      recoveryLastRotationView,
+      staleRecoveryUnlocked,
       payloadRecovered,
       quorumRetransmitted,
       rotated,
@@ -457,6 +576,7 @@ GstElapsed ==
 
 LearnFutureFrontierEvidence ==
   /\ LearnFutureFrontierEvidenceEnabled
+  /\ ClearProgressEvent
   /\ futurePresent' = TRUE
   /\ futureContiguous' = TRUE
   /\ futureCommitVotes' = 1
@@ -464,6 +584,8 @@ LearnFutureFrontierEvidence ==
   /\ futurePayloadState' = "Missing"
   /\ futureRecoveryOwner' = "None"
   /\ futureEvidenceObserved' = TRUE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -487,10 +609,130 @@ LearnFutureFrontierEvidence ==
       gst
      >>
 
+ValidatePending ==
+  /\ ValidatePendingEnabled
+  /\ RecordProgress("Validation")
+  /\ validationState' = "Valid"
+  /\ promotionFresh' = FALSE
+  /\ UNCHANGED <<
+      frontierSlot,
+      pending,
+      contiguous,
+      committed,
+      dropped,
+      dropReason,
+      commitVotes,
+      queuedVotes,
+      payloadState,
+      recoveryOwner,
+      quorumRescheduleArmed,
+      quorumWindowAge,
+      view,
+      localVoteEmitted,
+      commitQcObserved,
+      subjectView,
+      recoveryLastRotationView,
+      staleRecoveryUnlocked,
+      payloadRecovered,
+      quorumRetransmitted,
+      rotated,
+      futurePresent,
+      futureContiguous,
+      futureCommitVotes,
+      futureQueuedVotes,
+      futurePayloadState,
+      futureRecoveryOwner,
+      futurePromotionReady,
+      futurePromoted,
+      futureEvidenceObserved,
+      gst
+     >>
+
+EmitLocalCommitVote ==
+  /\ EmitLocalCommitVoteEnabled
+  /\ RecordProgress("LocalVote")
+  /\ localVoteEmitted' = TRUE
+  /\ promotionFresh' = FALSE
+  /\ UNCHANGED <<
+      frontierSlot,
+      pending,
+      contiguous,
+      committed,
+      dropped,
+      dropReason,
+      commitVotes,
+      queuedVotes,
+      payloadState,
+      recoveryOwner,
+      quorumRescheduleArmed,
+      quorumWindowAge,
+      view,
+      subjectView,
+      validationState,
+      commitQcObserved,
+      recoveryLastRotationView,
+      staleRecoveryUnlocked,
+      payloadRecovered,
+      quorumRetransmitted,
+      rotated,
+      futurePresent,
+      futureContiguous,
+      futureCommitVotes,
+      futureQueuedVotes,
+      futurePayloadState,
+      futureRecoveryOwner,
+      futurePromotionReady,
+      futurePromoted,
+      futureEvidenceObserved,
+      gst
+     >>
+
+ObserveCommitQc ==
+  /\ ObserveCommitQcEnabled
+  /\ RecordProgress("CommitQc")
+  /\ commitQcObserved' = TRUE
+  /\ promotionFresh' = FALSE
+  /\ UNCHANGED <<
+      frontierSlot,
+      pending,
+      contiguous,
+      committed,
+      dropped,
+      dropReason,
+      commitVotes,
+      queuedVotes,
+      payloadState,
+      recoveryOwner,
+      quorumRescheduleArmed,
+      quorumWindowAge,
+      view,
+      subjectView,
+      validationState,
+      localVoteEmitted,
+      recoveryLastRotationView,
+      staleRecoveryUnlocked,
+      payloadRecovered,
+      quorumRetransmitted,
+      rotated,
+      futurePresent,
+      futureContiguous,
+      futureCommitVotes,
+      futureQueuedVotes,
+      futurePayloadState,
+      futureRecoveryOwner,
+      futurePromotionReady,
+      futurePromoted,
+      futureEvidenceObserved,
+      gst
+     >>
+
 ClearStaleRecovery ==
   /\ ClearStaleRecoveryEnabled
+  /\ RecordProgress("StaleRecovery")
   /\ recoveryOwner' = "None"
+  /\ staleRecoveryUnlocked' = TRUE
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -504,6 +746,8 @@ ClearStaleRecovery ==
       quorumRescheduleArmed,
       quorumWindowAge,
       view,
+      subjectView,
+      recoveryLastRotationView,
       payloadRecovered,
       quorumRetransmitted,
       rotated,
@@ -521,9 +765,12 @@ ClearStaleRecovery ==
 
 DrainVoteQueue ==
   /\ DrainVoteQueueEnabled
+  /\ RecordProgress("VoteDrain")
   /\ commitVotes' = commitVotes + 1
   /\ queuedVotes' = queuedVotes - 1
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -553,10 +800,13 @@ DrainVoteQueue ==
 
 RecoverPayload ==
   /\ RecoverPayloadEnabled
+  /\ RecordProgress("PayloadRecovery")
   /\ payloadState' = "Local"
   /\ payloadRecovered' = TRUE
   /\ recoveryOwner' = "Local"
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -585,11 +835,14 @@ RecoverPayload ==
 
 CommitFrontier ==
   /\ CommitFrontierEnabled
+  /\ ClearProgressEvent
   /\ committed' = TRUE
   /\ pending' = FALSE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -617,9 +870,12 @@ CommitFrontier ==
 
 ArmQuorumReschedule ==
   /\ ArmQuorumRescheduleEnabled
+  /\ ClearProgressEvent
   /\ quorumRescheduleArmed' = TRUE
   /\ quorumWindowAge' = 0
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -649,8 +905,11 @@ ArmQuorumReschedule ==
 
 QuorumWindowTick ==
   /\ QuorumWindowTickEnabled
+  /\ AgeWithoutProgress
   /\ quorumWindowAge' = quorumWindowAge + 1
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -681,10 +940,13 @@ QuorumWindowTick ==
 
 QuorumRetransmit ==
   /\ QuorumRetransmitEnabled
+  /\ RecordProgress("QuorumRetransmit")
   /\ quorumRetransmitted' = TRUE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -713,12 +975,17 @@ QuorumRetransmit ==
 
 RotateVoteBackedFrontier ==
   /\ RotateVoteBackedFrontierEnabled
+  /\ RecordProgress("ViewRotation")
   /\ view' = view + 1
+  /\ subjectView' = view + 1
+  /\ recoveryLastRotationView' = view + 1
+  /\ staleRecoveryUnlocked' = FALSE
   /\ rotated' = TRUE
   /\ pending' = FALSE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -745,6 +1012,7 @@ RotateVoteBackedFrontier ==
 
 DropAtViewBound ==
   /\ DropAtViewBoundEnabled
+  /\ ClearProgressEvent
   /\ pending' = FALSE
   /\ dropped' = TRUE
   /\ dropReason' = "ViewBound"
@@ -752,6 +1020,8 @@ DropAtViewBound ==
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -777,11 +1047,14 @@ DropAtViewBound ==
 
 ClearCurrentForFutureReanchor ==
   /\ ClearCurrentForFutureReanchorEnabled
+  /\ RecordProgress("FutureReanchor")
   /\ pending' = FALSE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ futurePromotionReady' = TRUE
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -809,6 +1082,7 @@ ClearCurrentForFutureReanchor ==
 
 PromoteFutureFrontier ==
   /\ PromoteFutureFrontierEnabled
+  /\ RecordProgress("Promotion")
   /\ frontierSlot' = frontierSlot + 1
   /\ pending' = TRUE
   /\ contiguous' = futureContiguous
@@ -822,6 +1096,12 @@ PromoteFutureFrontier ==
   /\ quorumRescheduleArmed' = IF BugPromoteWithoutReset THEN quorumRescheduleArmed ELSE FALSE
   /\ quorumWindowAge' = IF BugPromoteWithoutReset THEN quorumWindowAge ELSE 0
   /\ view' = IF BugPromoteWithoutReset THEN view ELSE 0
+  /\ subjectView' = IF BugPromoteWithoutReset THEN subjectView ELSE 0
+  /\ validationState' = "Pending"
+  /\ localVoteEmitted' = FALSE
+  /\ commitQcObserved' = FALSE
+  /\ recoveryLastRotationView' = IF BugPromoteWithoutReset THEN recoveryLastRotationView ELSE 0
+  /\ staleRecoveryUnlocked' = FALSE
   /\ payloadRecovered' = IF BugPromoteWithoutReset THEN payloadRecovered ELSE FALSE
   /\ quorumRetransmitted' = IF BugPromoteWithoutReset THEN quorumRetransmitted ELSE FALSE
   /\ rotated' = FALSE
@@ -839,12 +1119,15 @@ PromoteFutureFrontier ==
 
 DropFutureFrontierEvidence ==
   /\ DropFutureFrontierEvidenceEnabled
+  /\ ClearProgressEvent
   /\ futurePresent' = FALSE
   /\ futureContiguous' = FALSE
   /\ futureCommitVotes' = 0
   /\ futureQueuedVotes' = 0
   /\ futurePayloadState' = "Missing"
   /\ futureRecoveryOwner' = "None"
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       pending,
@@ -871,12 +1154,15 @@ DropFutureFrontierEvidence ==
 
 DropZeroEvidence ==
   /\ DropZeroEvidenceEnabled
+  /\ ClearProgressEvent
   /\ pending' = FALSE
   /\ dropped' = TRUE
   /\ dropReason' = "ZeroEvidence"
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
   /\ promotionFresh' = FALSE
+  /\ UNCHANGED PendingProgressFlags
+  /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
       contiguous,
@@ -905,6 +1191,9 @@ Next ==
   \/ StallBeforeGst
   \/ GstElapsed
   \/ LearnFutureFrontierEvidence
+  \/ ValidatePending
+  \/ EmitLocalCommitVote
+  \/ ObserveCommitQc
   \/ ClearStaleRecovery
   \/ DrainVoteQueue
   \/ RecoverPayload
@@ -921,6 +1210,9 @@ Next ==
 
 Fairness ==
   /\ WF_vars(GstElapsed)
+  /\ WF_vars(ValidatePending)
+  /\ WF_vars(EmitLocalCommitVote)
+  /\ WF_vars(ObserveCommitQc)
   /\ WF_vars(ClearStaleRecovery)
   /\ WF_vars(DrainVoteQueue)
   /\ WF_vars(RecoverPayload)
@@ -959,6 +1251,61 @@ FuturePromotionReadyHasProgress ==
   /\ futurePromotionReady
   => PromoteFutureFrontierEnabled
 
+StaleRecoveryOwnerHasClearProgress ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ recoveryOwner = "Stale"
+  /\ StaleRecoveryViewCovered
+  => ClearStaleRecoveryEnabled
+
+VoteQueueBacklogHasDrainProgress ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ queuedVotes > 0
+  => DrainVoteQueueEnabled
+
+MissingPayloadHasRecoveryProgress ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ VoteBacked
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ queuedVotes = 0
+  /\ payloadState = "Missing"
+  => RecoverPayloadEnabled
+
+QuorumWindowHasRetransmitProgress ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ VoteBacked
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ PayloadAvailable
+  /\ ~FullQuorum
+  /\ quorumRescheduleArmed
+  /\ quorumWindowAge >= RescheduleWindow
+  => QuorumRetransmitEnabled
+
+RetransmitHasFollowthroughProgress ==
+  /\ gst
+  /\ ActiveFrontier
+  /\ VoteBacked
+  /\ FreshRecoveryOwner
+  /\ ~FutureReanchorReadyForCurrent
+  /\ PayloadAvailable
+  /\ ~FullQuorum
+  /\ ~quorumRescheduleArmed
+  /\ quorumRetransmitted
+  => RotateVoteBackedFrontierEnabled \/ DropAtViewBoundEnabled
+
+FutureEvidenceHasReanchorProgress ==
+  /\ gst
+  /\ FutureReanchorReadyForCurrent
+  /\ ~futurePromotionReady
+  => ClearCurrentForFutureReanchorEnabled
+
 FutureEvidencePreservedUntilPromotion ==
   /\ futureEvidenceObserved
   /\ ~futurePromoted
@@ -971,6 +1318,19 @@ FuturePromotionResetsActiveProgress ==
      /\ ~quorumRescheduleArmed
      /\ quorumWindowAge = 0
      /\ view = 0
+     /\ subjectView = view
+     /\ progressAge = 0
+     /\ validationState = "Pending"
+     /\ ~localVoteEmitted
+     /\ ~commitQcObserved
+     /\ recoveryLastRotationView = view
+     /\ ~staleRecoveryUnlocked
+
+PendingProgressEventsTouchAge ==
+  lastProgressKind # "None" => progressAge = 0
+
+StaleRecoveryUnlockIsViewScoped ==
+  staleRecoveryUnlocked => StaleRecoveryViewCovered
 
 PostGstVoteBackedFrontierEventuallyResolves ==
   [] (

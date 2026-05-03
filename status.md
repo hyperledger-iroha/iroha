@@ -1,6 +1,93 @@
 # Status
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03
+
+## 2026-05-03 Sumeragi frontier formal process hardening
+
+- Hardened the bounded Taira frontier-recovery model again after the latest
+  consensus hang fixes. The model now tracks active pending progress age and
+  event kind, validation/local-vote/commit-QC progress, subject-view-scoped
+  stale recovery unlocks, and direct process obligations for stale owner clear,
+  vote queue drain, payload recovery, quorum retransmit, retransmit
+  follow-through, and future reanchor.
+- Added expected-failure mutation coverage for disabled pending-progress touch
+  and height-only stale recovery unlocks, and extended the formal expected
+  failure suite so these run with the existing stale-owner, vote-queue,
+  payload-recovery, retransmit-follow-through, future-promotion,
+  reanchor-clear, future-evidence-drop, promotion-reset, and future-stale-owner
+  mutations.
+- The strengthened model closes a verification-process gap: during hardening,
+  the retransmit-follow-through mutation initially escaped until the model got
+  a direct `RetransmitHasFollowthroughProgress` invariant. The final suite now
+  rejects that mutation as expected. No Sumeragi protocol state-machine
+  behavior changed in this slice.
+- Broader runtime validation exposed an internal execution-witness recorder
+  isolation issue: a prior capture could leave the global witness recorder
+  active after an early return or panic, poisoning later parallel tests and
+  polluting transaction-set hash assertions. The recorder now only accepts
+  events inside an active capture window, recovers from poisoned lock state for
+  cleanup, and clears unfinished captures when the guard drops.
+- The next Torii validation pass exposed a non-consensus macOS process-wrapper
+  issue: `sandbox-exec` can abort the Rust attachment sanitizer child during
+  runtime initialization before it can return a structured rejection. Torii now
+  uses the direct sanitizer subprocess path on macOS, while Linux keeps the
+  `bwrap` sandbox path when available. The subprocess timeout fixture now
+  accepts both child-process and stdout-reader timeout classifications.
+- Full formal validation with local Apalache `0.52.2` is green:
+  - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-deep`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-wide`
+  - `bash scripts/formal/sumeragi_apalache.sh frontier-nightly`
+  - `bash ci/check_sumeragi_formal_expected_failures.sh`
+  - `bash ci/check_sumeragi_formal.sh`
+  - `git diff --check`
+  - `python3 ci/check_docs_i18n_metadata.py --paths docs/formal` (passed with
+    expected stale `source_hash` warnings for translated formal READMEs)
+- The full CI formal gate also ran the small TLC cross-check for the frontier
+  model. TLC completed the bounded state graph with `1,165,588` distinct
+  states, graph depth `11`, and no invariant or temporal-property errors.
+- Focused Rust bridge validation for the formal assumptions is green:
+  - `cargo test -p iroha_core --lib local_commit_vote_counts_as_pending_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_qc_observation_counts_as_pending_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib local_same_height_vote_blocks_when_exhausted_recovery_has_not_rotated_vote_view -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_ignores_quorum_timeout_vote_queue_backlog -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_reanchors_frontier_when_future_new_view_quorum_exists -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_reanchors_future_new_view_quorum_while_vote_queue_backlogged -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_reanchors_future_new_view_quorum_over_stale_frontier_owner -- --nocapture`
+- Broader Sumeragi regression windows were also green after the formal pass:
+  - `cargo test -p iroha_core --lib reschedule_ -- --nocapture` (`61` passed)
+  - `cargo test -p iroha_core --lib same_height -- --nocapture` (`51`
+    passed, `3` ignored as obsolete)
+  - `cargo test -p iroha_core --lib pending_progress -- --nocapture` (`6`
+    passed)
+  - `cargo test -p iroha_core --lib pacemaker_reanchors -- --nocapture` (`3`
+    passed)
+- Continued widening found no runtime consensus failures:
+  - `cargo test -p iroha_core --lib` (`5129` passed, `22` ignored, `0`
+    failed; finished in `726.67s`)
+  - `cargo test -p iroha_core --lib sumeragi::witness::tests -- --nocapture`
+    (`5` passed)
+  - `cargo test -p iroha_core --lib state::fastpq_tx_set_hash_tests -- --test-threads=1 --nocapture`
+    (`4` passed)
+  - `cargo test -p iroha_core --lib frontier -- --nocapture` (`326` passed,
+    `1` ignored)
+  - `cargo test -p iroha_core --lib vote_queue -- --nocapture` (`6` passed)
+  - `cargo test -p iroha_core --lib commit_qc -- --nocapture` (`143` passed)
+  - `cargo test -p iroha_core --lib future_new_view -- --nocapture` (`5`
+    passed)
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests` (`2023`
+    passed, `20` ignored)
+  - `cargo test -p iroha_core --lib sumeragi::tests` (`137` passed)
+  - `cargo test -p iroha_core --lib sumeragi::status` (`65` passed)
+- The Torii crate corridor is green after fixing the macOS sanitizer wrapper
+  issue:
+  - `cargo test -p iroha_torii --test zk_attachments_subprocess -- --nocapture --test-threads=1`
+    (`16` passed)
+  - `cargo test -p iroha_torii` (passed, including `1680` library tests, `1`
+    ignored, all integration binaries, and doctests)
 
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 

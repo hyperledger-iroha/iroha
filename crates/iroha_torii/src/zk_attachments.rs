@@ -936,11 +936,11 @@ fn sandboxed_sanitizer_command(exe: &Path, max_input_bytes: &str) -> Command {
 fn sandboxed_sanitizer_command_for_search_path(
     exe: &Path,
     max_input_bytes: &str,
-    search_path: Option<&OsStr>,
+    _search_path: Option<&OsStr>,
 ) -> Command {
     #[cfg(target_os = "linux")]
     {
-        if let Some(bubblewrap) = find_executable_in_search_path(search_path, "bwrap") {
+        if let Some(bubblewrap) = find_executable_in_search_path(_search_path, "bwrap") {
             let mut cmd = Command::new(bubblewrap);
             cmd.args([
                 "--die-with-parent",
@@ -970,25 +970,6 @@ fn sandboxed_sanitizer_command_for_search_path(
                 "1",
             ]);
             cmd.arg(exe);
-            return cmd;
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(sandbox_exec) = find_executable_in_search_path(search_path, "sandbox-exec") {
-            let profile = r#"(version 1)
-(deny default)
-(allow process*)
-(allow file-read*)
-(deny network*)"#;
-            let mut cmd = Command::new(sandbox_exec);
-            cmd.arg("-p")
-                .arg(profile)
-                .arg(exe)
-                .env(ATTACHMENT_SANITIZER_ENV, "1")
-                .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
-                .env(ATTACHMENT_SANITIZER_SANDBOXED_ENV, "1");
             return cmd;
         }
     }
@@ -2292,6 +2273,22 @@ mod tests {
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
         }));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandboxed_sanitizer_command_uses_direct_child_on_macos() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let sandbox_exec = temp.path().join("sandbox-exec");
+        fs::write(&sandbox_exec, "").expect("write fake sandbox-exec");
+
+        let exe = PathBuf::from("attachment_sanitizer");
+        let cmd = super::sandboxed_sanitizer_command_for_search_path(
+            &exe,
+            "4096",
+            Some(temp.path().as_os_str()),
+        );
+        assert_eq!(cmd.get_program(), exe.as_os_str());
     }
 
     #[cfg(target_os = "linux")]

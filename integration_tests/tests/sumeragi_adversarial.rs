@@ -314,29 +314,38 @@ async fn run_witness_corruption_scenario() -> Result<()> {
         .as_ref()
         .and_then(session_height)
         .unwrap_or(expected_height);
-    sleep(Duration::from_secs(3)).await;
-    let status_after = blocking_status(&client)?;
-    let sessions_after = tokio::task::spawn_blocking({
-        let client = client.clone();
-        move || client.get_sumeragi_rbc_sessions_json()
-    })
-    .await
-    .wrap_err("fetch RBC sessions after witness corruption wait")??;
-
-    let delivered = session
-        .as_ref()
-        .and_then(|value| get_bool(value, "delivered"))
-        .unwrap_or(false)
-        || any_delivered_session_for_height(&sessions_after, session_height);
-    let complete = any_complete_session_for_height(&sessions_after, session_height);
+    let observation_deadline = Instant::now() + Duration::from_secs(60);
+    let (status_after, delivered, complete, retired) = loop {
+        let status_after = blocking_status(&client)?;
+        let sessions_after = tokio::task::spawn_blocking({
+            let client = client.clone();
+            move || client.get_sumeragi_rbc_sessions_json()
+        })
+        .await
+        .wrap_err("fetch RBC sessions after witness corruption wait")??;
+        let delivered = session
+            .as_ref()
+            .and_then(|value| get_bool(value, "delivered"))
+            .unwrap_or(false)
+            || any_delivered_session_for_height(&sessions_after, session_height);
+        let complete = any_complete_session_for_height(&sessions_after, session_height);
+        let retired = extract_sessions_for_height(&sessions_after, session_height).is_empty();
+        if status_after.blocks != status_before.blocks
+            || delivered
+            || complete
+            || retired
+            || Instant::now() >= observation_deadline
+        {
+            break (status_after, delivered, complete, retired);
+        }
+        sleep(Duration::from_millis(200)).await;
+    };
     ensure!(
         status_after.blocks == status_before.blocks,
         "witness corruption should gate commit height even when the RBC session completes"
     );
     ensure!(
-        delivered
-            || complete
-            || extract_sessions_for_height(&sessions_after, session_height).is_empty(),
+        delivered || complete || retired,
         "witness corruption should still complete RBC delivery telemetry or retire the session after completion"
     );
     let mut summary_map = Map::new();

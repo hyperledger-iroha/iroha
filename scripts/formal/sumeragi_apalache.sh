@@ -102,8 +102,20 @@ case "$mode" in
     apalache_length=5
     expect_failure=1
     ;;
+  frontier-bug-progress-touch)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_progress_touch.cfg"
+    apalache_length=3
+    expect_failure=1
+    ;;
+  frontier-bug-height-only-recovery)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_height_only_recovery.cfg"
+    apalache_length=3
+    expect_failure=1
+    ;;
   *)
-    echo "usage: $0 {fast|deep|frontier-fast|frontier-deep|frontier-wide|frontier-nightly|frontier-bug-stale-owner|frontier-bug-vote-queue|frontier-bug-payload-recovery|frontier-bug-retransmit-followthrough|frontier-bug-future-promotion|frontier-bug-future-reanchor-clear|frontier-bug-future-evidence-drop|frontier-bug-promotion-reset|frontier-bug-future-stale-owner}" >&2
+    echo "usage: $0 {fast|deep|frontier-fast|frontier-deep|frontier-wide|frontier-nightly|frontier-bug-stale-owner|frontier-bug-vote-queue|frontier-bug-payload-recovery|frontier-bug-retransmit-followthrough|frontier-bug-future-promotion|frontier-bug-future-reanchor-clear|frontier-bug-future-evidence-drop|frontier-bug-promotion-reset|frontier-bug-future-stale-owner|frontier-bug-progress-touch|frontier-bug-height-only-recovery}" >&2
     exit 2
     ;;
 esac
