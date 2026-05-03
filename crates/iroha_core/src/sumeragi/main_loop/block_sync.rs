@@ -4624,6 +4624,10 @@ impl Actor {
         let sender_for_slot = sender
             .clone()
             .filter(|peer| peer != self.common_config.peer.id());
+        let plain_body_response = matches!(
+            &response.body,
+            super::message::BlockBodyData::BlockCreated(_)
+        );
         if allow_same_height_repair {
             info!(
                 height = response.height,
@@ -4702,6 +4706,18 @@ impl Actor {
                     sender: sender_for_slot,
                 },
             );
+            // Plain exact-body fallbacks share the dedup key with their
+            // QC-bearing companion. While commit-QC repair is pending, release
+            // the key so the certificate response is still admitted.
+            if plain_body_response
+                && self.missing_commit_qc_request_pending_for_round(
+                    response.block_hash,
+                    response.height,
+                    response.view,
+                )
+            {
+                self.release_block_payload_dedup(&dedup_key);
+            }
         } else {
             if body_materialized && allow_same_height_repair {
                 self.request_commit_pipeline_for_pending(

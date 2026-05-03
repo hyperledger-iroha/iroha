@@ -2,6 +2,37 @@
 
 Last updated: 2026-05-03
 
+## 2026-05-03 Sumeragi restarted-peer commit-QC recovery
+
+- The widened consensus validation did not find a quorum-halting consensus
+  failure, but it did expose a peer-local catch-up bug in the confidential
+  downtime plus timeout localnet scenario. A restarted peer could keep a known
+  frontier payload locally while repeatedly requesting the missing commit QC,
+  even though the other validators had already finalized later heights.
+- Root cause: exact block-body repair sends a plain `BlockBodyResponse` before
+  the richer `BlockSyncUpdate` companion. Both messages used the same
+  height/view/hash dedup key, so if the plain body arrived first it could leave
+  the key occupied and suppress the QC-bearing companion that would retire the
+  missing commit-QC request.
+- `handle_block_body_response(...)` now releases the shared dedup key when a
+  plain exact-body response materializes the active slot while a same-round
+  missing commit-QC request is still pending. This keeps normal duplicate
+  suppression for ordinary exact-body responses, but lets the certificate
+  companion through during known-block commit-QC repair.
+- Added a focused regression that reproduces the message order: plain exact
+  body first, then QC-bearing `BlockSyncUpdate`. The test proves the plain body
+  does not clear the missing-QC request by itself, releases dedup, and the
+  companion records the recovered commit certificate.
+- The NPoS 1s/K=3 performance harness now separates host jitter from consensus
+  liveness by raising the propose EMA ceiling slightly and adding an explicit
+  bounded-progress check on observed block spacing.
+- Validation:
+  - `cargo test -p iroha_core plain_block_body_response_releases_dedup_for_active_missing_commit_qc_repair -- --nocapture`
+  - `cargo test -p iroha_core --lib block_body_response -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --nocapture --test-threads=1`
+  - `bash ci/check_sumeragi_formal.sh`
+
 ## 2026-05-03 Sumeragi frontier formal process hardening
 
 - Hardened the bounded Taira frontier-recovery model again after the latest
