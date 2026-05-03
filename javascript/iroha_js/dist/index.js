@@ -73,6 +73,7 @@ export {
   canonicalRequestMessage,
   canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
+  buildCanonicalJsonRequest,
 } from "./canonicalRequest.js";
 export { buildSoraCloudHfDeployRequest } from "./soracloud.js";
 export {

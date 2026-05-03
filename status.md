@@ -89,6 +89,19 @@ Last updated: 2026-05-03
   - `cargo test -p iroha_torii` (passed, including `1680` library tests, `1`
     ignored, all integration binaries, and doctests)
 
+## 2026-05-03 Nexus fee burn semantics
+
+- Nexus transaction fees are now burned from the fee payer or authorized fee
+  sponsor instead of being transferred to `nexus.fees.fee_sink_account_id`.
+  Sponsored fees still require `CanUseFeeSponsor`, but a sponsor that is also
+  configured as the fee sink no longer receives a self-fee no-op.
+- Admission checks now require the payer/sponsor fee asset balance even when
+  the payer equals the configured fee sink, matching the burn-on-execution
+  behavior.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
+
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 
 - The SoraFS pin registry metrics summary test now records its Prometheus
@@ -2012,6 +2025,20 @@ Last updated: 2026-05-03
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::known_block_commit_evidence_replay_skips_without_new_progress' --nocapture`
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_keeps_retry_armed_when_body_present_but_commit_qc_repair_active' --nocapture`
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_ignores_passive_catchup_slot_even_with_targets' --nocapture`
+
+## 2026-05-03 Nexus Fee Burn Activation Gate
+
+- Normal Nexus transaction fees are now burned from the fee payer/sponsor once
+  `nexus.fees.burn_from_unix_timestamp_ms` is reached. Before that timestamp,
+  the executor preserves legacy fee transfer/self-fee behavior so existing live
+  Minamoto blocks replay without changing holder balances or total supply.
+- Added regression coverage for sponsor-as-sink legacy no-op before activation,
+  legacy transfer before activation, and burn behavior after activation.
+- The default activation timestamp is `u64::MAX`; operators must explicitly set
+  a future timestamp after deploying the compatible binary to every peer.
+- Focused validation:
+  - `env -u LOG_FORMAT cargo test -p iroha_config`
+  - `env -u LOG_FORMAT cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
 
 ## 2026-04-22 Sumeragi targeted main_loop regression sweep
 
