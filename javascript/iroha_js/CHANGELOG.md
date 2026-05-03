@@ -4,6 +4,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added signed Torii alias-resolution ergonomics: `resolveAlias`,
+  `resolveAliasByIndex`, and `lookupAliasesByAccount` now accept
+  `canonicalAuth`, and `buildCanonicalJsonRequest` builds a signed JSON request
+  from either private-key bytes or an async browser-wallet signer.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】

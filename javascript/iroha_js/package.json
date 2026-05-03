@@ -12,6 +12,10 @@
     },
     "./torii": "./dist/toriiClient.js",
     "./norito": "./dist/norito.js",
+    "./canonical-request": {
+      "import": "./dist/canonicalRequest.js",
+      "types": "./index.d.ts"
+    },
     "./sccp": {
       "import": "./dist/sccp.js",
       "types": "./index.d.ts"
@@ -32,6 +36,9 @@
         "./index.d.ts"
       ],
       "norito": [
+        "./index.d.ts"
+      ],
+      "canonical-request": [
         "./index.d.ts"
       ],
       "sccp": [
