@@ -76,6 +76,7 @@ const STATUS_QUORUM_RETRY_TIMEOUT: Duration = Duration::from_secs(15);
 const FINAL_SETTLE_WINDOW: Duration = Duration::from_secs(120);
 const LOAD_SUBMIT_RETRY_TIMEOUT_SECS: u64 = 3;
 const LOAD_SUBMIT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+const LOG_TAIL_LINES: usize = 80;
 
 #[derive(Clone, Copy)]
 struct SimulationModes {
@@ -381,6 +382,27 @@ impl ManagedLocalnet {
 
         cmd.spawn()
             .wrap_err_with(|| format!("spawn irohad for {node_label}"))
+    }
+
+    fn unexpected_validator_exit_report(&mut self) -> Result<Option<String>> {
+        for (idx, child) in self.validator_children.iter_mut().enumerate() {
+            let Some(child) = child.as_mut() else {
+                continue;
+            };
+            let Some(status) = child
+                .try_wait()
+                .wrap_err_with(|| format!("poll taira validator {idx}"))?
+            else {
+                continue;
+            };
+            let log_path = self.dir.join(format!("peer{idx}.log"));
+            let tail = log_tail(&log_path, LOG_TAIL_LINES);
+            return Ok(Some(format!(
+                "taira validator {idx} exited before readiness quorum: status={status}; log tail from {}:\n{tail}",
+                log_path.display()
+            )));
+        }
+        Ok(None)
     }
 }
 
@@ -1331,7 +1353,7 @@ async fn setup_taira_harness(out_dir: &Path, seed: &str) -> Result<TairaHarness>
     let irohad_bin = Program::Irohad
         .resolve()
         .wrap_err("resolve irohad binary")?;
-    let localnet = ManagedLocalnet::start(
+    let mut localnet = ManagedLocalnet::start(
         out_dir,
         &irohad_bin,
         TAIRA_VALIDATORS,
@@ -1345,7 +1367,13 @@ async fn setup_taira_harness(out_dir: &Path, seed: &str) -> Result<TairaHarness>
     let validator_clients =
         build_validator_clients(&primary_client, base_api_port, TAIRA_VALIDATORS)?;
     let validator_quorum = min_presence_matches(validator_clients.len());
-    wait_for_status_ready_quorum(&validator_clients, validator_quorum, READY_TIMEOUT).await?;
+    wait_for_status_ready_quorum(
+        &validator_clients,
+        validator_quorum,
+        &mut localnet,
+        READY_TIMEOUT,
+    )
+    .await?;
     if get_status_with_retry(&primary_client).is_err() {
         if let Some(candidate) = validator_clients
             .iter()
@@ -2075,6 +2103,7 @@ async fn wait_for_status_ready(client: &Client, timeout: Duration) -> Result<()>
 async fn wait_for_status_ready_quorum(
     clients: &[Client],
     min_required: usize,
+    localnet: &mut ManagedLocalnet,
     timeout: Duration,
 ) -> Result<()> {
     ensure!(
@@ -2091,11 +2120,25 @@ async fn wait_for_status_ready_quorum(
         if ready >= min_required {
             return Ok(());
         }
+        if let Some(report) = localnet.unexpected_validator_exit_report()? {
+            return Err(eyre!(report));
+        }
         ensure!(
             Instant::now() < deadline,
             "timed out waiting for /status readiness quorum: ready={ready}/{min_required}"
         );
         sleep(STATUS_POLL).await;
+    }
+}
+
+fn log_tail(path: &Path, lines: usize) -> String {
+    match fs::read_to_string(path) {
+        Ok(contents) => {
+            let mut tail = contents.lines().rev().take(lines).collect::<Vec<_>>();
+            tail.reverse();
+            tail.join("\n")
+        }
+        Err(err) => format!("failed to read log {}: {err}", path.display()),
     }
 }
 

@@ -936,11 +936,11 @@ fn sandboxed_sanitizer_command(exe: &Path, max_input_bytes: &str) -> Command {
 fn sandboxed_sanitizer_command_for_search_path(
     exe: &Path,
     max_input_bytes: &str,
-    _search_path: Option<&OsStr>,
+    search_path: Option<&OsStr>,
 ) -> Command {
     #[cfg(target_os = "linux")]
     {
-        if let Some(bubblewrap) = find_executable_in_search_path(_search_path, "bwrap") {
+        if let Some(bubblewrap) = find_executable_in_search_path(search_path, "bwrap") {
             let mut cmd = Command::new(bubblewrap);
             cmd.args([
                 "--die-with-parent",
@@ -973,6 +973,28 @@ fn sandboxed_sanitizer_command_for_search_path(
             return cmd;
         }
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(sandbox_exec) = find_executable_in_search_path(search_path, "sandbox-exec") {
+            let profile = r#"(version 1)
+(deny default)
+(allow process*)
+(allow file-read*)
+(deny network*)"#;
+            let mut cmd = Command::new(sandbox_exec);
+            cmd.arg("-p")
+                .arg(profile)
+                .arg(exe)
+                .env(ATTACHMENT_SANITIZER_ENV, "1")
+                .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
+                .env(ATTACHMENT_SANITIZER_SANDBOXED_ENV, "1");
+            return cmd;
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = search_path;
 
     // Fall back to a dedicated subprocess even when the platform-specific
     // wrapper is unavailable. The child still applies resource limits before
@@ -2277,7 +2299,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn sandboxed_sanitizer_command_uses_direct_child_on_macos() {
+    fn sandboxed_sanitizer_command_uses_sandbox_exec_on_macos() {
         let temp = tempfile::tempdir().expect("temp dir");
         let sandbox_exec = temp.path().join("sandbox-exec");
         fs::write(&sandbox_exec, "").expect("write fake sandbox-exec");
@@ -2288,7 +2310,25 @@ mod tests {
             "4096",
             Some(temp.path().as_os_str()),
         );
-        assert_eq!(cmd.get_program(), exe.as_os_str());
+        assert_eq!(cmd.get_program(), sandbox_exec.as_os_str());
+
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args.first().copied(), Some(OsStr::new("-p")));
+        assert!(
+            args.get(1)
+                .and_then(|arg| arg.to_str())
+                .is_some_and(|profile| profile.contains("(deny network*)"))
+        );
+        assert_eq!(args.last().copied(), Some(exe.as_os_str()));
+
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
+        }));
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(super::ATTACHMENT_SANITIZER_SANDBOXED_ENV)
+                && *value == Some(OsStr::new("1"))
+        }));
     }
 
     #[cfg(target_os = "linux")]
