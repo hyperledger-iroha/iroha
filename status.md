@@ -1,6 +1,23 @@
 # Status
 
-Last updated: 2026-05-03
+Last updated: 2026-05-04
+
+## 2026-05-04 Swift Torii wallet authentication guardrail
+
+- The Swift `ToriiClient` now accepts SDK-level default headers and a
+  `ToriiClientAuthentication` helper for wallet sessions. The helper builds
+  `Authorization`, `X-Account-Id`, and optional `X-Dataspace-Id` /
+  `X-API-Token` headers once, and every REST request merges that context before
+  sending so mobile clients do not need to remember Torii wallet headers at each
+  call site.
+- Torii transport security now treats `X-Account-Id` and `X-Dataspace-Id` as
+  credential-bearing headers alongside `Authorization` and `X-API-Token`, so
+  credentialed wallet context is rejected over insecure or host-mismatched
+  HTTP transport.
+- Validation:
+  - `swift test --filter AuthenticationContext`
+  - `swift test --filter ToriiClientTests`
+  - `swift test --filter TransportSecurity`
 
 ## 2026-05-03 Sumeragi restarted-peer commit-QC recovery
 

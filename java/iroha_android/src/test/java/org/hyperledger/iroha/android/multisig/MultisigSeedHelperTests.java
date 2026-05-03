@@ -5,6 +5,11 @@ import java.util.Optional;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.instructions.MultisigRegisterInstruction;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoDecoder;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
 import org.junit.Test;
 
 public final class MultisigSeedHelperTests {
@@ -83,6 +88,30 @@ public final class MultisigSeedHelperTests {
         : "deterministic controller seed must depend only on the canonical signatory set";
   }
 
+  @Test
+  public void deterministicSeedAccountIdMaterialUsesTransparentControllerPayload()
+      throws Exception {
+    final Object parts = accountIdPartsForSeed((byte) 0x31);
+    final TypeAdapter<Object> adapter = accountIdAdapter();
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.MINOR_VERSION);
+    adapter.encode(encoder, parts);
+
+    final NoritoDecoder decoder =
+        new NoritoDecoder(encoder.toByteArray(), NoritoHeader.MINOR_VERSION);
+    final long controllerTag = NoritoAdapters.uint(32).decode(decoder);
+    assert controllerTag == 0L
+        : "AccountId payload must start with AccountController::Single tag";
+    final long publicKeyLength = decoder.readLength(decoder.compactLenActive());
+    final byte[] publicKeyPayload = decoder.readBytes(Math.toIntExact(publicKeyLength));
+    assert decoder.remaining() == 0 : "AccountId payload must not wrap AccountController";
+
+    final NoritoDecoder publicKeyDecoder =
+        new NoritoDecoder(publicKeyPayload, NoritoHeader.MINOR_VERSION);
+    final String literal = NoritoAdapters.stringAdapter().decode(publicKeyDecoder);
+    assert literal.startsWith("ed0120") : "public key literal must be an Ed25519 multihash";
+    assert publicKeyDecoder.remaining() == 0 : "public key payload must be a single string";
+  }
+
   private static String accountIdForSeed(final byte seed) throws Exception {
     final byte[] seedBytes = new byte[32];
     Arrays.fill(seedBytes, seed);
@@ -94,5 +123,21 @@ public final class MultisigSeedHelperTests {
   private static String accountIdForPublicKey(final byte[] publicKey) throws Exception {
     final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
     return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+  }
+
+  private static Object accountIdPartsForSeed(final byte seed) throws Exception {
+    final java.lang.reflect.Method method =
+        MultisigSeedHelper.class.getDeclaredMethod("parseAccountIdParts", String.class);
+    method.setAccessible(true);
+    final Optional<?> parsed = (Optional<?>) method.invoke(null, accountIdForSeed(seed));
+    return parsed.orElseThrow(() -> new AssertionError("expected account id parts"));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static TypeAdapter<Object> accountIdAdapter() throws Exception {
+    final java.lang.reflect.Field field =
+        MultisigSeedHelper.class.getDeclaredField("ACCOUNT_ID_ADAPTER");
+    field.setAccessible(true);
+    return (TypeAdapter<Object>) field.get(null);
   }
 }

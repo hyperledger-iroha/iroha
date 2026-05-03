@@ -107,3 +107,65 @@ test("canonical request signing: JSON helper signs the exact request body with c
   const signature = Buffer.from(request.headers["X-Iroha-Signature"], "base64");
   assert.equal(verifyEd25519(message, signature, publicKey), true);
 });
+
+test("canonical request signing: JSON helper includes reverse-proxy base paths", async () => {
+  const { privateKey, publicKey } = generateKeyPair({
+    seed: Buffer.alloc(32, 9),
+  });
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const timestampMs = 1_717_171_717_002;
+  const nonce = "torii-prefix-nonce";
+  let signerInput = null;
+
+  const request = await buildCanonicalJsonRequest({
+    accountId,
+    method: "post",
+    baseUrl: "https://explorer.example/torii/",
+    path: "/v1/aliases/resolve?alias_scope=bpng",
+    body: { alias: "tidal-river-4160@mibank.bpng" },
+    timestampMs,
+    nonce,
+    sign: async (input) => {
+      signerInput = input;
+      return signEd25519(input.message, privateKey);
+    },
+  });
+
+  assert.ok(signerInput);
+  assert.equal(signerInput.path, "/torii/v1/aliases/resolve");
+  assert.equal(signerInput.query, "alias_scope=bpng");
+
+  const message = canonicalRequestSignatureMessage({
+    method: request.method,
+    path: "/torii/v1/aliases/resolve",
+    query: "alias_scope=bpng",
+    body: request.body,
+    timestampMs,
+    nonce,
+  });
+  const signature = Buffer.from(request.headers["X-Iroha-Signature"], "base64");
+  assert.equal(verifyEd25519(message, signature, publicKey), true);
+});
+
+test("canonical request signing: explicit query overrides query strings in paths", async () => {
+  const { privateKey } = generateKeyPair({
+    seed: Buffer.alloc(32, 10),
+  });
+  let signerInput = null;
+
+  await buildCanonicalJsonRequest({
+    accountId: "operator@bpng",
+    baseUrl: "https://explorer.example/torii",
+    path: "/v1/aliases/resolve?ignored=1",
+    query: "alias_scope=bpng",
+    body: { alias: "banking@bpng" },
+    sign: (input) => {
+      signerInput = input;
+      return signEd25519(input.message, privateKey);
+    },
+  });
+
+  assert.ok(signerInput);
+  assert.equal(signerInput.path, "/torii/v1/aliases/resolve");
+  assert.equal(signerInput.query, "alias_scope=bpng");
+});
