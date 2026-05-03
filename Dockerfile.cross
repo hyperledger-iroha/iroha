@@ -55,6 +55,11 @@ ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
 ARG BINARIES=""
+ARG IROHA_GIT_COMMIT_HASH=""
+ARG VERGEN_GIT_SHA=""
+
+ENV IROHA_GIT_COMMIT_HASH=${IROHA_GIT_COMMIT_HASH}
+ENV VERGEN_GIT_SHA=${VERGEN_GIT_SHA}
 
 # HACK: install target platform-specific headers necessary for cross-compilation
 RUN xx-apk add build-base

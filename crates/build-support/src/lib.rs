@@ -43,8 +43,22 @@ fn emit_git_sha() {
 }
 
 fn git_commit_hash() -> Option<String> {
+    if let Some(sha) = env_git_commit_hash() {
+        return Some(sha);
+    }
+
     let git_dir = resolve_git_dir()?;
     read_head_commit_hash(&git_dir)
+}
+
+fn env_git_commit_hash() -> Option<String> {
+    let sha = env::var(VERGEN_GIT_SHA_ENV).ok()?;
+    let trimmed = sha.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 fn emit_git_rerun_hints() {
