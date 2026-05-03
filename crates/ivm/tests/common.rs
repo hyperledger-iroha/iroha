@@ -145,12 +145,14 @@ pub fn assemble_with_literal_section(code: &[u8], literals: &[&[u8]]) -> (Vec<u8
     }
     program.extend_from_slice(&LITERAL_SECTION_MAGIC);
     program.extend_from_slice(&(literals.len() as u32).to_le_bytes());
-    program.extend_from_slice(&0u32.to_le_bytes()); // post-pad
+    let post_pad = (4 - ((16 + offsets_len + data.len()) % 4)) % 4;
+    program.extend_from_slice(&(post_pad as u32).to_le_bytes());
     program.extend_from_slice(&(data.len() as u32).to_le_bytes());
     for offset in &offsets {
         program.extend_from_slice(&offset.to_le_bytes());
     }
     program.extend_from_slice(&data);
+    program.extend(std::iter::repeat_n(0u8, post_pad));
     let literal_addrs = offsets.into_iter().collect();
     program.extend_from_slice(code);
     (program, literal_addrs)

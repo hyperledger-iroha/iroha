@@ -17,6 +17,30 @@ use ivm::{
     syscalls,
 };
 
+const AXT_VERIFY_EMPTY_GAS: u64 = 64;
+const AXT_GAS_BASE: u64 = 16;
+
+fn axt_gas(payload_len: usize) -> u64 {
+    AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn use_handle_gas(
+    handle: &AssetHandle,
+    intent: &RemoteSpendIntent,
+    proof: Option<&axt::ProofBlob>,
+) -> u64 {
+    let handle_len = norito::to_bytes(handle).expect("encode handle").len();
+    let intent_len = norito::to_bytes(intent).expect("encode intent").len();
+    let proof_len = proof
+        .map(|p| norito::to_bytes(p).expect("encode proof").len())
+        .unwrap_or(0);
+    axt_gas(
+        handle_len
+            .saturating_add(intent_len)
+            .saturating_add(proof_len),
+    )
+}
+
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(pty as u16).to_be_bytes());
@@ -45,32 +69,29 @@ fn begin_with_touch<T: IVMHost>(
     descriptor: &axt::AxtDescriptor,
     manifest: &TouchManifest,
 ) -> (DataSpaceId, u64) {
-    let desc_ptr = store_tlv(
-        vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let dsid = descriptor
         .dsids
         .first()
         .copied()
         .expect("descriptor contains dataspace");
-    let ds_ptr = store_tlv(
-        vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
-    let manifest_ptr = store_tlv(
-        vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(manifest).expect("encode manifest"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(vm, PointerType::DataSpaceId, &ds_bytes);
+    let manifest_bytes = norito::to_bytes(manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, vm),
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
+    );
     (dsid, ds_ptr)
 }
 
@@ -204,7 +225,10 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
@@ -216,7 +240,10 @@ fn default_host_fastpq_axt_proof_fails_closed_without_verifier() {
     let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
+    );
 
     let binding = axt::compute_binding(&descriptor).expect("compute binding");
     let handle = AssetHandle {
@@ -359,7 +386,7 @@ fn default_host_rejects_late_proof_manifest_root_mismatch_at_commit() {
     };
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle, &intent, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &intent, None))
     );
 
     let mismatched_proof = proof_blob_for(dsid, [0x44; 32], b"default-late-mismatch", None);
@@ -517,7 +544,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
     };
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle, &first_intent, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &first_intent, None))
     );
 
     let second_intent = RemoteSpendIntent {
@@ -532,7 +559,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
     handle.sub_nonce += 1;
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle, &second_intent, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &second_intent, None))
     );
 
     let proof_ptr = store_tlv(
@@ -685,7 +712,7 @@ fn default_host_rejects_commit_without_required_proof() {
     };
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle, &intent, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &intent, None))
     );
     assert!(matches!(
         host.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm),
@@ -991,43 +1018,41 @@ fn commit_requires_proof_for_every_dataspace() {
         write: vec!["ledger/b/1".into()],
     };
 
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     // Touch ds_a
-    let ds_a_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_a).expect("encode ds"),
-    );
-    let manifest_a_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_a).expect("encode manifest"),
-    );
+    let ds_a_bytes = norito::to_bytes(&ds_a).expect("encode ds");
+    let ds_a_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_a_bytes);
+    let manifest_a_bytes = norito::to_bytes(&manifest_a).expect("encode manifest");
+    let manifest_a_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_a_bytes);
     vm.set_register(10, ds_a_ptr);
     vm.set_register(11, manifest_a_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(
+            ds_a_bytes.len().saturating_add(manifest_a_bytes.len())
+        ))
+    );
 
     // Touch ds_b
-    let ds_b_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_b).expect("encode ds"),
-    );
-    let manifest_b_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_b).expect("encode manifest"),
-    );
+    let ds_b_bytes = norito::to_bytes(&ds_b).expect("encode ds");
+    let ds_b_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_b_bytes);
+    let manifest_b_bytes = norito::to_bytes(&manifest_b).expect("encode manifest");
+    let manifest_b_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_b_bytes);
     vm.set_register(10, ds_b_ptr);
     vm.set_register(11, manifest_b_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(
+            ds_b_bytes.len().saturating_add(manifest_b_bytes.len())
+        ))
+    );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = build_handle(
@@ -1059,7 +1084,7 @@ fn commit_requires_proof_for_every_dataspace() {
     };
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle_a, &intent_a, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle_a, &intent_a, None))
     );
     let intent_b = RemoteSpendIntent {
         asset_dsid: ds_b,
@@ -1072,7 +1097,7 @@ fn commit_requires_proof_for_every_dataspace() {
     };
     assert_eq!(
         use_handle(&mut vm, &mut host, &handle_b, &intent_b, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle_b, &intent_b, None))
     );
 
     assert!(matches!(
@@ -1083,52 +1108,36 @@ fn commit_requires_proof_for_every_dataspace() {
     // Now show failure if a dataspace proof is absent
     let mut vm_fail = IVM::new(1_000_000);
     let mut host_fail = DefaultHost::new();
-    let desc_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_ptr_fail = store_tlv(&mut vm_fail, PointerType::AxtDescriptor, &desc_bytes);
     vm_fail.set_register(10, desc_ptr_fail);
     assert_eq!(
         host_fail.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm_fail),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
-    let ds_a_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_a).expect("encode ds"),
-    );
-    let manifest_a_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_a).expect("encode manifest"),
-    );
+    let ds_a_ptr_fail = store_tlv(&mut vm_fail, PointerType::DataSpaceId, &ds_a_bytes);
+    let manifest_a_ptr_fail = store_tlv(&mut vm_fail, PointerType::NoritoBytes, &manifest_a_bytes);
     vm_fail.set_register(10, ds_a_ptr_fail);
     vm_fail.set_register(11, manifest_a_ptr_fail);
     assert_eq!(
         host_fail.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail),
-        Ok(0)
+        Ok(axt_gas(
+            ds_a_bytes.len().saturating_add(manifest_a_bytes.len())
+        ))
     );
-    let ds_b_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&ds_b).expect("encode ds"),
-    );
-    let manifest_b_ptr_fail = store_tlv(
-        &mut vm_fail,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest_b).expect("encode manifest"),
-    );
+    let ds_b_ptr_fail = store_tlv(&mut vm_fail, PointerType::DataSpaceId, &ds_b_bytes);
+    let manifest_b_ptr_fail = store_tlv(&mut vm_fail, PointerType::NoritoBytes, &manifest_b_bytes);
     vm_fail.set_register(10, ds_b_ptr_fail);
     vm_fail.set_register(11, manifest_b_ptr_fail);
     assert_eq!(
         host_fail.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail),
-        Ok(0)
+        Ok(axt_gas(
+            ds_b_bytes.len().saturating_add(manifest_b_bytes.len())
+        ))
     );
 
     assert_eq!(
         use_handle(&mut vm_fail, &mut host_fail, &handle_a, &intent_a, None),
-        Ok(0)
+        Ok(use_handle_gas(&handle_a, &intent_a, None))
     );
     assert!(matches!(
         host_fail.syscall(syscalls::SYSCALL_AXT_COMMIT, &mut vm_fail),
@@ -1259,13 +1268,13 @@ fn axt_policy_rejects_touch() {
             write: vec![],
         }],
     };
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let ds_ptr = store_tlv(
         &mut vm,
@@ -1524,6 +1533,13 @@ fn wsv_host_rejects_preflighted_proof_without_verifier() {
         write: vec!["ledger/skew".into()],
     };
     let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, 0);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Ok(AXT_VERIFY_EMPTY_GAS)
+    );
 
     let proof = proof_blob_for(dsid, manifest_root, b"proof-within-skew", Some(1));
     let proof_ptr = store_tlv(
@@ -2054,13 +2070,13 @@ fn wsv_host_applies_axt_policy() {
             write: Vec::new(),
         }],
     };
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
-    assert_eq!(host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm), Ok(0));
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(desc_bytes.len()))
+    );
 
     let ds_ptr = store_tlv(
         &mut vm,

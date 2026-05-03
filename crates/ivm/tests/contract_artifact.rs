@@ -83,6 +83,39 @@ fn compiler_emits_self_describing_contract_artifact() {
 }
 
 #[test]
+fn public_entrypoint_descriptor_targets_halting_wrapper() {
+    let src = r#"
+        seiyaku Demo {
+            kotoage fn main() {}
+
+            kotoage fn run() -> int {
+                return 42;
+            }
+        }
+    "#;
+    let bytes = ivm::KotodamaCompiler::new()
+        .compile_source(src)
+        .expect("compile contract");
+    let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse artifact");
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .expect("contract interface");
+    let run = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == "run")
+        .expect("run entrypoint");
+
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&bytes).expect("load artifact");
+    vm.set_program_counter(parsed.prefix_len() as u64 + run.entry_pc)
+        .expect("seek run wrapper");
+    vm.run().expect("run entrypoint wrapper");
+    assert_eq!(vm.register(10), 42);
+}
+
+#[test]
 fn contract_artifact_with_cntr_and_literals_loads_and_executes() {
     let src = r#"
         fn main() -> int {

@@ -100,6 +100,8 @@ use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::config::ensure_genesis_results;
+const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+
 pub use crate::config::genesis as genesis_factory;
 /// Build the default minimal genesis with additional post-topology transactions.
 ///
@@ -140,8 +142,8 @@ fn test_domain_register_request(
         pricing_class_hint: None,
         payment: PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: 120,
-            net_amount: 120,
+            gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+            net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
             settlement_tx: Json::from("mock-settlement"),
             payer: owner.clone(),
             signature: Json::from("mock-signature"),
@@ -6144,6 +6146,7 @@ impl NetworkPeer {
                     let status_snapshot = status.clone();
                     let mut block_height = BlockHeight::from(status);
                     storage_min_height.store(block_height.total, Ordering::Relaxed);
+                    let mut http_unreachable_warned = false;
                     if http_gate.on_status(source) {
                         http_seen.store(true, Ordering::Relaxed);
                         let _ = events_tx.send(PeerLifecycleEvent::ServerStarted);
@@ -6289,13 +6292,14 @@ impl NetworkPeer {
                                             && let Some(deadline) = http_deadline
                                             && Instant::now() >= deadline
                                         {
-                                            warn!(
-                                                torii_addr = %torii_addr.as_str(),
-                                                ?status_timeout,
-                                                "Torii HTTP never became reachable; requesting shutdown"
-                                            );
-                                            let _ = fatal_tx.send(true);
-                                            return;
+                                            if !http_unreachable_warned {
+                                                warn!(
+                                                    torii_addr = %torii_addr.as_str(),
+                                                    ?status_timeout,
+                                                    "Torii HTTP not reachable from internal startup poll; continuing while storage-observed progress advances"
+                                                );
+                                                http_unreachable_warned = true;
+                                            }
                                         }
                                         if status_timeout != Duration::ZERO
                                             && last_progress.elapsed() >= status_timeout

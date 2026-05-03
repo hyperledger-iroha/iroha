@@ -5262,11 +5262,11 @@ pub(crate) mod valid {
                     idx: usize,
                 }
 
-                fn verify_ed25519_batch_slices(
-                    messages: &[&[u8]],
-                    signatures: &[&[u8]],
+                fn verify_ed25519_batch_slices<'a>(
+                    messages: &[&'a [u8]],
+                    signatures: &[&'a [u8]],
                     public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
-                    scratch: &mut iroha_crypto::Ed25519BatchScratch,
+                    scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
                 ) -> Result<(), iroha_crypto::Error> {
                     iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
                         messages,
@@ -5614,6 +5614,7 @@ pub(crate) mod valid {
                     "pruned expired sealed transaction commitments"
                 );
             }
+            let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
             for entry_hash in &ordered_hashes {
                 fastpq_entry_dataspaces.insert(
@@ -5637,7 +5638,8 @@ pub(crate) mod valid {
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
 
-            let fastpq_transcripts = state_block.drain_transfer_transcripts();
+            let fastpq_transcripts =
+                state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
             block.set_transaction_results_with_transcripts(
@@ -8678,6 +8680,7 @@ pub(crate) mod valid {
                 );
             }
             let finalize_start = timings.as_ref().map(|_| Instant::now());
+            let fastpq_digest_batch = state_block.submit_transfer_transcript_digest_batch();
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
             for (idx, entry_hash) in call_hashes.iter().enumerate() {
                 fastpq_entry_dataspaces.insert(
@@ -8701,7 +8704,8 @@ pub(crate) mod valid {
             state_block.set_fastpq_tx_set_hash(tx_set_hash);
             state_block.set_fastpq_entry_dataspaces(fastpq_entry_dataspaces);
 
-            let fastpq_transcripts = state_block.drain_transfer_transcripts();
+            let fastpq_transcripts =
+                state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
             block.set_transaction_results_with_transcripts(

@@ -21,21 +21,16 @@ fn main() {
 
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
-    use std::{
-        env,
-        sync::{Mutex, OnceLock},
-    };
-
     use fastpq_prover::{
-        ColumnStagingStats, KernelKind, KernelStatsSample, PostTileSample, QueueDepthStats,
-        QueueLaneStats, TwiddleCacheStats,
+        KernelKind, KernelStatsSample, PostTileSample, QueueDepthStats, QueueLaneStats,
+        TwiddleCacheStats,
     };
     use norito::json::Value;
 
     use super::harness::{
-        self, BenchOperation, Config, OperationFilter, QueueDeltaAccumulator, RunState, Summary,
-        ZeroFillSummary, bn254_metrics_value, classify_run, kernel_stats_value, queue_stats_value,
-        round3, twiddle_cache_value, zero_fill_value,
+        self, BenchOperation, Config, OperationFilter, QueueDeltaAccumulator, Summary,
+        ZeroFillSummary, kernel_stats_value, queue_stats_value, round3, twiddle_cache_value,
+        zero_fill_value,
     };
 
     fn assert_close(actual: f64, expected: f64) {
@@ -707,15 +702,6 @@ mod harness {
             let _ = name;
             None
         }
-    }
-
-    fn debug_env_bool(name: &str) -> Option<bool> {
-        debug_env_var(name).map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
     }
 
     pub(super) const DEFAULT_TRACE_TEMPLATE: &str = "Metal System Trace";
@@ -1883,7 +1869,7 @@ mod harness {
         Value::Object(map)
     }
 
-    pub(super) fn classify_run(
+    fn classify_run(
         gpu_available: bool,
         backend_label: &str,
         operations: &[Value],
@@ -3629,7 +3615,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
             MTLDeviceLocation::Slot => "slot",
             MTLDeviceLocation::External => "external",
             MTLDeviceLocation::Unspecified => "unspecified",
-            _ => "unspecified",
         }
     }
 

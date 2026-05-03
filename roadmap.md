@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03
 
 Completed history lives in `status.md`. This file should only track unfinished work.
 
@@ -11,11 +11,34 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Focused commit, block-sync, VRF, QC-validation, roster-selection, Torii VRF
     OpenAPI/parser, and data-model consensus roundtrip tests are green as of
     2026-05-02 with `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-verify`.
+  - Additional Sumeragi/DA adversarial coverage is green as of 2026-05-02 with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor` for the debug
+    witness-root unit, witness-corruption recovery, chunk-drop recovery,
+    Kura-eviction DA rehydration, and block-body DA rehydration focused
+    reruns. The remaining broad-run Sumeragi DA payload-loss case is also green
+    as of 2026-05-03 with the same target dir.
+  - NewView QC `highest_qc` binding, non-NewView `highest_qc` rejection, and
+    same-highest aggregate formation are green as of 2026-05-03 with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest` for the NPoS
+    aggregate-only substitution regression, the `new_view_highest` focused
+    slice, and the stale/future NewView QC formation regressions. The same
+    target now also covers commit/checkpoint missing-PoP rejection, block-sync
+    QC validation with commit-phase enforcement, commit-certificate roster
+    validation, checkpoint roster validation, validation telemetry reason
+    labels, and the permissioned/NPoS aggregate-fallback quorum checks.
+  - The ZK-confidential localnet submit helper has been hardened for startup
+    transport jitter and wrapped policy rejections. The classifier/retry-budget
+    tests plus disabled shield/unshield localnet regressions are green as of
+    2026-05-03 with `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target`. The full
+    serial `consensus_and_da` target is also green in the same target dir:
+    `250` passed, `0` failed, `6` ignored. Focused strict clippy over
+    `iroha_core`, `iroha_torii`, `iroha_test_network`, and the
+    `consensus_and_da` test target is also green in that target dir.
   - Focused `cargo clippy -p iroha_core -p iroha_data_model -p iroha_torii -p
     irohad --all-targets -- -D warnings` is green as of 2026-05-02 with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-clippy`.
-  - Full workspace all-target clippy is green as of 2026-05-02 with
-    `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor`.
+  - Full workspace all-target clippy is green as of 2026-05-03 with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target`.
   - Broader `cargo test --workspace` remains for an uncontended validation
     window.
 - Carry the RAM-LFE API/proof hardening through the remaining signing and clean
@@ -173,14 +196,40 @@ Completed history lives in `status.md`. This file should only track unfinished w
     standalone codec, and real-host forwarding paths. `POINTER_TO_NORITO` and
     `POINTER_FROM_NORITO` now charge `G_pointer + bytes` across the default,
     WSV, and standalone codec hosts, with the byte component tied to the
-    canonical TLV envelope copied or validated. `SM4_GCM_*` and `SM4_CCM_*`
-    now charge `G_sm4 + bytes` through the shared default-host implementation,
-    preserving deterministic vector output while charging AAD and
-    plaintext/ciphertext bytes. Deterministic sysvar reads now charge
+    canonical TLV envelope copied or validated. Schema helpers and the
+    remaining classic codec helpers now charge deterministic byte-counted gas:
+    `SCHEMA_*`, `JSON_*`, `DECODE_INT`/`ENCODE_INT`, `NAME_DECODE`, and the
+    path builders no longer return zero for payload work. `SM2_VERIFY` now
+    charges `G_verify + bytes`; `SM4_GCM_*` and `SM4_CCM_*` now charge
+    `G_sm4 + bytes` through the shared default-host implementation, preserving
+    deterministic vector output while charging AAD and plaintext/ciphertext
+    bytes. Deterministic sysvar reads now charge
     `G_sysvar` or `G_sysvar + bytes`, and authority reads charge
     `G_get_auth + bytes`, across default, WSV, standalone codec, and real-host
-    paths; the real-host focused rerun is pending an unrelated dirty-tree
-    `fastpq_prover` compile repair.
+	    paths. VRF verification now charges `G_verify + bytes` on decoded
+	    status-returning paths, and standalone/WSV ZK verification status exits now
+	    charge payload-size verification gas instead of returning zero. ZK
+	    roots/tally reads and VRF epoch-seed reads now charge request + response
+	    byte gas across standalone, WSV, and real CoreHost paths.
+	    `VERIFY_DS_PROOF` now charges `G_verify + bytes` in the real
+	    smart-contract host and `G_verify` for proof-clear paths across real,
+	    default, standalone CoreHost, and WSV mock hosts while standalone
+	    proof-consuming AXT calls remain fail-closed without the real FastPQ
+	    verifier. Runtime helper syscalls now also avoid documented zero-gas
+	    gaps: `INPUT_PUBLISH_TLV`
+    charges envelope bytes across default, WSV, and standalone CoreHost paths;
+    `VERIFY_SIGNATURE` charges message/signature/key bytes; and private input,
+    nullifier, output commit, heap growth, allocation shim, debug/exit/abort,
+    validation-only ISI mutation stubs, FastPQ batch-entry/apply validation,
+    and Merkle proof helpers return fixed, page, per-entry, or depth costs
+    instead of zero. The WSV mock host direct mutation ABI surface, FastPQ
+    transfer batch apply path, and development `SMARTCONTRACT_EXECUTE_QUERY` /
+    `SMARTCONTRACT_EXECUTE_INSTRUCTION` JSON shims now also return deterministic
+    query or mutation gas instead of treating mock-host state changes as free.
+    The real smart-contract host now charges the declared `G_sc_depth` floor for
+    `SET_SMARTCONTRACT_EXECUTION_DEPTH`, including the zero-depth no-op path,
+    and the declared `G_create_nfts_all` floor for empty
+    `CREATE_NFTS_FOR_ALL_USERS` snapshots.
     The classic hash helper surface now includes gas-charged SHA-256,
     SHA3-256, raw Blake2b-256, Keccak-256, and Iroha `Hash::new` syscalls
     routed through the real smart-contract host with byte-identical CPU or
@@ -206,6 +255,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     `cargo test -p ivm_abi`, `cargo test -p kotodama_lang`,
     `cargo clippy -p ivm_abi -p kotodama_lang --all-targets -- -D warnings`,
     and `cargo clippy -p ivm --all-targets -- -D warnings`.
+  - Fold the 2026-05-03 Kotodama access-hint, contract artifact registry, and
+    literal-padding hardening through the next clean full workspace test and
+    clippy corridor after the focused validation recorded in `status.md`.
 - Carry the UAID onboarding hardening through the next workspace validation
   corridor.
   - Focused formatting, Python syntax checks, Torii UAID parser tests, Torii
@@ -331,12 +383,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
 - Carry the 2026-05-02 Norito/Crypto scalar hot-path slice through the remaining
   release validation corridor.
   - The Ed25519 admission follow-up now caches deterministic 32-byte invalid
-    public-key parse outcomes, expands the direct parse cache to 256 slots,
-    routes compact/full conversion through the cached parse path, skips
-    signature parsing and dalek batch setup for all-cached exact verify tuples,
-    and preserves lowest-original-index failure reporting for mixed batches.
-    Focused crypto/Torii checks and the `ed25519_hotpaths` Criterion bench are
-    recorded in `status.md`.
+    public-key parse outcomes, routes compact/full conversion through the
+    cached parse path, widens the hot thread-local parse/verify caches for the
+    20k stable workload window, skips signature parsing and dalek batch setup
+    for all-cached exact verify tuples, and preserves lowest-original-index
+    failure reporting for mixed batches. Focused crypto/Torii checks and the
+    `ed25519_hotpaths` Criterion bench are recorded in `status.md`.
   - Remaining local benchmark baselines: `cargo bench -p iroha_data_model
     --bench chain_wire`, `cargo bench -p iroha_data_model --bench
     decode_registry`, and `cargo bench -p iroha_core --bench crypto_hotpaths`.
@@ -360,12 +412,27 @@ Completed history lives in `status.md`. This file should only track unfinished w
     smaller allocation/copy/CRC64 costs. It is not a clean comparable baseline
     because workspace `cargo test`/rustc and another debug test network were
     active before and after the run.
-  - Rerun the 30s sampled Izanami 20k profile and a clean 120s release gate in
-    an uncontended host window after benchmark wins are recorded.
+  - The FASTPQ GPU follow-up is now recorded in `status.md`: Metal toolchain
+    preflight is green, `bn254_poseidon_words` uses the Metal backend,
+    transcript digest finalization overlaps Metal dispatch with CPU work,
+    execution-witness digest propagation avoids a duplicate witness-side
+    finalization, the final `fastpq-gpu` 120s release gate accepted all
+    `2,400,000` offered submissions and reached `36,986` strict-approved
+    transactions, and the delayed load-window sampled peer stacks have no
+    scalar `poseidon3_permute` or CPU FASTPQ fallback. Keep CUDA runtime
+    parity/perf validation as a separate CUDA-host follow-up; macOS
+    compile/manifest coverage is not CUDA hardware evidence.
+  - The next throughput slice should target the post-GPU peer CPU stack:
+    Ed25519/Curve25519 public-key parse and verification, Norito
+    transaction/transfer serialization and decode, transaction metadata
+    hashing, allocation/copy traffic, and CRC64/SHA-256 helpers. Use the final
+    GPU gate as the throughput baseline and rerun the 30s sampled 20k profile
+    in an uncontended host window before making fine-grained percentage claims
+    from sampled stack counts.
   - Keep broader trait-wide parallel decode, deeper GPU decode materialization,
-    deeper dalek backend experimentation, deterministic hardware-specific
-    Ed25519/Curve25519 acceleration, and FASTPQ GPU hook retuning as follow-up
-    work until the scalar changes have clean before/after evidence.
+    deeper dalek backend experimentation, and deterministic hardware-specific
+    Ed25519/Curve25519 acceleration as follow-up work until the current
+    bottleneck slice has clean before/after evidence.
 - Continue the 20k post-cache throughput tuning corridor.
   - The first post-cache 4-peer no-fault prebuilt `20k TPS` / `120s` release
     gate at `dist/izanami-prebuilt-20k-hotpath-120s-20260501-142015` improved

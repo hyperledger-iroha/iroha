@@ -195,7 +195,8 @@ impl TransferSmtProof {
     /// Returns true if both sender and receiver proofs are present.
     #[must_use]
     pub fn has_paired_paths(&self) -> bool {
-        true
+        self.from.siblings.len() == self.to.siblings.len()
+            && self.from.path_bits.len() == self.to.path_bits.len()
     }
 }
 
@@ -432,22 +433,32 @@ pub fn attach_transfer_smt_witnesses(
     Ok((old_root, state.root().into()))
 }
 
-#[derive(Default)]
 struct TransferSmtState {
-    leaves: BTreeMap<u32, Hash>,
+    levels: Vec<BTreeMap<u32, Hash>>,
+}
+
+impl Default for TransferSmtState {
+    fn default() -> Self {
+        Self {
+            levels: (0..=TRANSFER_MERKLE_HEIGHT)
+                .map(|_| BTreeMap::new())
+                .collect(),
+        }
+    }
 }
 
 impl TransferSmtState {
     fn insert(&mut self, key: &[u8], value: u64) -> Result<(), Error> {
         let path = path_index(key);
         let leaf = leaf_hash(key, value);
-        if let Some(existing) = self.leaves.insert(path, leaf)
+        if let Some(existing) = self.levels[0].insert(path, leaf)
             && existing != leaf
         {
             return Err(Error::TransferInvariant {
                 details: "transfer SMT key path collision".into(),
             });
         }
+        self.recompute_path(path);
         Ok(())
     }
 
@@ -459,7 +470,7 @@ impl TransferSmtState {
     ) -> Result<TransferSmtWitness, Error> {
         let path = path_index(key);
         let expected_before = leaf_hash(key, value_before);
-        if self.leaves.get(&path) != Some(&expected_before) {
+        if self.levels[0].get(&path) != Some(&expected_before) {
             return Err(Error::TransferInvariant {
                 details: "transfer SMT pre-balance does not match current state".into(),
             });
@@ -467,7 +478,8 @@ impl TransferSmtState {
         let root_before: [u8; 32] = self.root().into();
         let siblings = self.siblings_for(path);
         let path_bits = path.to_le_bytes().to_vec();
-        self.leaves.insert(path, leaf_hash(key, value_after));
+        self.levels[0].insert(path, leaf_hash(key, value_after));
+        self.recompute_path(path);
         let root_after: [u8; 32] = self.root().into();
         Ok(TransferSmtWitness::new(
             root_before,
@@ -479,53 +491,45 @@ impl TransferSmtState {
 
     fn siblings_for(&self, path: u32) -> Vec<[u8; 32]> {
         let mut siblings = Vec::with_capacity(TRANSFER_MERKLE_HEIGHT);
-        let mut level_nodes = self.leaves.clone();
         let mut index = path;
         for level in 0..TRANSFER_MERKLE_HEIGHT {
             let sibling_index = index ^ 1;
-            let sibling = level_nodes
+            let sibling = self.levels[level]
                 .get(&sibling_index)
                 .copied()
                 .unwrap_or_else(|| padding_hash(level));
             siblings.push(sibling.into());
-            level_nodes = parent_level(&level_nodes, level);
             index >>= 1;
         }
         siblings
     }
 
     fn root(&self) -> Hash {
-        if self.leaves.is_empty() {
+        if self.levels[0].is_empty() {
             return padding_hash(TRANSFER_MERKLE_HEIGHT);
         }
-        let mut level_nodes = self.leaves.clone();
-        for level in 0..TRANSFER_MERKLE_HEIGHT {
-            level_nodes = parent_level(&level_nodes, level);
-        }
-        level_nodes
+        self.levels[TRANSFER_MERKLE_HEIGHT]
             .get(&0)
             .copied()
             .unwrap_or_else(|| padding_hash(TRANSFER_MERKLE_HEIGHT))
     }
-}
 
-fn parent_level(nodes: &BTreeMap<u32, Hash>, level: usize) -> BTreeMap<u32, Hash> {
-    let mut parents = BTreeMap::new();
-    for &index in nodes.keys() {
-        let parent = index >> 1;
-        parents.entry(parent).or_insert_with(|| {
-            let left = nodes
+    fn recompute_path(&mut self, path: u32) {
+        let mut index = path;
+        for level in 0..TRANSFER_MERKLE_HEIGHT {
+            let parent = index >> 1;
+            let left = self.levels[level]
                 .get(&(parent << 1))
                 .copied()
                 .unwrap_or_else(|| padding_hash(level));
-            let right = nodes
+            let right = self.levels[level]
                 .get(&((parent << 1) | 1))
                 .copied()
                 .unwrap_or_else(|| padding_hash(level));
-            internal_hash(&left, &right)
-        });
+            self.levels[level + 1].insert(parent, internal_hash(&left, &right));
+            index = parent;
+        }
     }
-    parents
 }
 
 fn path_index(key: &[u8]) -> u32 {

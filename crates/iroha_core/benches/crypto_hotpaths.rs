@@ -48,7 +48,9 @@ fn sample_transfer_transcripts(count: usize, precompute_digest: bool) -> Vec<Tra
     let authority_digest = fastpq::authority_digest(&ALICE_ID);
     (0..count)
         .map(|idx| {
-            let batch_hash = Hash::prehashed([idx as u8; 32]);
+            let batch_hash = Hash::prehashed(
+                [u8::try_from(idx).expect("crypto hotpath bench sample count fits in u8"); 32],
+            );
             let poseidon_preimage_digest =
                 precompute_digest.then(|| fastpq::poseidon_preimage_digest(&delta, &batch_hash));
             TransferTranscript {
@@ -91,6 +93,15 @@ fn bench_poseidon_fixed_width(c: &mut Criterion) {
     c.bench_function("crypto_hotpaths/poseidon/hash6_u64", |b| {
         b.iter(|| black_box(poseidon::hash6_u64(black_box([1_u64, 2, 3, 4, 5, 6]))))
     });
+    for &len in &[2usize, 24, 64] {
+        let words = (0..len)
+            .map(|idx| (idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .collect::<Vec<_>>();
+        c.bench_function(
+            &format!("crypto_hotpaths/poseidon/hash_u64_words_bytes/{len}"),
+            |b| b.iter(|| black_box(poseidon::hash_u64_words_bytes(black_box(&words)))),
+        );
+    }
 }
 
 fn bench_fastpq_poseidon_preimage_digest(c: &mut Criterion) {

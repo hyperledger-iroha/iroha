@@ -230,7 +230,7 @@ pub mod isi {
             )
             .build(rwa_id, authority.clone());
             let (id, value) = rwa.clone().into_key_value();
-            state_transaction.world.rwas.insert(id, value);
+            state_transaction.world.insert_rwa_entry(id, value);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Rwa(RwaEvent::Created(rwa))));
@@ -300,8 +300,15 @@ pub mod isi {
             )?;
 
             if quantity == source_lot.quantity && source_lot.held_quantity.is_zero() {
-                let rwa_mut = state_transaction.world.rwa_mut(&rwa)?;
-                rwa_mut.owned_by = destination.clone();
+                {
+                    let rwa_mut = state_transaction.world.rwa_mut(&rwa)?;
+                    rwa_mut.owned_by = destination.clone();
+                }
+                state_transaction.world.replace_rwa_owner_index(
+                    &rwa,
+                    &source_lot.owned_by,
+                    &destination,
+                );
                 state_transaction.world.emit_events(Some(DomainEvent::Rwa(
                     RwaEvent::OwnerChanged(RwaOwnerChanged {
                         rwa,
@@ -346,7 +353,7 @@ pub mod isi {
                 destination.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.rwas.insert(id, value);
+            state_transaction.world.insert_rwa_entry(id, value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::Split(RwaSplit {
@@ -492,7 +499,7 @@ pub mod isi {
                 self.parents.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.rwas.insert(id, value);
+            state_transaction.world.insert_rwa_entry(id, value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::Merged(RwaMerged {
@@ -747,8 +754,15 @@ pub mod isi {
             )?;
 
             if self.quantity == source_lot.quantity && source_lot.held_quantity.is_zero() {
-                let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
-                rwa_mut.owned_by = self.destination.clone();
+                {
+                    let rwa_mut = state_transaction.world.rwa_mut(&self.rwa)?;
+                    rwa_mut.owned_by = self.destination.clone();
+                }
+                state_transaction.world.replace_rwa_owner_index(
+                    &self.rwa,
+                    &source_lot.owned_by,
+                    &self.destination,
+                );
                 state_transaction.world.emit_events(Some(DomainEvent::Rwa(
                     RwaEvent::OwnerChanged(RwaOwnerChanged {
                         rwa: self.rwa,
@@ -793,7 +807,7 @@ pub mod isi {
                 self.destination.clone(),
             );
             let (id, value) = child.clone().into_key_value();
-            state_transaction.world.rwas.insert(id, value);
+            state_transaction.world.insert_rwa_entry(id, value);
             state_transaction.world.emit_events([
                 DomainEvent::Rwa(RwaEvent::Created(child)),
                 DomainEvent::Rwa(RwaEvent::ForceTransferred(RwaSplit {
@@ -1106,6 +1120,20 @@ pub mod isi {
             assert_eq!(child.owned_by, recipient);
             assert_eq!(child.parents.len(), 1);
             assert_eq!(child.parents[0].rwa(), &source_id);
+            assert!(
+                stx.world
+                    .rwas_by_owner
+                    .get(&owner)
+                    .is_some_and(|ids| ids.contains(&source_id)),
+                "source lot should remain indexed under the original owner",
+            );
+            assert!(
+                stx.world
+                    .rwas_by_owner
+                    .get(&recipient)
+                    .is_some_and(|ids| ids.contains(child.id())),
+                "child lot should be indexed under the recipient",
+            );
         }
 
         #[test]
@@ -1157,6 +1185,20 @@ pub mod isi {
             let rwa = stx.world.rwa(&rwa_id).map(authoritative_rwa).unwrap();
             assert_eq!(rwa.owned_by, recipient);
             assert_eq!(rwa.quantity, "3".parse::<Numeric>().unwrap());
+            assert!(
+                !stx.world
+                    .rwas_by_owner
+                    .get(&owner)
+                    .is_some_and(|ids| ids.contains(&rwa_id)),
+                "full transfer should remove the lot from the previous owner index",
+            );
+            assert!(
+                stx.world
+                    .rwas_by_owner
+                    .get(&recipient)
+                    .is_some_and(|ids| ids.contains(&rwa_id)),
+                "full transfer should add the lot to the recipient owner index",
+            );
         }
 
         #[test]
@@ -1436,11 +1478,296 @@ pub mod isi {
 
 /// RWA-related query implementations.
 pub mod query {
+    use std::collections::BTreeSet;
+
     use eyre::Result;
-    use iroha_data_model::query::{dsl::CompoundPredicate, error::QueryExecutionFail as Error};
+    use iroha_data_model::query::{
+        dsl::{CompoundPredicate, EvaluatePredicate},
+        error::QueryExecutionFail as Error,
+        json::{EqualsCondition, InCondition, PredicateJson},
+    };
+    use iroha_data_model::rwa::RwaEntry;
+    use norito::json::Value;
 
     use super::*;
     use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+
+    #[derive(Debug, Default, Clone)]
+    struct RwaPredicateView {
+        ids: BTreeSet<RwaId>,
+        owners: BTreeSet<AccountId>,
+        domains: BTreeSet<DomainId>,
+    }
+
+    impl RwaPredicateView {
+        fn from_predicate(predicate: &CompoundPredicate<Rwa>) -> Self {
+            let mut view = Self::default();
+            let Some(raw) = predicate.json_payload() else {
+                return view;
+            };
+            let Ok(value) = norito::json::from_str(raw) else {
+                return view;
+            };
+
+            if let Some(parsed) = Self::parse_predicate_value(value) {
+                view.ingest_predicate(parsed);
+            }
+
+            view
+        }
+
+        fn parse_predicate_value(value: Value) -> Option<PredicateJson> {
+            PredicateJson::try_from_value(&value).ok().or_else(|| {
+                if let Value::Object(map) = value {
+                    let mut predicate = PredicateJson::default();
+                    for (field, raw_value) in map {
+                        match raw_value {
+                            Value::String(raw) => {
+                                predicate
+                                    .equals
+                                    .push(EqualsCondition::new(field, Value::String(raw)));
+                            }
+                            Value::Array(values) if !values.is_empty() => {
+                                predicate.r#in.push(InCondition::new(field, values));
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(predicate)
+                } else {
+                    None
+                }
+            })
+        }
+
+        fn ingest_predicate(&mut self, predicate: PredicateJson) {
+            for condition in predicate.equals {
+                self.push_field_value(&condition.field, &condition.value);
+            }
+            for membership in predicate.r#in {
+                for value in membership.values {
+                    self.push_field_value(&membership.field, &value);
+                }
+            }
+        }
+
+        fn push_field_value(&mut self, field: &str, value: &Value) {
+            let Some(raw) = Self::value_as_str(value) else {
+                return;
+            };
+
+            match field {
+                "id" => {
+                    if let Ok(rwa_id) = raw.parse::<RwaId>() {
+                        self.domains.insert(rwa_id.domain().clone());
+                        self.ids.insert(rwa_id);
+                    }
+                }
+                "owner" | "owned_by" | "account" | "account_id" => {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    {
+                        self.owners.insert(account_id.subject_id());
+                    }
+                }
+                "domain" | "id.domain" => {
+                    if let Some(domain_id) = parse_domain_predicate_value(raw) {
+                        self.domains.insert(domain_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn value_as_str(value: &Value) -> Option<&str> {
+            if let Value::String(raw) = value {
+                Some(raw.as_str())
+            } else {
+                None
+            }
+        }
+
+        fn plan(&self) -> RwaQueryPlan {
+            let mut ids: Vec<_> = self.ids.iter().cloned().collect();
+            ids.sort();
+
+            let mut owners: Vec<_> = self.owners.iter().cloned().collect();
+            owners.sort();
+
+            let mut domains: Vec<_> = self.domains.iter().cloned().collect();
+            domains.sort();
+
+            if !ids.is_empty() {
+                return RwaQueryPlan::Ids(ids);
+            }
+
+            if !owners.is_empty() {
+                return RwaQueryPlan::Owners {
+                    owners,
+                    domains: (!domains.is_empty()).then_some(domains),
+                };
+            }
+
+            if !domains.is_empty() {
+                return RwaQueryPlan::Domains(domains);
+            }
+
+            RwaQueryPlan::Full
+        }
+    }
+
+    #[derive(Debug)]
+    enum RwaQueryPlan {
+        Ids(Vec<RwaId>),
+        Owners {
+            owners: Vec<AccountId>,
+            domains: Option<Vec<DomainId>>,
+        },
+        Domains(Vec<DomainId>),
+        Full,
+    }
+
+    fn parse_domain_predicate_value(raw: &str) -> Option<DomainId> {
+        DomainId::parse_fully_qualified(raw)
+            .ok()
+            .or_else(|| DomainId::try_new(raw, "universal").ok())
+    }
+
+    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = value;
+        for segment in path.split('.') {
+            if segment.is_empty() {
+                return None;
+            }
+            match current {
+                Value::Object(map) => {
+                    current = map.get(segment)?;
+                }
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
+    fn rwa_alias_values(rwa: &Rwa, field: &str) -> Vec<String> {
+        match field {
+            "id" => vec![rwa.id().to_string()],
+            "owner" | "owned_by" | "account" | "account_id" => vec![rwa.owned_by().to_string()],
+            "domain" | "id.domain" => {
+                let domain = rwa.id().domain();
+                let canonical = domain.to_string();
+                let shorthand = domain.name().to_string();
+                if canonical == shorthand {
+                    vec![canonical]
+                } else {
+                    vec![canonical, shorthand]
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+        matches!(value, Value::String(raw) if raw == expected)
+    }
+
+    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::String(raw) if raw == expected))
+    }
+
+    fn rwa_json_value<'a>(cache: &'a mut Option<Value>, rwa: &Rwa) -> Option<&'a Value> {
+        if cache.is_none() {
+            *cache = norito::json::to_value(rwa).ok();
+        }
+        cache.as_ref()
+    }
+
+    fn predicate_matches_rwa(predicate: &PredicateJson, rwa: &Rwa) -> bool {
+        let mut rwa_json = None;
+
+        for cond in &predicate.equals {
+            let aliases = rwa_alias_values(rwa, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = rwa_json_value(&mut rwa_json, rwa) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let aliases = rwa_alias_values(rwa, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = rwa_json_value(&mut rwa_json, rwa) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if !rwa_alias_values(rwa, field).is_empty() {
+                continue;
+            }
+            let Some(value) = rwa_json_value(&mut rwa_json, rwa) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn entry_to_rwa(entry: RwaEntry<'_>) -> Rwa {
+        let value = entry.value().clone().into_inner();
+        Rwa {
+            id: entry.id().clone(),
+            quantity: value.quantity,
+            spec: value.spec,
+            primary_reference: value.primary_reference,
+            status: value.status,
+            metadata: value.metadata,
+            parents: value.parents,
+            controls: value.controls,
+            owned_by: value.owned_by,
+            is_frozen: value.is_frozen,
+            held_quantity: value.held_quantity,
+        }
+    }
 
     impl ValidQuery for FindRwas {
         #[metrics(+"find_rwas")]
@@ -1449,26 +1776,51 @@ pub mod query {
             filter: CompoundPredicate<Rwa>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Rwa>, Error> {
-            use iroha_data_model::query::dsl::EvaluatePredicate;
+            let world = state_ro.world();
+            let predicate_view = RwaPredicateView::from_predicate(&filter);
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str(raw).ok())
+                .and_then(RwaPredicateView::parse_predicate_value);
 
-            Ok(state_ro.world().rwas_iter().filter_map(move |entry| {
-                let rwa = {
-                    let value = entry.value().clone().into_inner();
-                    Rwa {
-                        id: entry.id().clone(),
-                        quantity: value.quantity,
-                        spec: value.spec,
-                        primary_reference: value.primary_reference,
-                        status: value.status,
-                        metadata: value.metadata,
-                        parents: value.parents,
-                        controls: value.controls,
-                        owned_by: value.owned_by,
-                        is_frozen: value.is_frozen,
-                        held_quantity: value.held_quantity,
-                    }
-                };
-                filter.applies(&rwa).then_some(rwa)
+            let iter: Box<dyn Iterator<Item = Rwa> + '_> = match predicate_view.plan() {
+                RwaQueryPlan::Ids(ids) => Box::new(
+                    ids.into_iter()
+                        .filter_map(move |id| world.rwa(&id).ok().map(entry_to_rwa)),
+                ),
+                RwaQueryPlan::Owners { owners, domains } => {
+                    let domains =
+                        domains.map(|domains| domains.into_iter().collect::<BTreeSet<_>>());
+                    Box::new(owners.into_iter().flat_map(move |owner| {
+                        let domains = domains.clone();
+                        world
+                            .rwas_in_account_iter(&owner)
+                            .filter(move |entry| {
+                                domains
+                                    .as_ref()
+                                    .is_none_or(|domains| domains.contains(entry.id().domain()))
+                            })
+                            .map(entry_to_rwa)
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                RwaQueryPlan::Domains(domains) => {
+                    Box::new(domains.into_iter().flat_map(move |domain| {
+                        world
+                            .rwas_in_domain_iter(&domain)
+                            .map(entry_to_rwa)
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                RwaQueryPlan::Full => Box::new(world.rwas_iter().map(entry_to_rwa)),
+            };
+
+            Ok(iter.filter(move |rwa| {
+                if let Some(predicate) = predicate_json.as_ref() {
+                    predicate_matches_rwa(predicate, rwa)
+                } else {
+                    filter.applies(rwa)
+                }
             }))
         }
     }
@@ -1477,6 +1829,7 @@ pub mod query {
     mod tests {
         use core::num::NonZeroU64;
 
+        use iroha_crypto::KeyPair;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
 
@@ -1579,6 +1932,93 @@ pub mod query {
                 .map(|rwa| rwa.id)
                 .collect();
             assert_eq!(results, vec![rwa_id]);
+        }
+
+        #[test]
+        fn find_rwas_filters_owner_with_owner_index() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+                [0xD4; iroha_crypto::Hash::LENGTH],
+            ));
+
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
+            let recipient = AccountId::new(KeyPair::random().public_key().clone());
+            seed_domain_name_lease(&mut stx.world, &ALICE_ID, &domain_id);
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(recipient.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            RegisterRwa {
+                rwa: NewRwa::new(
+                    domain_id.clone(),
+                    "2".parse().unwrap(),
+                    NumericSpec::integer(),
+                    "https://example.test/rwa/owner-filter-a".to_owned(),
+                    None,
+                    Metadata::default(),
+                    Vec::new(),
+                    RwaControlPolicy::default(),
+                ),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            let recipient_rwa_id = stx.world.rwas.iter().next().unwrap().0.clone();
+
+            TransferRwa {
+                source: ALICE_ID.clone(),
+                rwa: recipient_rwa_id.clone(),
+                quantity: "2".parse::<Numeric>().unwrap(),
+                destination: recipient.clone(),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            RegisterRwa {
+                rwa: NewRwa::new(
+                    domain_id,
+                    "3".parse().unwrap(),
+                    NumericSpec::integer(),
+                    "https://example.test/rwa/owner-filter-b".to_owned(),
+                    None,
+                    Metadata::default(),
+                    Vec::new(),
+                    RwaControlPolicy::default(),
+                ),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            assert!(
+                stx.world
+                    .rwas_by_owner
+                    .get(&recipient)
+                    .is_some_and(|ids| ids.contains(&recipient_rwa_id)),
+                "recipient-owned lot should be present in the owner index before commit",
+            );
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let predicate =
+                CompoundPredicate::<Rwa>::build(|p| p.equals("owner", recipient.to_string()));
+            let results: Vec<_> = FindRwas
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|rwa| rwa.id)
+                .collect();
+            assert_eq!(results, vec![recipient_rwa_id]);
         }
     }
 }

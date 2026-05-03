@@ -24461,8 +24461,8 @@ async fn submit_contract_deploy_request(
     };
     let mut instructions = Vec::with_capacity(8);
     instructions.extend(register_authority_if_missing(&state, &authority));
-    instructions.push(dm::InstructionBox::from(isi_code));
     instructions.push(dm::InstructionBox::from(isi_bytes));
+    instructions.push(dm::InstructionBox::from(isi_code));
     if let Some(previous_contract_address) = previous_contract_address.clone() {
         instructions.push(dm::InstructionBox::from(SetContractAlias::clear(
             previous_contract_address.clone(),

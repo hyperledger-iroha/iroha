@@ -35,9 +35,9 @@ pub enum RegistryError {
     /// Contract manifest must declare `code_hash`.
     #[error("manifest.code_hash missing")]
     MissingCodeHash,
-    /// Bytecode image does not include a valid IVM header.
+    /// Bytecode image is not a valid self-describing IVM contract artifact.
     #[error("invalid contract bytecode: {0}")]
-    InvalidCode(&'static str),
+    InvalidCode(String),
 }
 
 /// Record combining a contract manifest with optional bytecode.
@@ -53,7 +53,8 @@ pub struct ContractCodeRecord {
 ///
 /// Manifest registration is public. Networks can still protect specific
 /// namespaces at activation time via `gov_protected_namespaces`. The manifest
-/// must include `code_hash`; other fields are optional.
+/// must include `code_hash`, and the corresponding bytecode must already be
+/// stored as a verified self-describing artifact.
 ///
 /// # Errors
 ///
@@ -73,10 +74,10 @@ pub fn register_manifest(
 
 /// Register compiled contract bytecode on-chain and return its `code_hash`.
 ///
-/// The helper computes the canonical hash (bytes after the IVM header) and
-/// submits the [`RegisterSmartContractBytes`] instruction. Bytecode
-/// registration is public; namespace protection applies when instances are
-/// activated.
+/// The helper verifies the self-describing `CNTR` artifact, uses its canonical
+/// artifact hash, and submits the [`RegisterSmartContractBytes`] instruction.
+/// Bytecode registration is public; namespace protection applies when
+/// instances are activated.
 ///
 /// # Errors
 ///
@@ -87,15 +88,9 @@ pub fn register_code_bytes(
     code: Vec<u8>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<Hash, RegistryError> {
-    let parsed = ivm::ProgramMetadata::parse(&code)
-        .map_err(|_| RegistryError::InvalidCode("missing or malformed IVM header"))?;
-    if parsed.header_len > code.len() {
-        return Err(RegistryError::InvalidCode(
-            "header length exceeds code size",
-        ));
-    }
-    let body = &code[parsed.header_len..];
-    let code_hash = Hash::new(body);
+    let verified = ivm::verify_contract_artifact(&code)
+        .map_err(|err| RegistryError::InvalidCode(err.to_string()))?;
+    let code_hash = verified.code_hash;
     RegisterSmartContractBytes { code_hash, code }.execute(authority, state_transaction)?;
     Ok(code_hash)
 }
@@ -270,6 +265,7 @@ mod tests {
         parameter::custom::{CustomParameter, CustomParameterId},
         permission,
         prelude::*,
+        smart_contract::manifest::{EntryPointKind, EntrypointDescriptor},
     };
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
 
@@ -280,20 +276,63 @@ mod tests {
         state::{State, World},
     };
 
-    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    fn minimal_contract_artifact(
+        abi_version: u8,
+    ) -> (
+        Vec<u8>,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    ) {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,
             abi_version,
         };
+        let entrypoint = EntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        };
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "iroha-core-test".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: entrypoint.name.clone(),
+                kind: entrypoint.kind,
+                params: entrypoint.params.clone(),
+                return_type: entrypoint.return_type.clone(),
+                permission: entrypoint.permission.clone(),
+                read_keys: entrypoint.read_keys.clone(),
+                write_keys: entrypoint.write_keys.clone(),
+                access_hints_complete: entrypoint.access_hints_complete,
+                access_hints_skipped: entrypoint.access_hints_skipped.clone(),
+                triggers: entrypoint.triggers.clone(),
+                entry_pc: 0,
+            }],
+            states: Vec::new(),
+        };
+        let mut code = Vec::new();
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut out = meta.encode();
+        out.extend_from_slice(&interface.encode_section());
         out.extend_from_slice(&code);
-        out
+        let verified = ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
+        (out, verified.manifest)
+    }
+
+    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
+        minimal_contract_artifact(abi_version).0
     }
 
     fn test_state() -> (State, AccountId, iroha_crypto::KeyPair) {
@@ -328,21 +367,11 @@ mod tests {
         let mut stx = block.transaction();
 
         // Register bytecode and manifest, then activate a public namespace binding.
-        let code = minimal_ivm_program(1);
+        let (code, manifest) = minimal_contract_artifact(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
 
-        let manifest = ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: Some(Hash::new(b"abi-placeholder")),
-            compiler_fingerprint: Some("kotodama-1.0".into()),
-            features_bitmap: Some(0),
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&kp);
+        let manifest = manifest.signed(&kp);
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -401,20 +430,10 @@ mod tests {
             .expect("set protected namespaces");
 
         // Register code + manifest and activate under governance protection.
-        let code = minimal_ivm_program(1);
+        let (code, manifest) = minimal_contract_artifact(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
-        let manifest = ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: Some(Hash::new(b"abi-placeholder")),
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&kp);
+        let manifest = manifest.signed(&kp);
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),

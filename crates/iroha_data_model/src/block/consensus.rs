@@ -238,7 +238,7 @@ pub struct QcVote {
     pub view: View,
     /// Epoch index for `NPoS`; 0 in permissioned.
     pub epoch: u64,
-    /// Highest known QC for `NewView` votes (advisory; not signed).
+    /// Highest known QC for `NewView` votes, bound into the vote signature.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_qc: Option<QcRef>,
@@ -284,7 +284,7 @@ pub struct Qc {
     pub epoch: u64,
     /// Consensus mode tag used to domain-separate signatures.
     pub mode_tag: String,
-    /// Highest known QC that justifies a `NewView` QC (advisory; not signed).
+    /// Highest known QC that justifies a `NewView` QC, bound into the aggregate signature.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_qc: Option<QcRef>,

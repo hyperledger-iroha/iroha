@@ -702,9 +702,10 @@ fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
         };
         let offset = words.len();
         for idx in 0..len {
+            let rotation = u32::try_from(idx % 63).expect("rotation count is less than 63");
             let value = (row as u64)
                 .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                .rotate_left((idx % 63) as u32)
+                .rotate_left(rotation)
                 ^ (idx as u64).wrapping_mul(0xd1b5_4a32_d192_ed03);
             words.push(value);
         }

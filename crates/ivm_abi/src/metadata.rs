@@ -534,7 +534,7 @@ impl ProgramMetadata {
         if bytes.len() >= code_offset + 4
             && bytes[code_offset..code_offset + 4] == LITERAL_SECTION_MAGIC
         {
-            code_offset = parse_literal_section_end(bytes, code_offset)?;
+            code_offset = parse_literal_section_end(bytes, code_offset, header_len)?;
         } else if bytes.len() >= header_len + 4 {
             // Reject prefixed layouts that insert zero padding before the literal table marker.
             let max_scan = header_len + 32;
@@ -665,7 +665,11 @@ fn parse_contract_debug_section(
     Ok((decoded, payload_end))
 }
 
-fn parse_literal_section_end(bytes: &[u8], start: usize) -> Result<usize, VMError> {
+fn parse_literal_section_end(
+    bytes: &[u8],
+    start: usize,
+    header_len: usize,
+) -> Result<usize, VMError> {
     if bytes.len() < start + 16 {
         return Err(VMError::InvalidMetadata);
     }
@@ -681,14 +685,34 @@ fn parse_literal_section_end(bytes: &[u8], start: usize) -> Result<usize, VMErro
     let lit_count = u32::from_le_bytes(count_bytes) as usize;
     let post_pad = u32::from_le_bytes(post_bytes) as usize;
     let data_len = u32::from_le_bytes(data_bytes) as usize;
-    let lit_len = lit_count
-        .checked_mul(8)
-        .and_then(|n| n.checked_add(16))
-        .and_then(|n| n.checked_add(post_pad))
-        .and_then(|n| n.checked_add(data_len))
+    if post_pad > 3 {
+        return Err(VMError::InvalidMetadata);
+    }
+    let entries_len = lit_count.checked_mul(8).ok_or(VMError::InvalidMetadata)?;
+    let data_start = start
+        .checked_add(16)
+        .and_then(|offset| offset.checked_add(entries_len))
         .ok_or(VMError::InvalidMetadata)?;
-    let code_offset = start.checked_add(lit_len).ok_or(VMError::InvalidMetadata)?;
-    if code_offset > bytes.len() {
+    let data_end = data_start
+        .checked_add(data_len)
+        .ok_or(VMError::InvalidMetadata)?;
+    let code_offset = data_end
+        .checked_add(post_pad)
+        .ok_or(VMError::InvalidMetadata)?;
+    if code_offset > bytes.len() || start < header_len {
+        return Err(VMError::InvalidMetadata);
+    }
+    let unpadded_len_from_header = start
+        .checked_sub(header_len)
+        .and_then(|prefix_len| prefix_len.checked_add(16))
+        .and_then(|len| len.checked_add(entries_len))
+        .and_then(|len| len.checked_add(data_len))
+        .ok_or(VMError::InvalidMetadata)?;
+    let expected_pad = (4 - (unpadded_len_from_header % 4)) % 4;
+    if post_pad != expected_pad {
+        return Err(VMError::InvalidMetadata);
+    }
+    if bytes[data_end..code_offset].iter().any(|byte| *byte != 0) {
         return Err(VMError::InvalidMetadata);
     }
     Ok(code_offset)

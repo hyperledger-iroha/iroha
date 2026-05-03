@@ -585,6 +585,47 @@ mod tests {
         iroha_crypto::Hash::new(payload)
     }
 
+    fn minimal_contract_artifact() -> (
+        Vec<u8>,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    ) {
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version: 1,
+        };
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "isi-mod-test".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: None,
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            states: Vec::new(),
+        };
+        let mut code = Vec::new();
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut artifact = meta.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&code);
+        let verified = ivm::verify_contract_artifact(&artifact).expect("valid test contract");
+        (artifact, verified.manifest)
+    }
+
     fn axt_proof_blob_for(
         dsid: DataSpaceId,
         manifest_root: [u8; 32],
@@ -995,10 +1036,7 @@ mod tests {
 
     #[test]
     async fn register_contract_manifest_is_queryable_without_permission() -> Result<()> {
-        use iroha_crypto::Hash;
-        use iroha_data_model::{
-            isi::smart_contract_code, query::smart_contract::prelude, smart_contract::manifest,
-        };
+        use iroha_data_model::{isi::smart_contract_code, query::smart_contract::prelude};
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -1009,19 +1047,11 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let alice = ALICE_ID.clone();
-        // Build a dummy manifest with a random code_hash
-        let h = Hash::new(b"dummy_code");
-        let manifest = manifest::ContractManifest {
-            code_hash: Some(h),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&ALICE_KEYPAIR);
+        let (code, manifest) = minimal_contract_artifact();
+        let h = manifest.code_hash.expect("manifest code hash");
+        smart_contract_code::RegisterSmartContractBytes { code_hash: h, code }
+            .execute(&alice, &mut stx)?;
+        let manifest = manifest.signed(&ALICE_KEYPAIR);
 
         smart_contract_code::RegisterSmartContractCode {
             manifest: manifest.clone(),

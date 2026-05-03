@@ -39,6 +39,10 @@ Durable state helpers and ABI surface
 Validation
 - Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
 - Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- If a `LTLB` literal table is present after the fixed header or `CNTR` section,
+  its post-table padding must be canonical for the section offset: at most three
+  zero bytes, exactly the alignment length implied by the literal header,
+  entries, and data.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
 - `vector_length` is `0` or `1..=64`; `0` selects the runtime default and the field may be non-zero even if the `VECTOR` bit is not set.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.

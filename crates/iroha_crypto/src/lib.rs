@@ -599,15 +599,15 @@ pub struct Ed25519ParsedPublicKey(signature::ed25519::PublicKey);
 
 /// Reusable scratch storage for Ed25519 batch verification.
 #[derive(Debug, Default)]
-pub struct Ed25519BatchScratch {
+pub struct Ed25519BatchScratch<'a> {
     public_keys: Vec<signature::ed25519::PublicKey>,
     signatures: Vec<ed25519_dalek::Signature>,
-    miss_messages: Vec<usize>,
-    miss_raw_signatures: Vec<usize>,
+    miss_messages: Vec<&'a [u8]>,
+    miss_raw_signatures: Vec<&'a [u8]>,
     miss_original_indices: Vec<usize>,
 }
 
-impl Ed25519BatchScratch {
+impl Ed25519BatchScratch<'_> {
     /// Clear retained scratch contents while keeping allocated capacity.
     pub fn clear(&mut self) {
         self.public_keys.clear();
@@ -690,12 +690,28 @@ pub fn ed25519_verify_batch_preparsed_deterministic(
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any tuple fails verification, if signatures have invalid
 /// length, if the input slices have mismatched lengths, or if the input is empty.
-pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
+pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
     public_keys: &[Ed25519ParsedPublicKey],
     seed32: [u8; 32],
-    scratch: &mut Ed25519BatchScratch,
+    scratch: &mut Ed25519BatchScratch<'a>,
+) -> Result<(), Error> {
+    ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+        scratch,
+    )
+}
+
+fn ed25519_verify_batch_preparsed_deterministic_with_scratch_inner<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch<'a>,
 ) -> Result<(), Error> {
     if messages.is_empty()
         || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
@@ -738,8 +754,8 @@ pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
             continue;
         }
         scratch.miss_original_indices.push(idx);
-        scratch.miss_messages.push(idx);
-        scratch.miss_raw_signatures.push(idx);
+        scratch.miss_messages.push(message);
+        scratch.miss_raw_signatures.push(signature);
         scratch
             .signatures
             .push(signature::ed25519::Ed25519Sha512::parse_signature(
@@ -761,20 +777,9 @@ pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
         );
     }
 
-    let miss_messages = scratch
-        .miss_messages
-        .iter()
-        .map(|&idx| messages[idx])
-        .collect::<Vec<_>>();
-    let miss_raw_signatures = scratch
-        .miss_raw_signatures
-        .iter()
-        .map(|&idx| signatures[idx])
-        .collect::<Vec<_>>();
-
     signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_uncached(
-        &miss_messages,
-        &miss_raw_signatures,
+        &scratch.miss_messages,
+        &scratch.miss_raw_signatures,
         &scratch.signatures,
         &scratch.public_keys,
     )
@@ -786,15 +791,31 @@ pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch(
 /// [`ed25519_verify_batch_preparsed_deterministic_with_scratch`] and keeps
 /// `scratch` reusable across bisection probes.
 #[must_use]
-pub fn ed25519_first_bad_preparsed_deterministic_with_scratch(
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
+pub fn ed25519_first_bad_preparsed_deterministic_with_scratch<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
     public_keys: &[Ed25519ParsedPublicKey],
     seed32: [u8; 32],
-    scratch: &mut Ed25519BatchScratch,
+    scratch: &mut Ed25519BatchScratch<'a>,
+) -> Option<(usize, String)> {
+    ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
+        messages,
+        signatures,
+        public_keys,
+        seed32,
+        scratch,
+    )
+}
+
+fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
+    messages: &[&'a [u8]],
+    signatures: &[&'a [u8]],
+    public_keys: &[Ed25519ParsedPublicKey],
+    seed32: [u8; 32],
+    scratch: &mut Ed25519BatchScratch<'a>,
 ) -> Option<(usize, String)> {
     if messages.is_empty()
-        || ed25519_verify_batch_preparsed_deterministic_with_scratch(
+        || ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
             messages,
             signatures,
             public_keys,
@@ -806,7 +827,7 @@ pub fn ed25519_first_bad_preparsed_deterministic_with_scratch(
         return None;
     }
     if messages.len() == 1 {
-        let detail = ed25519_verify_batch_preparsed_deterministic_with_scratch(
+        let detail = ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
             messages,
             signatures,
             public_keys,
@@ -822,7 +843,7 @@ pub fn ed25519_first_bad_preparsed_deterministic_with_scratch(
     let (left_messages, right_messages) = messages.split_at(split);
     let (left_signatures, right_signatures) = signatures.split_at(split);
     let (left_public_keys, right_public_keys) = public_keys.split_at(split);
-    ed25519_first_bad_preparsed_deterministic_with_scratch(
+    ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
         left_messages,
         left_signatures,
         left_public_keys,
@@ -830,7 +851,7 @@ pub fn ed25519_first_bad_preparsed_deterministic_with_scratch(
         scratch,
     )
     .or_else(|| {
-        ed25519_first_bad_preparsed_deterministic_with_scratch(
+        ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
             right_messages,
             right_signatures,
             right_public_keys,

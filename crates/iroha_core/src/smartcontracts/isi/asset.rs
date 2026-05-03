@@ -1599,6 +1599,115 @@ pub mod query {
         }
     }
 
+    #[derive(Debug, Default, Clone)]
+    struct AssetDefinitionPredicateView {
+        ids: BTreeSet<AssetDefinitionId>,
+        owners: BTreeSet<AccountId>,
+        domains: BTreeSet<DomainId>,
+    }
+
+    impl AssetDefinitionPredicateView {
+        fn from_predicate(predicate: &CompoundPredicate<AssetDefinition>) -> Self {
+            let mut view = Self::default();
+            let Some(raw) = predicate.json_payload() else {
+                return view;
+            };
+            let Ok(value) = norito::json::from_str(raw) else {
+                return view;
+            };
+
+            if let Some(parsed) = AssetPredicateView::parse_predicate_value(value) {
+                view.ingest_predicate(parsed);
+            }
+
+            view
+        }
+
+        fn ingest_predicate(&mut self, predicate: PredicateJson) {
+            for condition in predicate.equals {
+                self.push_field_value(&condition.field, &condition.value);
+            }
+            for membership in predicate.r#in {
+                for value in membership.values {
+                    self.push_field_value(&membership.field, &value);
+                }
+            }
+        }
+
+        fn push_field_value(&mut self, field: &str, value: &Value) {
+            let Some(raw) = AssetPredicateView::value_as_str(value) else {
+                return;
+            };
+
+            match field {
+                "id"
+                | "definition"
+                | "asset_definition"
+                | "asset_definition_id"
+                | "definition_id" => {
+                    if let Ok(definition_id) = raw.parse::<AssetDefinitionId>() {
+                        if let Some(domain_id) = definition_id.try_domain() {
+                            self.domains.insert(domain_id.clone());
+                        }
+                        self.ids.insert(definition_id);
+                    }
+                }
+                "owner" | "owned_by" | "account" | "account_id" => {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    {
+                        self.owners.insert(account_id.subject_id());
+                    }
+                }
+                "domain" | "id.domain" => {
+                    if let Some(domain_id) = parse_domain_predicate_value(raw) {
+                        self.domains.insert(domain_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn plan(&self) -> AssetDefinitionQueryPlan {
+            let mut ids: Vec<_> = self.ids.iter().cloned().collect();
+            ids.sort();
+
+            let mut owners: Vec<_> = self.owners.iter().cloned().collect();
+            owners.sort();
+
+            let mut domains: Vec<_> = self.domains.iter().cloned().collect();
+            domains.sort();
+
+            if !ids.is_empty() {
+                return AssetDefinitionQueryPlan::Ids(ids);
+            }
+
+            if !owners.is_empty() {
+                return AssetDefinitionQueryPlan::Owners {
+                    owners,
+                    domains: (!domains.is_empty()).then_some(domains),
+                };
+            }
+
+            if !domains.is_empty() {
+                return AssetDefinitionQueryPlan::Domains(domains);
+            }
+
+            AssetDefinitionQueryPlan::Full
+        }
+    }
+
+    #[derive(Debug)]
+    enum AssetDefinitionQueryPlan {
+        Ids(Vec<AssetDefinitionId>),
+        Owners {
+            owners: Vec<AccountId>,
+            domains: Option<Vec<DomainId>>,
+        },
+        Domains(Vec<DomainId>),
+        Full,
+    }
+
     fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
         if path.is_empty() {
             return None;
@@ -1843,6 +1952,115 @@ pub mod query {
                 continue;
             }
             let Some(value) = asset_json_value(&mut asset_json, asset) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn asset_definition_alias_values(
+        asset_definition: &AssetDefinition,
+        field: &str,
+    ) -> Vec<String> {
+        match field {
+            "id" | "definition" | "asset_definition" | "asset_definition_id" | "definition_id" => {
+                vec![asset_definition.id().to_string()]
+            }
+            "owner" | "owned_by" | "account" | "account_id" => {
+                vec![asset_definition.owned_by().to_string()]
+            }
+            "domain" | "id.domain" => asset_definition
+                .id()
+                .try_domain()
+                .map(|domain| {
+                    let canonical = domain.to_string();
+                    let shorthand = domain.name().to_string();
+                    if canonical == shorthand {
+                        vec![canonical]
+                    } else {
+                        vec![canonical, shorthand]
+                    }
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn asset_definition_json_value<'a>(
+        cache: &'a mut Option<Value>,
+        asset_definition: &AssetDefinition,
+    ) -> Option<&'a Value> {
+        if cache.is_none() {
+            *cache = norito::json::to_value(asset_definition).ok();
+        }
+        cache.as_ref()
+    }
+
+    fn predicate_matches_asset_definition(
+        predicate: &PredicateJson,
+        asset_definition: &AssetDefinition,
+    ) -> bool {
+        let mut definition_json = None;
+
+        for cond in &predicate.equals {
+            let aliases = asset_definition_alias_values(asset_definition, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
+            else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let aliases = asset_definition_alias_values(asset_definition, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
+            else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if !asset_definition_alias_values(asset_definition, field).is_empty() {
+                continue;
+            }
+            let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
+            else {
                 continue;
             };
             let Some(actual) = predicate_value_at_path(value, field) else {
@@ -2153,16 +2371,65 @@ pub mod query {
             filter: CompoundPredicate<AssetDefinition>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = AssetDefinition>, Error> {
-            Ok(state_ro
-                .world()
-                .asset_definitions_iter()
-                .filter_map(move |asset_definition| {
-                    let effective = state_ro
-                        .world()
-                        .asset_definition(asset_definition.id())
-                        .ok()?;
-                    filter.applies(&effective).then_some(effective)
-                }))
+            let world = state_ro.world();
+            let predicate_view = AssetDefinitionPredicateView::from_predicate(&filter);
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str(raw).ok())
+                .and_then(AssetPredicateView::parse_predicate_value);
+
+            let iter: Box<dyn Iterator<Item = AssetDefinition> + '_> = match predicate_view.plan() {
+                AssetDefinitionQueryPlan::Ids(ids) => Box::new(
+                    ids.into_iter()
+                        .filter_map(move |id| world.asset_definition(&id).ok()),
+                ),
+                AssetDefinitionQueryPlan::Owners { owners, domains } => {
+                    let domains =
+                        domains.map(|domains| domains.into_iter().collect::<BTreeSet<_>>());
+                    Box::new(owners.into_iter().flat_map(move |owner| {
+                        let domains = domains.clone();
+                        world
+                            .asset_definitions_by_owner()
+                            .get(&owner)
+                            .into_iter()
+                            .flat_map(BTreeSet::iter)
+                            .filter(move |definition_id| {
+                                domains.as_ref().is_none_or(|domains| {
+                                    definition_id
+                                        .try_domain()
+                                        .is_some_and(|domain| domains.contains(domain))
+                                })
+                            })
+                            .filter_map(|definition_id| world.asset_definition(definition_id).ok())
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                AssetDefinitionQueryPlan::Domains(domains) => {
+                    Box::new(domains.into_iter().flat_map(move |domain| {
+                        world
+                            .domain_asset_definitions()
+                            .get(&domain)
+                            .into_iter()
+                            .flat_map(BTreeSet::iter)
+                            .filter_map(|definition_id| world.asset_definition(definition_id).ok())
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                AssetDefinitionQueryPlan::Full => Box::new(
+                    world
+                        .asset_definitions()
+                        .iter()
+                        .filter_map(|(id, _)| world.asset_definition(id).ok()),
+                ),
+            };
+
+            Ok(iter.filter(move |asset_definition| {
+                if let Some(predicate) = predicate_json.as_ref() {
+                    predicate_matches_asset_definition(predicate, asset_definition)
+                } else {
+                    filter.applies(asset_definition)
+                }
+            }))
         }
     }
 
@@ -2244,6 +2511,51 @@ pub mod query {
             let state = State::new(world, kura, query_store);
 
             (state, asset_definition_id, source_asset_id)
+        }
+
+        #[test]
+        fn find_asset_definitions_filters_owner_with_owner_index() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
+            let alice_definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+            let bob_definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "tea".parse().unwrap());
+            let alice_definition = build_numeric_asset_definition(&alice_definition_id, &ALICE_ID);
+            let bob_definition = build_numeric_asset_definition(&bob_definition_id, &BOB_ID);
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [alice_definition, bob_definition],
+                [],
+                [],
+            );
+            assert!(
+                world
+                    .view()
+                    .asset_definitions_by_owner
+                    .get(&ALICE_ID)
+                    .is_some_and(|ids| ids.contains(&alice_definition_id)),
+                "world constructor should build the asset-definition owner index",
+            );
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+            let view = state.view();
+            let predicate = CompoundPredicate::<AssetDefinition>::build(|p| {
+                p.equals("owned_by", ALICE_ID.to_string())
+            });
+            let results: Vec<_> = FindAssetsDefinitions
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|definition| definition.id().clone())
+                .collect();
+
+            assert_eq!(results, vec![alice_definition_id]);
         }
 
         fn asset_balance_or_zero(

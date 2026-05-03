@@ -93,11 +93,14 @@ fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
     program.extend_from_slice(&default_max_cycles().to_le_bytes());
     program.push(1); // abi_version
     if !literal_data.is_empty() {
+        let unpadded_literal_len = 16 + literal_data.len();
+        let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&0u32.to_le_bytes()); // literal entries
-        program.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
+        program.extend_from_slice(&(post_pad as u32).to_le_bytes()); // post-pad bytes
         program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
         program.extend_from_slice(literal_data);
+        program.extend(std::iter::repeat_n(0u8, post_pad));
     }
     program.extend_from_slice(code);
     program
@@ -122,17 +125,7 @@ fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
         max_cycles: default_max_cycles(),
         abi_version: 1,
     };
-    const PAD_LEN: usize = 64;
-    const PAD_LEN_U32: u32 = PAD_LEN as u32;
     let mut v = meta.encode();
-
-    // Reserve a literal section filled with zeros so padding does not become
-    // executable code.
-    v.extend_from_slice(b"LTLB");
-    v.extend_from_slice(&0u32.to_le_bytes());
-    v.extend_from_slice(&PAD_LEN_U32.to_le_bytes());
-    v.extend_from_slice(&0u32.to_le_bytes());
-    v.extend(std::iter::repeat_n(0u8, PAD_LEN));
 
     // Emit a single HALT instruction using the native wide opcode encoding so
     // `IVM::run()` returns immediately.
@@ -321,6 +314,7 @@ mod tests {
 
     #[test]
     fn fallback_samples_encode_valid_headers() {
+        assert_parses_with_abi(&build_minimal_valid_program(0));
         assert_parses_with_abi(&build_program_mint_rose_for_authority());
         assert_parses_with_abi(&build_program_create_nft_for_authority());
         assert_parses_with_abi(&build_program_set_account_detail_defaults());

@@ -629,6 +629,8 @@ pub(crate) enum QcValidationError {
     DuplicateSigners,
     #[error("QC mode tag does not match active consensus mode")]
     ModeTagMismatch,
+    #[error("QC phase is not valid for this validation path")]
+    PhaseMismatch,
     #[error("QC validator set does not match active roster")]
     ValidatorSetMismatch,
     #[allow(dead_code)]
@@ -659,6 +661,7 @@ impl QcValidationError {
             Self::MissingVotes { .. } => "missing_votes",
             Self::DuplicateSigners => "duplicate_signers",
             Self::ModeTagMismatch => "mode_tag_mismatch",
+            Self::PhaseMismatch => "phase_mismatch",
             Self::ValidatorSetMismatch => "validator_set_mismatch",
             Self::ViewMismatch { .. } => "view_mismatch",
             Self::AggregateMismatch => "aggregate_mismatch",
@@ -1100,6 +1103,7 @@ fn qc_validation_error_to_evidence(
         | QcValidationError::InvalidSignature { .. }
         | QcValidationError::SignerMissingFromBlock { .. }
         | QcValidationError::ModeTagMismatch
+        | QcValidationError::PhaseMismatch
         | QcValidationError::ValidatorSetMismatch
         | QcValidationError::ViewMismatch { .. }
         | QcValidationError::AggregateMismatch
@@ -1318,6 +1322,7 @@ fn normalize_signer_indices_to_view(
     normalized
 }
 
+#[cfg(test)]
 fn select_new_view_highest_qc_from_votes(
     accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     signers: &BTreeSet<ValidatorIndex>,
@@ -1325,7 +1330,30 @@ fn select_new_view_highest_qc_from_votes(
     view: u64,
     epoch: u64,
 ) -> Option<crate::sumeragi::consensus::QcRef> {
-    let mut selected: Option<crate::sumeragi::consensus::QcRef> = None;
+    new_view_highest_qc_signer_groups(accepted_votes, signers, height, view, epoch)
+        .into_iter()
+        .map(|(highest_qc, _)| highest_qc)
+        .max_by_key(|highest_qc| new_view_highest_qc_rank(*highest_qc))
+}
+
+fn new_view_highest_qc_rank(qc: crate::sumeragi::consensus::QcRef) -> (u64, u64, u8) {
+    (qc.height, qc.view, phase_rank(qc.phase))
+}
+
+fn new_view_highest_qc_signer_groups(
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
+    signers: &BTreeSet<ValidatorIndex>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+) -> Vec<(
+    crate::sumeragi::consensus::QcRef,
+    BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+)> {
+    let mut groups: Vec<(
+        crate::sumeragi::consensus::QcRef,
+        BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    )> = Vec::new();
     for signer in signers {
         let Some(vote) = accepted_votes.get(signer) else {
             continue;
@@ -1347,20 +1375,18 @@ fn select_new_view_highest_qc_from_votes(
         if !valid_phase {
             continue;
         }
-        selected = Some(selected.map_or(candidate, |current| {
-            let incoming = (candidate.height, candidate.view);
-            let existing = (current.height, current.view);
-            let promotes_phase = incoming == existing
-                && candidate.phase == crate::sumeragi::consensus::Phase::Commit
-                && current.phase != crate::sumeragi::consensus::Phase::Commit;
-            if incoming > existing || promotes_phase {
-                candidate
-            } else {
-                current
-            }
-        }));
+        if let Some((_, group)) = groups
+            .iter_mut()
+            .find(|(highest_qc, _)| *highest_qc == candidate)
+        {
+            group.insert(*signer);
+        } else {
+            let mut group = BTreeSet::new();
+            group.insert(*signer);
+            groups.push((candidate, group));
+        }
     }
-    selected
+    groups
 }
 
 fn qc_bls_preimage(
@@ -1376,7 +1402,7 @@ fn qc_bls_preimage(
         height: qc.height,
         view: qc.view,
         epoch: qc.epoch,
-        highest_qc: None,
+        highest_qc: qc.highest_qc,
         signer: 0,
         bls_sig: Vec::new(),
     };
@@ -2007,6 +2033,12 @@ pub(crate) fn validate_block_sync_qc(
     let roster_len = canonical_topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit().max(1);
     let voting_len = roster_len;
+    if qc.phase != crate::sumeragi::consensus::Phase::Commit {
+        return Err(QcValidationError::PhaseMismatch);
+    }
+    if qc.highest_qc.is_some() {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
     if qc.mode_tag != mode_tag {
         return Err(QcValidationError::ModeTagMismatch);
     }
@@ -2348,7 +2380,11 @@ fn validate_qc_against_votes(
     let roster_len = canonical_topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit();
     let voting_len = roster_len;
-    let qc_highest = if qc.phase == crate::sumeragi::consensus::Phase::NewView {
+    let is_new_view_qc = qc.phase == crate::sumeragi::consensus::Phase::NewView;
+    if !is_new_view_qc && qc.highest_qc.is_some() {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    let qc_highest = if is_new_view_qc {
         Some(validate_new_view_qc_highest(qc)?)
     } else {
         None
@@ -2426,37 +2462,7 @@ fn validate_qc_against_votes(
             return Err(QcValidationError::InvalidSignature { signer: *signer });
         }
         if let Some(qc_highest) = qc_highest {
-            let Some(vote_highest) = vote.highest_qc else {
-                return Err(QcValidationError::HighestQcMismatch);
-            };
-            let valid_phase = matches!(
-                vote_highest.phase,
-                crate::sumeragi::consensus::Phase::Commit
-                    | crate::sumeragi::consensus::Phase::Prepare
-            );
-            if !valid_phase {
-                return Err(QcValidationError::HighestQcMismatch);
-            }
-            if vote_highest.subject_block_hash != qc.subject_block_hash {
-                return Err(QcValidationError::HighestQcMismatch);
-            }
-            let vote_rank = (
-                vote_highest.height,
-                vote_highest.view,
-                phase_rank(vote_highest.phase),
-            );
-            let qc_rank = (
-                qc_highest.height,
-                qc_highest.view,
-                phase_rank(qc_highest.phase),
-            );
-            if vote_rank > qc_rank {
-                return Err(QcValidationError::HighestQcMismatch);
-            }
-            if vote_highest.height == qc_highest.height
-                && vote_highest.view == qc_highest.view
-                && vote_highest.epoch != qc_highest.epoch
-            {
+            if vote.highest_qc != Some(qc_highest) {
                 return Err(QcValidationError::HighestQcMismatch);
             }
         }
@@ -2492,6 +2498,9 @@ fn fallback_qc_tally_from_bitmap(
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let _signature_topology =
         topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
+    if qc.phase != crate::sumeragi::consensus::Phase::NewView && qc.highest_qc.is_some() {
+        return None;
+    }
     if !qc_aggregate_consistent(qc, &canonical_topology, pops, chain_id, mode_tag) {
         return None;
     }
@@ -11471,6 +11480,7 @@ enum RosterValidationError {
         actual: u64,
     },
     PhaseMismatch,
+    HighestQcMismatch,
     ModeTagMismatch,
     EmptyRoster,
     ValidatorSetHashVersionMismatch {
@@ -11489,6 +11499,7 @@ enum RosterValidationError {
     DuplicateSigner(u32),
     AggregateSignatureMissing,
     AggregateSignatureInvalid,
+    ProofOfPossessionMissing,
     CommitQuorumMissing {
         votes: usize,
         required: usize,
@@ -12732,6 +12743,9 @@ fn validate_commit_qc_roster_cached(
     if cert.phase != crate::sumeragi::consensus::Phase::Commit {
         return Err(RosterValidationError::PhaseMismatch);
     }
+    if cert.highest_qc.is_some() {
+        return Err(RosterValidationError::HighestQcMismatch);
+    }
     if cert.mode_tag != mode_tag {
         return Err(RosterValidationError::ModeTagMismatch);
     }
@@ -12876,6 +12890,9 @@ fn validate_commit_qc_roster(
     if cert.phase != crate::sumeragi::consensus::Phase::Commit {
         return Err(RosterValidationError::PhaseMismatch);
     }
+    if cert.highest_qc.is_some() {
+        return Err(RosterValidationError::HighestQcMismatch);
+    }
     if cert.mode_tag != mode_tag {
         return Err(RosterValidationError::ModeTagMismatch);
     }
@@ -12966,7 +12983,6 @@ fn validate_commit_qc_roster(
     let preimage = qc_bls_preimage(cert, chain_id, mode_tag);
     let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signer_indices.len());
     let mut pop_refs: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
-    let mut missing_pop = false;
     for idx in &signer_indices {
         let Some(peer) = cert.validator_set.get(*idx) else {
             return Err(RosterValidationError::SignerOutOfRange {
@@ -12975,21 +12991,12 @@ fn validate_commit_qc_roster(
             });
         };
         let pk = peer.public_key();
-        let Some(pop) = inputs.pops.get(pk) else {
-            missing_pop = true;
-            break;
-        };
+        let pop = inputs
+            .pops
+            .get(pk)
+            .ok_or(RosterValidationError::ProofOfPossessionMissing)?;
         public_keys.push(pk);
         pop_refs.push(pop.as_slice());
-    }
-    if missing_pop {
-        warn!(
-            height = block_height,
-            view = cert.view,
-            block = %block_hash,
-            "missing PoP for commit certificate signer; skipping aggregate verification"
-        );
-        return Ok(cert.validator_set.clone());
     }
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
@@ -13156,7 +13163,6 @@ fn validate_checkpoint_roster(
     let preimage = vote_preimage(chain_id, mode_tag, &vote);
     let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signer_indices.len());
     let mut pop_refs: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
-    let mut missing_pop = false;
     for idx in &signer_indices {
         let Some(peer) = checkpoint.validator_set.get(*idx) else {
             return Err(RosterValidationError::SignerOutOfRange {
@@ -13165,21 +13171,12 @@ fn validate_checkpoint_roster(
             });
         };
         let pk = peer.public_key();
-        let Some(pop) = inputs.pops.get(pk) else {
-            missing_pop = true;
-            break;
-        };
+        let pop = inputs
+            .pops
+            .get(pk)
+            .ok_or(RosterValidationError::ProofOfPossessionMissing)?;
         public_keys.push(pk);
         pop_refs.push(pop.as_slice());
-    }
-    if missing_pop {
-        warn!(
-            height = block_height,
-            view = checkpoint.view,
-            block = %block_hash,
-            "missing PoP for checkpoint signer; skipping aggregate verification"
-        );
-        return Ok(checkpoint.validator_set.clone());
     }
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,

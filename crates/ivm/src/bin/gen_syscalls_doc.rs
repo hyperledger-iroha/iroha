@@ -20,47 +20,71 @@ fn guess_defaults(n: u32) -> (String, String, String) {
     if up.contains("ZK_VERIFY_BATCH") || n == 0x68 {
         args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)".into();
         ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64".into();
-        gas = "G_verify".into();
+        gas = "G_verify + bytes".into();
+    } else if matches!(n, 0x60..=0x63) {
+        args = "r10=&NoritoBytes(OpenVerifyEnvelope)".into();
+        ret = "u64=0/1".into();
+        gas = "G_verify_proof + bytes".into();
     } else if up.contains("VRF_VERIFY_BATCH") || n == 0x67 {
         args = "r10=&NoritoBytes(VrfVerifyBatchRequest)".into();
         ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64".into();
-        gas = "G_verify".into();
+        gas = "G_verify + bytes".into();
     } else if up.contains("VRF_VERIFY") || n == 0x66 {
         args = "r10=&NoritoBytes(VrfVerifyRequest)".into();
         ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64".into();
-        gas = "G_verify".into();
+        gas = "G_verify + bytes".into();
     } else if up.contains("VERIFY_PROOF") || n == 0xF6 {
         args = "r10=&NoritoBytes(OpenVerifyEnvelope)".into();
         ret = "r10=0/1, r11=status:u64".into();
-        gas = "G_verify".into();
+        gas = "G_verify_proof + bytes".into();
     } else if up.contains("ROOTS_GET") || n == 0x64 {
         args = "r10=&NoritoBytes(RootsGetRequest)".into();
         ret = "ptr (NoritoBytes in INPUT)".into();
-        gas = "G_roots_get".into();
+        gas = "G_roots_get + bytes".into();
     } else if up.contains("VOTE_GET_TALLY") || n == 0x65 {
         args = "r10=&NoritoBytes(VoteGetTallyRequest)".into();
         ret = "ptr (NoritoBytes in INPUT)".into();
-        gas = "G_vote_get".into();
+        gas = "G_vote_get + bytes".into();
+    } else if up.contains("DECODE_INT") || n == 0x53 {
+        args = "r10=&NoritoBytes(Norito-framed i64)".into();
+        ret = "r10=i64".into();
+        gas = "G_numeric + bytes".into();
+    } else if up.contains("BUILD_PATH_MAP_KEY") || n == 0x54 {
+        args = "r10=&Name(base), r11=key:i64".into();
+        ret = "r10=ptr (&Name)".into();
+        gas = "G_path + bytes".into();
+    } else if up.contains("ENCODE_INT") || n == 0x55 {
+        args = "r10=value:i64".into();
+        ret = "r10=ptr (&NoritoBytes(Norito-framed i64))".into();
+        gas = "G_numeric + bytes".into();
+    } else if up.contains("BUILD_PATH_KEY_NORITO") || n == 0x56 {
+        args = "r10=&Name(base), r11=&NoritoBytes(key)".into();
+        ret = "r10=ptr (&Name)".into();
+        gas = "G_path + bytes".into();
     } else if up.contains("JSON_ENCODE") || n == 0x57 {
         args = "r10=&Json".into();
         ret = "ptr (&NoritoBytes)".into();
-        gas = "G_json_encode".into();
+        gas = "G_json_encode + bytes".into();
     } else if up.contains("JSON_DECODE") || n == 0x58 {
         args = "r10=&NoritoBytes(JSON bytes)".into();
         ret = "ptr (&Json)".into();
-        gas = "G_json_decode".into();
+        gas = "G_json_decode + bytes".into();
+    } else if up.contains("JSON_GET_") {
+        args = "r10=&Json(object), r11=&Name(key)".into();
+        ret = "r10=value or ptr".into();
+        gas = "G_json_get + bytes".into();
     } else if up.contains("JSON_OBJECT") || n == 0x81 {
         args = "-".into();
         ret = "ptr (&Json({}))".into();
-        gas = "G_json_object".into();
+        gas = "G_json_object + bytes".into();
     } else if up.contains("JSON_SET_I64") || n == 0x82 {
         args = "r10=&Json(object), r11=&Name(key), r12=value:i64".into();
         ret = "ptr (&Json)".into();
-        gas = "G_json_set".into();
+        gas = "G_json_set + bytes".into();
     } else if up.contains("JSON_SET_ACCOUNT_ID") || n == 0x83 {
         args = "r10=&Json(object), r11=&Name(key), r12=&AccountId".into();
         ret = "ptr (&Json)".into();
-        gas = "G_json_set".into();
+        gas = "G_json_set + bytes".into();
     } else if up.contains("SCHEMA_ENCODE") || n == 0x59 {
         args = "r10=&Name(schema), r11=&Json".into();
         ret = "ptr (&NoritoBytes)".into();
@@ -80,7 +104,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
     } else if up.contains("NAME_DECODE") || n == 0x5C {
         args = "r10=&NoritoBytes(UTF-8 string)".into();
         ret = "ptr (&Name)".into();
-        gas = "G_name_decode".into();
+        gas = "G_name_decode + bytes".into();
     } else if up.contains("POINTER_TO_NORITO") || n == 0x5D {
         args = "r10=&PointerType<T>".into();
         ret = "ptr (&NoritoBytes(TLV envelope))".into();
@@ -97,6 +121,10 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&Tlv".into();
         ret = "r10=payload_len:u64".into();
         gas = "G_tlv_len + bytes".into();
+    } else if up.contains("VRF_EPOCH_SEED") || n == 0x7E {
+        args = "r10=&NoritoBytes(VrfEpochSeedRequest)".into();
+        ret = "r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64".into();
+        gas = "G_vote_get + bytes".into();
     } else if up.starts_with("NUMERIC_") {
         gas = "G_numeric".into();
         if up.contains("FROM_INT") {
@@ -146,6 +174,14 @@ fn guess_defaults(n: u32) -> (String, String, String) {
                 .into();
         ret = "r10=ptr (&Blob(plaintext)) or 0".into();
         gas = "G_sm4 + bytes".into();
+    } else if up.contains("VERIFY_SIGNATURE") || n == 0xFC {
+        args = "r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8".into();
+        ret = "r10=0/1".into();
+        gas = "G_verify_sig + bytes".into();
+    } else if up.contains("VERIFY_DS_PROOF") || n == 0xB3 {
+        args = "r10=&DataSpaceId, r11=&ProofBlob or 0".into();
+        ret = "u64=0/1".into();
+        gas = "G_verify + bytes".into();
     } else if up.contains("VERIFY") {
         ret = "u64=0/1".into();
         gas = "G_verify".into();
@@ -158,8 +194,8 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "u64=new_limit".into();
         gas = "G_grow_heap per page".into();
     } else if up.contains("GET_PRIVATE_INPUT") || n == 0xFD {
-        args = "r10=&Name".into();
-        ret = "ptr (r10)".into();
+        args = "r10=index:u64".into();
+        ret = "r10=value".into();
         gas = "G_get_priv".into();
     } else if up.contains("GET_PUBLIC_INPUT") || n == 0xF1 {
         args = "r10=&Name".into();
@@ -190,7 +226,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
     } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
         args = "r10=&Blob(TLV)".into();
         ret = "ptr (r10)".into();
-        gas = "G_input_publish".into();
+        gas = "G_input_publish + bytes".into();
     } else if up.contains("MERKLE_PATH") || n == 0xF7 {
         args = "r10=addr:u64, r11=out:u64, r12=root_out?:u64".into();
         ret = "u64=len".into();
@@ -253,10 +289,6 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&Json".into();
         ret = "u64=0".into();
         gas = "G_commit".into();
-    } else if up.contains("VERIFY_SIGNATURE") || n == 0xFC {
-        args = "r10=&Json".into();
-        ret = "u64=0".into();
-        gas = "G_verify_sig".into();
     } else if up.is_empty() {
         // Unknown number without a name: keep dashes
     } else {

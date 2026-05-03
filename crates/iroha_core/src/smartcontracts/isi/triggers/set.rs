@@ -56,6 +56,11 @@ type TriggerContractStoreBlock<'set> = StorageBlock<'set, HashOf<IvmBytecode>, I
 type TriggerContractStoreTransaction<'block, 'set> =
     StorageTransaction<'block, 'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
 type TriggerContractStoreView<'set> = StorageView<'set, HashOf<IvmBytecode>, IvmBytecodeEntry>;
+type ActiveTriggerIdStore = Storage<TriggerId, ()>;
+type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
+type ActiveTriggerIdStoreTransaction<'block, 'set> =
+    StorageTransaction<'block, 'set, TriggerId, ()>;
+type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
 
 /// Specialized structure that maps event filters to Triggers.
 // NB: `Set` has custom `Serialize` and `DeserializeSeed` implementations
@@ -72,6 +77,14 @@ pub struct Set {
     by_call_triggers: Storage<TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: Storage<TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStore,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStore,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStore,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStore,
     /// [`IvmBytecode`]s map by contract blob hash.
     /// This map serves multiple purposes:
     /// 1. Querying original contract blob of trigger
@@ -79,7 +92,15 @@ pub struct Set {
     contracts: TriggerContractStore,
 }
 
-impl Set {}
+impl Set {
+    fn collect_active_ids<F>(triggers: &Storage<TriggerId, LoadedAction<F>>) -> ActiveTriggerIdStore {
+        triggers
+            .iter()
+            .filter(|(_, action)| !action.repeats.is_depleted())
+            .map(|(id, _)| (id.clone(), ()))
+            .collect()
+    }
+}
 
 impl json::JsonDeserialize for Set {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -134,6 +155,10 @@ impl json::JsonDeserialize for Set {
             by_call_triggers.ok_or_else(|| json::MapVisitor::missing_field("by_call_triggers"))?;
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
+        let active_data_trigger_ids = Self::collect_active_ids(&data_triggers);
+        let active_pipeline_trigger_ids = Self::collect_active_ids(&pipeline_triggers);
+        let active_time_trigger_ids = Self::collect_active_ids(&time_triggers);
+        let active_by_call_trigger_ids = Self::collect_active_ids(&by_call_triggers);
 
         Ok(Self {
             data_triggers,
@@ -141,6 +166,10 @@ impl json::JsonDeserialize for Set {
             time_triggers,
             by_call_triggers,
             ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
             contracts,
         })
     }
@@ -195,6 +224,14 @@ pub struct SetBlock<'set> {
     by_call_triggers: StorageBlock<'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: StorageBlock<'set, TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStoreBlock<'set>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreBlock<'set>,
 }
@@ -213,6 +250,14 @@ pub struct SetTransaction<'block, 'set> {
         StorageTransaction<'block, 'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: StorageTransaction<'block, 'set, TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStoreTransaction<'block, 'set>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreTransaction<'block, 'set>,
 }
@@ -229,6 +274,14 @@ pub struct SetView<'set> {
     by_call_triggers: StorageView<'set, TriggerId, LoadedAction<ExecuteTriggerEventFilter>>,
     /// Trigger ids with type of events they process
     ids: StorageView<'set, TriggerId, TriggeringEventType>,
+    /// Active data trigger ids.
+    active_data_trigger_ids: ActiveTriggerIdStoreView<'set>,
+    /// Active pipeline trigger ids.
+    active_pipeline_trigger_ids: ActiveTriggerIdStoreView<'set>,
+    /// Active time trigger ids.
+    active_time_trigger_ids: ActiveTriggerIdStoreView<'set>,
+    /// Active by-call trigger ids.
+    active_by_call_trigger_ids: ActiveTriggerIdStoreView<'set>,
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreView<'set>,
 }
@@ -397,6 +450,14 @@ pub trait SetReadOnly {
     ) -> &impl StorageReadOnly<TriggerId, LoadedAction<ExecuteTriggerEventFilter>>;
     /// Trigger type registry.
     fn ids(&self) -> &impl StorageReadOnly<TriggerId, TriggeringEventType>;
+    /// Active data trigger id registry.
+    fn active_data_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
+    /// Active pipeline trigger id registry.
+    fn active_pipeline_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
+    /// Active time trigger id registry.
+    fn active_time_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
+    /// Active by-call trigger id registry.
+    fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
     /// Mapping from code hash to bytecode entry.
     fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry>;
 
@@ -456,28 +517,24 @@ pub trait SetReadOnly {
         self.ids().iter().map(|(trigger_id, _)| trigger_id)
     }
 
-    /// Iterate active trigger ids directly from the typed trigger stores.
+    /// Iterate active trigger ids from id-only registries maintained on writes.
     fn active_trigger_ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
-        self.data_triggers()
+        self.active_data_trigger_ids()
             .iter()
-            .filter(|(_, action)| !action.repeats().is_depleted())
             .map(|(id, _)| id)
             .chain(
-                self.pipeline_triggers()
+                self.active_pipeline_trigger_ids()
                     .iter()
-                    .filter(|(_, action)| !action.repeats().is_depleted())
                     .map(|(id, _)| id),
             )
             .chain(
-                self.time_triggers()
+                self.active_time_trigger_ids()
                     .iter()
-                    .filter(|(_, action)| !action.repeats().is_depleted())
                     .map(|(id, _)| id),
             )
             .chain(
-                self.by_call_triggers()
+                self.active_by_call_trigger_ids()
                     .iter()
-                    .filter(|(_, action)| !action.repeats().is_depleted())
                     .map(|(id, _)| id),
             )
     }
@@ -734,6 +791,18 @@ macro_rules! impl_set_ro {
             fn ids(&self) -> &impl StorageReadOnly<TriggerId, TriggeringEventType> {
                 &self.ids
             }
+            fn active_data_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_data_trigger_ids
+            }
+            fn active_pipeline_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_pipeline_trigger_ids
+            }
+            fn active_time_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_time_trigger_ids
+            }
+            fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()> {
+                &self.active_by_call_trigger_ids
+            }
             fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry> {
                 &self.contracts
             }
@@ -754,6 +823,10 @@ impl Set {
             time_triggers: self.time_triggers.block(),
             by_call_triggers: self.by_call_triggers.block(),
             ids: self.ids.block(),
+            active_data_trigger_ids: self.active_data_trigger_ids.block(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.block(),
+            active_time_trigger_ids: self.active_time_trigger_ids.block(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.block(),
             contracts: self.contracts.block(),
         }
     }
@@ -766,6 +839,10 @@ impl Set {
             time_triggers: self.time_triggers.block_and_revert(),
             by_call_triggers: self.by_call_triggers.block_and_revert(),
             ids: self.ids.block_and_revert(),
+            active_data_trigger_ids: self.active_data_trigger_ids.block_and_revert(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.block_and_revert(),
+            active_time_trigger_ids: self.active_time_trigger_ids.block_and_revert(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.block_and_revert(),
             contracts: self.contracts.block_and_revert(),
         }
     }
@@ -778,6 +855,10 @@ impl Set {
             time_triggers: self.time_triggers.view(),
             by_call_triggers: self.by_call_triggers.view(),
             ids: self.ids.view(),
+            active_data_trigger_ids: self.active_data_trigger_ids.view(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.view(),
+            active_time_trigger_ids: self.active_time_trigger_ids.view(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.view(),
             contracts: self.contracts.view(),
         }
     }
@@ -803,6 +884,10 @@ impl<'set> SetBlock<'set> {
             time_triggers: self.time_triggers.transaction(),
             by_call_triggers: self.by_call_triggers.transaction(),
             ids: self.ids.transaction(),
+            active_data_trigger_ids: self.active_data_trigger_ids.transaction(),
+            active_pipeline_trigger_ids: self.active_pipeline_trigger_ids.transaction(),
+            active_time_trigger_ids: self.active_time_trigger_ids.transaction(),
+            active_by_call_trigger_ids: self.active_by_call_trigger_ids.transaction(),
             contracts: self.contracts.transaction(),
         }
     }
@@ -811,6 +896,10 @@ impl<'set> SetBlock<'set> {
     pub fn commit(self) {
         // NOTE: commit in reverse order
         self.contracts.commit();
+        self.active_by_call_trigger_ids.commit();
+        self.active_time_trigger_ids.commit();
+        self.active_pipeline_trigger_ids.commit();
+        self.active_data_trigger_ids.commit();
         self.ids.commit();
         self.by_call_triggers.commit();
         self.time_triggers.commit();

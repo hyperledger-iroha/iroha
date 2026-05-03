@@ -28749,19 +28749,11 @@ fn precheck_transaction_batch_ed25519(
         return prechecks;
     }
 
-    #[derive(Clone, Copy)]
-    struct Ed25519BatchItem<'a> {
-        idx: usize,
-        message: &'a [u8],
-        signature: &'a [u8],
-        public_key: iroha_crypto::Ed25519ParsedPublicKey,
-    }
-
-    fn verify_ed25519_batch_slices(
-        messages: &[&[u8]],
-        signatures: &[&[u8]],
+    fn verify_ed25519_batch_slices<'a>(
+        messages: &[&'a [u8]],
+        signatures: &[&'a [u8]],
         public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
-        scratch: &mut iroha_crypto::Ed25519BatchScratch,
+        scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
     ) -> Result<(), iroha_crypto::Error> {
         iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
             messages,
@@ -28783,66 +28775,87 @@ fn precheck_transaction_batch_ed25519(
         ))
     }
 
-    let batch_items = transactions
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, tx)| {
-            let (message, signature, public_key) = tx.single_ed25519_precheck_parts()?;
-            Some(Ed25519BatchItem {
-                idx,
-                message,
-                signature,
-                public_key,
-            })
-        })
-        .collect::<Vec<_>>();
-
     let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
-    let scratch_cap = batch_cap.min(batch_items.len());
+    let scratch_cap = batch_cap.min(transactions.len());
+    let mut indices = Vec::with_capacity(scratch_cap);
     let mut messages = Vec::with_capacity(scratch_cap);
     let mut signatures = Vec::with_capacity(scratch_cap);
     let mut public_keys = Vec::with_capacity(scratch_cap);
-    for range_start in (0..batch_items.len()).step_by(batch_cap) {
-        let range_end = range_start.saturating_add(batch_cap).min(batch_items.len());
-        let batch = &batch_items[range_start..range_end];
-        let batch_result = {
-            messages.clear();
-            signatures.clear();
-            public_keys.clear();
-            for item in batch {
-                messages.push(item.message);
-                signatures.push(item.signature);
-                public_keys.push(item.public_key);
-            }
 
-            verify_ed25519_batch_slices(&messages, &signatures, &public_keys, &mut scratch).map_err(
-                |err| {
-                    iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
-                        &messages,
-                        &signatures,
-                        &public_keys,
-                        [0; 32],
-                        &mut scratch,
-                    )
-                    .map_or_else(|| (0, err.to_string()), |bad| bad)
-                },
-            )
+    fn flush_ed25519_precheck_batch<'a>(
+        transactions: &[DecodedVersionedSignedTransaction],
+        prechecks: &mut [TransactionBatchPrecheck],
+        indices: &[usize],
+        messages: &[&'a [u8]],
+        signatures: &[&'a [u8]],
+        public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+        scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
+    ) {
+        if indices.is_empty() {
+            return;
+        }
+        let batch_result = {
+            verify_ed25519_batch_slices(messages, signatures, public_keys, scratch).map_err(|err| {
+                iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                    messages,
+                    signatures,
+                    public_keys,
+                    [0; 32],
+                    scratch,
+                )
+                .map_or_else(|| (0, err.to_string()), |bad| bad)
+            })
         };
 
         match batch_result {
             Ok(()) => {
-                for item in batch {
-                    prechecks[item.idx].single_ed25519_prechecked = true;
+                for &idx in indices {
+                    prechecks[idx].single_ed25519_prechecked = true;
                 }
             }
             Err((relative_idx, detail)) => {
-                if let Some(item) = batch.get(relative_idx) {
-                    prechecks[item.idx].precheck_rejection =
-                        Some(signature_error(&transactions[item.idx], detail));
+                if let Some(&idx) = indices.get(relative_idx) {
+                    prechecks[idx].precheck_rejection =
+                        Some(signature_error(&transactions[idx], detail));
                 }
             }
         }
     }
+
+    for (idx, tx) in transactions.iter().enumerate() {
+        let Some((message, signature, public_key)) = tx.single_ed25519_precheck_parts() else {
+            continue;
+        };
+        indices.push(idx);
+        messages.push(message);
+        signatures.push(signature);
+        public_keys.push(public_key);
+
+        if indices.len() == batch_cap {
+            flush_ed25519_precheck_batch(
+                transactions,
+                &mut prechecks,
+                &indices,
+                &messages,
+                &signatures,
+                &public_keys,
+                &mut scratch,
+            );
+            indices.clear();
+            messages.clear();
+            signatures.clear();
+            public_keys.clear();
+        }
+    }
+    flush_ed25519_precheck_batch(
+        transactions,
+        &mut prechecks,
+        &indices,
+        &messages,
+        &signatures,
+        &public_keys,
+        &mut scratch,
+    );
 
     prechecks
 }
@@ -40210,65 +40223,6 @@ pub(crate) mod tests_runtime_handlers {
         .await
         .expect("explorer detail response");
         assert_eq!(explorer.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn handler_post_transaction_rejects_confidential_policy_before_enqueue() {
-        let keypair = KeyPair::random();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let asset_def_id = iroha_data_model::asset::AssetDefinitionId::new(
-            domain_id.clone(),
-            "zkdeny".parse().expect("asset name"),
-        );
-        let domain = Domain::new(domain_id).build(&authority);
-        let account = Account::new(authority.clone()).build(&authority);
-        let asset_definition =
-            iroha_data_model::asset::AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string())
-                .confidential_policy(
-                    iroha_data_model::asset::definition::AssetConfidentialPolicy::transparent(),
-                )
-                .build(&authority);
-        let app =
-            mk_app_state_for_tests_with_world(World::with([domain], [account], [asset_definition]));
-        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority.clone())
-            .with_instructions([iroha_data_model::isi::zk::Shield::new(
-                asset_def_id,
-                authority,
-                10,
-                [7; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            )])
-            .sign(keypair.private_key());
-
-        let response = match super::handler_post_transaction(
-            State(app.clone()),
-            HeaderMap::new(),
-            versioned_signed_bytes_for_test(&tx),
-        )
-        .await
-        {
-            Ok(_) => panic!("expected confidential policy admission rejection"),
-            Err(err) => err.into_response(),
-        };
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("PRTRY:CONFIDENTIAL_POLICY_REJECTED")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .expect("response body")
-            .to_bytes();
-        let payload =
-            norito::decode_from_bytes::<QueueErrorEnvelope>(&body).expect("queue error envelope");
-        assert_eq!(payload.code, "queue_confidential_policy_rejected");
-        assert_eq!(app.queue.active_len(), 0);
     }
 
     #[tokio::test]
@@ -54265,6 +54219,42 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(|v| v.to_str().ok()),
             Some("PRTRY:ALREADY_COMMITTED")
         );
+    }
+
+    #[test]
+    fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
+        use nonzero_ext::nonzero;
+
+        let err = super::Error::PushIntoQueue {
+            source: Box::new(queue::Error::ConfidentialPolicyAdmissionRejected {
+                reason: TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "shield not permitted by policy".to_owned(),
+                )),
+                detail: "shield not permitted by policy".to_owned(),
+            }),
+            backpressure: queue::BackpressureState::Healthy {
+                queued: 0,
+                capacity: nonzero!(1_usize),
+            },
+        };
+
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:CONFIDENTIAL_POLICY_REJECTED")
+        );
+        let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))
+            .expect("response body")
+            .to_bytes();
+        let payload =
+            norito::decode_from_bytes::<QueueErrorEnvelope>(&body).expect("queue error envelope");
+        assert_eq!(payload.code, "queue_confidential_policy_rejected");
+        assert_eq!(payload.retry_after_seconds, None);
+        assert_eq!(payload.queue.state, "healthy");
     }
 
     #[test]

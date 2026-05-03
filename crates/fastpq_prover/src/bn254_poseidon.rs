@@ -57,8 +57,66 @@ pub fn try_hash_bn254_poseidon_word_batches(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
 ) -> Option<Vec<[u8; 32]>> {
+    try_submit_bn254_poseidon_word_batches(words, slices)?.wait()
+}
+
+/// Pending BN254 Poseidon word-batch GPU work.
+///
+/// This is an opaque helper for host code that can submit transcript hashing
+/// before it needs the digest bytes. Failed waits disable the accelerated path
+/// and return `None` so callers can compute the same batch on the scalar path.
+pub struct PendingBn254PoseidonWordBatch {
+    inner: PendingBn254PoseidonWordBatchInner,
+}
+
+enum PendingBn254PoseidonWordBatchInner {
+    Ready(Vec<[u8; 32]>),
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    Metal(crate::metal::PendingBn254PoseidonWords),
+}
+
+impl PendingBn254PoseidonWordBatch {
+    /// Wait for completion and return digest bytes, or `None` when the GPU path failed.
+    #[must_use]
+    #[cfg_attr(
+        not(all(feature = "fastpq-gpu", target_os = "macos")),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "the public wait API stays fallible because Metal submissions can fail after being accepted"
+        )
+    )]
+    pub fn wait(self) -> Option<Vec<[u8; 32]>> {
+        match self.inner {
+            PendingBn254PoseidonWordBatchInner::Ready(result) => Some(result),
+            #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+            PendingBn254PoseidonWordBatchInner::Metal(pending) => match pending.wait() {
+                Ok(result) => Some(result),
+                Err(error) => {
+                    warn!(
+                        target: "fastpq::bn254_poseidon",
+                        %error,
+                        "BN254 Poseidon Metal batch failed while waiting; falling back to scalar hashing"
+                    );
+                    disable_bn254_poseidon_gpu();
+                    None
+                }
+            },
+        }
+    }
+}
+
+/// Try to submit flattened BN254 Poseidon word batches on the configured GPU backend.
+///
+/// Returns `None` when the accelerator is unavailable, disabled, or fails validation.
+#[must_use]
+pub fn try_submit_bn254_poseidon_word_batches(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> Option<PendingBn254PoseidonWordBatch> {
     if slices.is_empty() {
-        return Some(Vec::new());
+        return Some(PendingBn254PoseidonWordBatch {
+            inner: PendingBn254PoseidonWordBatchInner::Ready(Vec::new()),
+        });
     }
     if BN254_POSEIDON_GPU_DISABLED.load(Ordering::Acquire) {
         return None;
@@ -70,21 +128,44 @@ pub fn try_hash_bn254_poseidon_word_batches(
         return None;
     }
 
-    try_hash_bn254_poseidon_word_batches_impl(words, slices).or_else(|| {
-        BN254_POSEIDON_GPU_DISABLED.store(true, Ordering::Release);
+    try_submit_bn254_poseidon_word_batches_impl(words, slices).or_else(|| {
+        disable_bn254_poseidon_gpu();
         None
     })
 }
 
+/// Preflight the configured BN254 Poseidon word-batch accelerator.
+///
+/// This performs the same backend discovery and parity self-test that the first
+/// real batch would otherwise do. It returns `false` when the GPU path is not
+/// available and preserves the normal scalar fallback behavior.
+#[must_use]
+pub fn preflight_bn254_poseidon_word_batches() -> bool {
+    if BN254_POSEIDON_GPU_DISABLED.load(Ordering::Acquire) {
+        return false;
+    }
+    if !bn254_poseidon_backend_available() {
+        return false;
+    }
+    if bn254_poseidon_self_test_passed() {
+        true
+    } else {
+        disable_bn254_poseidon_gpu();
+        false
+    }
+}
+
 #[cfg(feature = "fastpq-gpu")]
-fn try_hash_bn254_poseidon_word_batches_impl(
+fn try_submit_bn254_poseidon_word_batches_impl(
     words: &[u64],
     slices: &[Bn254PoseidonBatchSlice],
-) -> Option<Vec<[u8; 32]>> {
+) -> Option<PendingBn254PoseidonWordBatch> {
     match backend::current_gpu_backend() {
         Some(GpuBackend::Cuda) => {
             match crate::fastpq_cuda::fastpq_bn254_poseidon_hash_words(words, slices) {
-                Ok(result) => Some(result),
+                Ok(result) => Some(PendingBn254PoseidonWordBatch {
+                    inner: PendingBn254PoseidonWordBatchInner::Ready(result),
+                }),
                 Err(error) => {
                     warn!(
                         target: "fastpq::bn254_poseidon",
@@ -96,27 +177,35 @@ fn try_hash_bn254_poseidon_word_batches_impl(
             }
         }
         #[cfg(target_os = "macos")]
-        Some(GpuBackend::Metal) => match crate::metal::bn254_poseidon_hash_words(words, slices) {
-            Ok(result) => Some(result),
-            Err(error) => {
-                warn!(
-                    target: "fastpq::bn254_poseidon",
-                    %error,
-                    "BN254 Poseidon Metal batch failed; falling back to scalar hashing"
-                );
-                None
+        Some(GpuBackend::Metal) => {
+            match crate::metal::bn254_poseidon_hash_words_async(words, slices) {
+                Ok(pending) => Some(PendingBn254PoseidonWordBatch {
+                    inner: PendingBn254PoseidonWordBatchInner::Metal(pending),
+                }),
+                Err(error) => {
+                    warn!(
+                        target: "fastpq::bn254_poseidon",
+                        %error,
+                        "BN254 Poseidon Metal batch failed; falling back to scalar hashing"
+                    );
+                    None
+                }
             }
-        },
+        }
         _ => None,
     }
 }
 
 #[cfg(not(feature = "fastpq-gpu"))]
-fn try_hash_bn254_poseidon_word_batches_impl(
+fn try_submit_bn254_poseidon_word_batches_impl(
     _words: &[u64],
     _slices: &[Bn254PoseidonBatchSlice],
-) -> Option<Vec<[u8; 32]>> {
+) -> Option<PendingBn254PoseidonWordBatch> {
     None
+}
+
+fn disable_bn254_poseidon_gpu() {
+    BN254_POSEIDON_GPU_DISABLED.store(true, Ordering::Release);
 }
 
 #[cfg(feature = "fastpq-gpu")]
@@ -235,5 +324,11 @@ mod tests {
             scalar_hash_words_u64(&words),
             iroha_zkp_halo2::poseidon::hash_words_bytes(&fr_words)
         );
+    }
+
+    #[cfg(not(feature = "fastpq-gpu"))]
+    #[test]
+    fn preflight_reports_unavailable_without_gpu_feature() {
+        assert!(!preflight_bn254_poseidon_word_batches());
     }
 }

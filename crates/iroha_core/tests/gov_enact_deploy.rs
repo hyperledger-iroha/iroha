@@ -264,12 +264,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     let mut abi_arr = [0u8; 32];
     abi_arr.copy_from_slice(&abi_b);
     let key = iroha_crypto::Hash::prehashed(code_arr);
-    // Grant permission to register manifest
-    let p_reg: iroha_data_model::permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
-    Grant::account_permission(p_reg, account_id.clone())
-        .execute(&account_id, &mut stx)
-        .expect("grant CanRegisterSmartContractCode");
     let man = iroha_data_model::smart_contract::manifest::ContractManifest {
         code_hash: Some(key),
         abi_hash: Some(iroha_crypto::Hash::prehashed(abi_arr)),
@@ -281,9 +275,9 @@ fn enact_rejects_on_conflicting_existing_manifest() {
         provenance: None,
     }
     .signed(&kp);
-    iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest: man }
-        .execute(&account_id, &mut stx)
-        .expect("register conflicting manifest");
+    stx.world
+        .contract_manifests_mut_for_testing()
+        .insert(key, man);
 
     // Enact should fail due to abi_hash mismatch
     let instr = iroha_data_model::isi::governance::EnactReferendum {

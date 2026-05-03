@@ -5918,6 +5918,8 @@ pub fn read_config_and_genesis(
             "failed to apply FASTPQ Metal overrides"
         );
     }
+    #[cfg(feature = "fastpq-gpu")]
+    preflight_fastpq_bn254_poseidon_words();
 
     let stack_budget_bytes = ivm_stack_budget_bytes(&config);
     apply_concurrency_config(&config.concurrency, stack_budget_bytes);
@@ -7794,6 +7796,21 @@ fn install_fastpq_execution_mode_probe(labels: &FastpqDeviceLabels) {
     });
 }
 
+#[cfg(feature = "fastpq-gpu")]
+fn preflight_fastpq_bn254_poseidon_words() {
+    if fastpq_prover::preflight_bn254_poseidon_word_batches() {
+        iroha_logger::info!(
+            target: "fastpq",
+            "BN254 Poseidon word-batch GPU preflight passed"
+        );
+    } else {
+        iroha_logger::debug!(
+            target: "fastpq",
+            "BN254 Poseidon word-batch GPU preflight unavailable; scalar fallback remains active"
+        );
+    }
+}
+
 #[cfg(feature = "telemetry")]
 fn install_fastpq_poseidon_probe(labels: &FastpqDeviceLabels) {
     let telemetry_labels = labels.clone();
@@ -8819,7 +8836,7 @@ fn log_norito_banner(cfg: &Config) {
     // Snapshot core settings
     let n = &cfg.norito;
     let gpu_allowed = n.allow_gpu_compression;
-    let gpu_available = norito::core::hw::has_gpu_compression();
+    let gpu_probe_status = if gpu_allowed { "deferred" } else { "disabled" };
 
     // UTF‑8 box drawing and kana render nicely in modern terminals.
     let art = r"
@@ -8836,11 +8853,11 @@ fn log_norito_banner(cfg: &Config) {
 
     // Compose settings block
     let msg = format!(
-        "\n{}\nNorito settings:\n  - max_archive_len: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_available: {}\n",
+        "\n{}\nNorito settings:\n  - max_archive_len: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_probe: {}\n",
         art,
         resolve_norito_max_archive_len(cfg),
         gpu_allowed,
-        gpu_available,
+        gpu_probe_status,
     );
 
     iroha_logger::info!(target: "norito", "{}", msg);

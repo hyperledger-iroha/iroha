@@ -116,6 +116,8 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
     let from_post = from_pre.saturating_sub(amount);
     let to_pre = 500_000u64 + index as u64;
     let to_post = to_pre.saturating_add(amount);
+    let sender_key = format!("asset/{asset_definition}/{from_account}").into_bytes();
+    let receiver_key = format!("asset/{asset_definition}/{to_account}").into_bytes();
     let delta = TransferDeltaTranscript {
         from_account: from_account.clone(),
         to_account: to_account.clone(),

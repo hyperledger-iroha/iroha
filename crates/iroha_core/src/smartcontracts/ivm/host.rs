@@ -134,6 +134,12 @@ struct CachedProofEntry {
 
 const PUBLIC_INPUT_GAS_BASE_DEFAULT: u64 = 16;
 const PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT: u64 = 1;
+const CREATE_NFTS_ALL_GAS: u64 = 16;
+const SMARTCONTRACT_DEPTH_GAS: u64 = 16;
+const AXT_GAS_BASE: u64 = 16;
+const AXT_GAS_PER_BYTE: u64 = 1;
+const AXT_VERIFY_GAS_BASE: u64 = 64;
+const AXT_VERIFY_GAS_PER_BYTE: u64 = 1;
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
 
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize)]
@@ -3006,6 +3012,34 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
 
+    fn smartcontract_depth_gas() -> u64 {
+        SMARTCONTRACT_DEPTH_GAS
+    }
+
+    fn create_nfts_for_all_gas() -> u64 {
+        CREATE_NFTS_ALL_GAS
+    }
+
+    fn axt_verify_gas(payload_len: usize) -> u64 {
+        AXT_VERIFY_GAS_BASE.saturating_add(
+            AXT_VERIFY_GAS_PER_BYTE.saturating_mul(u64::try_from(payload_len).unwrap_or(u64::MAX)),
+        )
+    }
+
+    fn axt_gas(payload_len: usize) -> u64 {
+        let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);
+        AXT_GAS_BASE.saturating_add(AXT_GAS_PER_BYTE.saturating_mul(bytes))
+    }
+
+    fn axt_commit_gas(state: &axt::HostAxtState) -> u64 {
+        let entries = state
+            .touches()
+            .len()
+            .saturating_add(state.proofs().len())
+            .saturating_add(state.handles().len());
+        Self::axt_gas(entries)
+    }
+
     fn collect_durable_state_keys(&self, prefix: &Name) -> Result<Vec<Name>, ivm::VMError> {
         let prefix_str = prefix.as_ref();
         let scope_prefix = self.durable_state_scope_prefix();
@@ -5346,8 +5380,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         self.clear_axt_reject();
         let ptr = vm.register(10);
-        let descriptor: axt::AxtDescriptor =
-            Self::decode_tlv_typed(vm, ptr, PointerType::AxtDescriptor)?;
+        let descriptor_tlv = Self::expect_tlv(vm, ptr, PointerType::AxtDescriptor)?;
+        let gas = Self::axt_gas(descriptor_tlv.payload.len());
+        let descriptor: axt::AxtDescriptor = Self::decode_header(descriptor_tlv.payload)?;
         if let Err(err) = axt::validate_descriptor(&descriptor) {
             self.record_axt_reject_detail(
                 AxtRejectReason::Descriptor,
@@ -5376,7 +5411,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .and_then(Self::policy_current_slot);
         self.reset_axt_proof_cache_for_slot(policy_slot);
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
-        Ok(0)
+        Ok(gas)
     }
 
     fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -5393,7 +5428,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::VMError::PermissionDenied);
         }
         let ds_ptr = vm.register(10);
-        let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)?;
+        let ds_tlv = Self::expect_tlv(vm, ds_ptr, PointerType::DataSpaceId)?;
+        let mut gas_len = ds_tlv.payload.len();
+        let dsid: DataSpaceId = Self::decode_header(ds_tlv.payload)?;
         let manifest_ptr = vm.register(11);
         let manifest = if manifest_ptr == 0 {
             TouchManifest {
@@ -5402,6 +5439,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         } else {
             let manifest_tlv = Self::expect_tlv(vm, manifest_ptr, PointerType::NoritoBytes)?;
+            gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
             Self::decode_header(manifest_tlv.payload)?
         };
         if let Err(err) = self.axt_policy.allow_touch(dsid, &manifest) {
@@ -5432,7 +5470,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(err);
         }
-        Ok(0)
+        Ok(Self::axt_gas(gas_len))
     }
 
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -5491,9 +5529,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 self.clear_axt_proof_cache_state(dsid, &entry);
             }
             self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
-            return Ok(0);
+            return Ok(Self::axt_verify_gas(0));
         }
         let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
+        let gas = Self::axt_verify_gas(proof_tlv.payload.len());
         let mut proof_payload = proof_tlv.payload;
         #[cfg(test)]
         eprintln!("proof payload len {}", proof_payload.len());
@@ -5514,7 +5553,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 ivm::VMError::NoritoInvalid
             })?;
         self.validate_axt_proof(dsid, &proof, policy)?;
-        Ok(0)
+        Ok(gas)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -5718,6 +5757,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let handle_ptr = vm.register(10);
         let handle_tlv = Self::expect_tlv(vm, handle_ptr, PointerType::AssetHandle)?;
+        let mut gas_len = handle_tlv.payload.len();
         let handle: AssetHandle = Self::decode_header(handle_tlv.payload)?;
         let binding = handle.binding_array().ok_or_else(|| {
             self.record_axt_reject(
@@ -5739,6 +5779,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let intent_ptr = vm.register(11);
         let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
+        gas_len = gas_len.saturating_add(intent_tlv.payload.len());
         let intent: RemoteSpendIntent = Self::decode_header(intent_tlv.payload)?;
         let (state_binding, dsid_expected, has_touch) = {
             let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
@@ -5846,6 +5887,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             None
         } else {
             let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
+            gas_len = gas_len.saturating_add(proof_tlv.payload.len());
             let blob: ProofBlob = Self::decode_header(proof_tlv.payload).inspect_err(|_| {
                 self.record_axt_reject(
                     AxtRejectReason::Proof,
@@ -5934,7 +5976,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(err);
         }
-        Ok(0)
+        Ok(Self::axt_gas(gas_len))
     }
 
     fn handle_axt_commit(&mut self) -> Result<u64, ivm::VMError> {
@@ -5948,6 +5990,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             ivm::VMError::PermissionDenied
         })?;
+        let gas = Self::axt_commit_gas(&state);
         if let Some(analysis) = &self.amx_analysis {
             if let Some(ds_count) = NonZeroUsize::new(state.expected_dsids().len()) {
                 if let Err(err) = analysis::enforce_amx_budget(analysis, ds_count, &self.amx_limits)
@@ -6013,7 +6056,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         match state.validate_commit() {
             Ok(()) => {
                 self.completed_axt.push(state);
-                Ok(0)
+                Ok(gas)
             }
             Err(err) => {
                 self.axt_state = Some(state);
@@ -6816,14 +6859,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     }
                 }
                 self.nft_seq = i;
-                Ok(gas)
+                Ok(gas.max(Self::create_nfts_for_all_gas()))
             }
             // Set SmartContract execution depth parameter to x10
             ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
                 let depth_raw = vm.register(10);
                 // If zero, treat as no-op to avoid setting an invalid value
                 if depth_raw == 0 {
-                    return Ok(0);
+                    return Ok(Self::smartcontract_depth_gas());
                 }
                 // SmartContractParameter::ExecutionDepth expects a u8.
                 let depth: u8 = u8::try_from(depth_raw).unwrap_or(u8::MAX);
@@ -6831,7 +6874,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
                 );
                 let instr = InstructionBox::from(SetParameter::new(param));
-                Ok(self.queue_instruction(instr))
+                Ok(self
+                    .queue_instruction(instr)
+                    .max(Self::smartcontract_depth_gas()))
             }
             // Reserved for future smart-contract helpers
             // Accept a Norito-encoded InstructionBox and enqueue it for later execution.
@@ -7287,8 +7332,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // ZK roots read: build response from snapshot and return TLV pointer in r10
             ivm::syscalls::SYSCALL_ZK_ROOTS_GET => {
                 let ptr = vm.register(10);
+                let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
+                let input_len = req_tlv.payload.len();
                 let req: ivm::zk_verify::RootsGetRequest =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    norito::decode_from_bytes(req_tlv.payload)
+                        .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let ad: AssetDefinitionId = req
                     .asset_id
                     .parse()
@@ -7331,13 +7379,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                Ok(0)
+                Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
             }
             // ZK vote tally read: respond from elections snapshot
             ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
                 let ptr = vm.register(10);
+                let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
+                let input_len = req_tlv.payload.len();
                 let req: ivm::zk_verify::VoteGetTallyRequest =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    norito::decode_from_bytes(req_tlv.payload)
+                        .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let (finalized, tally) = match self.zk_elections.get(&req.election_id) {
                     Some((f, t)) => (*f, t.clone()),
                     None => (false, Vec::new()),
@@ -7354,7 +7405,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                Ok(0)
+                Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
             }
             ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
                 use ivm::vrf::{VrfEpochSeedRequest, VrfEpochSeedResponse};
@@ -7366,17 +7417,19 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
+                let input_len = tlv.payload.len();
+                let gas = Self::state_query_gas(input_len);
                 if tlv.type_id != PointerType::NoritoBytes {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_TYPE);
-                    return Ok(0);
+                    return Ok(gas);
                 }
                 let req: VrfEpochSeedRequest = match norito::decode_from_bytes(tlv.payload) {
                     Ok(req) => req,
                     Err(_) => {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_DECODE);
-                        return Ok(0);
+                        return Ok(gas);
                     }
                 };
 
@@ -7419,7 +7472,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         vm.set_register(11, ERR_OOM);
                     }
                 }
-                Ok(0)
+                Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
             }
             // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
             ivm::syscalls::SYSCALL_SM3_HASH
@@ -8178,15 +8231,12 @@ mod pointer_abi_tests {
         assert!(host.axt_proof_cache.is_empty(), "cache must stay empty");
 
         let aligned_proof = proof_blob_for(dsid, manifest_root, b"aligned-proof", 20);
-        let proof_ptr = store_tlv(
-            &mut vm,
-            PointerType::ProofBlob,
-            &norito_blob(&aligned_proof),
-        );
+        let aligned_proof_bytes = norito_blob(&aligned_proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &aligned_proof_bytes);
         vm.set_register(11, proof_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0)
+            Ok(CoreHost::axt_verify_gas(aligned_proof_bytes.len()))
         );
         let entry = host
             .axt_proof_cache
@@ -8254,13 +8304,14 @@ mod pointer_abi_tests {
 
         let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
         let proof = proof_blob_for(dsid, manifest_root, b"raw-expiry", 11);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&proof));
+        let proof_bytes = norito_blob(&proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, proof_ptr);
 
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0)
+            Ok(CoreHost::axt_verify_gas(proof_bytes.len()))
         );
         let recorded = host
             .axt_state
@@ -8291,11 +8342,12 @@ mod pointer_abi_tests {
         let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
         vm.set_register(10, ds_ptr);
         let proof = proof_blob_for(dsid, manifest_root, b"cache-slot", 30);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&proof));
+        let proof_bytes = norito_blob(&proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
         vm.set_register(11, proof_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0)
+            Ok(CoreHost::axt_verify_gas(proof_bytes.len()))
         );
         let entry = host.axt_proof_cache.get(&dsid).expect("cache populated");
         assert_eq!(entry.verified_slot, current_slot);
@@ -8307,7 +8359,7 @@ mod pointer_abi_tests {
         }
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0),
+            Ok(CoreHost::axt_verify_gas(proof_bytes.len())),
             "slot change should re-verify and refresh cache"
         );
         let entry = host
@@ -8321,11 +8373,12 @@ mod pointer_abi_tests {
             snapshot.entries[0].policy.manifest_root = new_manifest_root;
         }
         let new_proof = proof_blob_for(dsid, new_manifest_root, b"cache-rotated-root", 30);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&new_proof));
+        let new_proof_bytes = norito_blob(&new_proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &new_proof_bytes);
         vm.set_register(11, proof_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0),
+            Ok(CoreHost::axt_verify_gas(new_proof_bytes.len())),
             "manifest rotation must invalidate prior cache entry"
         );
         let entry = host
@@ -8395,15 +8448,22 @@ mod pointer_abi_tests {
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let ds_bytes = norito_blob(&dsid);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
         let manifest = TouchManifest {
             read: Vec::new(),
             write: Vec::new(),
         };
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        let manifest_bytes = norito_blob(&manifest);
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
+            Ok(CoreHost::axt_gas(
+                ds_bytes.len().saturating_add(manifest_bytes.len())
+            ))
+        );
 
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let handle = AssetHandle {
@@ -8470,15 +8530,22 @@ mod pointer_abi_tests {
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let ds_bytes = norito_blob(&dsid);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
         let manifest = TouchManifest {
             read: Vec::new(),
             write: Vec::new(),
         };
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        let manifest_bytes = norito_blob(&manifest);
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
+            Ok(CoreHost::axt_gas(
+                ds_bytes.len().saturating_add(manifest_bytes.len())
+            ))
+        );
 
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let handle = AssetHandle {
@@ -8545,15 +8612,22 @@ mod pointer_abi_tests {
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let ds_bytes = norito_blob(&dsid);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
         let manifest = TouchManifest {
             read: Vec::new(),
             write: Vec::new(),
         };
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        let manifest_bytes = norito_blob(&manifest);
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
+            Ok(CoreHost::axt_gas(
+                ds_bytes.len().saturating_add(manifest_bytes.len())
+            ))
+        );
 
         let handle = AssetHandle {
             scope: vec!["transfer".into()],
@@ -8629,11 +8703,12 @@ mod pointer_abi_tests {
         let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
         vm.set_register(10, ds_ptr);
         let proof = proof_blob_for(dsid, manifest_root, b"telemetry-cache", 30);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&proof));
+        let proof_bytes = norito_blob(&proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
         vm.set_register(11, proof_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0)
+            Ok(CoreHost::axt_verify_gas(proof_bytes.len()))
         );
         let snapshot = telemetry.axt_proof_cache_status_snapshot();
         assert_eq!(snapshot.len(), 1);
@@ -8655,16 +8730,13 @@ mod pointer_abi_tests {
 
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
         let rotated_proof = proof_blob_for(dsid, rotated_root, b"telemetry-cache-rotated", 40);
-        let proof_ptr = store_tlv(
-            &mut vm,
-            PointerType::ProofBlob,
-            &norito_blob(&rotated_proof),
-        );
+        let rotated_proof_bytes = norito_blob(&rotated_proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &rotated_proof_bytes);
         vm.set_register(11, proof_ptr);
         vm.set_register(10, ds_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0)
+            Ok(CoreHost::axt_verify_gas(rotated_proof_bytes.len()))
         );
         let refreshed_snapshot = telemetry.axt_proof_cache_status_snapshot();
         assert_eq!(refreshed_snapshot.len(), 1);
@@ -8707,17 +8779,21 @@ mod pointer_abi_tests {
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
         // Touch the dataspace so handle validation can proceed to policy checks.
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let ds_bytes = norito_blob(&dsid);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
         let manifest = TouchManifest {
             read: Vec::new(),
             write: Vec::new(),
         };
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        let manifest_bytes = norito_blob(&manifest);
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(0),
+            Ok(CoreHost::axt_gas(
+                ds_bytes.len().saturating_add(manifest_bytes.len())
+            )),
             "touch should succeed before handle use"
         );
 
@@ -8845,13 +8921,17 @@ mod pointer_abi_tests {
 
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        let ds_bytes = norito_blob(&dsid);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
+        let manifest_bytes = norito_blob(&manifest);
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(0),
+            Ok(CoreHost::axt_gas(
+                ds_bytes.len().saturating_add(manifest_bytes.len())
+            )),
             "touch should succeed before handle use"
         );
         let handle_ptr = store_tlv(
@@ -8880,13 +8960,17 @@ mod pointer_abi_tests {
 
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        let ds_bytes = norito_blob(&dsid);
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
+        let manifest_bytes = norito_blob(&manifest);
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(0),
+            Ok(CoreHost::axt_gas(
+                ds_bytes.len().saturating_add(manifest_bytes.len())
+            )),
             "touch should succeed after policy refresh"
         );
         let handle_ptr = store_tlv(
@@ -8943,18 +9027,19 @@ mod pointer_abi_tests {
         assert!(host.axt_proof_cache.is_empty());
 
         let live_proof = proof_blob_for(dsid, manifest_root, b"live-proof", 50);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&live_proof));
+        let live_proof_bytes = norito_blob(&live_proof);
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &live_proof_bytes);
         vm.set_register(11, proof_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0)
+            Ok(CoreHost::axt_verify_gas(live_proof_bytes.len()))
         );
         assert!(host.axt_proof_cache.contains_key(&dsid));
 
         vm.set_register(11, 0);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(0),
+            Ok(CoreHost::axt_verify_gas(0)),
             "proof clear should drop cache entry"
         );
         assert!(host.axt_proof_cache.is_empty());
@@ -12593,6 +12678,64 @@ seiyaku AliasPayout {{
 
         assert_eq!(gas, expected);
         assert_eq!(host.queued, vec![instr_one, instr_two]);
+    }
+
+    #[test]
+    fn create_nfts_for_all_noop_syscall_charges_declared_gas() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::with_accounts(authority, Arc::new(Vec::new()));
+        let mut vm = ivm::IVM::new(1_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &mut vm)
+            .expect("create nfts for all");
+
+        assert_eq!(gas, CoreHost::create_nfts_for_all_gas());
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn create_nfts_for_all_syscall_charges_at_least_declared_gas() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
+        let mut vm = ivm::IVM::new(1_000);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &mut vm)
+            .expect("create nfts for all");
+
+        assert!(gas >= CoreHost::create_nfts_for_all_gas());
+        assert_eq!(host.queued.len(), 2);
+    }
+
+    #[test]
+    fn smartcontract_depth_noop_syscall_charges_declared_gas() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000);
+        vm.set_register(10, 0);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm)
+            .expect("depth syscall");
+
+        assert_eq!(gas, CoreHost::smartcontract_depth_gas());
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn smartcontract_depth_update_syscall_charges_at_least_declared_gas() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut vm = ivm::IVM::new(1_000);
+        vm.set_register(10, 3);
+
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm)
+            .expect("depth syscall");
+
+        assert!(gas >= CoreHost::smartcontract_depth_gas());
+        assert_eq!(host.queued.len(), 1);
     }
 
     #[test]
@@ -16555,11 +16698,12 @@ seiyaku Vault {
         vm: &mut IVM,
         descriptor: &axt::AxtDescriptor,
     ) {
-        let desc_ptr = store_tlv(vm, PointerType::AxtDescriptor, &norito_blob(descriptor));
+        let descriptor_bytes = norito_blob(descriptor);
+        let desc_ptr = store_tlv(vm, PointerType::AxtDescriptor, &descriptor_bytes);
         vm.set_register(10, desc_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_AXT_BEGIN, vm),
-            Ok(0),
+            Ok(CoreHost::axt_gas(descriptor_bytes.len())),
             "AXT_BEGIN should seed envelope state"
         );
     }
@@ -16630,15 +16774,22 @@ seiyaku Vault {
         let mut vm = IVM::new(10_000);
 
         vm.set_register(10, 42);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_ENCODE_INT, &mut vm), Ok(0));
+        let encode_gas = host
+            .syscall(ivm_sys::SYSCALL_ENCODE_INT, &mut vm)
+            .expect("encode int");
         let ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(ptr).expect("encode tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let encoded_len = tlv.payload.len();
+        assert_eq!(encode_gas, 16 + encoded_len as u64);
         let encoded: i64 = norito::decode_from_bytes(tlv.payload).expect("decode int payload");
         assert_eq!(encoded, 42);
 
         vm.set_register(10, ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_DECODE_INT, &mut vm), Ok(0));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_DECODE_INT, &mut vm),
+            Ok(16 + encoded_len as u64)
+        );
         assert_eq!(vm.register(10), 42);
     }
 
@@ -17453,15 +17604,19 @@ seiyaku Vault {
             epoch: 7,
             fallback_to_latest: false,
         };
-        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&req));
+        let req_bytes = norito_blob(&req);
+        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
         vm.set_register(10, req_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm),
-            Ok(0)
-        );
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
+            .expect("vrf epoch seed");
         assert_eq!(vm.register(11), 0);
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(
+            gas,
+            CoreHost::state_query_gas(req_bytes.len().saturating_add(tlv.payload.len()))
+        );
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
         assert!(resp.found);
@@ -17472,22 +17627,22 @@ seiyaku Vault {
             epoch: 99,
             fallback_to_latest: true,
         };
-        let fallback_ptr = store_tlv(
-            &mut vm,
-            PointerType::NoritoBytes,
-            &norito_blob(&fallback_req),
-        );
+        let fallback_bytes = norito_blob(&fallback_req);
+        let fallback_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &fallback_bytes);
         vm.set_register(10, fallback_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm),
-            Ok(0)
-        );
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
+            .expect("vrf epoch seed fallback");
         assert_eq!(vm.register(11), 0);
         let out_ptr = vm.register(10);
         let tlv = vm
             .memory
             .validate_tlv(out_ptr)
             .expect("fallback output tlv");
+        assert_eq!(
+            gas,
+            CoreHost::state_query_gas(fallback_bytes.len().saturating_add(tlv.payload.len()))
+        );
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode fallback response");
         assert!(resp.found);
@@ -17510,15 +17665,19 @@ seiyaku Vault {
             epoch: 42,
             fallback_to_latest: false,
         };
-        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&req));
+        let req_bytes = norito_blob(&req);
+        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
         vm.set_register(10, req_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm),
-            Ok(0)
-        );
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_VRF_EPOCH_SEED, &mut vm)
+            .expect("vrf epoch seed missing");
         assert_eq!(vm.register(11), 0);
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(
+            gas,
+            CoreHost::state_query_gas(req_bytes.len().saturating_add(tlv.payload.len()))
+        );
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
         assert!(!resp.found);
@@ -17570,13 +17729,16 @@ seiyaku Vault {
         let req_bytes = norito::to_bytes(&req).expect("encode request");
         let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
         vm.set_register(10, req_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
-            Ok(0)
-        );
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm)
+            .expect("vote tally");
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        assert_eq!(
+            gas,
+            CoreHost::state_query_gas(req_bytes.len().saturating_add(tlv.payload.len()))
+        );
         let resp: ivm::zk_verify::VoteGetTallyResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
         assert!(resp.finalized);
@@ -17621,7 +17783,7 @@ seiyaku Vault {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let host = CoreHost::from_state(authority, &state);
+        let mut host = CoreHost::from_state(authority, &state);
 
         assert_eq!(
             host.zk_roots
@@ -17638,6 +17800,30 @@ seiyaku Vault {
         assert!(finalized);
         assert_eq!(tally, vec![1, 2]);
         assert!(host.verifying_keys.contains_key(&vk_id));
+
+        let mut vm = IVM::new(10_000);
+        let req = ivm::zk_verify::RootsGetRequest {
+            asset_id: asset_def_id.to_string(),
+            max: 2,
+        };
+        let req_bytes = norito::to_bytes(&req).expect("encode request");
+        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
+        vm.set_register(10, req_ptr);
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_ZK_ROOTS_GET, &mut vm)
+            .expect("roots get");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("roots output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        assert_eq!(
+            gas,
+            CoreHost::state_query_gas(req_bytes.len().saturating_add(tlv.payload.len()))
+        );
+        let resp: ivm::zk_verify::RootsGetResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode roots response");
+        assert_eq!(resp.latest, [2u8; 32]);
+        assert_eq!(resp.roots, vec![[1u8; 32], [2u8; 32]]);
+        assert_eq!(resp.height, 2);
     }
 
     #[test]

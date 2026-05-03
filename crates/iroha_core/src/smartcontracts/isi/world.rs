@@ -1769,6 +1769,36 @@ pub mod isi {
         Ok(provenance)
     }
 
+    fn verify_registered_contract_artifact_for_manifest(
+        world: &WorldTransaction<'_, '_>,
+        code_hash: &Hash,
+        manifest: &ContractManifest,
+    ) -> Result<Vec<u8>, InstructionExecutionError> {
+        let code_bytes = world.contract_code.get(code_hash).cloned().ok_or_else(|| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "contract bytecode for manifest.code_hash not found".into(),
+            ))
+        })?;
+        let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                err.to_string().into(),
+            ))
+        })?;
+        if verified.code_hash != *code_hash {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "stored contract bytecode hash does not match manifest.code_hash".into(),
+            ));
+        }
+        if manifest.signature_payload() != verified.manifest.signature_payload() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "manifest payload does not match embedded contract artifact".into(),
+                ),
+            ));
+        }
+        Ok(code_bytes)
+    }
+
     #[cfg(feature = "telemetry")]
     fn root_evictions_since(before_len: usize, appended: usize, after_len: usize) -> u64 {
         let expected = before_len.saturating_add(appended);
@@ -4241,6 +4271,21 @@ pub mod isi {
             ensure_contract_binding_governance(authority, state_transaction)?;
             let key = *self.code_hash();
             let contract_address = self.contract_address().clone();
+            let Some(manifest) = state_transaction
+                .world
+                .contract_manifests
+                .get(&key)
+                .cloned()
+            else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
+                ));
+            };
+            let code_bytes = verify_registered_contract_artifact_for_manifest(
+                &state_transaction.world,
+                &key,
+                &manifest,
+            )?;
             if let Some(existing) = state_transaction
                 .world
                 .contract_instances
@@ -4254,16 +4299,6 @@ pub mod isi {
                 // idempotent when same
                 return Ok(());
             }
-            let Some(manifest) = state_transaction
-                .world
-                .contract_manifests
-                .get(&key)
-                .cloned()
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("manifest for code_hash not found".into()),
-                ));
-            };
             let needs_trigger_registration =
                 manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
                     entrypoints
@@ -4271,19 +4306,6 @@ pub mod isi {
                         .any(|entrypoint| !entrypoint.triggers.is_empty())
                 });
             if needs_trigger_registration {
-                let code_bytes = state_transaction
-                    .world
-                    .contract_code
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "contract bytecode is required to register manifest triggers"
-                                    .into(),
-                            ),
-                        )
-                    })?;
                 register_manifest_triggers(
                     authority,
                     state_transaction,
@@ -4383,23 +4405,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let code = self.code().clone();
-            // Parse IVM header and verify code_hash over program body
-            let parsed = ivm::ProgramMetadata::parse(&code).map_err(|e| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid IVM program: {e}").into(),
-                )
-            })?;
-            if parsed.metadata.version_major != 1 {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "unsupported IVM program version".into(),
-                ));
-            }
-            let body_hash = iroha_crypto::Hash::new(&code[parsed.header_len..]);
-            if body_hash != *self.code_hash() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "code_hash does not match program body".into(),
-                ));
-            }
             // Optional size cap via custom parameter `max_contract_code_bytes` (JSON u64)
             let mut cap_bytes: u64 = 16 * 1024 * 1024; // default 16 MiB
             if let Ok(name) = core::str::FromStr::from_str("max_contract_code_bytes") {
@@ -4414,6 +4419,16 @@ pub mod isi {
             if (code.len() as u64) > cap_bytes {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!("code bytes exceed cap: {} > {}", code.len(), cap_bytes).into(),
+                ));
+            }
+            let verified = ivm::verify_contract_artifact(&code).map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string().into(),
+                ))
+            })?;
+            if verified.code_hash != *self.code_hash() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "code_hash does not match embedded contract artifact".into(),
                 ));
             }
             // Idempotent insert; if exists and differs, reject
@@ -6745,7 +6760,7 @@ pub mod isi {
                 verified_at_height: Some(height),
                 bridge: None,
             };
-            state_transaction.world.proofs.insert(pid.clone(), record);
+            state_transaction.world.insert_proof_record(record);
 
             let cap = state_transaction.zk.proof_history_cap;
             let prune_outcome = enforce_proof_history_cap(
@@ -6892,7 +6907,7 @@ pub mod isi {
                     size_bytes: u32::try_from(proof_size).unwrap_or(u32::MAX),
                 }),
             };
-            state_transaction.world.proofs.insert(pid.clone(), record);
+            state_transaction.world.insert_proof_record(record);
 
             let cap = state_transaction.zk.proof_history_cap;
             let prune_outcome = enforce_bridge_history_cap(
@@ -7340,7 +7355,7 @@ pub mod isi {
                 }
             }
             state_transaction.world.proof_tags.remove(old_id.clone());
-            state_transaction.world.proofs.remove(old_id.clone());
+            state_transaction.world.remove_proof_record(old_id);
         }
     }
 
@@ -9534,6 +9549,11 @@ pub mod isi {
                     ),
                 ));
             }
+            let _code_bytes = verify_registered_contract_artifact_for_manifest(
+                &state_transaction.world,
+                &key,
+                &manifest,
+            )?;
             if state_transaction
                 .world
                 .contract_manifests
@@ -9975,20 +9995,20 @@ pub mod isi {
             let event_domain = domain.clone();
             let world = &mut state_transaction.world;
 
-            if let Some(existing) = world.domains.insert(canonical_id.clone(), domain) {
-                let _ = world.domains.insert(canonical_id.clone(), existing);
+            if world.domains.get(&canonical_id).is_some() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
                     id: IdBox::DomainId(canonical_id.clone()),
                 }
                 .into());
             }
+            world.insert_domain_entry(canonical_id.clone(), domain);
             if world
                 .domain_selectors
                 .insert(selector, canonical_id.clone())
                 .is_some()
             {
-                world.domains.remove(canonical_id.clone());
+                world.remove_domain_entry(&canonical_id);
                 return Err(InstructionExecutionError::InvariantViolation(
                     "Domain selector already registered".to_owned().into(),
                 ));
@@ -11105,7 +11125,7 @@ pub mod isi {
                     state_transaction,
                     &nft_id,
                 );
-                state_transaction.world.nfts.remove(nft_id.clone());
+                state_transaction.world.remove_nft_entry(&nft_id);
                 state_transaction
                     .world
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
@@ -11339,8 +11359,7 @@ pub mod isi {
                     .remove(asset_definition_id.clone());
                 state_transaction
                     .world
-                    .asset_definitions
-                    .remove(asset_definition_id.clone());
+                    .remove_asset_definition_entry(&asset_definition_id);
             }
 
             for account_id in relabeled_accounts {
@@ -11401,8 +11420,7 @@ pub mod isi {
             })?;
             if state_transaction
                 .world
-                .domains
-                .remove(domain_id.clone())
+                .remove_domain_entry(&domain_id)
                 .is_none()
             {
                 return Err(FindError::Domain(domain_id).into());
@@ -12049,6 +12067,45 @@ pub mod isi {
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+
+        fn minimal_contract_artifact() -> (Vec<u8>, ContractManifest) {
+            let meta = ivm::ProgramMetadata {
+                version_major: 1,
+                version_minor: 1,
+                mode: 0,
+                vector_length: 0,
+                max_cycles: 1,
+                abi_version: 1,
+            };
+            let interface = ivm::EmbeddedContractInterfaceV1 {
+                compiler_fingerprint: "world-isi-test".to_owned(),
+                features_bitmap: 0,
+                access_set_hints: None,
+                kotoba: Vec::new(),
+                entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                    name: "main".to_owned(),
+                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                    params: Vec::new(),
+                    return_type: None,
+                    permission: None,
+                    read_keys: Vec::new(),
+                    write_keys: Vec::new(),
+                    access_hints_complete: None,
+                    access_hints_skipped: Vec::new(),
+                    triggers: Vec::new(),
+                    entry_pc: 0,
+                }],
+                states: Vec::new(),
+            };
+            let mut code = Vec::new();
+            code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let mut artifact = meta.encode();
+            artifact.extend_from_slice(&interface.encode_section());
+            artifact.extend_from_slice(&code);
+            let verified =
+                ivm::verify_contract_artifact(&artifact).expect("valid test contract artifact");
+            (artifact, verified.manifest)
         }
 
         fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
@@ -13311,6 +13368,8 @@ pub mod isi {
                 .domain_mut(&foreign_domain)
                 .expect("foreign domain exists")
                 .set_owned_by(account_id.clone());
+            stx.world
+                .replace_domain_owner_index(&foreign_domain, &ALICE_ID, &account_id);
 
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(foreign_domain.clone(), "bond".parse().unwrap());
@@ -13325,6 +13384,8 @@ pub mod isi {
                 .asset_definition_mut(&asset_def_id)
                 .expect("foreign asset definition exists")
                 .set_owned_by(account_id.clone());
+            stx.world
+                .replace_asset_definition_owner_index(&asset_def_id, &ALICE_ID, &account_id);
 
             Unregister::domain(domain_id.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -18169,17 +18230,9 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
 
-            let code_hash = Hash::new(b"public-contract");
-            let manifest = ContractManifest {
-                code_hash: Some(code_hash),
-                abi_hash: None,
-                compiler_fingerprint: None,
-                features_bitmap: None,
-                access_set_hints: None,
-                entrypoints: None,
-                kotoba: None,
-                provenance: None,
-            };
+            let (program, manifest) = minimal_contract_artifact();
+            let code_hash = manifest.code_hash.expect("manifest code hash");
+            stx.world.contract_code.insert(code_hash, program);
             stx.world.contract_manifests.insert(code_hash, manifest);
 
             let contract_address = ContractAddress::derive(
@@ -18731,6 +18784,7 @@ pub mod isi {
 
         impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecordsByBackend {
             #[metrics(+"find_proof_records_by_backend")]
+            #[allow(clippy::needless_collect)]
             fn execute(
                 self,
                 filter: CompoundPredicate<iroha_data_model::proof::ProofRecord>,
@@ -18738,18 +18792,22 @@ pub mod isi {
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
                 let backend = self.backend;
-                Ok(state_ro
+                // Own the backend-range results because the returned iterator cannot borrow the
+                // query's owned backend string after this function returns.
+                let proofs = state_ro
                     .world()
-                    .proofs()
-                    .iter()
+                    .proofs_by_backend_iter(&backend)
                     .map(|(_, rec)| rec)
-                    .filter(move |rec| rec.id.backend == backend && filter.applies(rec))
-                    .cloned())
+                    .filter(move |rec| filter.applies(rec))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Ok(proofs.into_iter())
             }
         }
 
         impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecordsByStatus {
             #[metrics(+"find_proof_records_by_status")]
+            #[allow(clippy::needless_collect)]
             fn execute(
                 self,
                 filter: CompoundPredicate<iroha_data_model::proof::ProofRecord>,
@@ -18757,13 +18815,16 @@ pub mod isi {
             ) -> Result<impl Iterator<Item = iroha_data_model::proof::ProofRecord>, Error>
             {
                 let status = self.status;
-                Ok(state_ro
+                // Own the status-index results because the returned iterator cannot borrow the
+                // query's owned status value after this function returns.
+                let proofs = state_ro
                     .world()
-                    .proofs()
-                    .iter()
+                    .proofs_by_status_iter(&status)
                     .map(|(_, rec)| rec)
-                    .filter(move |rec| rec.status == status && filter.applies(rec))
-                    .cloned())
+                    .filter(move |rec| filter.applies(rec))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Ok(proofs.into_iter())
             }
         }
     }

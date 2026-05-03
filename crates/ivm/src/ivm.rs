@@ -6599,13 +6599,19 @@ mod tests {
     fn execution_proof_summary_is_stable_for_same_program() {
         set_banner_enabled(false);
         let program = program_with_imm(7);
-        let mut first = IVM::new(u64::MAX);
+        let config = IvmConfig::deterministic(u64::MAX)
+            .with_stack_limit_bytes(Memory::STACK_SIZE)
+            .with_stack_budget_bytes(Memory::STACK_SIZE);
+        let mut first = IVM::new_with_config(config);
         first.load_program(&program).expect("first program loads");
+        let mut second = first.clone();
+        second.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(
+            DefaultHost::new(),
+        )));
+
         first.run().expect("first program runs");
         let first_proof = first.execution_proof();
 
-        let mut second = IVM::new(u64::MAX);
-        second.load_program(&program).expect("second program loads");
         second.run().expect("second program runs");
         let second_proof = second.execution_proof();
 
@@ -6637,6 +6643,31 @@ mod tests {
         bytes.extend_from_slice(&addi.to_le_bytes());
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, literal_prefix)
+    }
+
+    fn program_with_unaligned_contract_prefix() -> (Vec<u8>, usize) {
+        let interface = crate::metadata::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: String::new(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: Vec::new(),
+            states: Vec::new(),
+        };
+        let prefix = (0..32)
+            .map(|len| crate::metadata::EmbeddedContractInterfaceV1 {
+                compiler_fingerprint: "x".repeat(len),
+                ..interface.clone()
+            })
+            .map(|interface| interface.encode_section())
+            .find(|section| !section.len().is_multiple_of(WIDE_INSTRUCTION_LEN as usize))
+            .expect("CNTR section can produce an unaligned code prefix");
+
+        let mut bytes = ProgramMetadata::default().encode();
+        let prefix_len = prefix.len();
+        bytes.extend_from_slice(&prefix);
+        bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        (bytes, prefix_len)
     }
 
     #[test]
@@ -6683,21 +6714,14 @@ mod tests {
     }
 
     #[test]
-    fn load_program_runs_unaligned_prefix_from_prepared_ops() {
+    fn load_program_runs_unaligned_contract_prefix_from_prepared_ops() {
         set_banner_enabled(false);
-        let mut program = ProgramMetadata::default().encode();
-        program.extend_from_slice(&LITERAL_SECTION_MAGIC);
-        program.extend_from_slice(&(2u32).to_le_bytes());
-        program.extend_from_slice(&(1u32).to_le_bytes());
-        program.extend_from_slice(&0u32.to_le_bytes());
-        program.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
-        program.extend_from_slice(&0x99aa_bbcc_ddee_f010u64.to_le_bytes());
-        program.push(0);
-        program.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        let (program, prefix_len) = program_with_unaligned_contract_prefix();
+        assert_ne!(prefix_len as u64 & 0b11, 0);
 
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program).expect("program loads");
-        assert_eq!(vm.pc() & 0b11, 1);
+        assert_eq!(vm.pc(), prefix_len as u64);
         assert!(vm.prepared_contains_pc(vm.pc()));
 
         vm.reset_predecode_misses();

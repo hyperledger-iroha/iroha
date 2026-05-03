@@ -12,7 +12,7 @@ translator: machine-google-reviewed
 
 # Sparse Merkle yangilash misoli
 
-Ushbu ishlangan misol FASTPQ Stage 2 izi qanday kodlashini ko'rsatadi
+Ushbu ishlangan misol FASTPQ V1 izi qanday kodlashini ko'rsatadi
 a'zo bo'lmagan guvoh `neighbour_leaf` ustunidan foydalangan holda. Siyrak Merkle daraxti
 Poseidon2 maydon elementlari ustida ikkilik hisoblanadi. Kalitlar kanonikga aylantiriladi
 32 baytli kichik endian satrlar, maydon elementiga xeshlangan va eng ko'p

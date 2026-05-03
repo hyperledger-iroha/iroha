@@ -8,8 +8,9 @@ use std::{
 };
 
 use fastpq_prover::{
-    Bn254PoseidonBatchSlice, OperationKind, PoseidonSponge, PublicInputs, StateTransition,
-    TransitionBatch, try_hash_bn254_poseidon_word_batches,
+    Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PoseidonSponge,
+    PublicInputs, StateTransition, TransitionBatch, try_hash_bn254_poseidon_word_batches,
+    try_submit_bn254_poseidon_word_batches,
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
 use iroha_crypto::Hash;
@@ -277,6 +278,15 @@ impl PoseidonDigestBatch {
             .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
     }
 
+    fn try_submit_gpu(&self) -> Option<PendingBn254PoseidonWordBatch> {
+        if self.slices.len() < DIGEST_FINALIZE_GPU_THRESHOLD
+            || !poseidon_digest_acceleration_enabled()
+        {
+            return None;
+        }
+        try_submit_bn254_poseidon_word_batches(&self.words, &self.slices)
+    }
+
     fn hash_cpu(&self) -> Vec<Hash> {
         self.slices
             .iter()
@@ -291,9 +301,35 @@ impl PoseidonDigestBatch {
     }
 }
 
+/// Pending FASTPQ transfer transcript digest batch.
+pub(crate) struct PendingTransferTranscriptDigests {
+    digest_count: usize,
+    batch: PoseidonDigestBatch,
+    pending: PendingBn254PoseidonWordBatch,
+}
+
+impl PendingTransferTranscriptDigests {
+    fn into_digests(self) -> Vec<Hash> {
+        let Self { batch, pending, .. } = self;
+        pending
+            .wait()
+            .map(|digests| digests.into_iter().map(Hash::prehashed).collect::<Vec<_>>())
+            .unwrap_or_else(|| batch.hash_cpu())
+    }
+}
+
 /// Fill missing single-delta transcript digests before block or witness data is exposed.
 pub(crate) fn finalize_transfer_transcript_digests_in_map(
     transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
+) {
+    let pending = try_submit_transfer_transcript_digests_in_map(transcripts);
+    finalize_transfer_transcript_digests_in_map_with_pending(transcripts, pending);
+}
+
+/// Fill missing single-delta transcript digests using a previously submitted GPU batch.
+pub(crate) fn finalize_transfer_transcript_digests_in_map_with_pending(
+    transcripts: &mut BTreeMap<Hash, Vec<TransferTranscript>>,
+    pending: Option<PendingTransferTranscriptDigests>,
 ) {
     let digest_count = transcripts
         .values()
@@ -301,6 +337,24 @@ pub(crate) fn finalize_transfer_transcript_digests_in_map(
         .sum::<usize>();
     if digest_count == 0 {
         return;
+    }
+    if let Some(pending) = pending {
+        if pending.digest_count == digest_count {
+            let digests = pending.into_digests();
+            let mut digests = digests.into_iter();
+            for entries in transcripts.values_mut() {
+                apply_transfer_transcript_digests(entries, &mut digests);
+            }
+            debug_assert!(
+                digests.next().is_none(),
+                "FASTPQ transcript digest batch output count must match inputs",
+            );
+            return;
+        }
+        debug_assert_eq!(
+            pending.digest_count, digest_count,
+            "pending FASTPQ transcript digest batch must match current transcript map",
+        );
     }
     if digest_count >= DIGEST_FINALIZE_GPU_THRESHOLD
         && try_finalize_transfer_transcript_digests_in_map_batched(transcripts, digest_count)
@@ -320,6 +374,32 @@ pub(crate) fn finalize_transfer_transcript_digests_in_map(
             finalize_transfer_transcripts_serial(entries);
         }
     }
+}
+
+/// Submit missing single-delta transcript digests without waiting for completion.
+pub(crate) fn try_submit_transfer_transcript_digests_in_map(
+    transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
+) -> Option<PendingTransferTranscriptDigests> {
+    if !poseidon_digest_acceleration_enabled() {
+        return None;
+    }
+    let digest_count = transcripts
+        .values()
+        .map(|entries| missing_single_delta_transcript_count(entries))
+        .sum::<usize>();
+    if digest_count < DIGEST_FINALIZE_GPU_THRESHOLD {
+        return None;
+    }
+    let mut batch = PoseidonDigestBatch::with_capacity(digest_count);
+    for entries in transcripts.values() {
+        collect_transfer_transcript_digests(entries, &mut batch);
+    }
+    let pending = batch.try_submit_gpu()?;
+    Some(PendingTransferTranscriptDigests {
+        digest_count,
+        batch,
+        pending,
+    })
 }
 
 /// Fill missing single-delta transcript digests in witness bundles.

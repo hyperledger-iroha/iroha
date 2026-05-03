@@ -27,7 +27,7 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
 pub const DEFAULT_PARAMETER: &str = "fastpq-lane-balanced";
-/// Maximum encoded AXT FastPQ batch/proof payload accepted before decoding.
+/// Maximum encoded AXT `FastPQ` batch/proof payload accepted before decoding.
 const DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES: usize = 1024 * 1024;
 const AXT_STATEMENT_DOMAIN: &[u8] = b"fastpq:axt:statement:v1";
 const AXT_BATCH_SEAL_DOMAIN: &[u8] = b"fastpq:axt:batch-seal:v1";

@@ -33,20 +33,46 @@ use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
-fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-    let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, ContractManifest) {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1,
-        abi_version,
+        abi_version: 1,
     };
+    let embedded_entrypoints = entrypoints
+        .iter()
+        .map(|entrypoint| ivm::EmbeddedEntrypointDescriptor {
+            name: entrypoint.name.clone(),
+            kind: entrypoint.kind,
+            params: entrypoint.params.clone(),
+            return_type: entrypoint.return_type.clone(),
+            permission: entrypoint.permission.clone(),
+            read_keys: entrypoint.read_keys.clone(),
+            write_keys: entrypoint.write_keys.clone(),
+            access_hints_complete: entrypoint.access_hints_complete,
+            access_hints_skipped: entrypoint.access_hints_skipped.clone(),
+            triggers: entrypoint.triggers.clone(),
+            entry_pc: 0,
+        })
+        .collect();
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        compiler_fingerprint: "contract-manifest-trigger-test".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: embedded_entrypoints,
+        states: Vec::new(),
+    };
+    let mut code = Vec::new();
+    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let mut out = meta.encode();
+    out.extend_from_slice(&interface.encode_section());
     out.extend_from_slice(&code);
-    out
+    let verified = ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
+    (out, verified.manifest)
 }
 
 fn setup_state() -> (State, AccountId, KeyPair) {
@@ -143,17 +169,6 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
 
-    let program = minimal_ivm_program(1);
-    let parsed = ivm::ProgramMetadata::parse(&program).expect("ivm header");
-    let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
-
-    RegisterSmartContractBytes {
-        code_hash,
-        code: program,
-    }
-    .execute(&authority, &mut stx)
-    .expect("register contract bytes");
-
     let trigger_id: TriggerId = "wake".parse().expect("trigger id");
     let mut descriptor_metadata = Metadata::default();
     descriptor_metadata.insert("tag".parse::<Name>().expect("tag key"), Json::from("alpha"));
@@ -180,18 +195,17 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         access_hints_skipped: Vec::new(),
         triggers: vec![trigger],
     };
-    let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let manifest = ContractManifest {
-        code_hash: Some(code_hash),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: Some(vec![entrypoint]),
-        kotoba: None,
-        provenance: None,
+    let (program, manifest) = contract_artifact(vec![entrypoint]);
+    let code_hash = manifest.code_hash.expect("manifest code hash");
+
+    RegisterSmartContractBytes {
+        code_hash,
+        code: program,
     }
-    .signed(&kp);
+    .execute(&authority, &mut stx)
+    .expect("register contract bytes");
+
+    let manifest = manifest.signed(&kp);
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");
@@ -270,17 +284,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
 
-    let program = minimal_ivm_program(1);
-    let parsed = ivm::ProgramMetadata::parse(&program).expect("ivm header");
-    let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
-
-    RegisterSmartContractBytes {
-        code_hash,
-        code: program,
-    }
-    .execute(&authority, &mut stx)
-    .expect("register contract bytes");
-
     let asset_definition = opaque_asset_definition_id();
     let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
     let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
@@ -334,18 +337,17 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         access_hints_skipped: Vec::new(),
         triggers: vec![data_trigger, pipeline_trigger],
     };
-    let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let manifest = ContractManifest {
-        code_hash: Some(code_hash),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: Some(vec![entrypoint]),
-        kotoba: None,
-        provenance: None,
+    let (program, manifest) = contract_artifact(vec![entrypoint]);
+    let code_hash = manifest.code_hash.expect("manifest code hash");
+
+    RegisterSmartContractBytes {
+        code_hash,
+        code: program,
     }
-    .signed(&kp);
+    .execute(&authority, &mut stx)
+    .expect("register contract bytes");
+
+    let manifest = manifest.signed(&kp);
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");

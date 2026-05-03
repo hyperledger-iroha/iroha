@@ -264,39 +264,39 @@ gas = "G_state_count + count"
 
 [[syscall]]
 number = "0x53"
-args = "r10=&NoritoBytes(ASCII decimal) or r10=&Blob(ASCII decimal)"
+args = "r10=&NoritoBytes(Norito-framed i64)"
 ret = "r10=i64"
-gas = "-"
+gas = "G_numeric + bytes"
 
 [[syscall]]
 number = "0x54"
 args = "r10=&Name(base), r11=key:i64"
 ret = "r10=ptr (&Name)"
-gas = "-"
+gas = "G_path + bytes"
 
 [[syscall]]
 number = "0x55"
 args = "r10=value:i64"
-ret = "r10=ptr (&NoritoBytes(ASCII decimal))"
-gas = "-"
+ret = "r10=ptr (&NoritoBytes(Norito-framed i64))"
+gas = "G_numeric + bytes"
 
 [[syscall]]
 number = "0x56"
 args = "r10=&Name(base), r11=&NoritoBytes(key)"
 ret = "r10=ptr (&Name)"
-gas = "-"
+gas = "G_path + bytes"
 
 [[syscall]]
 number = "0x57"
 args = "r10=&Json"
 ret = "ptr (&NoritoBytes)"
-gas = "G_json_encode"
+gas = "G_json_encode + bytes"
 
 [[syscall]]
 number = "0x58"
 args = "r10=&NoritoBytes(JSON bytes)"
 ret = "ptr (&Json)"
-gas = "G_json_decode"
+gas = "G_json_decode + bytes"
 
 [[syscall]]
 number = "0x59"
@@ -320,7 +320,7 @@ gas = "G_schema + bytes"
 number = "0x5C"
 args = "r10=&NoritoBytes(UTF-8 string)"
 ret = "ptr (&Name)"
-gas = "G_name_decode"
+gas = "G_name_decode + bytes"
 
 [[syscall]]
 number = "0x5D"
@@ -344,63 +344,63 @@ gas = "G_tlv_eq + bytes"
 number = "0xE0"
 args = "r10=&Blob(TLV)"
 ret = "ptr (r10)"
-gas = "G_input_publish"
+gas = "G_input_publish + bytes"
 
 # Zero-knowledge verification and state-read syscalls
 [[syscall]]
 number = "0x60"
 args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
 ret = "u64=0/1"
-gas = "G_verify_proof"
+gas = "G_verify_proof + bytes"
 
 [[syscall]]
 number = "0x61"
 args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
 ret = "u64=0/1"
-gas = "G_verify_proof"
+gas = "G_verify_proof + bytes"
 
 [[syscall]]
 number = "0x62"
 args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
 ret = "u64=0/1"
-gas = "G_verify_proof"
+gas = "G_verify_proof + bytes"
 
 [[syscall]]
 number = "0x63"
 args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
 ret = "u64=0/1"
-gas = "G_verify_proof"
+gas = "G_verify_proof + bytes"
 
 [[syscall]]
 number = "0x64"
 args = "r10=&NoritoBytes(RootsGetRequest)"
 ret = "ptr (NoritoBytes in INPUT)"
-gas = "G_roots_get"
+gas = "G_roots_get + bytes"
 
 [[syscall]]
 number = "0x65"
 args = "r10=&NoritoBytes(VoteGetTallyRequest)"
 ret = "ptr (NoritoBytes in INPUT)"
-gas = "G_vote_get"
+gas = "G_vote_get + bytes"
 
 # VRF verification syscalls
 [[syscall]]
 number = "0x66"
 args = "r10=&NoritoBytes(VrfVerifyRequest)"
 ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64"
-gas = "G_verify"
+gas = "G_verify + bytes"
 
 [[syscall]]
 number = "0x67"
 args = "r10=&NoritoBytes(VrfVerifyBatchRequest)"
 ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64"
-gas = "G_verify"
+gas = "G_verify + bytes"
 
 [[syscall]]
 number = "0x68"
 args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)"
 ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64"
-gas = "G_verify"
+gas = "G_verify + bytes"
 
 [[syscall]]
 number = "0x69"
@@ -496,7 +496,7 @@ gas = "G_tlv_len + bytes"
 number = "0x7E"
 args = "r10=&NoritoBytes(VrfEpochSeedRequest)"
 ret = "r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64"
-gas = "G_vote_get"
+gas = "G_vote_get + bytes"
 
 [[syscall]]
 number = "0x90"
@@ -508,7 +508,7 @@ gas = "G_hash + bytes"
 number = "0x91"
 args = "r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)?"
 ret = "u64=0/1"
-gas = "G_verify"
+gas = "G_verify + bytes"
 
 [[syscall]]
 number = "0x92"
@@ -652,31 +652,31 @@ gas = "-"
 number = "0xB0"
 args = "r10=&AxtDescriptor"
 ret = "u64=0"
-gas = "-"
+gas = "G_axt + bytes"
 
 [[syscall]]
 number = "0xB1"
 args = "r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0"
 ret = "u64=0"
-gas = "-"
+gas = "G_axt + bytes"
 
 [[syscall]]
 number = "0xB2"
 args = "-"
 ret = "u64=0"
-gas = "-"
+gas = "G_axt + entries"
 
 [[syscall]]
 number = "0xB3"
 args = "r10=&DataSpaceId, r11=&ProofBlob or 0"
 ret = "u64=0/1"
-gas = "G_verify"
+gas = "G_verify + bytes"
 
 [[syscall]]
 number = "0xB4"
 args = "r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob?"
 ret = "u64=0"
-gas = "-"
+gas = "G_axt + bytes"
 
 [[syscall]]
 number = "0xB8"
@@ -812,9 +812,9 @@ gas = "G_grow_heap per page"
 
 [[syscall]]
 number = "0xF6"
-args = "-"
-ret = "r10=0/1"
-gas = "G_verify"
+args = "r10=&NoritoBytes(OpenVerifyEnvelope)"
+ret = "r10=0/1, r11=status:u64"
+gas = "G_verify_proof + bytes"
 
 [[syscall]]
 number = "0xF7"
@@ -844,7 +844,7 @@ gas = "G_use_null"
 number = "0xFC"
 args = "r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8"
 ret = "r10=0/1"
-gas = "G_verify_sig"
+gas = "G_verify_sig + bytes"
 
 [[syscall]]
 number = "0xFD"

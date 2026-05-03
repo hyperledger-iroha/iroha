@@ -2479,6 +2479,23 @@ impl Actor {
             record_drop(super::status::VoteValidationDropReason::Duplicate);
             return false;
         }
+        if vote.phase != Phase::NewView && vote.highest_qc.is_some() {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                "dropping non-NEW_VIEW vote with highest certificate reference"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::HighestQcMismatch,
+            );
+            record_drop(super::status::VoteValidationDropReason::HighestQcMismatch);
+            return false;
+        }
         let signature_result = signature_result.unwrap_or_else(|| {
             vote_signature_check(
                 vote,
@@ -2555,7 +2572,7 @@ impl Actor {
             }
         }
         if vote.phase == Phase::NewView {
-            // NEW_VIEW votes sign only the block hash, so highest QC fields must be checked here.
+            // The highest QC reference is signed; these checks enforce its HotStuff semantics.
             let Some(highest) = vote.highest_qc else {
                 debug!(
                     height = vote.height,

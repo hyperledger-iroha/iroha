@@ -37,6 +37,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_axt",
+        asset_id: "asset:gas/G_axt@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_burn",
         asset_id: "asset:gas/G_burn@ivm.core/v2",
         unit: "gas",
@@ -170,6 +177,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_json_get",
+        asset_id: "asset:gas/G_json_get@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_json_object",
         asset_id: "asset:gas/G_json_object@ivm.core/v2",
         unit: "gas",
@@ -235,6 +249,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset {
         key: "G_numeric",
         asset_id: "asset:gas/G_numeric@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
+        key: "G_path",
+        asset_id: "asset:gas/G_path@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",

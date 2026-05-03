@@ -351,6 +351,61 @@ fn syscall_sm2_verify_success() {
 }
 
 #[test]
+fn syscall_sm2_verify_charges_input_bytes() {
+    use ivm::{
+        IVM,
+        host::{DefaultHost, IVMHost},
+    };
+
+    let secret = [0x33u8; 32];
+    let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("construct key");
+    let public = private.public_key();
+    let message = b"ivm-sm2-gas";
+    let signature = private.sign(message);
+    let signature_bytes = signature.to_bytes();
+    let public_key_bytes = public.to_sec1_bytes(false);
+
+    let mut host = DefaultHost::new().with_sm_enabled(true);
+    let mut vm = IVM::new(10_000);
+    let mut offset = 0u64;
+    let p_msg = preload_blob(&mut vm, &mut offset, message);
+    let p_sig = preload_blob(&mut vm, &mut offset, signature_bytes.as_ref());
+    let p_pk = preload_blob(&mut vm, &mut offset, &public_key_bytes);
+    vm.set_register(10, p_msg);
+    vm.set_register(11, p_sig);
+    vm.set_register(12, p_pk);
+    vm.set_register(13, 0);
+
+    let expected_gas =
+        64 + message.len() as u64 + signature_bytes.len() as u64 + public_key_bytes.len() as u64;
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_SM2_VERIFY, &mut vm),
+        Ok(expected_gas)
+    );
+    assert_eq!(vm.register(10), 1);
+
+    let mut bad_sig = signature_bytes.as_ref().to_vec();
+    bad_sig.truncate(Sm2Signature::LENGTH - 1);
+    let mut vm = IVM::new(10_000);
+    let mut offset = 0u64;
+    let p_msg = preload_blob(&mut vm, &mut offset, message);
+    let p_sig = preload_blob(&mut vm, &mut offset, &bad_sig);
+    let p_pk = preload_blob(&mut vm, &mut offset, &public_key_bytes);
+    vm.set_register(10, p_msg);
+    vm.set_register(11, p_sig);
+    vm.set_register(12, p_pk);
+    vm.set_register(13, 0);
+
+    let expected_bad_gas =
+        64 + message.len() as u64 + bad_sig.len() as u64 + public_key_bytes.len() as u64;
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_SM2_VERIFY, &mut vm),
+        Ok(expected_bad_gas)
+    );
+    assert_eq!(vm.register(10), 0);
+}
+
+#[test]
 fn syscall_sm2_verify_accepts_custom_distid() {
     use ivm::IVM;
 

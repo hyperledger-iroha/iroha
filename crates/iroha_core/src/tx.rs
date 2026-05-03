@@ -738,37 +738,14 @@ impl DecodedVersionedSignedTransaction {
             <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
                 input,
             )?;
-        let payload_len = input.len().saturating_sub(1);
-        let encoded_len =
-            AcceptedTransaction::framed_encoded_payload_len::<SignedTransaction>(payload_len);
-        debug_assert_eq!(
-            encoded_len,
-            AcceptedTransaction::signed_encoded_len(&tx),
-            "versioned signed transaction payload length must match canonical framed length",
-        );
-        let signed_payload = input
-            .get(1..)
-            .expect("successful versioned decode includes version byte");
-        let entrypoint_hash =
-            AcceptedTransaction::external_entrypoint_hash_from_signed_payload(signed_payload);
-        debug_assert_eq!(
-            entrypoint_hash,
-            tx.hash_as_entrypoint(),
-            "payload-derived external entrypoint hash must match canonical hash",
-        );
-        let prepared =
-            AcceptedTransaction::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
-                &tx,
-                entrypoint_hash,
-                encoded_len,
-            );
+        let prepared = AcceptedTransaction::prepare_signed_metadata(&tx);
         Ok(Self { tx, prepared })
     }
 
     /// Decode an owned versioned signed transaction and prepare admission metadata once.
     ///
-    /// This keeps Torii batch admission on the exact inbound payload length without
-    /// re-encoding the signed transaction during stateless validation.
+    /// This normalizes adaptive versioned transport payloads to canonical signed
+    /// transaction metadata before stateless validation.
     ///
     /// # Errors
     ///
@@ -1347,13 +1324,8 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
-        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let payload_len = Self::bare_encoded_len(tx);
-        let mut writer = Blake2HashWriter::new();
-        Self::write_external_entrypoint_hash_prefix(&mut writer, payload_len);
-        norito::core::NoritoSerialize::serialize(tx, &mut writer)
-            .expect("hash writer accepts signed transaction payload");
-        HashOf::from_untyped_unchecked(writer.finalize())
+        let signed_payload = norito::codec::Encode::encode(tx);
+        Self::external_entrypoint_hash_from_signed_payload(&signed_payload)
     }
 
     fn write_external_entrypoint_hash_prefix(
@@ -1378,9 +1350,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     }
 
     fn bare_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
-        value
-            .encoded_len_exact()
-            .unwrap_or_else(|| norito::codec::Encode::encoded_len(value))
+        norito::codec::Encode::encode(value).len()
     }
 
     fn framed_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
@@ -1451,14 +1421,10 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Build reusable stateless metadata for a signed transaction.
     #[must_use]
     pub(crate) fn prepare_signed_metadata(tx: &SignedTransaction) -> PreparedTransactionMetadata {
-        Self::prepare_signed_metadata_with_encoded_len(tx, Self::signed_encoded_len(tx))
-    }
-
-    fn prepare_signed_metadata_with_encoded_len(
-        tx: &SignedTransaction,
-        encoded_len: usize,
-    ) -> PreparedTransactionMetadata {
-        let entrypoint_hash = Self::external_entrypoint_hash_from_signed(tx);
+        let signed_payload = norito::codec::Encode::encode(tx);
+        let encoded_len =
+            Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload.len());
+        let entrypoint_hash = Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
         Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
             tx,
             entrypoint_hash,
@@ -1480,6 +1446,62 @@ impl<'tx> AcceptedTransaction<'tx> {
             signed_bytes: None,
             single_ed25519_key: Self::parsed_single_ed25519_key(tx),
         }
+    }
+
+    fn signed_encoded_len_from_external_entrypoint_frame(
+        framed: &[u8],
+    ) -> Result<usize, norito::core::Error> {
+        const EXTERNAL_ENTRYPOINT_TAG: u32 = 0;
+
+        let view = norito::core::from_bytes_view(framed)?;
+        if view.schema() != <TransactionEntrypoint as norito::core::NoritoSerialize>::schema_hash()
+        {
+            return Err(norito::core::Error::SchemaMismatch);
+        }
+        let payload = view.as_bytes();
+        let tag_bytes = payload
+            .get(..4)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let tag = u32::from_le_bytes(
+            tag_bytes
+                .try_into()
+                .expect("slice length checked for u32 tag"),
+        );
+        if tag != EXTERNAL_ENTRYPOINT_TAG {
+            return Err(norito::core::Error::Message(
+                "gossip entrypoint frame does not contain an external signed transaction".into(),
+            ));
+        }
+        let (signed_payload_len, len_prefix_len) =
+            norito::core::read_len_from_slice_with_flags(&payload[4..], view.flags())?;
+        let signed_payload_start = 4usize
+            .checked_add(len_prefix_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let signed_payload_end = signed_payload_start
+            .checked_add(signed_payload_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        if signed_payload_end > payload.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        Ok(Self::framed_encoded_payload_len::<SignedTransaction>(
+            signed_payload_len,
+        ))
+    }
+
+    /// Build stateless metadata for a signed transaction decoded from a canonical gossip frame.
+    #[must_use]
+    pub(crate) fn prepare_gossip_signed_metadata(
+        tx: &SignedTransaction,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        entrypoint_bytes: &[u8],
+    ) -> PreparedTransactionMetadata {
+        let encoded_len = Self::signed_encoded_len_from_external_entrypoint_frame(entrypoint_bytes)
+            .unwrap_or_else(|_| Self::signed_encoded_len(tx));
+        Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+            tx,
+            entrypoint_hash,
+            encoded_len,
+        )
     }
 
     fn from_external_with_prepared_metadata(
@@ -3257,10 +3279,6 @@ impl StateBlock<'_> {
                 .get(&crate::smartcontracts::isi::multisig::spec_key())
                 .is_some();
             let has_multisig_controller = authority.multisig_policy().is_some();
-            let has_multisig_role = state_transaction
-                .world
-                .account_roles_iter(&authority)
-                .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
             let allows_multisig_envelope_authority = match tx.instructions() {
                 Executable::Instructions(instructions) => {
                     instructions_allow_multisig_envelope_authority(instructions)
@@ -3269,10 +3287,7 @@ impl StateBlock<'_> {
                     false
                 }
             };
-            if (has_multisig_role
-                || has_multisig_state
-                || has_multisig_metadata
-                || has_multisig_controller)
+            if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
             {
                 warn!(
@@ -6108,7 +6123,7 @@ pub mod tests {
     }
 
     #[test]
-    fn multisig_account_direct_signing_rejected_when_only_role_present() {
+    fn multisig_signatory_role_does_not_block_direct_signing() {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-role-only".parse().unwrap();
@@ -6158,15 +6173,10 @@ pub mod tests {
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
 
-        match result {
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) => {
-                assert!(
-                    reason.contains("multisig"),
-                    "unexpected reject reason: {reason}"
-                );
-            }
-            other => panic!("expected multisig direct-sign reject, got {other:?}"),
-        }
+        assert!(
+            result.is_ok(),
+            "single-key signatories with multisig roles should keep ordinary direct-signing rights: {result:?}"
+        );
     }
 
     #[test]
@@ -6846,6 +6856,58 @@ pub mod tests {
     }
 
     #[test]
+    fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
+        let chain: ChainId = "decoded-versioned-adaptive-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "adaptivezk".parse().expect("asset name"),
+        );
+        let signed = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([InstructionBox::from(
+                iroha_data_model::isi::zk::Shield::new(
+                    asset_def_id,
+                    authority,
+                    200_u128,
+                    [7; 32],
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                ),
+            )])
+            .sign(keypair.private_key());
+        let actual_payload_len = norito::codec::Encode::encode(&signed).len();
+        let stale_exact_hint = norito::core::NoritoSerialize::encoded_len_exact(&signed)
+            .expect("confidential signed transaction advertises an exact hint");
+        let canonical_len = norito::to_bytes(&signed)
+            .expect("signed transaction encodes")
+            .len();
+        let versioned =
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
+
+        assert_ne!(
+            stale_exact_hint, actual_payload_len,
+            "this regression must exercise a stale exact-length hint"
+        );
+        assert_eq!(versioned.len().saturating_sub(1), actual_payload_len);
+        assert_eq!(
+            AcceptedTransaction::signed_encoded_len(&signed),
+            canonical_len
+        );
+
+        let decoded = DecodedVersionedSignedTransaction::decode_versioned(&versioned)
+            .expect("versioned signed transaction decodes");
+
+        assert_eq!(decoded.signed(), &signed);
+        assert_eq!(
+            AcceptedTransaction::external_entrypoint_hash_from_signed(&signed),
+            signed.hash_as_entrypoint()
+        );
+        assert_eq!(decoded.hash(), signed.hash());
+        assert_eq!(decoded.hash_as_entrypoint(), signed.hash_as_entrypoint());
+        assert_eq!(decoded.encoded_len(), canonical_len);
+        assert_eq!(decoded.prepared.encoded_len, canonical_len);
+    }
+
+    #[test]
     fn decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept() {
         let chain: ChainId = "decoded-versioned-owned-precheck-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7000,6 +7062,35 @@ pub mod tests {
 
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.encoded_len, expected_len);
+    }
+
+    #[test]
+    fn gossip_signed_metadata_matches_canonical_preparation() {
+        let chain: ChainId = "gossip-signed-metadata-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "gossip-metadata".into())])
+            .sign(keypair.private_key());
+        let entrypoint = TransactionEntrypoint::External(signed.clone());
+        let entrypoint_bytes =
+            norito::to_bytes(&entrypoint).expect("entrypoint transaction encodes");
+
+        let expected = AcceptedTransaction::prepare_signed_metadata(&signed);
+        let actual = AcceptedTransaction::prepare_gossip_signed_metadata(
+            &signed,
+            entrypoint.hash(),
+            entrypoint_bytes.as_slice(),
+        );
+
+        assert_eq!(actual.signed_hash, expected.signed_hash);
+        assert_eq!(actual.entrypoint_hash, expected.entrypoint_hash);
+        assert_eq!(actual.payload_hash, expected.payload_hash);
+        assert_eq!(actual.encoded_len, expected.encoded_len);
+        assert!(actual.signed_bytes.is_none());
+        assert_eq!(
+            actual.single_ed25519_key.is_some(),
+            expected.single_ed25519_key.is_some()
+        );
     }
 
     #[test]

@@ -62,6 +62,14 @@ const FIXTURE_MERCHANT_ACCOUNT_LITERAL: &str =
     "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888";
 const FIXTURE_VENDOR_ACCOUNT_LITERAL: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
+macro_rules! assert_ok_gas {
+    ($expr:expr $(,)?) => {{
+        let gas = $expr.expect("syscall should succeed");
+        assert!(gas > 0, "syscall should bill positive gas, got {gas}");
+        gas
+    }};
+}
+
 fn fixture_authority() -> AccountId {
     let public_key = FIXTURE_AUTHORITY_PUBLIC_KEY
         .parse()
@@ -343,10 +351,7 @@ fn core_host_handles_axt_flow() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     // Provide manifest to match descriptor prefixes
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
@@ -357,20 +362,14 @@ fn core_host_handles_axt_flow() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     // Declare dataspace proof artifact
     let proof = proof_blob_for(dsid, manifest_root, vec![0xA5, 0x5A], 25);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 
     // Prepare handle/intents and use handle
     let binding = axt::compute_binding(&descriptor).expect("binding");
@@ -410,16 +409,10 @@ fn core_host_handles_axt_flow() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 
     // Commit the envelope
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 
     // Subsequent operations without an active envelope must fail
     vm.set_register(10, ds_ptr);
@@ -451,10 +444,7 @@ fn axt_policy_reject_exposes_context() {
     // Begin envelope and record a touch for the dataspace.
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
         read: vec!["orders/0".into()],
@@ -463,10 +453,7 @@ fn axt_policy_reject_exposes_context() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     // Build a handle with a mismatched manifest root to trigger a policy rejection.
     let binding = axt::compute_binding(&descriptor).expect("binding");
@@ -553,10 +540,7 @@ fn axt_handle_allows_configured_clock_skew_window() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -566,19 +550,13 @@ fn axt_handle_allows_configured_clock_skew_window() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let proof = proof_blob_for(dsid, manifest_root, vec![0xE5], 10);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
@@ -617,10 +595,7 @@ fn axt_handle_allows_configured_clock_skew_window() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 }
 
 #[test]
@@ -651,10 +626,7 @@ fn axt_handle_rejects_clock_skew_above_config() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -664,10 +636,7 @@ fn axt_handle_rejects_clock_skew_above_config() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
@@ -1122,10 +1091,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -1135,10 +1101,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
@@ -1408,10 +1371,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -1421,19 +1381,13 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0x55], 40);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 
     let intent = iroha_data_model::nexus::RemoteSpendIntent {
         asset_dsid: dsid,
@@ -1477,10 +1431,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -1490,19 +1441,13 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAA, 0x55], 40);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 
     let handle = AssetHandle {
         scope: model_handle.scope.clone(),
@@ -2180,10 +2125,7 @@ fn axt_commit_enforces_amx_budget() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest = TouchManifest {
@@ -2193,19 +2135,13 @@ fn axt_commit_enforces_amx_budget() {
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAB], 20);
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
@@ -2244,10 +2180,7 @@ fn axt_commit_enforces_amx_budget() {
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 
     match host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm) {
         Err(VMError::AmxBudgetExceeded { stage, .. }) => {
@@ -2312,10 +2245,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let touch_a = TouchManifest {
         read: vec!["orders/a/1".into()],
@@ -2325,10 +2255,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     let touch_a_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &touch_a);
     vm.set_register(10, ds_a_ptr);
     vm.set_register(11, touch_a_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let touch_b = TouchManifest {
         read: vec!["orders/b/1".into()],
@@ -2338,10 +2265,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     let touch_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &touch_b);
     vm.set_register(10, ds_b_ptr);
     vm.set_register(11, touch_b_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle_a = AssetHandle {
@@ -2404,10 +2328,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(10, handle_a_ptr);
     vm.set_register(11, intent_a_ptr);
     vm.set_register(12, proof_a_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
@@ -2415,41 +2336,26 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm.set_register(10, handle_b_ptr);
     vm.set_register(11, intent_b_ptr);
     vm.set_register(12, proof_b_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 
     // Omit proof for ds_b to confirm rejection
     let mut vm_fail = IVM::new(1_000_000);
     let mut host_fail = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
     let desc_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::AxtDescriptor, &descriptor);
     vm_fail.set_register(10, desc_ptr_fail);
-    assert_eq!(
-        host_fail.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm_fail),
-        Ok(0)
-    );
+    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm_fail));
     let ds_a_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::DataSpaceId, &ds_a);
     let touch_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &touch_a);
     vm_fail.set_register(10, ds_a_ptr_fail);
     vm_fail.set_register(11, touch_a_ptr_fail);
-    assert_eq!(
-        host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail),
-        Ok(0)
-    );
+    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail));
     let ds_b_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::DataSpaceId, &ds_b);
     let touch_b_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &touch_b);
     vm_fail.set_register(10, ds_b_ptr_fail);
     vm_fail.set_register(11, touch_b_ptr_fail);
-    assert_eq!(
-        host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail),
-        Ok(0)
-    );
+    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm_fail));
 
     let handle_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::AssetHandle, &handle_a);
     let intent_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::NoritoBytes, &intent_a);
@@ -2457,10 +2363,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     vm_fail.set_register(11, intent_a_ptr_fail);
     let proof_a_ptr_fail = store_tlv_norito(&mut vm_fail, PointerType::ProofBlob, &proof_a);
     vm_fail.set_register(12, proof_a_ptr_fail);
-    assert_eq!(
-        host_fail.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm_fail),
-        Ok(0)
-    );
+    assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm_fail));
 
     assert!(matches!(
         host_fail.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm_fail),
@@ -2612,10 +2515,7 @@ fn core_host_policy_rejects_touch() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &descriptor.dsids[0]);
     vm.set_register(10, ds_ptr);
@@ -2643,18 +2543,12 @@ fn core_host_policy_rejects_handle() {
     };
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
@@ -2822,10 +2716,12 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         Err(VMError::PermissionDenied)
     );
 
-    assert_eq!(
-        use_handle_with_snapshot(&authority, dsid, &snapshot, base_handle),
-        Ok(0)
-    );
+    assert_ok_gas!(use_handle_with_snapshot(
+        &authority,
+        dsid,
+        &snapshot,
+        base_handle
+    ));
 }
 
 #[test]
@@ -2876,19 +2772,13 @@ fn core_host_reports_amx_budget_timeout() {
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
 
     let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
     let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
 
     let result = host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm);
     match result {
@@ -3051,10 +2941,13 @@ fn core_host_from_state_enforces_space_directory_policy() {
         max_clock_skew_ms: Some(0),
     };
 
-    assert_eq!(
-        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, base_handle.clone()),
-        Ok(0)
-    );
+    assert_ok_gas!(use_handle_with_state_policy(
+        &state,
+        &authority,
+        dsid,
+        &descriptor,
+        base_handle.clone()
+    ));
 
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(1);
@@ -3260,18 +3153,12 @@ fn core_host_binds_proof_to_manifest_root() {
     let ok_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ok_proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, ok_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 
     // Cache hit in the same slot should also succeed.
     vm.set_register(10, ds_ptr);
     vm.set_register(11, ok_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 }
 
 #[cfg(feature = "app_api")]
@@ -3434,10 +3321,7 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
 
-    let proof_current = axt::ProofBlob {
-        payload: vec![0x11; 32],
-        expiry_slot: Some(20),
-    };
+    let proof_current = proof_blob_for(dsid, [0x11; 32], b"manifest-v1".to_vec(), 20);
     let proof_v1_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_current);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v1_ptr);
@@ -3467,17 +3351,11 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         Err(VMError::PermissionDenied)
     );
 
-    let proof_v2 = axt::ProofBlob {
-        payload: vec![0x22; 32],
-        expiry_slot: Some(20),
-    };
+    let proof_v2 = proof_blob_for(dsid, [0x22; 32], b"manifest-v2".to_vec(), 20);
     let proof_v2_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_v2);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v2_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
 }
 
 #[cfg(feature = "app_api")]

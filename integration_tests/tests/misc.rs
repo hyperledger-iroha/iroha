@@ -21,6 +21,8 @@ use iroha_test_network::*;
 use sandbox::start_network_async_or_skip;
 use tokio::task::spawn_blocking;
 
+const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+
 fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
     lhs.peers == rhs.peers
         && lhs.blocks == rhs.blocks
@@ -62,8 +64,6 @@ async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()>
 
 #[tokio::test]
 async fn misc_status_endpoints_smoke() -> Result<()> {
-    use norito::codec::DecodeAll;
-
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new().with_pipeline_time(std::time::Duration::from_secs(2)),
         stringify!(misc_status_endpoints_smoke),
@@ -93,8 +93,8 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
                 pricing_class_hint: Some(0),
                 payment: PaymentProofV1 {
                     asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
-                    gross_amount: 120,
-                    net_amount: 120,
+                    gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
+                    net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
                     settlement_tx: Json::from("mock-settlement"),
                     payer: owner,
                     signature: Json::from("mock-signature"),
@@ -134,7 +134,7 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         .await?;
     assert!(resp.status().is_success());
     let bytes = resp.bytes().await?;
-    let _: Status = DecodeAll::decode_all(&mut bytes.as_ref())?;
+    let _: Status = norito::decode_from_bytes(&bytes)?;
 
     Ok(())
 }

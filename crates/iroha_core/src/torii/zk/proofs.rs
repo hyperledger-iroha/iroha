@@ -78,81 +78,100 @@ pub fn list_proofs(state: &State, params: &ProofListParams<'_>) -> Vec<ProofList
 /// Count proof records matching the supplied filters (ignores pagination controls).
 pub fn count_proofs(state: &State, filters: &ProofFilters<'_>) -> u64 {
     let world = state.world_view();
-    collect_filtered(&world, filters).len() as u64
+    filtered_proofs(&world, filters).count() as u64
 }
 
 fn collect_filtered(world: &impl WorldReadOnly, filters: &ProofFilters<'_>) -> Vec<ProofListItem> {
-    let mut items: Vec<(ProofId, ProofRecord)> = Vec::new();
+    filtered_proofs(world, filters)
+        .map(|(id, record)| ProofListItem {
+            id: id.clone(),
+            record: record.clone(),
+        })
+        .collect()
+}
 
-    let matches = |id: &ProofId, record: &ProofRecord| -> bool {
-        if let Some(backend) = filters.backend
-            && id.backend != backend
-        {
-            return false;
-        }
-        if let Some(status) = filters.status
-            && record.status != status
-        {
-            return false;
-        }
-        if let Some(min_height) = filters.min_height {
-            match record.verified_at_height {
-                Some(h) if h >= min_height => {}
-                _ => return false,
-            }
-        }
-        if let Some(max_height) = filters.max_height {
-            match record.verified_at_height {
-                Some(h) if h <= max_height => {}
-                _ => return false,
-            }
-        }
-        if filters.bridge_only || filters.pinned_only {
-            match record.bridge.as_ref() {
-                Some(bridge) => {
-                    if filters.pinned_only && !bridge.proof.pinned {
-                        return false;
-                    }
-                    if let Some(min_range_start) = filters.bridge_min_range_start
-                        && bridge.proof.range.start_height < min_range_start
-                    {
-                        return false;
-                    }
-                    if let Some(max_range_end) = filters.bridge_max_range_end
-                        && bridge.proof.range.end_height > max_range_end
-                    {
-                        return false;
-                    }
-                }
-                None => return false,
-            }
-        }
-        true
-    };
+fn filtered_proofs<'a, W>(
+    world: &'a W,
+    filters: &'a ProofFilters<'a>,
+) -> impl Iterator<Item = (&'a ProofId, &'a ProofRecord)> + 'a
+where
+    W: WorldReadOnly,
+{
+    candidate_proofs(world, filters)
+        .filter(move |(id, record)| proof_matches_filters(id, record, filters))
+}
 
+fn candidate_proofs<'a, W>(
+    world: &'a W,
+    filters: &'a ProofFilters<'a>,
+) -> Box<dyn Iterator<Item = (&'a ProofId, &'a ProofRecord)> + 'a>
+where
+    W: WorldReadOnly,
+{
     if let Some(tag) = filters.has_tag {
         let tag_slice: &[u8] = &tag;
         if let Some(ids) = world.proofs_by_tag().get(tag_slice) {
-            for proof_id in ids {
-                if let Some(record) = world.proofs().get(proof_id)
-                    && matches(proof_id, record)
-                {
-                    items.push((proof_id.clone(), record.clone()));
-                }
-            }
+            return Box::new(
+                ids.iter()
+                    .filter_map(|proof_id| world.proofs().get_key_value(proof_id)),
+            );
         }
-    } else {
-        for (id, record) in world.proofs().iter() {
-            if matches(id, record) {
-                items.push((id.clone(), record.clone()));
-            }
-        }
+        return Box::new(std::iter::empty());
     }
 
-    items
-        .into_iter()
-        .map(|(id, record)| ProofListItem { id, record })
-        .collect()
+    if let Some(backend) = filters.backend {
+        Box::new(world.proofs_by_backend_iter(backend))
+    } else if let Some(status) = filters.status.as_ref() {
+        Box::new(world.proofs_by_status_iter(status))
+    } else {
+        Box::new(world.proofs().iter())
+    }
+}
+
+fn proof_matches_filters(id: &ProofId, record: &ProofRecord, filters: &ProofFilters<'_>) -> bool {
+    if let Some(backend) = filters.backend
+        && id.backend != backend
+    {
+        return false;
+    }
+    if let Some(status) = filters.status
+        && record.status != status
+    {
+        return false;
+    }
+    if let Some(min_height) = filters.min_height {
+        match record.verified_at_height {
+            Some(h) if h >= min_height => {}
+            _ => return false,
+        }
+    }
+    if let Some(max_height) = filters.max_height {
+        match record.verified_at_height {
+            Some(h) if h <= max_height => {}
+            _ => return false,
+        }
+    }
+    if filters.bridge_only || filters.pinned_only {
+        match record.bridge.as_ref() {
+            Some(bridge) => {
+                if filters.pinned_only && !bridge.proof.pinned {
+                    return false;
+                }
+                if let Some(min_range_start) = filters.bridge_min_range_start
+                    && bridge.proof.range.start_height < min_range_start
+                {
+                    return false;
+                }
+                if let Some(max_range_end) = filters.bridge_max_range_end
+                    && bridge.proof.range.end_height > max_range_end
+                {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -274,7 +293,7 @@ mod tests {
             verified_at_height: Some(42),
             bridge: None,
         };
-        stx.world.proofs.insert(id_verified.clone(), rec_verified);
+        stx.world.insert_proof_record(rec_verified);
         stx.world
             .proof_tags
             .insert(id_verified.clone(), vec![*b"PROF"]);
@@ -294,7 +313,7 @@ mod tests {
             verified_at_height: Some(43),
             bridge: None,
         };
-        stx.world.proofs.insert(id_rejected.clone(), rec_rejected);
+        stx.world.insert_proof_record(rec_rejected);
         stx.apply();
         block.commit().expect("commit proof registry snapshot");
 
@@ -347,7 +366,7 @@ mod tests {
             verified_at_height: Some(10),
             bridge: None,
         };
-        stx.world.proofs.insert(id_early.clone(), rec_early);
+        stx.world.insert_proof_record(rec_early);
 
         // Proof with verified height 25
         let id_late = ProofId {
@@ -362,7 +381,7 @@ mod tests {
             verified_at_height: Some(25),
             bridge: None,
         };
-        stx.world.proofs.insert(id_late.clone(), rec_late);
+        stx.world.insert_proof_record(rec_late);
 
         // Submitted proof (no height) should only appear when no bounds are requested.
         let id_submitted = ProofId {
@@ -377,7 +396,7 @@ mod tests {
             verified_at_height: None,
             bridge: None,
         };
-        stx.world.proofs.insert(id_submitted.clone(), rec_submitted);
+        stx.world.insert_proof_record(rec_submitted);
         stx.apply();
         block.commit().expect("commit proof registry snapshot");
 
@@ -493,8 +512,8 @@ mod tests {
             [0x10; 32],
             2,
         );
-        let (id_bridge, rec_bridge) = bridge_record(backend, [0x01; 32], bridge_proof, 5);
-        stx.world.proofs.insert(id_bridge.clone(), rec_bridge);
+        let (_, rec_bridge) = bridge_record(backend, [0x01; 32], bridge_proof, 5);
+        stx.world.insert_proof_record(rec_bridge);
 
         // Pinned bridge proof with later range
         let pinned_proof = bridge_proof_record(
@@ -509,12 +528,11 @@ mod tests {
             3,
         );
         let (id_pinned, rec_pinned) = bridge_record(backend, [0x02; 32], pinned_proof, 6);
-        stx.world.proofs.insert(id_pinned.clone(), rec_pinned);
+        stx.world.insert_proof_record(rec_pinned);
 
         // Non-bridge proof should be filtered out.
-        let (plain_id, plain) =
-            plain_record("halo2/ipa", [0x03; 32], ProofStatus::Verified, Some(7));
-        stx.world.proofs.insert(plain_id, plain);
+        let (_, plain) = plain_record("halo2/ipa", [0x03; 32], ProofStatus::Verified, Some(7));
+        stx.world.insert_proof_record(plain);
         stx.apply();
         block.commit().expect("commit bridge filter snapshot");
 

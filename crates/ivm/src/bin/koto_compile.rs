@@ -236,7 +236,7 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] \\");
     eprintln!(
-        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--strip-debug] [--mode <production|test>] [--no-lint] [--deny-lint-warnings]"
+        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--embed-debug] [--strip-debug] [--mode <production|test>] [--no-lint] [--deny-lint-warnings]"
     );
     eprintln!("  koto_compile --explain <code>");
     eprintln!("\nNotes:");
@@ -277,7 +277,7 @@ fn main() {
     let mut diagnostic_format = DiagnosticFormat::Text;
     let mut emit_source_map: Option<String> = None;
     let mut emit_budget_report: Option<String> = None;
-    let mut strip_debug = false;
+    let mut emit_debug = false;
     let mut mode = CompilerMode::Production;
     let mut explain: Option<String> = None;
 
@@ -371,8 +371,12 @@ fn main() {
                 };
                 i += 2;
             }
+            "--embed-debug" => {
+                emit_debug = true;
+                i += 1;
+            }
             "--strip-debug" => {
-                strip_debug = true;
+                emit_debug = false;
                 i += 1;
             }
             "--mode" => {
@@ -474,7 +478,7 @@ fn main() {
     }
     opts.force_zk = force_zk;
     opts.force_vector = force_vector;
-    opts.emit_debug = !strip_debug;
+    opts.emit_debug = emit_debug;
     opts.debug_source_name = normalize_debug_source_name(&input_path);
     opts.mode = mode;
 

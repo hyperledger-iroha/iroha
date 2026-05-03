@@ -1481,7 +1481,11 @@ impl TransactionGossiper {
             };
             let prepared = match &entrypoint {
                 TransactionEntrypoint::External(signed) => {
-                    Some(AcceptedTransaction::prepare_signed_metadata(signed))
+                    Some(AcceptedTransaction::prepare_gossip_signed_metadata(
+                        signed,
+                        entrypoint_hash,
+                        payload.as_slice(),
+                    ))
                 }
                 _ => None,
             };
@@ -1503,11 +1507,11 @@ impl TransactionGossiper {
                 idx: usize,
             }
 
-            fn verify_ed25519_batch_slices(
-                messages: &[&[u8]],
-                signatures: &[&[u8]],
+            fn verify_ed25519_batch_slices<'a>(
+                messages: &[&'a [u8]],
+                signatures: &[&'a [u8]],
                 public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
-                scratch: &mut iroha_crypto::Ed25519BatchScratch,
+                scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
             ) -> Result<(), iroha_crypto::Error> {
                 iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
                     messages,
@@ -2276,9 +2280,9 @@ fn decode_transaction_gossip_payload(
 impl NoritoSerialize for TransactionGossip {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
         let mut tmp = ncore::DeriveSmallBuf::new();
-        ncore::write_len_prefixed(&mut writer, &self.txs, &mut tmp)?;
-        ncore::write_len_prefixed(&mut writer, &self.routes, &mut tmp)?;
-        ncore::write_len_prefixed(&mut writer, &self.plane, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.txs, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.routes, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.plane, &mut tmp)?;
         Ok(())
     }
 

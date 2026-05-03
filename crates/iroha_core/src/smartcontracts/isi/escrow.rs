@@ -1,5 +1,7 @@
 //! Native asset escrow instruction handlers.
 
+use std::collections::BTreeSet;
+
 use eyre::Result;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
@@ -483,8 +485,7 @@ impl Execute for OpenAssetEscrow {
         };
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Opened(record)));
@@ -518,8 +519,7 @@ impl Execute for AcceptAssetEscrow {
         record.accepted_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Accepted(record)));
@@ -551,8 +551,7 @@ impl Execute for MarkEscrowPaymentSent {
         record.payment_sent_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::PaymentSent(record)));
@@ -598,8 +597,7 @@ impl Execute for ReleaseAssetEscrow {
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Released(record)));
@@ -646,8 +644,7 @@ impl Execute for CancelAssetEscrow {
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Cancelled(record)));
@@ -691,8 +688,7 @@ impl Execute for OpenEscrowDispute {
             .extend(self.evidence_hashes.iter().copied());
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Disputed(AssetEscrowDisputed {
@@ -766,8 +762,7 @@ impl Execute for ResolveEscrowDispute {
         });
         state_transaction
             .world
-            .asset_escrows
-            .insert(record.id, record.clone());
+            .insert_asset_escrow_entry(record.clone());
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Resolved(AssetEscrowResolved {
@@ -832,8 +827,7 @@ impl Execute for OpenAnonymousAssetEscrow {
         };
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -857,8 +851,7 @@ impl Execute for AcceptAnonymousAssetEscrow {
         record.accepted_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -880,8 +873,7 @@ impl Execute for MarkAnonymousEscrowPaymentSent {
         record.payment_sent_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -919,8 +911,7 @@ impl Execute for ReleaseAnonymousAssetEscrow {
         record.release = Some(release);
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -960,8 +951,7 @@ impl Execute for CancelAnonymousAssetEscrow {
         record.cancellation = Some(cancellation);
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -995,8 +985,7 @@ impl Execute for OpenAnonymousEscrowDispute {
             .extend(self.evidence_hashes.iter().copied());
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -1057,8 +1046,7 @@ impl Execute for ResolveAnonymousEscrowDispute {
         });
         state_transaction
             .world
-            .anonymous_asset_escrows
-            .insert(record.id, record);
+            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -1099,11 +1087,13 @@ impl ValidQuery for FindAssetEscrowsBySeller {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AssetEscrowRecord>, QueryExecutionFail> {
         let seller = self.seller;
-        Ok(state_ro
-            .world()
-            .asset_escrows()
-            .iter()
-            .filter_map(move |(_, record)| (record.seller == seller).then(|| record.clone()))
+        let world = state_ro.world();
+        Ok(world
+            .asset_escrows_by_seller()
+            .get(&seller)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(move |escrow_id| world.asset_escrows().get(escrow_id).cloned())
             .filter(move |record| filter.applies(record)))
     }
 }
@@ -1115,17 +1105,13 @@ impl ValidQuery for FindAssetEscrowsByBuyer {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AssetEscrowRecord>, QueryExecutionFail> {
         let buyer = self.buyer;
-        Ok(state_ro
-            .world()
-            .asset_escrows()
-            .iter()
-            .filter_map(move |(_, record)| {
-                record
-                    .buyer
-                    .as_ref()
-                    .is_some_and(|record_buyer| record_buyer == &buyer)
-                    .then(|| record.clone())
-            })
+        let world = state_ro.world();
+        Ok(world
+            .asset_escrows_by_buyer()
+            .get(&buyer)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(move |escrow_id| world.asset_escrows().get(escrow_id).cloned())
             .filter(move |record| filter.applies(record)))
     }
 }
@@ -1137,11 +1123,13 @@ impl ValidQuery for FindAssetEscrowsByStatus {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AssetEscrowRecord>, QueryExecutionFail> {
         let status = self.status;
-        Ok(state_ro
-            .world()
-            .asset_escrows()
-            .iter()
-            .filter_map(move |(_, record)| (record.status == status).then(|| record.clone()))
+        let world = state_ro.world();
+        Ok(world
+            .asset_escrows_by_status()
+            .get(&status)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(move |escrow_id| world.asset_escrows().get(escrow_id).cloned())
             .filter(move |record| filter.applies(record)))
     }
 }
@@ -1182,11 +1170,13 @@ impl ValidQuery for FindAnonymousAssetEscrowsBySeller {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
         let seller = self.seller;
-        Ok(state_ro
-            .world()
-            .anonymous_asset_escrows()
-            .iter()
-            .filter_map(move |(_, record)| (record.seller == seller).then(|| record.clone()))
+        let world = state_ro.world();
+        Ok(world
+            .anonymous_asset_escrows_by_seller()
+            .get(&seller)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(move |escrow_id| world.anonymous_asset_escrows().get(escrow_id).cloned())
             .filter(move |record| filter.applies(record)))
     }
 }
@@ -1198,17 +1188,13 @@ impl ValidQuery for FindAnonymousAssetEscrowsByBuyer {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
         let buyer = self.buyer;
-        Ok(state_ro
-            .world()
-            .anonymous_asset_escrows()
-            .iter()
-            .filter_map(move |(_, record)| {
-                record
-                    .buyer
-                    .as_ref()
-                    .is_some_and(|record_buyer| record_buyer == &buyer)
-                    .then(|| record.clone())
-            })
+        let world = state_ro.world();
+        Ok(world
+            .anonymous_asset_escrows_by_buyer()
+            .get(&buyer)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(move |escrow_id| world.anonymous_asset_escrows().get(escrow_id).cloned())
             .filter(move |record| filter.applies(record)))
     }
 }
@@ -1220,11 +1206,13 @@ impl ValidQuery for FindAnonymousAssetEscrowsByStatus {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
         let status = self.status;
-        Ok(state_ro
-            .world()
-            .anonymous_asset_escrows()
-            .iter()
-            .filter_map(move |(_, record)| (record.status == status).then(|| record.clone()))
+        let world = state_ro.world();
+        Ok(world
+            .anonymous_asset_escrows_by_status()
+            .get(&status)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(move |escrow_id| world.anonymous_asset_escrows().get(escrow_id).cloned())
             .filter(move |record| filter.applies(record)))
     }
 }
@@ -1636,16 +1624,14 @@ mod tests {
         );
         let mut block = state.block(block_header(5_000));
         let mut tx = block.transaction();
-        tx.world.anonymous_asset_escrows.insert(
-            escrow_id,
-            anonymous_escrow_fixture(
+        tx.world
+            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
                 escrow_id,
                 seller.clone(),
                 None,
                 asset_definition,
                 AssetEscrowStatus::Open,
-            ),
-        );
+            ));
 
         assert!(
             AcceptAnonymousAssetEscrow { escrow_id }
@@ -1713,16 +1699,14 @@ mod tests {
         };
 
         let release_id = fixture_escrow_id("anonymous-release-auth");
-        tx.world.anonymous_asset_escrows.insert(
-            release_id,
-            anonymous_escrow_fixture(
+        tx.world
+            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
                 release_id,
                 seller.clone(),
                 Some(buyer.clone()),
                 asset_definition.clone(),
                 AssetEscrowStatus::PaymentSent,
-            ),
-        );
+            ));
         assert!(
             ReleaseAnonymousAssetEscrow {
                 escrow_id: release_id,
@@ -1737,16 +1721,14 @@ mod tests {
         );
 
         let cancel_id = fixture_escrow_id("anonymous-cancel-auth");
-        tx.world.anonymous_asset_escrows.insert(
-            cancel_id,
-            anonymous_escrow_fixture(
+        tx.world
+            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
                 cancel_id,
                 seller.clone(),
                 Some(buyer.clone()),
                 asset_definition.clone(),
                 AssetEscrowStatus::Accepted,
-            ),
-        );
+            ));
         assert!(
             CancelAnonymousAssetEscrow {
                 escrow_id: cancel_id,
@@ -1761,16 +1743,14 @@ mod tests {
         );
 
         let dispute_id = fixture_escrow_id("anonymous-resolve-auth");
-        tx.world.anonymous_asset_escrows.insert(
-            dispute_id,
-            anonymous_escrow_fixture(
+        tx.world
+            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
                 dispute_id,
                 seller,
                 Some(buyer),
                 asset_definition,
                 AssetEscrowStatus::Disputed,
-            ),
-        );
+            ));
         assert!(
             ResolveAnonymousEscrowDispute {
                 escrow_id: dispute_id,
@@ -1803,16 +1783,14 @@ mod tests {
         );
         let mut block = state.block(block_header(7_000));
         let mut tx = block.transaction();
-        tx.world.anonymous_asset_escrows.insert(
-            escrow_id,
-            anonymous_escrow_fixture(
+        tx.world
+            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
                 escrow_id,
                 seller.clone(),
                 None,
                 asset_definition.clone(),
                 AssetEscrowStatus::Open,
-            ),
-        );
+            ));
 
         let err = OpenAssetEscrow {
             escrow_id,
@@ -1994,6 +1972,7 @@ mod tests {
         );
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
+        tx.tx_call_hash = Some(Hash::prehashed([0xA2; Hash::LENGTH]));
 
         OpenAssetEscrow {
             escrow_id,
@@ -2032,6 +2011,104 @@ mod tests {
             balance(&tx, &record.custody, &asset_definition),
             Numeric::zero()
         );
+    }
+
+    #[test]
+    fn asset_escrow_indexes_track_seller_buyer_and_status_updates() {
+        let seller = fixture_account("seller");
+        let buyer = fixture_account("buyer");
+        let court = fixture_account("court");
+        let asset_definition = fixture_asset_definition_id();
+        let escrow_id = fixture_escrow_id("indexed-query");
+        let amount = Numeric::new(40_u32, 0);
+        let state = state_with_parties(
+            &seller,
+            &buyer,
+            &court,
+            &asset_definition,
+            Numeric::new(100_u32, 0),
+        );
+        let mut block = state.block(block_header(1_000));
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(Hash::prehashed([0xA3; Hash::LENGTH]));
+
+        OpenAssetEscrow {
+            escrow_id,
+            asset_definition: asset_definition.clone(),
+            amount,
+            evidence_hashes: Vec::new(),
+        }
+        .execute(&seller, &mut tx)
+        .expect("open escrow");
+        AcceptAssetEscrow { escrow_id }
+            .execute(&buyer, &mut tx)
+            .expect("accept escrow");
+        MarkEscrowPaymentSent { escrow_id }
+            .execute(&buyer, &mut tx)
+            .expect("mark payment sent");
+
+        assert!(
+            tx.world
+                .asset_escrows_by_seller
+                .get(&seller)
+                .expect("seller index entry")
+                .contains(&escrow_id)
+        );
+        assert!(
+            tx.world
+                .asset_escrows_by_buyer
+                .get(&buyer)
+                .expect("buyer index entry")
+                .contains(&escrow_id)
+        );
+        assert!(
+            tx.world
+                .asset_escrows_by_status
+                .get(&AssetEscrowStatus::PaymentSent)
+                .expect("payment-sent index entry")
+                .contains(&escrow_id)
+        );
+        let stale_open_entry = tx
+            .world
+            .asset_escrows_by_status
+            .get(&AssetEscrowStatus::Open)
+            .is_some_and(|escrows| escrows.contains(&escrow_id));
+        assert!(
+            !stale_open_entry,
+            "status update should remove stale open index entry"
+        );
+        let stale_accepted_entry = tx
+            .world
+            .asset_escrows_by_status
+            .get(&AssetEscrowStatus::Accepted)
+            .is_some_and(|escrows| escrows.contains(&escrow_id));
+        assert!(
+            !stale_accepted_entry,
+            "status update should remove stale accepted index entry"
+        );
+
+        let by_seller = FindAssetEscrowsBySeller { seller }
+            .execute(CompoundPredicate::PASS, &tx)
+            .expect("query escrows by seller")
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        assert_eq!(by_seller, vec![escrow_id]);
+
+        let by_buyer = FindAssetEscrowsByBuyer { buyer }
+            .execute(CompoundPredicate::PASS, &tx)
+            .expect("query escrows by buyer")
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        assert_eq!(by_buyer, vec![escrow_id]);
+
+        let by_status = FindAssetEscrowsByStatus {
+            status: AssetEscrowStatus::PaymentSent,
+        }
+        .execute(CompoundPredicate::PASS, &tx)
+        .expect("query escrows by status")
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+        assert_eq!(by_status, vec![escrow_id]);
     }
 
     #[test]

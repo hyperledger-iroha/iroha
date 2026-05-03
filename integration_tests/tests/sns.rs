@@ -29,6 +29,7 @@ const METRIC_READY_RETRIES: usize = 60;
 const METRIC_RETRY_DELAY_MS: u64 = 250;
 const STATUS_READY_ATTEMPTS: usize = 60;
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(250);
+const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
 
 /// End-to-end registrar flow: register → fetch record → fetch policy.
 #[tokio::test]
@@ -299,7 +300,7 @@ fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
 }
 
 fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
-    stub_payment_proof_with_amount(payer, 120)
+    stub_payment_proof_with_amount(payer, TEST_SNS_LEASE_PAYMENT_NANOS)
 }
 
 fn stub_payment_proof_with_amount(payer: &AccountId, amount: u64) -> PaymentProofV1 {

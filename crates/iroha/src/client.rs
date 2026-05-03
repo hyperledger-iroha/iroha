@@ -6806,11 +6806,14 @@ impl Client {
     }
 
     /// Encode and hash a signed transaction once for later submission.
+    #[expect(
+        clippy::unused_self,
+        reason = "preparing a signed transaction is intentionally client-independent and must allow foreign-chain payloads for server-side rejection tests"
+    )]
     pub fn prepare_transaction_payload(
         &self,
         transaction: &SignedTransaction,
     ) -> PreparedTransactionPayload {
-        debug_assert_eq!(transaction.chain(), &self.chain);
         PreparedTransactionPayload {
             bytes: Bytes::from(transaction.encode_versioned()),
             hash: transaction.hash(),
@@ -10449,11 +10452,9 @@ impl Client {
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to deploy contract: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
+            return Err(ResponseReport::with_msg("Failed to deploy contract", &resp)
+                .unwrap_or_else(core::convert::identity)
+                .into());
         }
         Ok(norito::json::from_slice(resp.body())?)
     }
@@ -10481,11 +10482,11 @@ impl Client {
             .build()?
             .send()?;
         if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to deploy contract bundle: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
+            return Err(
+                ResponseReport::with_msg("Failed to deploy contract bundle", &resp)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
         }
         Ok(norito::json::from_slice(resp.body())?)
     }
@@ -16314,6 +16315,21 @@ mod tests {
             TransactionEntrypoint::decode_all_versioned(prepared.as_bytes()).is_err(),
             "prepared payload must not use internal TransactionEntrypoint envelopes"
         );
+    }
+
+    #[test]
+    fn prepared_transaction_payload_allows_foreign_chain_for_server_rejection_tests() {
+        let client = client_with_base_url(base_url());
+        let (authority, keypair) = gen_account_in("foreign-chain-authority");
+        let tx = TransactionBuilder::new(ChainId::from("foreign-chain"), authority)
+            .with_instructions(Vec::<InstructionBox>::new())
+            .sign(keypair.private_key());
+        let prepared = client.prepare_transaction_payload(&tx);
+
+        assert_eq!(prepared.hash(), tx.hash());
+        let decoded = SignedTransaction::decode_all_versioned(prepared.as_bytes())
+            .expect("prepared payload must decode as the original signed transaction");
+        assert_eq!(decoded.chain(), tx.chain());
     }
 
     #[test]

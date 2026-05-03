@@ -60,7 +60,10 @@ pub use backend::{
     compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
 };
 pub use batch::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
-pub use bn254_poseidon::{Bn254PoseidonBatchSlice, try_hash_bn254_poseidon_word_batches};
+pub use bn254_poseidon::{
+    Bn254PoseidonBatchSlice, PendingBn254PoseidonWordBatch, preflight_bn254_poseidon_word_batches,
+    try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
+};
 pub use digest::trace_commitment;
 pub use error::{Error, Result};
 pub use fastpq_cuda::{

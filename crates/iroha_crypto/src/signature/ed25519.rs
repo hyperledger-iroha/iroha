@@ -19,13 +19,23 @@ use std::{
     collections::{HashMap, HashSet},
     format,
     string::ToString as _,
+    sync::{Mutex, OnceLock},
     vec::Vec,
 };
 
-const VERIFY_OK_CACHE_LIMIT: usize = 4096;
-const VERIFY_OK_EXACT_CACHE_SIZE: usize = 1024;
-const PUBLIC_KEY_PARSE_CACHE_LIMIT: usize = 4096;
-const PUBLIC_KEY_PARSE_FAST_CACHE_SIZE: usize = 256;
+const VERIFY_OK_CACHE_LIMIT: usize = 8192;
+const VERIFY_OK_EXACT_CACHE_SIZE: usize = 65536;
+const PUBLIC_KEY_PARSE_CACHE_LIMIT: usize = 32768;
+const PUBLIC_KEY_PARSE_FAST_CACHE_SIZE: usize = 16384;
+const PUBLIC_KEY_PARSE_SHARED_SHARDS: usize = 64;
+const PUBLIC_KEY_PARSE_SHARED_CACHE_LIMIT_PER_SHARD: usize = 1024;
+
+#[inline]
+fn masked_cache_index(mixed: u64, cache_size: usize) -> usize {
+    debug_assert!(cache_size.is_power_of_two());
+    let mask = u64::try_from(cache_size - 1).expect("cache mask fits in u64");
+    usize::try_from(mixed & mask).expect("masked cache index fits in usize")
+}
 
 #[derive(Clone)]
 enum PublicKeyParseOutcome {
@@ -65,6 +75,34 @@ struct PublicKeyParseCache {
     misses: usize,
     #[cfg(test)]
     inserts: usize,
+}
+
+struct PublicKeyParseSharedCache {
+    map: HashMap<[u8; 32], PublicKeyParseOutcome>,
+}
+
+impl PublicKeyParseSharedCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    fn get(&self, bytes: &[u8; 32]) -> Option<PublicKeyParseOutcome> {
+        self.map.get(bytes).cloned()
+    }
+
+    fn insert(&mut self, bytes: [u8; 32], outcome: PublicKeyParseOutcome) {
+        if self.map.len() >= PUBLIC_KEY_PARSE_SHARED_CACHE_LIMIT_PER_SHARD {
+            self.map.clear();
+        }
+        self.map.insert(bytes, outcome);
+    }
+
+    #[cfg(test)]
+    fn reset(&mut self) {
+        self.map.clear();
+    }
 }
 
 impl PublicKeyParseCache {
@@ -156,8 +194,51 @@ struct PublicKeyParseCacheStats {
 
 #[inline]
 fn public_key_parse_fast_index(bytes: &[u8; 32]) -> usize {
-    usize::from(bytes[0] ^ bytes[7] ^ bytes[15] ^ bytes[23] ^ bytes[31])
-        & (PUBLIC_KEY_PARSE_FAST_CACHE_SIZE - 1)
+    let a = u64::from_le_bytes(bytes[0..8].try_into().expect("slice length checked"));
+    let b = u64::from_le_bytes(bytes[8..16].try_into().expect("slice length checked"));
+    let c = u64::from_le_bytes(bytes[16..24].try_into().expect("slice length checked"));
+    let d = u64::from_le_bytes(bytes[24..32].try_into().expect("slice length checked"));
+    let mixed = a ^ b.rotate_left(17) ^ c.rotate_left(31) ^ d.rotate_left(47);
+    masked_cache_index(mixed, PUBLIC_KEY_PARSE_FAST_CACHE_SIZE)
+}
+
+static PUBLIC_KEY_PARSE_SHARED_CACHE: OnceLock<Box<[Mutex<PublicKeyParseSharedCache>]>> =
+    OnceLock::new();
+
+fn public_key_parse_shared_cache() -> &'static [Mutex<PublicKeyParseSharedCache>] {
+    PUBLIC_KEY_PARSE_SHARED_CACHE
+        .get_or_init(|| {
+            let mut shards = Vec::with_capacity(PUBLIC_KEY_PARSE_SHARED_SHARDS);
+            for _ in 0..PUBLIC_KEY_PARSE_SHARED_SHARDS {
+                shards.push(Mutex::new(PublicKeyParseSharedCache::new()));
+            }
+            shards.into_boxed_slice()
+        })
+        .as_ref()
+}
+
+#[inline]
+fn public_key_parse_shared_index(bytes: &[u8; 32]) -> usize {
+    let a = u64::from_le_bytes(bytes[0..8].try_into().expect("slice length checked"));
+    let b = u64::from_le_bytes(bytes[8..16].try_into().expect("slice length checked"));
+    let mixed = a ^ b.rotate_left(29);
+    masked_cache_index(mixed, PUBLIC_KEY_PARSE_SHARED_SHARDS)
+}
+
+fn get_shared_public_key_parse(bytes: &[u8; 32]) -> Option<PublicKeyParseOutcome> {
+    let shards = public_key_parse_shared_cache();
+    let shard = shards[public_key_parse_shared_index(bytes)]
+        .lock()
+        .expect("ed25519 public-key parse shared cache mutex poisoned");
+    shard.get(bytes)
+}
+
+fn remember_shared_public_key_parse(bytes: [u8; 32], outcome: PublicKeyParseOutcome) {
+    let shards = public_key_parse_shared_cache();
+    let mut shard = shards[public_key_parse_shared_index(&bytes)]
+        .lock()
+        .expect("ed25519 public-key parse shared cache mutex poisoned");
+    shard.insert(bytes, outcome);
 }
 
 #[derive(Clone, Copy)]
@@ -230,9 +311,21 @@ fn exact_verify_key(
 
 #[inline]
 fn verify_ok_exact_index(pk: &[u8; 32], message: &[u8; 32], signature: &[u8; 64]) -> usize {
-    let mixed = u16::from(pk[0] ^ message[31] ^ signature[63])
-        | (u16::from(pk[11] ^ message[13] ^ signature[31]) << 8);
-    usize::from(mixed) & (VERIFY_OK_EXACT_CACHE_SIZE - 1)
+    let pk_a = u64::from_le_bytes(pk[0..8].try_into().expect("slice length checked"));
+    let pk_b = u64::from_le_bytes(pk[24..32].try_into().expect("slice length checked"));
+    let msg_a = u64::from_le_bytes(message[0..8].try_into().expect("slice length checked"));
+    let msg_b = u64::from_le_bytes(message[24..32].try_into().expect("slice length checked"));
+    let sig_a = u64::from_le_bytes(signature[0..8].try_into().expect("slice length checked"));
+    let sig_b = u64::from_le_bytes(signature[24..32].try_into().expect("slice length checked"));
+    let sig_c = u64::from_le_bytes(signature[56..64].try_into().expect("slice length checked"));
+    let mixed = pk_a
+        ^ pk_b.rotate_left(7)
+        ^ msg_a.rotate_left(19)
+        ^ msg_b.rotate_left(29)
+        ^ sig_a.rotate_left(41)
+        ^ sig_b.rotate_left(53)
+        ^ sig_c.rotate_left(61);
+    masked_cache_index(mixed, VERIFY_OK_EXACT_CACHE_SIZE)
 }
 
 thread_local! {
@@ -240,6 +333,8 @@ thread_local! {
     static VERIFY_OK_CACHE: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
     #[cfg(test)]
     static VERIFY_OK_CACHE_KEY_CALLS: RefCell<usize> = const { RefCell::new(0) };
+    #[cfg(test)]
+    static ED25519_PUBLIC_KEY_PARSE_UNCACHED_CALLS: RefCell<usize> = const { RefCell::new(0) };
     #[cfg(test)]
     static ED25519_SIGNATURE_PARSE_CALLS: RefCell<usize> = const { RefCell::new(0) };
     #[cfg(test)]
@@ -254,6 +349,26 @@ fn reset_public_key_parse_cache_for_tests() {
 #[cfg(test)]
 fn public_key_parse_cache_stats_for_tests() -> PublicKeyParseCacheStats {
     PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow().stats())
+}
+
+#[cfg(test)]
+fn reset_public_key_parse_shared_cache_for_tests() {
+    for shard in public_key_parse_shared_cache() {
+        shard
+            .lock()
+            .expect("ed25519 public-key parse shared cache mutex poisoned")
+            .reset();
+    }
+}
+
+#[cfg(test)]
+fn reset_public_key_parse_uncached_calls_for_tests() {
+    ED25519_PUBLIC_KEY_PARSE_UNCACHED_CALLS.with(|calls| *calls.borrow_mut() = 0);
+}
+
+#[cfg(test)]
+fn public_key_parse_uncached_calls_for_tests() -> usize {
+    ED25519_PUBLIC_KEY_PARSE_UNCACHED_CALLS.with(|calls| *calls.borrow())
 }
 
 #[cfg(test)]
@@ -391,16 +506,28 @@ impl Ed25519Sha512 {
             return result;
         }
 
+        if let Some(outcome) = get_shared_public_key_parse(&bytes) {
+            PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().insert(bytes, outcome.clone()));
+            return outcome.as_result();
+        }
+
         let result = Self::parse_public_key_uncached(&bytes);
         let outcome = match &result {
             Ok(key) => PublicKeyParseOutcome::valid(*key),
             Err(err) => PublicKeyParseOutcome::invalid(err.clone()),
         };
-        PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().insert(bytes, outcome));
+        PUBLIC_KEY_PARSE_CACHE.with(|cache| cache.borrow_mut().insert(bytes, outcome.clone()));
+        remember_shared_public_key_parse(bytes, outcome);
         result
     }
 
     fn parse_public_key_uncached(bytes: &[u8; 32]) -> Result<PublicKey, ParseError> {
+        #[cfg(test)]
+        ED25519_PUBLIC_KEY_PARSE_UNCACHED_CALLS.with(|calls| {
+            let mut calls = calls.borrow_mut();
+            *calls = (*calls).saturating_add(1);
+        });
+
         let compressed = CompressedEdwardsY(*bytes);
         let point = compressed
             .decompress()
@@ -818,6 +945,16 @@ mod test {
     }
 
     #[test]
+    fn ed25519_cache_indexes_stay_within_cache_masks() {
+        let pk = [0xFF; 32];
+        let message = [0xA5; 32];
+        let signature = [0x5A; 64];
+
+        assert!(public_key_parse_fast_index(&pk) < PUBLIC_KEY_PARSE_FAST_CACHE_SIZE);
+        assert!(verify_ok_exact_index(&pk, &message, &signature) < VERIFY_OK_EXACT_CACHE_SIZE);
+    }
+
+    #[test]
     fn parse_public_key_uses_thread_local_cache_for_valid_keys() {
         reset_public_key_parse_cache_for_tests();
         let (pk, _) = Ed25519Sha512::keypair(KeyGenOption::Random);
@@ -840,6 +977,36 @@ mod test {
             public_key_parse_cache_stats_for_tests(),
             PublicKeyParseCacheStats {
                 hits: 1,
+                misses: 1,
+                inserts: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_public_key_uses_shared_cache_after_thread_local_reset() {
+        reset_public_key_parse_cache_for_tests();
+        reset_public_key_parse_shared_cache_for_tests();
+        reset_public_key_parse_uncached_calls_for_tests();
+        let (pk, _) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(vec![0x6B; 32]));
+        let bytes = pk.to_bytes();
+
+        let first = Ed25519Sha512::parse_public_key(&bytes).expect("first parse succeeds");
+        assert_eq!(first.to_bytes(), bytes);
+        assert_eq!(public_key_parse_uncached_calls_for_tests(), 1);
+
+        reset_public_key_parse_cache_for_tests();
+        let second = Ed25519Sha512::parse_public_key(&bytes).expect("shared cache parse succeeds");
+        assert_eq!(second.to_bytes(), bytes);
+        assert_eq!(
+            public_key_parse_uncached_calls_for_tests(),
+            1,
+            "shared cache hit must avoid a second curve decompression"
+        );
+        assert_eq!(
+            public_key_parse_cache_stats_for_tests(),
+            PublicKeyParseCacheStats {
+                hits: 0,
                 misses: 1,
                 inserts: 1,
             }
@@ -935,6 +1102,25 @@ mod test {
             public_key_parse_cache_stats_for_tests(),
             PublicKeyParseCacheStats::default()
         );
+    }
+
+    #[test]
+    fn public_key_parse_cache_keeps_izanami_sized_working_set() {
+        let mut cache = PublicKeyParseCache::new();
+
+        for idx in 0..20_000u64 {
+            let mut bytes = [0u8; 32];
+            bytes[..8].copy_from_slice(&idx.to_le_bytes());
+            cache.insert(
+                bytes,
+                PublicKeyParseOutcome::invalid(ParseError("cached rejection".into())),
+            );
+        }
+
+        assert_eq!(cache.map.len(), 20_000);
+        let mut first = [0u8; 32];
+        first[..8].copy_from_slice(&0u64.to_le_bytes());
+        assert!(cache.get(&first).is_some());
     }
 
     #[test]

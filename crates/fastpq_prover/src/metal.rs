@@ -3440,6 +3440,78 @@ pub fn bn254_poseidon_hash_words(
     if slices.is_empty() {
         return Ok(Vec::new());
     }
+    bn254_poseidon_hash_words_async(words, slices)?.wait()
+}
+
+/// Pending BN254 Poseidon word-batch dispatch.
+///
+/// The guard owns the staged Metal buffers until [`wait`](Self::wait), allowing
+/// callers to overlap command completion with independent host work.
+pub(crate) struct PendingBn254PoseidonWords {
+    _word_chunk: PooledBuffer,
+    _word_buffer: Buffer,
+    _slice_chunk: Vec<Bn254PoseidonMetalSlice>,
+    _slice_buffer: Buffer,
+    _round_constants: PooledBuffer,
+    _round_buffer: Buffer,
+    _mds: PooledBuffer,
+    _mds_buffer: Buffer,
+    output: PooledBuffer,
+    _output_buffer: Buffer,
+    ticket: Option<DispatchTicket>,
+    completed: bool,
+}
+
+impl PendingBn254PoseidonWords {
+    /// Wait for the dispatch and collect canonical BN254 digest bytes.
+    pub(crate) fn wait(mut self) -> MetalResult<Vec<[u8; 32]>> {
+        self.finish()?;
+        Ok(self
+            .output
+            .as_slice()
+            .chunks_exact(BN254_LIMBS)
+            .map(bn254_limbs_to_bytes)
+            .collect())
+    }
+
+    fn finish(&mut self) -> MetalResult<()> {
+        if self.completed {
+            return Ok(());
+        }
+        let ticket = self
+            .ticket
+            .take()
+            .expect("pending BN254 Poseidon dispatch missing ticket");
+        let result = wait_for_ticket(ticket);
+        self.completed = true;
+        result
+    }
+}
+
+impl Drop for PendingBn254PoseidonWords {
+    fn drop(&mut self) {
+        if self.completed || self.ticket.is_none() {
+            return;
+        }
+        if let Err(error) = self.finish() {
+            warn!(
+                target: "fastpq::metal",
+                %error,
+                "pending BN254 Poseidon word dispatch dropped without awaiting completion"
+            );
+        }
+    }
+}
+
+pub(crate) fn bn254_poseidon_hash_words_async(
+    words: &[u64],
+    slices: &[Bn254PoseidonBatchSlice],
+) -> MetalResult<PendingBn254PoseidonWords> {
+    if slices.is_empty() {
+        return Err(GpuError::InvalidInput(
+            "BN254 Poseidon async dispatch requires at least one input",
+        ));
+    }
 
     let context = bn254_poseidon_context()?;
     let batch_count = u32::try_from(slices.len())
@@ -3525,13 +3597,20 @@ pub fn bn254_poseidon_hash_words(
             );
         },
     )?;
-    wait_for_ticket(ticket)?;
-
-    Ok(output
-        .as_slice()
-        .chunks_exact(BN254_LIMBS)
-        .map(bn254_limbs_to_bytes)
-        .collect())
+    Ok(PendingBn254PoseidonWords {
+        _word_chunk: word_chunk,
+        _word_buffer: word_buffer,
+        _slice_chunk: slice_chunk,
+        _slice_buffer: slice_buffer,
+        _round_constants: round_constants,
+        _round_buffer: round_buffer,
+        _mds: mds,
+        _mds_buffer: mds_buffer,
+        output,
+        _output_buffer: output_buffer,
+        ticket: Some(ticket),
+        completed: false,
+    })
 }
 
 pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
@@ -3821,6 +3900,7 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
     let trace_label = ticket.trace_label.clone();
     let timing_start = ticket.timing_start;
     let wait_start = Instant::now();
+    let mut polls = 0usize;
     let status = loop {
         let status = ticket.command.status();
         if matches!(
@@ -3840,7 +3920,14 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
                 message: format!("command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"),
             });
         }
-        thread::sleep(Duration::from_millis(1));
+        polls = polls.saturating_add(1);
+        if polls <= 64 {
+            thread::yield_now();
+        } else if polls <= 256 {
+            thread::sleep(Duration::from_micros(50));
+        } else {
+            thread::sleep(Duration::from_millis(1));
+        }
     };
     let duration = timing_start.map(|start| start.elapsed());
     if let Some(label) = trace_label {

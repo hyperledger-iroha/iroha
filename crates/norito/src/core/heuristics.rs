@@ -145,7 +145,7 @@ pub fn select_compression_for_len(len: usize) -> CompressionPlan {
     if len < h.min_compress_bytes_cpu {
         return CompressionPlan::None;
     }
-    if hw::has_gpu_compression() && len >= h.min_compress_bytes_gpu {
+    if len >= h.min_compress_bytes_gpu && hw::has_gpu_compression() {
         return CompressionPlan::GpuZstd {
             level: h.zstd_level_gpu,
         };
@@ -268,6 +268,21 @@ mod tests {
                 level: h.zstd_level_large,
             },
             "GPU policy disable should force CPU selection even at the GPU cutoff"
+        );
+    }
+
+    #[test]
+    fn compression_selector_keeps_below_gpu_cutoff_on_cpu() {
+        let _guard = GpuPolicyGuard::set(true);
+        let h = get();
+        let below_gpu_cutoff = h.min_compress_bytes_gpu.saturating_sub(1);
+
+        assert_eq!(
+            select_compression_for_len(below_gpu_cutoff),
+            CompressionPlan::CpuZstd {
+                level: h.zstd_level_large,
+            },
+            "GPU availability must not affect payloads below the canonical GPU cutoff"
         );
     }
 }

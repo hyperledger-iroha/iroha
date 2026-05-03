@@ -1,6 +1,454 @@
 # Status
 
-Last updated: 2026-05-02
+Last updated: 2026-05-03
+
+## 2026-05-03 Workspace clippy corridor follow-up
+
+- The full workspace all-target clippy corridor is green again with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy --workspace --all-targets -- -D warnings`.
+- Follow-up lint repairs were kept narrow: `iroha_core` state escrow index
+  helpers now use the `mv::Key` bound required by `StorageTransaction`, the
+  NewView highest-QC vote selector is compiled only for tests, Ed25519 cache
+  index masking now uses checked conversions with a focused bounds regression,
+  the FASTPQ BN254 Poseidon pending wait API documents its cfg-dependent
+  fallibility, and signed-transaction payload preparation documents why it is
+  intentionally client-independent.
+- The IVM CoreHost AXT policy test now expects commit gas for the actually
+  recorded flow shape: an empty proof preflight does not store a proof entry,
+  so the valid flow commits one touch and one handle. Focused validation passed
+  with `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p ivm --test core_host_policy -- --nocapture`
+  (`21` passed), and the adjacent AXT host dispatch/flow tests passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p ivm --test axt_host_flow --test host_unknown_syscall -- --nocapture`
+  (`35` passed).
+- Additional validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha_core --lib -- -D warnings`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha_core --all-targets -- -D warnings`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha_crypto --all-targets -- -D warnings`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p iroha_crypto ed25519_cache_indexes_stay_within_cache_masks -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p fastpq_prover --all-targets -- -D warnings`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p ivm --all-targets -- -D warnings`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha --all-targets -- -D warnings`,
+  `cargo fmt --all -- --check`, `scripts/check_no_scale.sh`, and
+  `git diff --check`.
+- Full workspace tests were not rerun in this follow-up and remain for the next
+  uncontended validation window.
+
+## 2026-05-03 Sumeragi NewView QC signature binding
+
+- Sumeragi vote preimages now bind the optional `highest_qc` reference and use
+  the new `Vote/v2` consensus domain. Aggregate QC verification mirrors the
+  QC's `highest_qc` into the reconstructed vote preimage, so NPoS aggregate-only
+  validation cannot accept a NewView QC whose highest-QC hint was substituted
+  after signing.
+- NewView QC formation now groups votes by exact signed highest-QC reference
+  and only aggregates a quorum from one group. This avoids locally building a
+  same-message BLS aggregate from votes that signed different NewView
+  justifications.
+- Non-NewView votes and QCs now reject unexpected `highest_qc` payloads so the
+  signed NewView-only field cannot create alternate Prepare/Commit preimages.
+- Block-sync QC validation, commit-certificate roster validation, embedded-roster
+  bootstrap, and aggregate-only block-sync fallback now enforce the same
+  NewView-only `highest_qc` invariant. Block-sync commit evidence also rejects
+  non-`Commit` QCs before aggregate fallback, and the fallback rechecks
+  permissioned commit quorum and NPoS stake quorum instead of treating an
+  aggregate-valid permissioned QC as sufficient by itself.
+- Commit-certificate and validator-checkpoint roster validation now fail closed
+  when any bitmap signer is missing a BLS proof of possession. They no longer
+  log and accept the roster without aggregate verification.
+- The data-model comments for `QcVote::highest_qc` and `Qc::highest_qc` now
+  reflect that the field is cryptographically bound into vote and aggregate
+  signatures.
+- During the focused rerun, unrelated dirty compile blockers in `state.rs`,
+  `block.rs`, and `gossiper.rs` were repaired: the `ProofId` range-bound macro
+  now uses a local identifier, the pending FASTPQ transcript digest hooks
+  expected by block finalization are restored, and local Ed25519 batch helper
+  lifetimes now match `Ed25519BatchScratch`. A later proof-query lifetime
+  blocker in `smartcontracts/isi/world.rs` was also repaired by returning an
+  owned iterator for status-indexed proof queries.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib non_new_view_highest -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib missing_pop -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib validate_block_sync_qc -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib block_sync_qc_aggregate_fallback -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib qc_validation_error_reports_reason_labels -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib validate_commit_qc_roster -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib validate_checkpoint_roster -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib highest_qc_substitution -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib new_view_highest -- --nocapture`, and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest cargo test -p iroha_core --lib new_view_votes_still_form_qc -- --nocapture`.
+  Formatting and whitespace validation passed with `rustfmt --edition 2024 --check`
+  over the touched Rust files and `git diff --check`.
+
+## 2026-05-03 Core API multisig and status smoke follow-up
+
+- Multisig direct-sign admission now rejects only authorities that actually
+  carry multisig state, multisig metadata, or a multisig controller. Ordinary
+  single-key signatories keep direct-signing rights even when they hold a
+  `MULTISIG_SIGNATORY/` role assigned by another multisig account.
+- The status endpoint smoke test now decodes the Norito status payload with the
+  canonical byte helper and uses the current SNS lease payment amount in its
+  setup path.
+- The multisig CLI list-all regression test now resolves the `iroha` CLI binary
+  before submitting expiring proposals, then reuses the resolved path for JSON,
+  text, and paged CLI checks. This keeps Cargo build-lock contention outside
+  the proposal lifetime and preserves the hashed-role-suffix coverage.
+- The shared dynamic-key comparison macro now accepts full Rust type syntax for
+  `target:` so qualified path targets compile as well as bare identifiers.
+- Focused validation passed with
+  `cargo test -p iroha_core multisig_signatory_role_does_not_block_direct_signing --lib -- --nocapture`,
+  `cargo test -p integration_tests --test core_api misc::misc_status_endpoints_smoke -- --nocapture`, and
+  `cargo test -p integration_tests --test core_api multisig::multisig_cli_list_all_resolves_hashed_role_suffixes -- --nocapture`.
+  The full multisig slice now passes with
+  `cargo test -p integration_tests --test core_api multisig:: -- --nocapture`:
+  `17` passed, `0` failed.
+  A prior full `core_api` integration sweep exposed the fixed status and
+  multisig regressions; the whole `core_api` target was not rerun after this
+  focused repair.
+
+## 2026-05-03 Kotodama artifact and access-hint hardening
+
+- Contract bytecode registration now verifies self-describing `CNTR` artifacts,
+  uses the verified artifact hash, and rejects raw or malformed contract bytes.
+  Manifest registration and contract activation now require the matching stored
+  bytecode and compare the submitted manifest payload with the manifest embedded
+  in the artifact.
+- Torii and overlay deploy paths now queue `RegisterSmartContractBytes` before
+  `RegisterSmartContractCode`. Transaction-metadata manifests are trusted only
+  when they match the embedded `CNTR` payload, and access-set derivation prefers
+  selected entrypoint hints before manifest-level hints while applying the same
+  bytecode safety gate to both.
+- Kotodama access-hint reports now distinguish complete precise hints from
+  fallback wildcards. Dynamic durable-state paths, contract calls, opaque ISI
+  lowering, and alias-derived fallback cases record skipped reasons and mark
+  `access_hints_complete = false`.
+- IVM metadata parsing now rejects noncanonical literal-table post-padding:
+  padding must be at most three zero bytes and exactly match the alignment
+  implied by the section offset, entries, and data length. `koto_compile` now
+  strips debug metadata by default unless `--embed-debug` is passed.
+- The CoreHost `SET_ACCOUNT_DETAIL` gas path now reads JSON TLV payload length
+  through the payload-length helper, fixing the compile regression where the
+  validating helper's unit return value was treated like a TLV.
+- Follow-up strict clippy fixes added `FastPQ` doc markup, made paired SMT-path
+  checks inspect both path shapes instead of returning a constant, and replaced
+  truncating crypto hotpath / CUDA bench casts with checked conversions. The
+  FastPQ backend fixture assertion now uses `assert!` with the same mismatch
+  diagnostics.
+- Focused validation passed with
+  `cargo test -p kotodama_lang access_hint -- --nocapture`,
+  `cargo test -p kotodama_lang manifest_access_set_hints --lib -- --nocapture`,
+  `cargo test -p ivm --test metadata_parse -- --nocapture`,
+  `cargo test -p iroha_core overlay_appends_manifest_only_when_missing --lib -- --nocapture`,
+  `cargo test -p iroha_core --test contract_code_bytes -- --nocapture`,
+  `cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture`,
+  `cargo test -p iroha_core ivm_access_uses_manifest --lib -- --nocapture`,
+  `cargo test -p iroha_core register_contract_manifest_is_queryable_without_permission --lib -- --nocapture`,
+  `cargo test -p iroha_core activate_contract_instance_is_public_for_unprotected_namespace --lib -- --nocapture`,
+  `cargo test -p iroha_core --test ivm_manifest_abi_reject -- --nocapture`,
+  `cargo test -p iroha_core --test gov_enact_deploy -- --nocapture`, and
+  `cargo test -p iroha_core smartcontracts::code --lib -- --nocapture`.
+  Strict targeted clippy passed with
+  `cargo clippy -p ivm -p ivm_abi -p kotodama_lang -p iroha_core --all-targets -- -D warnings`.
+  The full workspace all-target clippy corridor also passed with
+  `cargo clippy --workspace --all-targets -- -D warnings` after the follow-up
+  FastPQ and bench lint fixes.
+  An accidental broad filtered sweep,
+  `cargo test -p ivm metadata_parse -- --nocapture`, also completed without
+  failures, though it filtered out the `parse_*` metadata tests; the exact
+  `metadata_parse` target above exercised them. Formatting and whitespace
+  validation passed with `cargo fmt --all` and `git diff --check`.
+- A full `cargo test --workspace` run was attempted after the clippy corridor.
+  It progressed through broad workspace compilation but failed during
+  large test-binary linking with `ld: write() failed, errno=28` and subsequent
+  `No space left on device` errors while writing incremental/query-cache
+  outputs. This was an infrastructure capacity failure rather than a Rust test
+  assertion failure. `cargo clean` then completed and removed 1,850,436
+  generated files, recovering 880.4 GiB from `target/`.
+
+## 2026-05-03 Confidential admission and localnet stabilization
+
+- Confidential policy admission now rejects disabled `Shield`/`Unshield`
+  instructions before queueing and again during stateful block admission. Torii
+  maps the queue rejection to `403` with stable confidential-policy metadata so
+  clients get a policy error instead of a transport-looking failure.
+- Versioned signed-transaction admission metadata now derives the external
+  entrypoint hash and framed byte budget from the actual adaptive Norito payload
+  bytes after decode. This avoids trusting stale `encoded_len_exact()` hints for
+  confidential encrypted payloads while preserving the decoded signed
+  transaction and canonical hash contract.
+- The ZK-confidential localnet negative-submit helper now distinguishes wrapped
+  policy rejections from startup transport errors, allows inconclusive negative
+  submits to skip state assertions, retries balance reads through transient peer
+  churn, and requires stable Torii readiness before starting submit-heavy flows.
+  The test-network startup poll now treats storage-observed block progress as a
+  nonfatal readiness fallback instead of shutting down peers when `/status`
+  lags behind.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p iroha_core --lib confidential_policy_admission -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p iroha_core --lib push_with_lane_with_state_rejects_confidential_policy_before_enqueue -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p iroha_torii --lib push_into_queue_confidential_policy_rejection_maps_to_forbidden --features app_api -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p iroha_core --lib decoded_versioned_signed_transaction -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_unshield_rejected_when_disabled -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_shield_rejected_when_disabled -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da transient_client_error_detector -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da accepted_or_expected_rejection_treats_transient_submit_as_inconclusive -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da submit_retry_budget_covers_localnet_startup_jitter -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo check -p integration_tests --test consensus_and_da`,
+  `cargo fmt --all -- --check`,
+  `scripts/check_no_scale.sh`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha_core -p iroha_torii -p iroha_test_network --lib -- -D warnings`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p integration_tests --test consensus_and_da -- -D warnings`, and
+  `git diff --check`.
+- The full serial consensus/DA integration target now passes with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da -- --test-threads=1`:
+  `250` passed, `0` failed, `6` ignored.
+- Full workspace tests were not rerun in this pass and remain for the next
+  uncontended validation window.
+
+## 2026-05-03 FASTPQ GPU Metal Gate and Profile
+
+- Installed and verified the Apple Metal compiler toolchain on this macOS
+  arm64 host with `xcodebuild -downloadComponent MetalToolchain`. `xcrun`
+  now resolves both `metal` and `metallib` from the Metal toolchain bundle, and
+  `xcrun -sdk macosx metal -v` reports Apple Metal `32023.864`.
+- The FASTPQ BN254 Poseidon word-batch Metal perf gate is now hardware-backed
+  instead of silently measuring fallback CPU:
+  `cargo run -p fastpq_prover --bin fastpq_metal_bench --features fastpq-gpu -- --operation bn254_poseidon_words --rows 20000 --iterations 20 --require-gpu --require-telemetry`
+  completed with `execution_mode = gpu`, `gpu_backend = metal`,
+  `run_status = ok`, CPU mean `7373.849 ms`, GPU mean `323.923 ms`, and
+  `22.764x` speedup on Apple M1 Ultra.
+- Focused FASTPQ GPU validation passed with
+  `cargo check -p fastpq_prover --features fastpq-gpu`,
+  `cargo test -p fastpq_prover bn254_poseidon --features fastpq-gpu -- --nocapture`,
+  `cargo test -p fastpq_prover --test poseidon_manifest_consistency -- --nocapture`,
+  and `cargo test -p iroha_core fastpq --lib --features fastpq-gpu -- --nocapture`
+  (`38` passed). CUDA runtime parity/perf was not run on this macOS host; the
+  CUDA evidence here is limited to compile/manifest/bounds coverage.
+- Built the release Izanami gate binaries with
+  `ENABLE_RANS_BUNDLES=1 NORITO_SKIP_BINDINGS_SYNC=1 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami --features irohad/fastpq-gpu`.
+  The 4-peer `20k TPS` / `120s` GPU-enabled release gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-120s-20260503-034401` exited `0`,
+  offered and accepted all `2,400,000` planned submissions, reported `0`
+  failures, reached strict approved transactions `24,605` at strict height `8`,
+  and recorded no view changes, validation rejects, missing payload/QC events,
+  DA/RBC pressure, or queue drops.
+- A requested same-shape rerun at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-rerun-120s-20260503-035513` also
+  exited `0`, offered and accepted all `2,400,000` planned submissions,
+  reported `0` failures, and improved strict approved transactions to `28,695`
+  at strict height `9`. Safety signals stayed clean: no view changes,
+  validation rejects, missing payload/QC events, DA/RBC pressure, or queue
+  drops. The artifact captured unrelated Cargo/rustc and debug-network
+  activity before/after the run, so treat latency and throughput comparisons as
+  contended.
+- The matching `30s` sampled GPU profile at
+  `dist/izanami-profile-20k-fastpq-gpu-sampled-30s-20260503-034942` exited `0`
+  with sample status `0`, offered and accepted all `600,000` planned
+  submissions, and reported `0` failures. The profile was contended by
+  unrelated Cargo/rustc work, so treat it as bottleneck evidence rather than a
+  clean latency baseline.
+- A requested same-shape sampled rerun at
+  `dist/izanami-profile-20k-fastpq-gpu-rerun3-sampled-30s-20260503-040340`
+  exited `0` with sample status `0`, offered and accepted all `600,000`
+  planned submissions, reported `0` failures, and reached strict approved
+  transactions `4,131` at strict height `3`. Peer stack samples show the
+  current bottlenecks as synchronous Metal completion wait inside
+  `finalize_transfer_transcript_digests_in_map`, Ed25519/Curve25519 batch
+  verification and public-key parsing, Norito transaction/gossip decode and
+  transfer serialization, allocator/copy traffic, CRC64, SHA-256, and Blake2.
+  Scalar `poseidon3_permute` remains absent.
+- Peer samples confirm FASTPQ transcript digest finalization now reaches the
+  Metal `bn254_poseidon_hash_words` path, while `poseidon3_permute` is absent
+  from the sampled stacks. Remaining hot costs are dominated by Norito
+  transaction/transfer serialization and decode, Ed25519/Curve25519
+  parse/verify miss work, allocation/copy traffic, and CRC64/hash helpers.
+- The follow-up FASTPQ performance pass now overlaps Metal BN254 Poseidon word
+  batches with CPU finalization work, preflights the daemon `fastpq-gpu`
+  hardware path at startup, propagates finalized transcript digests into the
+  execution-witness recorder to avoid a duplicate witness-side GPU wait, and
+  widens the Ed25519 thread-local public-key/verify caches for the 20k stable
+  workload window. Focused validation passed with
+  `cargo test -p iroha_core apply_fastpq_transcript_digests_updates_recorded_witness_copy --lib -- --nocapture`,
+  `cargo test -p iroha_crypto ed25519 --lib -- --nocapture` (`34` passed),
+  and `cargo check -p iroha_core --features fastpq-gpu`.
+- Rebuilt the release gate binaries with `irohad/fastpq-gpu`. The final
+  4-peer `20k TPS` / `120s` GPU-enabled release gate at
+  `dist/izanami-prebuilt-20k-fastpq-gpu-final-120s-20260503-152118` exited
+  `0`, offered and accepted all `2,400,000` planned submissions, reported `0`
+  failures, reached strict approved transactions `36,986` at strict height
+  `11`, and recorded submit latency `p50=4ms`, `p95=12ms`, `p99=79ms`,
+  `max=253ms`. The queue remained saturated
+  (`875,623 / 2,400,000`), with `2` view-change installs and no validation
+  rejects, missing payload/QC view-change causes, queue drops, DA/RBC pressure,
+  ingress failover, or endpoint unhealthy events.
+- The final delayed load-window sampled profile at
+  `dist/izanami-profile-20k-fastpq-gpu-final-sampled-30s-20260503-151935`
+  exited `0` with sample status `0`, offered and accepted all `600,000`
+  planned submissions, and reported `0` failures. The load-window peer samples
+  no longer include cold Metal preflight, scalar `poseidon3_permute`, or CPU
+  FASTPQ fallback. Small residual FASTPQ waits are now device completion waits
+  on the accelerated path; the dominant remaining peer CPU stack is
+  Ed25519/Curve25519 public-key parse and verification, Norito transaction and
+  transfer encode/decode, transaction metadata hashing, allocation/copy
+  traffic, and CRC64/SHA-256 helpers. Sampling perturbed this short run
+  (`strict approved = 4,152`, `p95 = 57ms`), so use the profile for stack
+  attribution and the 120s gate above for the cleaner throughput/latency
+  evidence.
+
+## 2026-05-03 IVM WSV mock mutation gas hardening
+
+- The WSV mock host no longer normalizes free state mutation for ABI syscalls.
+  Direct peer, trigger, contract-code, domain/account, signatory/quorum/detail,
+  asset, role/permission, transfer, unregister, domain-transfer, and NFT
+  mutation syscalls now return deterministic mutation gas. Account detail and
+  NFT metadata charge their JSON payload bytes; FastPQ transfer batch entry and
+  apply paths charge per-entry mutation gas.
+- Development `SMARTCONTRACT_EXECUTE_QUERY` JSON envelopes now charge singular
+  query gas over request + response bytes, and
+  `SMARTCONTRACT_EXECUTE_INSTRUCTION` JSON/data-model mutation envelopes charge
+  payload-sized mutation gas on successful state changes. ZK ballot/finalize
+  helper mutations also return nonzero deterministic gas while preserving the
+  one-shot verification latch semantics.
+- Focused validation passed with `cargo fmt --all`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib charge -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test wsv_host_execute_query_envelope --test wsv_host_pointer_tlv --test wsv_host_account_admin --test wsv_host_grant_revoke_tlv --test wsv_host_roles_triggers_envelope --test wsv_host_register_account_asset_tlv --test wsv_host_register_domain_tlv --test wsv_host_unregister_tlv -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib finalize -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib submit_ballot -- --nocapture`.
+- The real smart-contract host now charges the declared deterministic
+  `G_sc_depth` floor for `SET_SMARTCONTRACT_EXECUTION_DEPTH`, including the
+  zero-depth no-op path that previously returned free success.
+  `CREATE_NFTS_FOR_ALL_USERS` also now charges the declared deterministic
+  `G_create_nfts_all` floor when the account snapshot is empty, while retaining
+  queued-instruction gas for NFT creation/transfer work. Focused validation
+  passed with
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core smartcontract_depth --lib -- --nocapture` and
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core create_nfts_for_all --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core queue_instructions_accumulates_gas_and_enqueues --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core syscall_charges --lib -- --nocapture`.
+
+## 2026-05-03 IVM runtime-helper gas hardening
+
+- Runtime helper syscalls that already advertised gas assets now return
+  deterministic nonzero gas in host implementations instead of silently doing
+  work for free. `INPUT_PUBLISH_TLV` charges `G_input_publish + bytes` across
+  `DefaultHost`, standalone `CoreHost`, and WSV host paths; `VERIFY_SIGNATURE`
+  charges `G_verify_sig + bytes`; `GET_PRIVATE_INPUT`, `USE_NULLIFIER`,
+  `COMMIT_OUTPUT`, debug/exit/abort helpers, heap growth, allocation in the
+  standalone `CoreHost`, Merkle proof helpers, validation-only ISI mutation
+  stubs, and FastPQ batch-entry/apply validation paths now return their
+  documented fixed/page/depth/per-entry costs.
+- The syscall spec, generated docs, and ABI doc table now reflect byte-scaled
+  costs for `INPUT_PUBLISH_TLV` and `VERIFY_SIGNATURE`.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib charges -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib default_host_runtime_helpers_charge_declared_gas -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test syscalls_doc_sync --test syscalls_doc_generated --test syscalls_gas_names --test syscalls_markdown_gas --test gas_schedule_hash -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test abi_hash_versions --test abi_syscall_list_golden --test ivm_abi_doc_sync -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm_abi --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test dynamic_memory --test private_input --test nullifier --test verify_signature_tlv --test syscalls --test default_host_input_publish_tlv --test core_host_input_publish_tlv --test wsv_host_input_publish_tlv -- --nocapture`.
+  Follow-up pointer/mutation coverage passed with
+	  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test core_host_pointer_abi -- --nocapture` and
+	  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test syscalls --test wsv_host_pointer_tlv -- --nocapture`.
+	  Formatting passed with `cargo fmt --all`.
+
+## 2026-05-03 IVM verification gas hardening
+
+- VRF verification syscalls now charge deterministic byte-counted gas across
+  all decoded status exits in the shared `DefaultHost` path. `VRF_VERIFY` and
+  `VRF_VERIFY_BATCH` return `G_verify + bytes` for wrong-type, malformed
+  payload, chain/key/proof/variant/verification failure, empty-batch, OOM, and
+  success paths instead of allowing status-returning work to run for free.
+- Standalone and WSV ZK verification status paths now charge deterministic
+  payload-size gas as well. The real smart-contract host already used the
+  confidential proof gas schedule; the standalone single-envelope verifier,
+  disabled standalone batch path, and WSV mock verifier now match the same
+  nonzero accounting model for decoded payload work.
+- Stale standalone, WSV, and feature-gated Goldilocks verifier fixtures now
+  assert the byte-counted verification gas and encoded JSON mutation-envelope
+  gas instead of preserving the old zero-gas expectations in tests.
+- `VERIFY_DS_PROOF` now charges deterministic verification gas as well: the real
+  smart-contract host returns `G_verify + bytes` for successful proof
+  verification and `G_verify` for proof-clear, while standalone `DefaultHost`,
+  standalone `CoreHost`, and WSV mock proof-clear paths return `G_verify`.
+  Standalone proof-consuming AXT calls still fail closed after FastPQ V1
+  preflight because those hosts do not link the real verifier.
+- The remaining successful AXT bookkeeping syscalls are no longer free:
+  `AXT_BEGIN`, `AXT_TOUCH`, and `USE_ASSET_HANDLE` now charge `G_axt + bytes`
+  from the decoded pointer-ABI payloads they validate, and `AXT_COMMIT` charges
+  `G_axt + entries` from recorded touches, proofs, and handle uses. The
+  standalone hosts, WSV mock, and real smart-contract host all use the same
+  deterministic saturating arithmetic.
+- The generated syscall spec/docs now advertise `G_verify_proof + bytes` for
+  single ZK proof verification, `G_verify + bytes` for VRF and ZK batches,
+  `G_verify + bytes` for `VERIFY_DS_PROOF`, `G_axt + bytes`/`G_axt + entries`
+  for AXT bookkeeping, and `G_verify_proof + bytes` for `VERIFY_PROOF`.
+- ZK read helpers and VRF epoch seed reads now charge deterministic request +
+  response byte gas (`G_roots_get + bytes` / `G_vote_get + bytes`) across the
+  standalone host, WSV mock, and real smart-contract host instead of returning
+  zero on successful read/status paths.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib default_host_ -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib zk_verify_status_paths_charge_payload_bytes -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib zk_read_helpers_charge_request_and_response_bytes -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test zk_verify_batch_syscall --test zk_verify_batch_gating -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test zk_verify_syscall --test zk_verify_gating --test wsv_verify_latch_unshield --test wsv_host_zk_perm_and_events -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test zk_verify_goldilocks --features ivm_zk_tests,goldilocks_backend -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core vrf_epoch_seed_syscall --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core zk_vote_tally_syscall_reads_world_snapshot --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core from_state_hydrates_zk_snapshots --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core axt_verify_ds_proof --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core axt_proof_cache --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test core_host_policy --test host_unknown_syscall --test axt_host_flow -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test axt_host_flow --test core_host_policy --test host_unknown_syscall -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test syscalls_doc_sync --test syscalls_gas_names --test syscalls_markdown_gas --test gas_schedule_hash -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test syscalls_doc_sync --test syscalls_doc_generated --test syscalls_gas_names --test syscalls_markdown_gas -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test abi_hash_versions --test abi_syscall_list_golden --test ivm_abi_doc_sync -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test gas_schedule_hash --test abi_hash_versions --test abi_syscall_list_golden --test ivm_abi_doc_sync -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm_abi --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core axt_ --lib -- --nocapture`, and
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core --features iroha-core-tests --test ivm_corehost_axt -- --nocapture`.
+  Formatting and whitespace validation passed with `cargo fmt --all` and
+  `git diff --check`.
+
+## 2026-05-02 Sumeragi witness-root and localnet validation hardening
+
+- Sumeragi's debug `corrupt_witness_ack` path now mutates the local
+  post-execution root before the node stores validated roots and votes, both in
+  inline validation and validation-worker result handling. The parent root is
+  preserved, while the post root is deterministically salted by block hash,
+  height, view, and peer identity so witness-root divergence is exercised by the
+  QC path instead of being hidden by an unmodified local vote.
+- The ZK-confidential localnet submit helper now treats lower-cased transport
+  causes, including `tcp connect error`, as transient during startup and uses a
+  larger submit retry budget. This keeps early peer readiness jitter from being
+  reported as a policy or payload failure before any live peer sees the
+  transaction.
+- The nested `iroha3d` build path used by consensus localnet tests was repaired
+  by keeping schema-helper input lengths in scope before VM mutation in the
+  standalone and WSV IVM hosts.
+- Focused validation passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo test -p iroha_core debug_corrupt_witness_roots_changes_local_post_root --lib`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo check -p ivm --lib`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo check -p iroha_core --lib`, and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --nocapture`.
+  Earlier focused reruns in the same corridor also passed for
+  `sumeragi_adversarial::sumeragi_adversarial_witness_corruption`,
+  `sumeragi_da::sumeragi_da_kura_eviction_rehydrates_from_da_store`, and
+  `sumeragi_da_eviction_rehydrates_block_bodies`. Follow-up validation on
+  2026-05-03 also passed
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_da_payload_loss_does_not_block_commit -- --nocapture`.
+  The localnet retry-helper slice also passed with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo test -p integration_tests --test consensus_and_da transient_client_error_detector -- --nocapture`,
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo test -p integration_tests --test consensus_and_da transient_localnet_startup_error_detector -- --nocapture`, and
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-corridor cargo test -p integration_tests --test consensus_and_da submit_retry_budget_covers_localnet_startup_jitter -- --nocapture`.
+  Follow-up validation on 2026-05-03 with
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target` also passed the disabled
+  shield/unshield confidential localnet cases, the hardened negative-submit
+  classifier/retry-budget slice, and the full serial `consensus_and_da` target
+  after fixing adaptive signed-transaction admission metadata.
+- A broad `consensus_and_da` rerun reached 228 passed, 19 failed, and 6 ignored
+  under heavy concurrent Cargo activity. The Sumeragi/DA failures from that run
+  now have green focused reruns, and the disabled confidential localnet cluster
+  has green focused reruns. The follow-up serial rerun is green.
 
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 
@@ -98,12 +546,22 @@ Last updated: 2026-05-02
   real smart-contract hosts. The byte component charges AAD plus
   plaintext/ciphertext bytes, including decoded-input failure paths, while the
   existing deterministic SM4 vector outputs remain unchanged.
+- SM2 verification now advertises and returns `G_verify + bytes`. The default
+  host charges message, signature, public-key, and optional distid bytes on
+  both successful verification and decoded-input failure paths; standalone,
+  WSV, and real-host forwarding inherit the same deterministic cost.
 - Deterministic host sysvars now advertise and return nonzero gas:
   `CURRENT_TIME_MS`, `SYSVAR_BLOCK_TIME_MS`, and `SYSVAR_BLOCK_HEIGHT` charge
   `G_sysvar`; byte-returning `SYSVAR_CHAIN_ID`, `SYSVAR_CONTRACT_ADDRESS`, and
   `SYSVAR_ENTRYPOINT` charge `G_sysvar + bytes`; authority sysvars charge
   `G_get_auth + bytes`. DefaultHost, standalone CoreHost, WsvHost, and the real
   smart-contract host now return the matching gas from these paths.
+- Schema and codec helper gas gaps are closed across standalone CoreHost, WSV,
+  and real-host codec delegation: `SCHEMA_*` charge `G_schema + bytes`;
+  `JSON_ENCODE`, `JSON_DECODE`, `JSON_OBJECT`, `JSON_GET_*`, and `JSON_SET_*`
+  charge their JSON gas assets plus bytes; `DECODE_INT`/`ENCODE_INT` charge
+  `G_numeric + bytes`; path builders charge `G_path + bytes`; and
+  `NAME_DECODE` charges `G_name_decode + bytes`.
 - Focused validation passed with
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib default_host_state_has_len_and_keys_roundtrip -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib state_keys_syscall_returns_sorted_prefix_page -- --nocapture`,
@@ -124,15 +582,21 @@ Last updated: 2026-05-02
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib default_host_sm4_gcm_charges_aad_and_data_bytes -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test sm_syscalls wsv_host_sm4_gcm_seal_returns_byte_counted_gas_when_enabled -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test sm_syscalls syscall_sm4_ -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test sm_syscalls syscall_sm2_verify_ -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib sysvar -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib time_syscalls_use_configured_deterministic_value -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib current_time_syscall_returns_host_time -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib helpers_charge_payload_bytes -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test core_host_json_schema_syscalls schema_encode_decode_roundtrip -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test wsv_host_decode_syscalls -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test core_host_name_decode_syscall -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --lib get_account_balance_syscall_accepts_account_id_payloads -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test core_host_state_syscalls --test wsv_host_state_syscalls -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core get_account_balance_syscall_reads_numeric_asset --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core resolve_account_alias_syscall_reads_current_alias_binding --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core state_syscall_ --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core state_keys_syscall_strips_scope_and_applies_tombstones --lib -- --nocapture`,
+  `CARGO_TARGET_DIR=target/codex-core-scallx cargo test -p iroha_core encode_decode_int_syscalls_roundtrip --lib -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test abi_hash_versions --test abi_syscall_list_golden --test syscalls_doc_sync --test ivm_abi_doc_sync --test syscalls_gas_names --test syscalls_markdown_gas -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test syscalls_doc_sync --test syscalls_gas_names --test syscalls_markdown_gas --test gas_schedule_hash -- --nocapture`,
   `CARGO_TARGET_DIR=target/codex-ivm-scallx cargo test -p ivm --test gas_schedule_hash -- --nocapture`,
@@ -5152,9 +5616,23 @@ Last updated: 2026-05-02
   `crates/iroha_zkp_halo2/src/poseidon.rs`: the S-box now uses explicit
   square/square/multiply arithmetic, width-3 MDS/round updates are unrolled,
   byte hashing absorbs full two-word rate blocks directly, and field/u64 word
-  hashing no longer materializes padded vectors. A width-6 round-unroll
-  experiment was rejected after filtered `hash6_u64` Criterion runs showed the
-  simpler loop faster (`~57.1 us` versus `~65.9 us`).
+  hashing no longer materializes padded vectors. `PoseidonByteHasher::finalize`
+  now applies final padding directly instead of routing through `absorb_word`,
+  and `hash*_u64` output no longer copies a full 32-byte field representation
+  before reading the low limb. A width-6 round-unroll experiment was rejected
+  after filtered `hash6_u64` Criterion runs showed the simpler loop faster
+  (`~57.1 us` versus `~65.9 us`).
+- Added packed `hash_u64_words_bytes` Criterion coverage for the FASTPQ CPU
+  batch fallback path and kept a manual two-word sponge loop after it improved
+  the 24-word and 64-word filters. Baseline medians were about `40.0 us`,
+  `262.6 us`, and `666.4 us` for 2/24/64 words; the manual loop rerun was
+  within noise for 2 words and improved to about `258.1 us` and `651.0 us` for
+  24 and 64 words. The cached round constants now live in fixed-size arrays
+  instead of a `Vec`; filtered Criterion showed `hash2_u64` at about `19.39 us`,
+  improved `hash_u64_words_bytes/2` to about `39.5 us`, and kept the 24/64-word
+  packed filters statistically unchanged. A final `apply_mds3` row-destructure
+  pass was kept after filtered `hash2_u64` Criterion measured `19.47 us` with
+  no statistically significant performance change.
 - Updated FASTPQ digest construction in `crates/iroha_core/src/fastpq/mod.rs`
   to stream Norito encodings into the Poseidon byte hasher and to pack GPU
   digest batches into a shared word buffer with preallocated slice/word
@@ -5179,17 +5657,31 @@ Last updated: 2026-05-02
   - `cargo test -p fastpq_prover compute_poseidon_digest_matches_canonical_encoded_preimage --lib -- --nocapture`
   - `cargo test -p iroha_crypto parse_public_key_cache --lib -- --nocapture`
   - `cargo check -p iroha_core --features zk-halo2,zk-halo2-ipa --bench crypto_hotpaths`
+  - `CARGO_TARGET_DIR=target/codex-core-scallx cargo bench -p iroha_core --features zk-halo2,zk-halo2-ipa --bench crypto_hotpaths -- crypto_hotpaths/poseidon/hash2_u64`
+  - `CARGO_TARGET_DIR=target/codex-core-scallx cargo bench -p iroha_core --features zk-halo2,zk-halo2-ipa --bench crypto_hotpaths -- crypto_hotpaths/poseidon/hash_u64_words_bytes`
+- A small unrelated `crates/ivm/src/mock_wsv.rs` gas-accounting compile fix was
+  applied while validating the benchmark target: `BUILD_PATH_MAP_KEY` now keeps
+  the decoded `Name` payload length in scope before returning `schema_gas`.
+- A small unrelated `crates/iroha_core/src/state.rs` lifetime compile fix was
+  also applied while validating the FASTPQ tests: domain-asset iteration now
+  collects owned `AccountId`s before querying account assets.
 - `cargo bench -p iroha_core --features zk-halo2,zk-halo2-ipa --bench
   crypto_hotpaths` now builds and runs after the concurrent
   `crates/ivm/src/host.rs` TLV fix. Latest Criterion medians were roughly:
-  `hash_bytes` 32/128/512/4096 bytes = `60.1 us`, `178.6 us`, `651.9 us`,
-  `5.16 ms`; streaming 32/128/512/4096 bytes = `56.8 us`, `168.0 us`,
-  `617.1 us`, `5.08 ms`; `hash2_u64` = `20.3 us`; filtered `hash6_u64`
-  after reverting the width-6 unroll = `57.1 us`; filtered
+  `hash_bytes` 32/128/512/4096 bytes = `58.5 us`, `176.9 us`, `648.6 us`,
+  `5.05 ms`; streaming 32/128/512/4096 bytes = `56.5 us`, `168.8 us`,
+  `607.3 us`, `4.72 ms`; `hash2_u64` = `19.9 us`; filtered `hash6_u64`
+  remained within noise at `57.0 us`; filtered
   `fastpq/poseidon_preimage_digest` = `308.7 us`; filtered
   `fastpq/batch_from_transcripts` for 64 transcripts = `20.74 ms` with missing
   digests versus `527 us` with precomputed digests. A packed-CPU local
   finalizer experiment was rejected and reverted after it regressed the same
-  filter to `22.68 ms` and `625.8 us`; the final current-code rerun kept the
-  precomputed path fast at `557.5 us`, while the missing-digest case was noisy
-  under workspace load (`45.5 ms`).
+  filter to `22.68 ms` and `625.8 us`; a stack-backed single-digest word
+  hasher experiment was also rejected and reverted after it regressed
+  `poseidon_preimage_digest` to `330.6 us`. A `chunks_exact(16)` byte-update
+  loop refactor was likewise rejected and reverted after Criterion showed
+  Poseidon regressions across byte and u64 filters (`hash_bytes/32` around
+  `67.5 us`, `streaming/32` around `64.5 us`, and `hash2_u64` around
+  `21.4 us`). The final current-code batch rerun kept the precomputed path
+  fast at `557.5 us`, while the missing-digest case was noisy under workspace
+  load (`45.5 ms`).

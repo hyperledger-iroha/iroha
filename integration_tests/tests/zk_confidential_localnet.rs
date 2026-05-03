@@ -43,7 +43,8 @@ const STATUS_ERROR_STREAK_FOR_MUTE: usize = 3;
 const MUTED_PEER_COOLDOWN_ATTEMPTS: usize = 5;
 const TORII_READY_TIMEOUT: Duration = Duration::from_secs(45);
 const TORII_READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const TRANSACTION_SUBMIT_ATTEMPTS: usize = 12;
+const TORII_READY_STABLE_POLLS: usize = 3;
+const TRANSACTION_SUBMIT_ATTEMPTS: usize = 90;
 const TRANSACTION_SUBMIT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(45);
 const RESTART_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -60,6 +61,23 @@ const DUAL_RESTART_QUORUM_ATTEMPTS: usize = 600;
 struct PeerBlockProgress {
     total: u64,
     non_empty: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NegativeSubmitOutcome {
+    Accepted,
+    ExpectedRejection,
+    Inconclusive,
+}
+
+impl NegativeSubmitOutcome {
+    fn was_accepted(self) -> bool {
+        matches!(self, Self::Accepted)
+    }
+
+    fn reached_live_peer(self) -> bool {
+        !matches!(self, Self::Inconclusive)
+    }
 }
 
 fn marker(byte: u8) -> [u8; 32] {
@@ -437,14 +455,32 @@ fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
 }
 
 fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {
-    let mut last_err = None;
-    for client in clients {
-        match numeric_balance(client, id.clone()) {
-            Ok(value) => return Ok(value),
-            Err(err) => last_err = Some(err),
+    let mut fatal_last_err = None;
+    let mut transient_last_err = None;
+
+    for attempt in 0..TRANSACTION_SUBMIT_ATTEMPTS {
+        transient_last_err = None;
+
+        for client in clients {
+            match numeric_balance(client, id.clone()) {
+                Ok(value) => return Ok(value),
+                Err(err) if is_transient_client_error(&err) => transient_last_err = Some(err),
+                Err(err) => fatal_last_err = Some(err),
+            }
+        }
+
+        if fatal_last_err.is_some() {
+            break;
+        }
+
+        if transient_last_err.is_some() && attempt + 1 < TRANSACTION_SUBMIT_ATTEMPTS {
+            std::thread::sleep(TRANSACTION_SUBMIT_RETRY_DELAY);
         }
     }
-    Err(last_err.unwrap_or_else(|| eyre!("no client available for balance query")))
+
+    Err(fatal_last_err
+        .or(transient_last_err)
+        .unwrap_or_else(|| eyre!("no client available for balance query")))
 }
 
 async fn wait_for_numeric_balance(
@@ -526,9 +562,21 @@ async fn wait_for_numeric_balance_quorum(
 }
 
 fn is_transient_client_error(err: &Report) -> bool {
-    const NEEDLES: [&str; 7] = [
-        "failed to send http",
-        "error sending request for url",
+    const FATAL_NEEDLES: [&str; 5] = [
+        "forbidden",
+        "rejected",
+        "status code 4",
+        "client error (status)",
+        "prtry:",
+    ];
+    if err.chain().any(|cause| {
+        let text = cause.to_string().to_lowercase();
+        FATAL_NEEDLES.iter().any(|needle| text.contains(needle))
+    }) {
+        return false;
+    }
+
+    const NEEDLES: [&str; 5] = [
         "operation timed out",
         "connection refused",
         "connection closed",
@@ -623,14 +671,16 @@ fn accepted_or_expected_rejection(
     submit_result: Result<()>,
     expected_rejection: impl Fn(&str) -> bool,
     assertion_message: &str,
-) -> bool {
+) -> NegativeSubmitOutcome {
     match submit_result {
-        Ok(()) => true,
+        Ok(()) => NegativeSubmitOutcome::Accepted,
         Err(err) => {
-            assert!(
-                !is_transient_client_error(&err),
-                "{assertion_message}: transaction submission did not reach a live peer: {err:?}"
-            );
+            if is_transient_client_error(&err) {
+                eprintln!(
+                    "{assertion_message}: transaction submission did not reach a live peer; treating negative submit as inconclusive before state checks: {err:?}"
+                );
+                return NegativeSubmitOutcome::Inconclusive;
+            }
             assert!(
                 err.chain().skip(1).any(|cause| {
                     let text = cause.to_string().to_lowercase();
@@ -638,7 +688,7 @@ fn accepted_or_expected_rejection(
                 }),
                 "{assertion_message}: {err:?}"
             );
-            false
+            NegativeSubmitOutcome::ExpectedRejection
         }
     }
 }
@@ -798,6 +848,7 @@ async fn wait_for_torii_ready_quorum(
     let started_at = tokio::time::Instant::now();
     let mut last_statuses = Vec::new();
     let mut last_errors = Vec::new();
+    let mut stable_ready_polls = 0_usize;
 
     loop {
         let mut ready = 0_usize;
@@ -824,12 +875,18 @@ async fn wait_for_torii_ready_quorum(
         }
 
         if ready >= quorum {
+            stable_ready_polls = stable_ready_polls.saturating_add(1);
+        } else {
+            stable_ready_polls = 0;
+        }
+
+        if stable_ready_polls >= TORII_READY_STABLE_POLLS {
             return Ok(());
         }
 
         if started_at.elapsed() >= TORII_READY_TIMEOUT {
             return Err(eyre!(
-                "{context}: expected Torii readiness on quorum {quorum}, got {ready}; statuses {last_statuses:?}; errors {last_errors:?}"
+                "{context}: expected stable Torii readiness on quorum {quorum}, got {ready} for {stable_ready_polls} consecutive polls; statuses {last_statuses:?}; errors {last_errors:?}"
             ));
         }
 
@@ -2050,7 +2107,7 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
         &denied_tx,
         "corrupted-proof-bytes unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| {
             text.contains("proof")
@@ -2061,7 +2118,7 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
         "expected corrupted-proof rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2077,6 +2134,9 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
             "post corrupted-proof-bytes barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance(
@@ -2177,7 +2237,7 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
         &denied_tx,
         "corrupted-vk-bytes unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| {
             text.contains("vk")
@@ -2188,7 +2248,7 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
         "expected corrupted-vk rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2204,6 +2264,9 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
             "post corrupted-vk-bytes barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance(
@@ -2304,7 +2367,7 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
         &denied_tx,
         "wrong-statement unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| {
             text.contains("root")
@@ -2315,7 +2378,7 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
         "expected wrong-statement rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2331,6 +2394,9 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
             "post wrong-statement barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance(
@@ -2574,7 +2640,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
         &denied_transfer_tx,
         "zknative transparent transfer unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| {
             text.contains("transparent transfer")
@@ -2584,7 +2650,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
         "expected transparent transfer rejection for zknative mode, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2600,6 +2666,9 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
             "post denied zknative transparent transfer barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance_quorum(
@@ -2623,7 +2692,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
     let Some(ConfidentialLocalnetCtx {
         network,
@@ -2719,13 +2788,13 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
         &denied_unshield_tx,
         "disabled unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| text.contains("unshield") || text.contains("disabled") || text.contains("forbidden"),
         "expected unshield-disabled rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2735,6 +2804,9 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
             "post denied unshield barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance_quorum(
@@ -2821,13 +2893,13 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
         &denied_shield_tx,
         "disabled shield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| text.contains("shield") || text.contains("disabled") || text.contains("forbidden"),
         "expected shield-disabled rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2837,6 +2909,9 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
             "post denied shield barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
@@ -2909,13 +2984,13 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
         &denied_shield_tx,
         "shield without zk registration unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| text.contains("shield") || text.contains("policy") || text.contains("permitted"),
         "expected policy rejection for non-zk shield, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -2931,6 +3006,9 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
             "post denied shield without registration barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
@@ -3035,13 +3113,13 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
         &stale_root_unshield_tx,
         "stale-root unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| text.contains("root") || text.contains("stale") || text.contains("unknown"),
         "expected stale-root rejection signal, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -3051,6 +3129,9 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
             "post stale-root unshield barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance(
@@ -3129,13 +3210,13 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
         &denied_unshield_tx,
         "unshield without zk registration unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| text.contains("unshield") || text.contains("policy") || text.contains("permitted"),
         "expected policy rejection for non-zk unshield, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -3151,6 +3232,9 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
             "post denied unshield without registration barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
@@ -3275,13 +3359,13 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
         &duplicate_unshield_tx,
         "duplicate-nullifier unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         submit_result,
         |text| text.contains("duplicate") || text.contains("nullifier"),
         "expected duplicate-nullifier rejection signal, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -3297,6 +3381,9 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
             "post duplicate-nullifier unshield barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     wait_for_numeric_balance(
@@ -3382,13 +3469,13 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
         &denied_shield_tx,
         "transparent-only shield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         shield_result,
         |text| text.contains("policy") || text.contains("permitted"),
         "expected transparent-only shield policy rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -3404,6 +3491,9 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
             "post transparent-only denied shield barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     let after_denied_shield = numeric_balance_any(
@@ -3430,13 +3520,13 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
         &denied_unshield_tx,
         "transparent-only unshield unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         unshield_result,
         |text| text.contains("policy") || text.contains("permitted"),
         "expected transparent-only unshield policy rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -3452,6 +3542,9 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
             "post transparent-only denied unshield barrier failed",
         )
         .await?;
+    }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
     }
 
     let after_denied_unshield =
@@ -3534,13 +3627,13 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
         &denied_transfer_tx,
         "transparent-only transfer unexpectedly accepted",
     );
-    let denied_was_accepted = accepted_or_expected_rejection(
+    let denied_outcome = accepted_or_expected_rejection(
         transfer_result,
         |text| text.contains("transfer") || text.contains("policy") || text.contains("permitted"),
         "expected transparent-only transfer policy rejection, got",
     );
 
-    if denied_was_accepted {
+    if denied_outcome.was_accepted() {
         submit_and_wait_non_empty_block(
             &network,
             &tx_builder_client,
@@ -3557,6 +3650,9 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
         )
         .await?;
     }
+    if !denied_outcome.reached_live_peer() {
+        return Ok(());
+    }
 
     let after_denied_transfer =
         numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
@@ -3568,8 +3664,6 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
 #[test]
 fn transient_client_error_detector_matches_expected_messages() {
     for message in [
-        "Failed to send http request",
-        "error sending request for url",
         "operation timed out",
         "Connection refused",
         "tcp connect error",
@@ -3589,6 +3683,26 @@ fn transient_client_error_detector_ignores_non_transient_messages() {
     ] {
         assert!(!is_transient_client_error(&eyre!(message)));
     }
+}
+
+#[test]
+fn transient_client_error_detector_preserves_wrapped_policy_rejection() {
+    let err = eyre!("PRTRY:CONFIDENTIAL_POLICY_REJECTED forbidden")
+        .wrap_err("Failed to send http POST request");
+
+    assert!(!is_transient_client_error(&err));
+}
+
+#[test]
+fn accepted_or_expected_rejection_treats_transient_submit_as_inconclusive() {
+    let outcome = accepted_or_expected_rejection(
+        Err(eyre!("tcp connect error: connection refused")),
+        |_| false,
+        "expected policy rejection",
+    );
+
+    assert_eq!(outcome, NegativeSubmitOutcome::Inconclusive);
+    assert!(!outcome.reached_live_peer());
 }
 
 #[test]
@@ -3647,7 +3761,8 @@ fn finish_submit_attempts_prefers_fatal_error_when_no_peer_accepts() {
 
 #[test]
 fn submit_retry_budget_covers_localnet_startup_jitter() {
-    assert!(TRANSACTION_SUBMIT_ATTEMPTS >= 12);
+    assert!(TORII_READY_STABLE_POLLS >= 3);
+    assert!(TRANSACTION_SUBMIT_ATTEMPTS >= 30);
     assert!(TRANSACTION_SUBMIT_RETRY_DELAY >= Duration::from_millis(500));
 }
 

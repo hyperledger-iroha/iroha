@@ -135,7 +135,7 @@ pub mod isi {
             }
             let _ = state_transaction.world.domain(nft_id.domain())?;
 
-            state_transaction.world.nfts.insert(nft_id, nft_value);
+            state_transaction.world.insert_nft_entry(nft_id, nft_value);
 
             state_transaction
                 .world
@@ -158,8 +158,7 @@ pub mod isi {
 
             state_transaction
                 .world
-                .nfts
-                .remove(nft_id.clone())
+                .remove_nft_entry(&nft_id)
                 .ok_or_else(|| FindError::Nft(nft_id.clone()))?;
             let _ = state_transaction.world.domain(nft_id.domain())?;
 
@@ -288,15 +287,21 @@ pub mod isi {
                 ));
             }
 
-            let nft = state_transaction.world.nft_mut(&object)?;
+            {
+                let nft = state_transaction.world.nft_mut(&object)?;
 
-            if nft.owned_by != source {
-                return Err(Error::InvariantViolation(
-                    format!("Can't transfer NFT {object} since {source} doesn't own it",).into(),
-                ));
+                if nft.owned_by != source {
+                    return Err(Error::InvariantViolation(
+                        format!("Can't transfer NFT {object} since {source} doesn't own it",)
+                            .into(),
+                    ));
+                }
+
+                nft.owned_by = destination.clone();
             }
-
-            nft.owned_by = destination.clone();
+            state_transaction
+                .world
+                .replace_nft_owner_index(&object, &source, &destination);
             state_transaction
                 .world
                 .emit_events(Some(NftEvent::OwnerChanged(NftOwnerChanged {
@@ -569,11 +574,213 @@ pub mod isi {
 
 /// NFT-related query implementations.
 pub mod query {
+    use std::collections::BTreeSet;
+
     use eyre::Result;
-    use iroha_data_model::query::{dsl::CompoundPredicate, error::QueryExecutionFail as Error};
+    use iroha_data_model::{
+        nft::NftEntry,
+        query::{
+            dsl::{CompoundPredicate, EvaluatePredicate},
+            error::QueryExecutionFail as Error,
+            json::PredicateJson,
+        },
+    };
+    use norito::json::Value;
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::ValidQuery,
+        state::{StateReadOnly, WorldReadOnly},
+    };
+
+    #[derive(Debug, Default)]
+    struct NftPredicateView {
+        ids: BTreeSet<NftId>,
+        owners: BTreeSet<AccountId>,
+    }
+
+    impl NftPredicateView {
+        fn from_predicate(predicate: &CompoundPredicate<Nft>) -> Self {
+            let mut view = Self::default();
+            let Some(raw) = predicate.json_payload() else {
+                return view;
+            };
+            let Ok(predicate) = norito::json::from_str::<PredicateJson>(raw) else {
+                return view;
+            };
+
+            for condition in predicate.equals {
+                view.push_field_value(&condition.field, &condition.value);
+            }
+            for membership in predicate.r#in {
+                for value in membership.values {
+                    view.push_field_value(&membership.field, &value);
+                }
+            }
+
+            view
+        }
+
+        fn push_field_value(&mut self, field: &str, value: &Value) {
+            let Value::String(raw) = value else {
+                return;
+            };
+
+            match field {
+                "id" | "nft" | "nft_id" => {
+                    if let Ok(id) = raw.parse::<NftId>() {
+                        self.ids.insert(id);
+                    }
+                }
+                "owner" | "owned_by" | "account" | "account_id" => {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    {
+                        self.owners.insert(account_id.subject_id());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn plan(&self) -> NftQueryPlan {
+            let mut ids = self.ids.iter().cloned().collect::<Vec<_>>();
+            ids.sort();
+            let mut owners = self.owners.iter().cloned().collect::<Vec<_>>();
+            owners.sort();
+
+            if !ids.is_empty() {
+                return NftQueryPlan::Ids(ids);
+            }
+            if !owners.is_empty() {
+                return NftQueryPlan::Owners(owners);
+            }
+            NftQueryPlan::Full
+        }
+    }
+
+    #[derive(Debug)]
+    enum NftQueryPlan {
+        Ids(Vec<NftId>),
+        Owners(Vec<AccountId>),
+        Full,
+    }
+
+    fn nft_from_entry(entry: NftEntry<'_>) -> Nft {
+        let details = entry.value().clone().into_inner();
+        Nft {
+            id: entry.id().clone(),
+            content: details.content,
+            owned_by: details.owned_by,
+        }
+    }
+
+    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = value;
+        for segment in path.split('.') {
+            if segment.is_empty() {
+                return None;
+            }
+            match current {
+                Value::Object(map) => current = map.get(segment)?,
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
+    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+        matches!(value, Value::String(raw) if raw == expected)
+    }
+
+    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::String(raw) if raw == expected))
+    }
+
+    fn nft_alias_values(nft: &Nft, field: &str) -> Vec<String> {
+        match field {
+            "id" | "nft" | "nft_id" => vec![nft.id().to_string()],
+            "owner" | "owned_by" | "account" | "account_id" => vec![nft.owned_by().to_string()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn nft_json_value<'a>(cache: &'a mut Option<Value>, nft: &Nft) -> Option<&'a Value> {
+        if cache.is_none() {
+            *cache = norito::json::to_value(nft).ok();
+        }
+        cache.as_ref()
+    }
+
+    fn predicate_matches_nft(predicate: &PredicateJson, nft: &Nft) -> bool {
+        let mut nft_json = None;
+
+        for cond in &predicate.equals {
+            let aliases = nft_alias_values(nft, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_value_equals_str(&cond.value, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = nft_json_value(&mut nft_json, nft) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            let aliases = nft_alias_values(nft, &cond.field);
+            if !aliases.is_empty() {
+                if !aliases
+                    .iter()
+                    .any(|alias| predicate_values_contain_str(&cond.values, alias))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = nft_json_value(&mut nft_json, nft) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if !nft_alias_values(nft, field).is_empty() {
+                continue;
+            }
+            let Some(value) = nft_json_value(&mut nft_json, nft) else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
 
     impl ValidQuery for FindNfts {
         #[metrics(+"find_nfts")]
@@ -582,16 +789,34 @@ pub mod query {
             filter: CompoundPredicate<Nft>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Nft>, Error> {
-            use iroha_data_model::query::dsl::EvaluatePredicate;
+            let world = state_ro.world();
+            let predicate_view = NftPredicateView::from_predicate(&filter);
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
 
-            Ok(state_ro.world().nfts_iter().filter_map(move |entry| {
-                let details = entry.value().clone().into_inner();
-                let nft = Nft {
-                    id: entry.id().clone(),
-                    content: details.content,
-                    owned_by: details.owned_by,
-                };
-                filter.applies(&nft).then_some(nft)
+            let iter: Box<dyn Iterator<Item = Nft> + '_> = match predicate_view.plan() {
+                NftQueryPlan::Ids(ids) => Box::new(
+                    ids.into_iter()
+                        .filter_map(move |id| world.nft(&id).ok().map(nft_from_entry)),
+                ),
+                NftQueryPlan::Owners(owners) => {
+                    Box::new(owners.into_iter().flat_map(move |owner| {
+                        world
+                            .nfts_in_account_iter(&owner)
+                            .map(nft_from_entry)
+                            .collect::<Vec<_>>()
+                    }))
+                }
+                NftQueryPlan::Full => Box::new(world.nfts_iter().map(nft_from_entry)),
+            };
+
+            Ok(iter.filter(move |nft| {
+                if let Some(predicate) = predicate_json.as_ref() {
+                    predicate_matches_nft(predicate, nft)
+                } else {
+                    filter.applies(nft)
+                }
             }))
         }
     }
@@ -608,21 +833,27 @@ pub mod query {
             let account_id = self.account_id().clone();
             state_ro.world().account(&account_id)?;
 
-            Ok(state_ro.world().nfts_iter().filter_map(move |entry| {
-                let details = entry.value().clone().into_inner();
-                let nft = Nft {
-                    id: entry.id().clone(),
-                    content: details.content,
-                    owned_by: details.owned_by,
-                };
-                (nft.owned_by == account_id && filter.applies(&nft)).then_some(nft)
-            }))
+            let nfts = state_ro
+                .world()
+                .nfts_in_account_iter(&account_id)
+                .filter_map(move |entry| {
+                    let details = entry.value().clone().into_inner();
+                    let nft = Nft {
+                        id: entry.id().clone(),
+                        content: details.content,
+                        owned_by: details.owned_by,
+                    };
+                    filter.applies(&nft).then_some(nft)
+                })
+                .collect::<Vec<_>>();
+            Ok(nfts.into_iter())
         }
     }
 
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
+        use std::collections::BTreeSet;
 
         use iroha_data_model::IntoKeyValue;
         use iroha_primitives::json::Json;
@@ -633,7 +864,7 @@ pub mod query {
             block::ValidBlock,
             kura::Kura,
             query::store::LiveQueryStore,
-            state::{State, World},
+            state::{State, World, WorldReadOnly},
         };
 
         fn new_dummy_block() -> crate::block::CommittedBlock {
@@ -695,6 +926,80 @@ pub mod query {
         }
 
         #[test]
+        fn find_nfts_filters_owner_with_owner_index() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+            let users_domain = DomainId::try_new("users", "universal").unwrap();
+            let (user1, _) = iroha_test_samples::gen_account_in("users");
+            let (user2, _) = iroha_test_samples::gen_account_in("users");
+
+            state.world.domains.insert(
+                users_domain.clone(),
+                Domain {
+                    id: users_domain,
+                    logo: None,
+                    metadata: Metadata::default(),
+                    owned_by: ALICE_ID.clone(),
+                },
+            );
+            for account in [
+                Account::new(user1.clone()).build(&user1),
+                Account::new(user2.clone()).build(&user2),
+            ] {
+                let (account_id, account_value) = account.into_key_value();
+                state.world.accounts.insert(account_id, account_value);
+            }
+
+            let nft1_id: NftId = "ticket1$users.universal".parse().expect("nft id");
+            let nft2_id: NftId = "ticket2$users.universal".parse().expect("nft id");
+            for nft in [
+                Nft {
+                    id: nft1_id.clone(),
+                    content: Metadata::default(),
+                    owned_by: user1.clone(),
+                },
+                Nft {
+                    id: nft2_id.clone(),
+                    content: Metadata::default(),
+                    owned_by: user2.clone(),
+                },
+            ] {
+                let (id, value) = nft.into_key_value();
+                state.world.nfts.insert(id, value);
+            }
+            state
+                .world
+                .nfts_by_owner
+                .insert(user1.clone(), BTreeSet::from([nft1_id.clone()]));
+            state
+                .world
+                .nfts_by_owner
+                .insert(user2, BTreeSet::from([nft2_id]));
+
+            let view = state.view();
+            assert_eq!(
+                view.world()
+                    .nfts_in_account_iter(&user1)
+                    .map(|entry| entry.id().clone())
+                    .collect::<Vec<_>>(),
+                vec![nft1_id.clone()],
+                "fixture should populate the owner index used by the query planner",
+            );
+
+            let predicate =
+                CompoundPredicate::<Nft>::build(|p| p.equals("owner", user1.to_string()));
+            let results: Vec<_> = FindNfts
+                .execute(predicate, &view)
+                .expect("query execution succeeds")
+                .map(|nft| nft.id)
+                .collect();
+
+            assert_eq!(results, vec![nft1_id]);
+        }
+
+        #[test]
         fn find_nfts_by_account_id_limits_results_to_requested_owner() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -731,6 +1036,7 @@ pub mod query {
 
             let nft1_id: NftId = "ticket1$users.universal".parse().expect("nft id");
             let nft2_id: NftId = "ticket2$users.universal".parse().expect("nft id");
+            let user1_nfts = BTreeSet::from([nft1_id.clone()]);
             for nft in [
                 Nft {
                     id: nft1_id.clone(),
@@ -738,14 +1044,19 @@ pub mod query {
                     owned_by: user1.clone(),
                 },
                 Nft {
-                    id: nft2_id,
+                    id: nft2_id.clone(),
                     content: Metadata::default(),
-                    owned_by: user2,
+                    owned_by: user2.clone(),
                 },
             ] {
                 let (id, value) = nft.into_key_value();
                 state.world.nfts.insert(id, value);
             }
+            state.world.nfts_by_owner.insert(user1.clone(), user1_nfts);
+            state
+                .world
+                .nfts_by_owner
+                .insert(user2, BTreeSet::from([nft2_id]));
 
             let view = state.view();
             let results: Vec<_> = FindNftsByAccountId::new(user1.clone())
@@ -754,6 +1065,67 @@ pub mod query {
                 .map(|nft| nft.id)
                 .collect();
             assert_eq!(results, vec![nft1_id]);
+        }
+
+        #[test]
+        fn nft_owner_index_tracks_register_transfer_and_unregister() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let domain_id: DomainId = DomainId::try_new("tickets", "universal").unwrap();
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (user1, _) = iroha_test_samples::gen_account_in("users");
+            let (user2, _) = iroha_test_samples::gen_account_in("users");
+            for account_id in [&user1, &user2] {
+                Register::account(Account::new(account_id.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+            }
+
+            let nft_id: NftId = "ticket$tickets.universal".parse().unwrap();
+            Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
+                .execute(&user1, &mut stx)
+                .unwrap();
+            let owned_by_user1 = stx
+                .world
+                .nfts_in_account_iter(&user1)
+                .map(|nft| nft.id().clone())
+                .collect::<Vec<_>>();
+            assert_eq!(owned_by_user1, vec![nft_id.clone()]);
+            assert!(
+                stx.world.nfts_in_account_iter(&user2).next().is_none(),
+                "register should not add the NFT to another owner bucket",
+            );
+
+            Transfer::nft(user1.clone(), nft_id.clone(), user2.clone())
+                .execute(&user1, &mut stx)
+                .unwrap();
+            assert!(
+                stx.world.nfts_in_account_iter(&user1).next().is_none(),
+                "transfer should remove the NFT from the source owner bucket",
+            );
+            let owned_by_user2 = stx
+                .world
+                .nfts_in_account_iter(&user2)
+                .map(|nft| nft.id().clone())
+                .collect::<Vec<_>>();
+            assert_eq!(owned_by_user2, vec![nft_id.clone()]);
+
+            Unregister::nft(nft_id.clone())
+                .execute(&user2, &mut stx)
+                .unwrap();
+            assert!(
+                stx.world.nfts_in_account_iter(&user2).next().is_none(),
+                "unregister should remove the NFT from the owner index",
+            );
         }
     }
 }

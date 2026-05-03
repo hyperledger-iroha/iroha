@@ -17,6 +17,34 @@ use ivm::{
 };
 mod common;
 
+const AXT_VERIFY_EMPTY_GAS: u64 = 64;
+const AXT_GAS_BASE: u64 = 16;
+
+fn axt_gas(payload_len: usize) -> u64 {
+    AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn axt_commit_gas(touches: usize, proofs: usize, handles: usize) -> u64 {
+    axt_gas(touches.saturating_add(proofs).saturating_add(handles))
+}
+
+fn use_handle_gas(
+    handle: &AssetHandle,
+    intent: &RemoteSpendIntent,
+    proof: Option<&ProofBlob>,
+) -> u64 {
+    let handle_len = norito::to_bytes(handle).expect("encode handle").len();
+    let intent_len = norito::to_bytes(intent).expect("encode intent").len();
+    let proof_len = proof
+        .map(|p| norito::to_bytes(p).expect("encode proof").len())
+        .unwrap_or(0);
+    axt_gas(
+        handle_len
+            .saturating_add(intent_len)
+            .saturating_add(proof_len),
+    )
+}
+
 #[test]
 fn core_host_rejects_unknown_syscalls() {
     let mut vm = IVM::new(0);
@@ -169,50 +197,38 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
-    let ds_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 42, 10);
-    let handle_ptr = store_tlv(
-        &mut vm,
-        PointerType::AssetHandle,
-        &norito::to_bytes(&handle).expect("encode handle"),
-    );
+    let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
+    let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
     let manifest = TouchManifest {
         read: vec!["orders/0".into()],
         write: vec!["ledger/0".into()],
     };
-    let manifest_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest).expect("encode manifest"),
-    );
+    let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
 
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
+        Ok(AXT_VERIFY_EMPTY_GAS)
     );
 
     let intent = RemoteSpendIntent {
@@ -224,22 +240,19 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
             amount: "100".into(),
         },
     };
-    let intent_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&intent).expect("encode intent"),
-    );
+    let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
+    let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &intent_bytes);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &intent, None))
     );
 
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(0)
+        Ok(axt_commit_gas(1, 0, 1))
     );
 
     // Follow-up calls without an active AXT sequence must be rejected.
@@ -369,15 +382,12 @@ fn core_host_policy_rejects_touch_when_policy_denies() {
 
     let dsid = DataSpaceId::new(3);
     let descriptor = make_descriptor(dsid);
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
     let ds_ptr = store_tlv(
@@ -414,37 +424,28 @@ fn core_host_enforces_space_directory_policy_on_handles() {
     let mut host = CoreHost::new().with_axt_policy(Arc::new(policy));
 
     // Begin AXT
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
     // Touch the dataspace so handles are permitted.
-    let ds_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
+        Ok(axt_gas(ds_bytes.len()))
     );
 
     // Lane/manifest match → allowed.
     let handle = make_handle(binding, LaneId::new(2), [1; 32], 2, 2, 10);
-    let handle_ptr = store_tlv(
-        &mut vm,
-        PointerType::AssetHandle,
-        &norito::to_bytes(&handle).expect("encode handle"),
-    );
+    let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
+    let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -454,17 +455,14 @@ fn core_host_enforces_space_directory_policy_on_handles() {
             amount: "50".into(),
         },
     };
-    let intent_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&intent).expect("encode intent"),
-    );
+    let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
+    let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &intent_bytes);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, 0);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
+        Ok(use_handle_gas(&handle, &intent, None))
     );
 
     // Lane mismatch → denied.
@@ -617,7 +615,10 @@ fn run_policy_snapshot_case(
 fn core_host_builds_space_directory_policy_from_snapshot() {
     let dsid = DataSpaceId::new(11);
     let snapshot = make_policy_snapshot(dsid, [0xAB; 32], LaneId::new(6), 4, 7, 30);
-    assert_eq!(run_policy_snapshot_case(&snapshot, dsid, |_| {}), Ok(0));
+    assert!(matches!(
+        run_policy_snapshot_case(&snapshot, dsid, |_| {}),
+        Ok(gas) if gas > 0
+    ));
 }
 
 #[test]
@@ -747,7 +748,7 @@ fn core_host_builds_policy_from_wsv_snapshot() {
     );
 
     let res = run_wsv_policy_case(wsv, dsid, |_| {});
-    assert_eq!(res, Ok(0));
+    assert!(matches!(res, Ok(gas) if gas > 0));
 }
 
 #[test]
@@ -797,7 +798,7 @@ fn core_host_wsv_policy_respects_explicit_current_slot() {
     let res = run_wsv_policy_case(wsv, dsid, |handle| {
         handle.expiry_slot = 10;
     });
-    assert_eq!(res, Ok(0));
+    assert!(matches!(res, Ok(gas) if gas > 0));
 }
 
 #[test]
@@ -822,36 +823,27 @@ fn core_host_enforces_policy_snapshot() {
     let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
-    let ds_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
         read: vec!["orders/policy".into()],
         write: vec!["ledger/policy".into()],
     };
-    let manifest_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest).expect("encode manifest"),
-    );
+    let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
@@ -891,7 +883,7 @@ fn core_host_enforces_policy_snapshot() {
         Err(VMError::PermissionDenied)
     ));
 
-    // Correct lane -> accept
+    // Correct lane still fails closed when an inline proof requires a real verifier.
     handle.target_lane = LaneId::new(2);
     let handle_ptr = store_tlv(
         &mut vm,
@@ -899,13 +891,15 @@ fn core_host_enforces_policy_snapshot() {
         &norito::to_bytes(&handle).expect("encode handle"),
     );
     vm.set_register(10, handle_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
+    // No handle was accepted after the fail-closed inline proof, so commit only
+    // closes the standalone sequence.
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(0)
+        Ok(axt_commit_gas(1, 0, 0))
     );
 }
 
@@ -918,36 +912,27 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
-    let ds_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
         read: vec!["orders/inline".into()],
         write: vec!["ledger/inline".into()],
     };
-    let manifest_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest).expect("encode manifest"),
-    );
+    let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
@@ -988,7 +973,7 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
 }
 
 #[test]
-fn core_host_accepts_proof_within_skew() {
+fn core_host_rejects_proof_within_skew_without_verifier() {
     use std::num::NonZeroU64;
 
     let mut vm = IVM::new(1_000_000);
@@ -1000,15 +985,12 @@ fn core_host_accepts_proof_within_skew() {
         .with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
     let ds_ptr = store_tlv(
@@ -1024,10 +1006,16 @@ fn core_host_accepts_proof_within_skew() {
     );
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    assert_eq!(
+    assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Ok(0)
-    );
+        Err(VMError::PermissionDenied)
+    ));
+    assert!(host.axt_recorded_proof_payload(dsid).is_none());
+    let cache_status = host
+        .axt_cached_proof_status(dsid)
+        .expect("preflight rejection should be cached");
+    assert!(!cache_status.0);
+    assert_eq!(cache_status.1, Some(manifest_root));
 }
 
 #[test]
@@ -1039,36 +1027,27 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
     let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
 
     let descriptor = make_descriptor(dsid);
-    let desc_ptr = store_tlv(
-        &mut vm,
-        PointerType::AxtDescriptor,
-        &norito::to_bytes(&descriptor).expect("encode descriptor"),
-    );
+    let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
+    let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
     vm.set_register(10, desc_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
-        Ok(0)
+        Ok(axt_gas(desc_bytes.len()))
     );
 
-    let ds_ptr = store_tlv(
-        &mut vm,
-        PointerType::DataSpaceId,
-        &norito::to_bytes(&dsid).expect("encode dsid"),
-    );
+    let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
+    let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
         read: vec!["orders/inline".into()],
         write: vec!["ledger/inline".into()],
     };
-    let manifest_ptr = store_tlv(
-        &mut vm,
-        PointerType::NoritoBytes,
-        &norito::to_bytes(&manifest).expect("encode manifest"),
-    );
+    let manifest_bytes = norito::to_bytes(&manifest).expect("encode manifest");
+    let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
-        Ok(0)
+        Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
@@ -1234,10 +1213,10 @@ fn core_host_enforces_fixture_snapshot_fields() {
             .expect("state should accept fixture handle");
     }
 
-    assert_eq!(
+    assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &base_handle, &base_intent),
-        Ok(0)
-    );
+        Ok(gas) if gas > 0
+    ));
 
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(policy_entry.policy.target_lane.as_u32() + 1);
@@ -1283,7 +1262,7 @@ fn core_host_enforces_fixture_snapshot_fields() {
 }
 
 #[test]
-fn core_host_caches_valid_ds_proof_per_slot() {
+fn core_host_caches_fail_closed_ds_proof_per_slot() {
     let dsid = DataSpaceId::new(25);
     let descriptor = make_descriptor(dsid);
     let manifest_root = [0xAB; 32];
@@ -1328,25 +1307,26 @@ fn core_host_caches_valid_ds_proof_per_slot() {
 
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("first proof accepted");
-    // Second verification in the same slot should hit the cache.
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("cached proof accepted");
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
+    // Second verification in the same slot should hit the cached rejection.
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
 
     let cache_status = host
         .axt_cached_proof_status(dsid)
         .expect("cache entry present");
-    assert!(cache_status.0, "expected cached proof to be valid");
+    assert!(!cache_status.0, "expected cached proof to be invalid");
     assert_eq!(
         cache_status.1.expect("manifest cached"),
         manifest_root,
         "cached manifest root should match policy"
     );
-    let recorded = host
-        .axt_recorded_proof_payload(dsid)
-        .expect("proof recorded");
-    assert_eq!(recorded, proof.payload);
+    assert!(host.axt_recorded_proof_payload(dsid).is_none());
 }
 
 #[test]
@@ -1418,7 +1398,7 @@ fn core_host_caches_rejected_proof_per_slot() {
 }
 
 #[test]
-fn core_host_handles_multi_dataspace_axt_flow() {
+fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
     let dsid_a = DataSpaceId::new(31);
     let dsid_b = DataSpaceId::new(32);
     let descriptor = axt::AxtDescriptor {
@@ -1436,7 +1416,6 @@ fn core_host_handles_multi_dataspace_axt_flow() {
             },
         ],
     };
-    let binding = axt::compute_binding(&descriptor).expect("binding");
     let policy_a = AxtPolicyBinding {
         dsid: dsid_a,
         policy: AxtPolicyEntry {
@@ -1521,36 +1500,20 @@ fn core_host_handles_multi_dataspace_axt_flow() {
         );
         vm.set_register(10, ds_ptr);
         vm.set_register(11, proof_ptr);
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-            .expect("proof accepted");
-    }
-
-    for (idx, dsid, root, sub_nonce) in [
-        (0usize, dsid_a, [0xA1; 32], 2),
-        (1usize, dsid_b, [0xB2; 32], 3),
-    ] {
-        let handle = make_handle(binding, LaneId::new(3), root, 2, sub_nonce, 30 + idx as u64);
-        let intent = fixture_intent(dsid);
-        let handle_ptr = store_tlv(
-            &mut vm,
-            PointerType::AssetHandle,
-            &norito::to_bytes(&handle).expect("encode handle"),
-        );
-        let intent_ptr = store_tlv(
-            &mut vm,
-            PointerType::NoritoBytes,
-            &norito::to_bytes(&intent).expect("encode intent"),
-        );
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
-        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-            .expect("handle accepted");
+        assert!(matches!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            Err(VMError::PermissionDenied)
+        ));
+        let cache_status = host
+            .axt_cached_proof_status(dsid)
+            .expect("preflight rejection cached");
+        assert!(!cache_status.0);
+        assert_eq!(cache_status.1, Some(root));
     }
 
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Ok(0)
+        Ok(axt_commit_gas(2, 0, 0))
     );
 }
 

@@ -14,10 +14,11 @@ use once_cell::sync::OnceCell;
 use poseidon_primitives::poseidon::primitives::Spec;
 use std::io::{self, Write};
 
-type PoseidonConstants<const W: usize> = (Vec<[Fr; W]>, [[Fr; W]; W]);
 const FULL_ROUNDS: usize = 8;
 const FULL_ROUNDS_HALF: usize = FULL_ROUNDS / 2;
 const PARTIAL_ROUNDS: usize = 56;
+const ROUND_COUNT: usize = FULL_ROUNDS + PARTIAL_ROUNDS;
+type PoseidonConstants<const W: usize> = ([[Fr; W]; ROUND_COUNT], [[Fr; W]; W]);
 
 /// Poseidon2 parameters (round constants + MDS) encoded as byte arrays.
 #[derive(Debug, Clone)]
@@ -79,10 +80,13 @@ fn apply_mds3(state: &mut [Fr; 3], mds: &[[Fr; 3]; 3]) {
     let s0 = state[0];
     let s1 = state[1];
     let s2 = state[2];
+    let [m00, m01, m02] = mds[0];
+    let [m10, m11, m12] = mds[1];
+    let [m20, m21, m22] = mds[2];
     *state = [
-        mds[0][0] * s0 + mds[0][1] * s1 + mds[0][2] * s2,
-        mds[1][0] * s0 + mds[1][1] * s1 + mds[1][2] * s2,
-        mds[2][0] * s0 + mds[2][1] * s1 + mds[2][2] * s2,
+        m00 * s0 + m01 * s1 + m02 * s2,
+        m10 * s0 + m11 * s1 + m12 * s2,
+        m20 * s0 + m21 * s1 + m22 * s2,
     ];
 }
 
@@ -163,7 +167,7 @@ fn poseidon3_params() -> &'static PoseidonConstants<3> {
     static CONSTS: OnceCell<PoseidonConstants<3>> = OnceCell::new();
     CONSTS.get_or_init(|| {
         let (rc, m, _) = <FrSpec as Spec<Fr, 3, 2>>::constants();
-        (rc, m)
+        (round_constants_array(rc), m)
     })
 }
 
@@ -171,8 +175,13 @@ fn poseidon6_params() -> &'static PoseidonConstants<6> {
     static CONSTS: OnceCell<PoseidonConstants<6>> = OnceCell::new();
     CONSTS.get_or_init(|| {
         let (rc, m, _) = <FrSpec as Spec<Fr, 6, 5>>::constants();
-        (rc, m)
+        (round_constants_array(rc), m)
     })
+}
+
+fn round_constants_array<const W: usize>(rc: Vec<[Fr; W]>) -> [[Fr; W]; ROUND_COUNT] {
+    rc.try_into()
+        .unwrap_or_else(|rc: Vec<[Fr; W]>| panic!("unexpected Poseidon round count: {}", rc.len()))
 }
 
 #[inline(always)]
@@ -284,21 +293,18 @@ fn pack_bytes_to_fr(bytes: &[u8]) -> Vec<Fr> {
 
 fn hash_words_internal(words: &[Fr]) -> Fr {
     let mut state = [Fr::ZERO; 3];
-    let mut chunks = words.chunks_exact(2);
-    for chunk in &mut chunks {
-        state[0] += chunk[0];
-        state[1] += chunk[1];
+    let mut index = 0;
+    while index + 1 < words.len() {
+        state[0] += words[index];
+        state[1] += words[index + 1];
         poseidon3_permute(&mut state);
+        index += 2;
     }
-    match chunks.remainder() {
-        [] => {
-            state[0] += Fr::ONE;
-        }
-        [word] => {
-            state[0] += *word;
-            state[1] += Fr::ONE;
-        }
-        _ => unreachable!("chunks_exact(2) remainder cannot contain more than one word"),
+    if index == words.len() {
+        state[0] += Fr::ONE;
+    } else {
+        state[0] += words[index];
+        state[1] += Fr::ONE;
     }
     poseidon3_permute(&mut state);
     state[0]
@@ -306,21 +312,18 @@ fn hash_words_internal(words: &[Fr]) -> Fr {
 
 fn hash_u64_words_internal(words: &[u64]) -> Fr {
     let mut state = [Fr::ZERO; 3];
-    let mut chunks = words.chunks_exact(2);
-    for chunk in &mut chunks {
-        state[0] += Fr::from(chunk[0]);
-        state[1] += Fr::from(chunk[1]);
+    let mut index = 0;
+    while index + 1 < words.len() {
+        state[0] += Fr::from(words[index]);
+        state[1] += Fr::from(words[index + 1]);
         poseidon3_permute(&mut state);
+        index += 2;
     }
-    match chunks.remainder() {
-        [] => {
-            state[0] += Fr::ONE;
-        }
-        [word] => {
-            state[0] += Fr::from(*word);
-            state[1] += Fr::ONE;
-        }
-        _ => unreachable!("chunks_exact(2) remainder cannot contain more than one word"),
+    if index == words.len() {
+        state[0] += Fr::ONE;
+    } else {
+        state[0] += Fr::from(words[index]);
+        state[1] += Fr::ONE;
     }
     poseidon3_permute(&mut state);
     state[0]

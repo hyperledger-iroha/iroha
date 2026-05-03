@@ -25,7 +25,7 @@ use iroha_test_samples::{
 };
 
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
-const CONTRACT_GAS_LIMIT: u64 = 10_000;
+const CONTRACT_GAS_LIMIT: u64 = 100_000;
 
 fn unique_asset_definition_id(test_name: &str) -> AssetDefinitionId {
     let name: Name = format!("escrow_{}", test_name.replace('-', "_"))
@@ -106,7 +106,7 @@ async fn wait_for_tx_terminal_status(
     tx_hash_hex: &str,
     timeout: Duration,
     stage: &str,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
@@ -125,7 +125,7 @@ async fn wait_for_tx_terminal_status(
             if let Some(kind) = pipeline_status_kind(&payload) {
                 last_kind = kind.to_owned();
                 if matches!(kind, "Applied" | "Rejected" | "Expired") {
-                    return Ok(last_kind);
+                    return Ok((last_kind, last_payload));
                 }
             }
         }
@@ -180,9 +180,11 @@ async fn deploy_threshold_escrow(
             "deploy threshold escrow",
         )
         .await?;
-        if observed != "Applied" {
+        if observed.0 != "Applied" {
             return Err(eyre!(
-                "deploy threshold escrow: expected `Applied`, observed `{observed}` for tx `{tx_hash_hex}`"
+                "deploy threshold escrow: expected `Applied`, observed `{}` for tx `{tx_hash_hex}`; payload={}",
+                observed.0,
+                observed.1,
             ));
         }
     } else {
@@ -239,9 +241,11 @@ async fn call_contract_expect_status(
     let observed =
         wait_for_tx_terminal_status(http, &client.torii_url, tx_hash_hex, TX_TIMEOUT, stage)
             .await?;
-    if observed != expected_status {
+    if observed.0 != expected_status {
         return Err(eyre!(
-            "{stage}: expected `{expected_status}`, observed `{observed}` for tx `{tx_hash_hex}`"
+            "{stage}: expected `{expected_status}`, observed `{}` for tx `{tx_hash_hex}`; payload={}",
+            observed.0,
+            observed.1,
         ));
     }
     Ok(())

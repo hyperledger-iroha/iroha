@@ -6,6 +6,10 @@ use iroha_zkp_halo2::{
 };
 use ivm::{IVMHost, syscalls};
 
+fn verify_gas(payload_len: usize) -> u64 {
+    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
 fn tlv_from_env(env: &OpenVerifyEnvelope) -> Vec<u8> {
     let payload = norito::to_bytes(env).expect("encode envelope");
     let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -41,6 +45,7 @@ fn make_goldilocks_envelope() -> OpenVerifyEnvelope {
 #[test]
 fn zk_verify_transfer_goldilocks_opening_succeeds() {
     let env = make_goldilocks_envelope();
+    let env_payload = norito::to_bytes(&env).expect("encode env");
     let tlv = tlv_from_env(&env);
 
     let mut vm = ivm::IVM::new(1_000_000);
@@ -50,7 +55,7 @@ fn zk_verify_transfer_goldilocks_opening_succeeds() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_payload.len()));
     assert_eq!(vm.register(10), 1);
     assert_eq!(vm.register(11), 0);
 }

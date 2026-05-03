@@ -36,6 +36,19 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn verify_gas(payload_len: usize) -> u64 {
+    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn mutation_gas(payload_len: usize) -> u64 {
+    16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
+fn json_payload_len(value: &norito::json::Value) -> usize {
+    let bytes = norito::json::to_vec(value).expect("serialize json envelope");
+    common::payload_for_type(PointerType::Json, &bytes).len()
+}
+
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
@@ -380,7 +393,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!((vm.register(10), vm.register(11)), (1, 0));
 
     // With matching vk_ref transfer succeeds
@@ -393,7 +406,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
         .expect("transfer with matching vk");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, mutation_gas(json_payload_len(&transfer_env_ref)));
 
     // Re-arm latch
     let env_bytes = build_open_verify_envelope_bytes();
@@ -405,7 +418,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!((vm.register(10), vm.register(11)), (1, 0));
 
     // Mismatched vk_ref is rejected
@@ -430,7 +443,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!(vm.register(10), 1);
 
     let tlv = make_tlv(
@@ -454,7 +467,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!(vm.register(10), 1);
 
     let tlv = make_tlv(
@@ -466,7 +479,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
         .expect("inline vk ok");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, mutation_gas(json_payload_len(&transfer_env_inline)));
 
     // Inline with mismatched backend must be rejected
     let env_bytes = build_open_verify_envelope_bytes();
@@ -478,7 +491,7 @@ fn zk_transfer_requires_matching_vk_reference() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("verify");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(env_bytes.len()));
     assert_eq!(vm.register(10), 1);
 
     let tlv = make_tlv(

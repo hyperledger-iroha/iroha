@@ -280,23 +280,6 @@ fn manifest_access_set(
     requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
     let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
-    if let Some(hints) = manifest.access_set_hints.as_ref() {
-        let key = AccessSetCacheKey {
-            code_hash,
-            entrypoint: None,
-        };
-        if let Some(hash) = manifest_hash.as_ref() {
-            if let Some(set) = access_set_cache_get(&key, hash) {
-                return Some((set, AccessSetSource::ManifestHints));
-            }
-        }
-        if let Some(set) = access_set_from_hint_keys(&hints.read_keys, &hints.write_keys) {
-            if let Some(hash) = manifest_hash {
-                access_set_cache_put(key, hash, set.clone());
-            }
-            return Some((set, AccessSetSource::ManifestHints));
-        }
-    }
     if let Some(entrypoints) = manifest.entrypoints.as_deref()
         && let Some(entrypoint) = select_entrypoint(entrypoints, requested_entrypoint)
     {
@@ -310,10 +293,27 @@ fn manifest_access_set(
             }
         }
         if let Some(set) = entrypoint_access_set_if_safe(bytecode, entrypoint) {
-            if let Some(hash) = manifest_hash {
-                access_set_cache_put(key, hash, set.clone());
+            if let Some(hash) = manifest_hash.as_ref() {
+                access_set_cache_put(key, hash.clone(), set.clone());
             }
             return Some((set, AccessSetSource::EntrypointHints));
+        }
+    }
+    if let Some(hints) = manifest.access_set_hints.as_ref() {
+        let key = AccessSetCacheKey {
+            code_hash,
+            entrypoint: None,
+        };
+        if let Some(hash) = manifest_hash.as_ref() {
+            if let Some(set) = access_set_cache_get(&key, hash) {
+                return Some((set, AccessSetSource::ManifestHints));
+            }
+        }
+        if let Some(set) = hint_access_set_if_safe(bytecode, &hints.read_keys, &hints.write_keys) {
+            if let Some(hash) = manifest_hash.as_ref() {
+                access_set_cache_put(key, hash.clone(), set.clone());
+            }
+            return Some((set, AccessSetSource::ManifestHints));
         }
     }
     None
@@ -435,7 +435,9 @@ where
                 }
                 // 1b) Fallback to manifest provided in transaction metadata.
                 if let Some(manifest) = manifest_from_metadata(tx) {
-                    if manifest.code_hash == Some(code_hash) {
+                    if manifest.code_hash == Some(code_hash)
+                        && manifest_matches_embedded_contract(bytecode_ref, &manifest)
+                    {
                         if let Some((set, source)) = manifest_access_set(
                             &manifest,
                             code_hash,
@@ -482,6 +484,12 @@ where
     }
 }
 
+fn manifest_matches_embedded_contract(bytecode: &[u8], manifest: &ContractManifest) -> bool {
+    ivm::verify_contract_artifact(bytecode)
+        .map(|verified| manifest.signature_payload() == verified.manifest.signature_payload())
+        .unwrap_or(false)
+}
+
 fn key_tx_sequence(account: &AccountId) -> AccessKey {
     format!("tx.sequence:{account}")
 }
@@ -500,8 +508,20 @@ fn entrypoint_access_set_if_safe(
     bytecode: &[u8],
     entrypoint: &EntrypointDescriptor,
 ) -> Option<AccessSet> {
-    if entrypoint.read_keys.is_empty() && entrypoint.write_keys.is_empty() {
+    hint_access_set_if_safe(bytecode, &entrypoint.read_keys, &entrypoint.write_keys)
+}
+
+fn hint_access_set_if_safe(
+    bytecode: &[u8],
+    read_keys: &[String],
+    write_keys: &[String],
+) -> Option<AccessSet> {
+    if read_keys.is_empty() && write_keys.is_empty() {
         return None;
+    }
+    let set = access_set_from_hint_keys(read_keys, write_keys)?;
+    if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
+        return Some(set);
     }
     let report = match ivm::analysis::analyze_program(bytecode) {
         Ok(report) => report,
@@ -518,10 +538,10 @@ fn entrypoint_access_set_if_safe(
         .syscalls
         .iter()
         .any(|entry| !is_state_only_syscall(entry.number));
-    if has_non_state_syscall && entrypoint_keys_state_only(entrypoint) {
+    if has_non_state_syscall && hint_keys_state_only(read_keys, write_keys) {
         return None;
     }
-    access_set_from_hint_keys(&entrypoint.read_keys, &entrypoint.write_keys)
+    Some(set)
 }
 
 fn select_entrypoint<'a>(
@@ -803,10 +823,9 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
     Some(set)
 }
 
-fn entrypoint_keys_state_only(entrypoint: &EntrypointDescriptor) -> bool {
+fn hint_keys_state_only(read_keys: &[String], write_keys: &[String]) -> bool {
     let is_state_key = |key: &str| key.starts_with("state:");
-    entrypoint.read_keys.iter().all(|key| is_state_key(key))
-        && entrypoint.write_keys.iter().all(|key| is_state_key(key))
+    read_keys.iter().all(|key| is_state_key(key)) && write_keys.iter().all(|key| is_state_key(key))
 }
 
 fn is_entrypoint_hint_safe_syscall(number: u32) -> bool {
@@ -1665,6 +1684,65 @@ mod tests {
         );
     }
 
+    fn test_contract_artifact(
+        code: Vec<u8>,
+        access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
+        entrypoints: Vec<EntrypointDescriptor>,
+    ) -> (Vec<u8>, IrohaHash, ContractManifest) {
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 10_000,
+            abi_version: 1,
+        };
+        let embedded_entrypoints = entrypoints
+            .iter()
+            .map(|entrypoint| ivm::EmbeddedEntrypointDescriptor {
+                name: entrypoint.name.clone(),
+                kind: entrypoint.kind,
+                params: entrypoint.params.clone(),
+                return_type: entrypoint.return_type.clone(),
+                permission: entrypoint.permission.clone(),
+                read_keys: entrypoint.read_keys.clone(),
+                write_keys: entrypoint.write_keys.clone(),
+                access_hints_complete: entrypoint.access_hints_complete,
+                access_hints_skipped: entrypoint.access_hints_skipped.clone(),
+                triggers: entrypoint.triggers.clone(),
+                entry_pc: 0,
+            })
+            .collect();
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "access-test".to_owned(),
+            features_bitmap: 0,
+            access_set_hints,
+            kotoba: Vec::new(),
+            entrypoints: embedded_entrypoints,
+            states: Vec::new(),
+        };
+        let mut artifact = meta.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&code);
+        let verified = ivm::verify_contract_artifact(&artifact).expect("valid test artifact");
+        (artifact, verified.code_hash, verified.manifest)
+    }
+
+    fn default_test_entrypoint() -> EntrypointDescriptor {
+        EntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
     fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
         let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         v.extend_from_slice(&type_id.to_be_bytes());
@@ -2028,7 +2106,7 @@ mod tests {
     fn ivm_access_uses_manifest_hints_when_present() {
         use iroha_data_model::{
             asset::{AssetDefinitionId, AssetId},
-            smart_contract::manifest::{AccessSetHints, ContractManifest, MANIFEST_METADATA_KEY},
+            smart_contract::manifest::{AccessSetHints, MANIFEST_METADATA_KEY},
         };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
@@ -2043,12 +2121,6 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        // Minimal program body to compute a code hash
-        let mut prog = ivm::ProgramMetadata::default().encode();
-        prog.extend_from_slice(&[0x01, 0x00]); // dummy body
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
-
         // Insert manifest with access-set hints into WSV
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -2059,17 +2131,13 @@ mod tests {
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
         };
-        let manifest = ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: Some(hints.clone()),
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&kp);
+        let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let (prog, code_hash, manifest) =
+            test_contract_artifact(code, Some(hints.clone()), vec![default_test_entrypoint()]);
+        let manifest = manifest.signed(&kp);
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut st_block = state.block(header);
@@ -2103,7 +2171,7 @@ mod tests {
     fn ivm_access_uses_manifest_hints_from_metadata_when_missing_in_wsv() {
         use iroha_data_model::{
             asset::{AssetDefinitionId, AssetId},
-            smart_contract::manifest::{AccessSetHints, ContractManifest, MANIFEST_METADATA_KEY},
+            smart_contract::manifest::{AccessSetHints, MANIFEST_METADATA_KEY},
         };
         use iroha_primitives::json::Json;
 
@@ -2118,11 +2186,6 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        let mut prog = ivm::ProgramMetadata::default().encode();
-        prog.extend_from_slice(b"metadata-hints");
-        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
-
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -2132,17 +2195,13 @@ mod tests {
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
         };
-        let manifest = ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: Some(hints.clone()),
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&kp);
+        let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let (prog, _code_hash, manifest) =
+            test_contract_artifact(code, Some(hints.clone()), vec![default_test_entrypoint()]);
+        let manifest = manifest.signed(&kp);
 
         let mut md = iroha_data_model::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
@@ -2163,7 +2222,7 @@ mod tests {
 
     #[test]
     fn access_set_cache_invalidates_on_manifest_update() {
-        use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
+        use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
 
         access_set_cache_clear();
@@ -2178,7 +2237,7 @@ mod tests {
         let state = State::new(world, kura, query);
 
         let mut prog = ivm::ProgramMetadata::default().encode();
-        prog.extend_from_slice(b"cache-hints");
+        prog.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
@@ -2243,7 +2302,7 @@ mod tests {
 
     #[test]
     fn ivm_access_falls_back_when_manifest_hints_invalid() {
-        use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
+        use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -2296,7 +2355,7 @@ mod tests {
     #[test]
     fn ivm_access_uses_manifest_entrypoint_hints_when_present() {
         use iroha_data_model::smart_contract::manifest::{
-            ContractManifest, EntryPointKind, EntrypointDescriptor,
+            AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
         use nonzero_ext::nonzero;
 
@@ -2355,7 +2414,10 @@ mod tests {
             abi_hash: None,
             compiler_fingerprint: None,
             features_bitmap: None,
-            access_set_hints: None,
+            access_set_hints: Some(AccessSetHints {
+                read_keys: vec!["state:manifest-read".to_owned()],
+                write_keys: vec!["state:manifest-write".to_owned()],
+            }),
             entrypoints: Some(entrypoints),
             kotoba: None,
             provenance: None,
@@ -2380,6 +2442,8 @@ mod tests {
             derive_for_transaction_with_source(&tx, Some(&state.view()), IvmStrategy::Conservative);
         assert!(set.read_keys.contains("state:alpha"));
         assert!(set.write_keys.contains("state:beta"));
+        assert!(!set.read_keys.contains("state:manifest-read"));
+        assert!(!set.write_keys.contains("state:manifest-write"));
         assert!(!set.read_keys.contains("state:run-read"));
         assert!(!set.write_keys.contains("state:run-write"));
         assert_eq!(source, Some(AccessSetSource::EntrypointHints));
@@ -2748,7 +2812,7 @@ mod tests {
 
     #[test]
     fn execute_trigger_uses_manifest_hints_for_ivm_triggers() {
-        use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
+        use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
 
         access_set_cache_clear();
@@ -2772,25 +2836,17 @@ mod tests {
                 .execute(&alice, &mut stx)
                 .unwrap();
 
-            let mut prog = ivm::ProgramMetadata::default().encode();
-            prog.extend_from_slice(b"trigger-manifest-hints");
-            let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
-            let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
             let hints = AccessSetHints {
                 read_keys: vec![format!("account:{alice}")],
                 write_keys: vec![format!("state:trigger_hint")],
             };
-            let manifest = ContractManifest {
-                code_hash: Some(code_hash),
-                abi_hash: None,
-                compiler_fingerprint: None,
-                features_bitmap: None,
-                access_set_hints: Some(hints.clone()),
-                entrypoints: None,
-                kotoba: None,
-                provenance: None,
-            }
-            .signed(&iroha_test_samples::ALICE_KEYPAIR);
+            let code = vec![ivm::encoding::wide::encode_halt().to_le_bytes()]
+                .into_iter()
+                .flatten()
+                .collect();
+            let (prog, code_hash, manifest) =
+                test_contract_artifact(code, Some(hints.clone()), vec![default_test_entrypoint()]);
+            let manifest = manifest.signed(&iroha_test_samples::ALICE_KEYPAIR);
             stx.world.contract_manifests.insert(code_hash, manifest);
 
             let trigger_id: TriggerId = "ivm_trigger".parse().unwrap();

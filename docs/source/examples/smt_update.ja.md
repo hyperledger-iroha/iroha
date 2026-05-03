@@ -10,7 +10,7 @@ translator: manual
 
 # 疎メルクル更新の例
 
-本例は Stage 2 パイプラインにおいて FASTPQ トレースが `neighbour_leaf` 列を使って非会員証明をエンコードする方法を示します。木構造は Poseidon2 フィールド要素上のバイナリ疎メルクルツリーで、キーは正規化された 32 バイト LE 文字列からフィールド要素にハッシュされ、最上位ビットが各レベルの枝選択を決めます。
+本例は V1 パイプラインにおいて FASTPQ トレースが `neighbour_leaf` 列を使って非会員証明をエンコードする方法を示します。木構造は Poseidon2 フィールド要素上のバイナリ疎メルクルツリーで、キーは正規化された 32 バイト LE 文字列からフィールド要素にハッシュされ、最上位ビットが各レベルの枝選択を決めます。
 
 ## シナリオ
 
@@ -20,7 +20,7 @@ translator: manual
 - 更新要求: `asset::carol::rose` に値 2 を挿入。
 - Carol の正規キーは 5 ビット接頭辞 `0b01011`。近傍は `0b01010`（Alice）と `0b01101`（Bob）。
 
-`0b01011` で始まる葉が存在しないため、証明は区間 `(alice, bob)` が空であることを示す追加情報が必要です。Stage 2 では `path_bit_{level}`、`sibling_{level}`、`node_in_{level}`、`node_out_{level}`（`level = 0..31`）の各列に値を配置します。値はすべて Poseidon2 フィールド要素のリトルエンディアン表現です。
+`0b01011` で始まる葉が存在しないため、証明は区間 `(alice, bob)` が空であることを示す追加情報が必要です。V1 では `path_bit_{level}`、`sibling_{level}`、`node_in_{level}`、`node_out_{level}`（`level = 0..31`）の各列に値を配置します。値はすべて Poseidon2 フィールド要素のリトルエンディアン表現です。
 
 | level | `path_bit_level` | `sibling_level` | `node_in_level` | `node_out_level` | 備考 |
 | --- | --- | --- | --- | --- | --- |

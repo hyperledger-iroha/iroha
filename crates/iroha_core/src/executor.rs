@@ -70,7 +70,6 @@ use crate::{
 
 #[cfg(test)]
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-const FIXTURE_LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
@@ -3429,29 +3428,24 @@ fn detect_fixture_executor_kind(executor: &LoadedExecutor) -> Option<FixtureExec
 
 fn detect_fixture_executor_kind_from_bytecode(bytecode: &[u8]) -> Option<FixtureExecutorKind> {
     // Placeholder samples are tiny deterministic programs with this exact layout:
-    // header(17) + LTLB(16) + pad(64) + HALT(4) = 101 bytes.
-    if bytecode.len() != 101 {
+    // header(17) + HALT(4) = 21 bytes.
+    if bytecode.len() != 21 {
         return None;
     }
     if bytecode.get(0..4) != Some(b"IVM\0") {
         return None;
     }
-    let vector_length = *bytecode.get(7)?;
-    let kind = FixtureExecutorKind::from_vector_length(vector_length)?;
-
-    let section = bytecode.get(17..33)?;
-    if section.get(0..4) != Some(&FIXTURE_LITERAL_SECTION_MAGIC) {
+    if bytecode.get(4..7) != Some(&[1, 1, 0]) {
         return None;
     }
-    let entries = u32::from_le_bytes(section.get(4..8)?.try_into().ok()?);
-    let pad_len = u32::from_le_bytes(section.get(8..12)?.try_into().ok()?);
-    let literal_len = u32::from_le_bytes(section.get(12..16)?.try_into().ok()?);
-    if entries != 0 || pad_len != 64 || literal_len != 0 {
+    let vector_length = *bytecode.get(7)?;
+    let kind = FixtureExecutorKind::from_vector_length(vector_length)?;
+    if bytecode.get(16) != Some(&1) {
         return None;
     }
 
     let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
-    if bytecode.get(97..101) != Some(&halt) {
+    if bytecode.get(17..21) != Some(&halt) {
         return None;
     }
 
@@ -5153,14 +5147,9 @@ mod tests {
     fn generate_fixture_placeholder_program(vector_length: u8) -> Vec<u8> {
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, vector_length]);
+        program.extend_from_slice(&[1, 1, 0, vector_length]);
         program.extend_from_slice(&1_000_000_u64.to_le_bytes());
         program.push(1);
-        program.extend_from_slice(&FIXTURE_LITERAL_SECTION_MAGIC);
-        program.extend_from_slice(&0_u32.to_le_bytes());
-        program.extend_from_slice(&64_u32.to_le_bytes());
-        program.extend_from_slice(&0_u32.to_le_bytes());
-        program.extend(std::iter::repeat_n(0_u8, 64));
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }

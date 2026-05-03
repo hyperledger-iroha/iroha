@@ -199,6 +199,12 @@ original payload; failures disable the backend and fall back cleanly to CPU enco
 Decode still uses the deterministic shared frame-decoder path with a CPU zstd
 fallback for unsupported frames.
 
+Daemon startup does not probe GPU zstd availability. CPU/SIMD capability detection stays
+cheap, and GPU helper loading is deferred until the compression path actually considers
+GPU offload. The startup banner therefore reports `gpu_backend_probe: deferred` when
+`allow_gpu_compression` is enabled; it is a policy/status hint, not proof that a helper
+has been loaded.
+
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `allow_gpu_compression` | `true` | Allows GPU compression offload when the backend is compiled and available. Disabling it keeps compression on the canonical CPU path. |

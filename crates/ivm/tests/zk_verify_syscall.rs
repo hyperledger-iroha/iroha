@@ -1,5 +1,9 @@
 use ivm::{IVMHost, syscalls};
 
+fn verify_gas(payload_len: usize) -> u64 {
+    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+}
+
 #[test]
 fn zk_verify_transfer_default_host_rejects_invalid_envelope() {
     let payload = vec![0xAA, 0xBB];
@@ -22,7 +26,7 @@ fn zk_verify_transfer_default_host_rejects_invalid_envelope() {
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
-    assert_eq!(gas, 0);
+    assert_eq!(gas, verify_gas(payload.len()));
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), ivm::host::ERR_DECODE);
 }

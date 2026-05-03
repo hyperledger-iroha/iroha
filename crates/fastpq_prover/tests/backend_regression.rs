@@ -146,7 +146,7 @@ fn v1_artifact_balanced_1k_matches_fixture() {
         fs::write("tests/fixtures/v1_balanced_1k.bin", &encoded).expect("write fixture");
         return;
     }
-    assert_eq!(encoded.as_slice(), expected);
+    assert_fixture_bytes("v1_balanced_1k.bin", &encoded, expected);
 }
 
 #[cfg(feature = "fastpq-gpu")]
@@ -196,5 +196,16 @@ fn v1_artifact_balanced_5k_matches_fixture() {
         fs::write("tests/fixtures/v1_balanced_5k.bin", &encoded).expect("write fixture");
         return;
     }
-    assert_eq!(encoded.as_slice(), expected);
+    assert_fixture_bytes("v1_balanced_5k.bin", &encoded, expected);
+}
+
+fn assert_fixture_bytes(name: &str, actual: &[u8], expected: &[u8]) {
+    assert!(
+        actual == expected,
+        "{name} fixture mismatch: actual_len={} expected_len={} actual_hash={} expected_hash={}",
+        actual.len(),
+        expected.len(),
+        Hash::new(actual),
+        Hash::new(expected)
+    );
 }

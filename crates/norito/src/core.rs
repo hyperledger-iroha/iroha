@@ -2189,6 +2189,56 @@ pub fn write_len_prefixed<W: Write, T: NoritoSerialize, const N: usize>(
     Ok(())
 }
 
+/// Write a trusted exact length prefix, then serialize the value directly.
+///
+/// This avoids materializing a temporary field buffer for hot paths whose
+/// `encoded_len_exact` implementations are covered by byte-equivalence tests.
+/// If an exact length is not available, it falls back to [`write_len_prefixed`].
+pub fn write_len_prefixed_exact<W: Write, T: NoritoSerialize, const N: usize>(
+    writer: &mut W,
+    value: &T,
+    buf: &mut SmallBuf<N>,
+) -> Result<(), Error> {
+    let Some(exact_len) = value.encoded_len_exact() else {
+        return write_len_prefixed(writer, value, buf);
+    };
+    let flags = effective_layout_flags();
+    let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
+    write_len_with_flags(writer, len, flags)?;
+    let mut counted = CountingWriter {
+        inner: writer,
+        len: 0,
+    };
+    value.serialize(&mut counted)?;
+    if counted.len != exact_len {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(())
+}
+
+struct CountingWriter<'a, W> {
+    inner: &'a mut W,
+    len: usize,
+}
+
+impl<W: Write> Write for CountingWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.len = self.len.saturating_add(written);
+        Ok(written)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.inner.write_all(buf)?;
+        self.len = self.len.saturating_add(buf.len());
+        Ok(())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Write a compact varint length prefix regardless of layout flags.
 pub fn write_varint_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     let mut buf = [0u8; MAX_VARINT_BYTES];
@@ -8411,6 +8461,17 @@ mod tests {
         write_len_prefixed(&mut out, &value, &mut tmp).expect("write len prefixed");
         let (len, hdr) = read_len_from_slice(&out).expect("read len");
         assert_eq!(len, out.len() - hdr);
+    }
+
+    #[test]
+    fn write_len_prefixed_exact_matches_buffered_output() {
+        let value = vec![1u64, 2, 3, 5, 8, 13];
+        let mut buffered = Vec::new();
+        let mut exact = Vec::new();
+        let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
+        write_len_prefixed(&mut buffered, &value, &mut tmp).expect("write buffered");
+        write_len_prefixed_exact(&mut exact, &value, &mut tmp).expect("write exact");
+        assert_eq!(exact, buffered);
     }
 
     #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]

@@ -248,6 +248,9 @@ impl Actor {
         {
             return None;
         }
+        if qc.phase != crate::sumeragi::consensus::Phase::NewView && qc.highest_qc.is_some() {
+            return None;
+        }
 
         let topology = super::network_topology::Topology::new(qc.validator_set.clone());
         let roster_len = topology.as_ref().len();
@@ -3593,6 +3596,7 @@ impl Actor {
         } else {
             None
         };
+        let mut selected_new_view_highest_qc = None;
         if phase == crate::sumeragi::consensus::Phase::Commit && !snapshot.signers.is_empty() {
             let valid_signers = snapshot.signers.len();
             let root_selection = match consensus_mode {
@@ -3649,6 +3653,74 @@ impl Actor {
                     "commit votes split across execution roots; selected root signer set for QC"
                 );
             }
+        }
+        if phase == crate::sumeragi::consensus::Phase::NewView && !snapshot.signers.is_empty() {
+            let groups = super::new_view_highest_qc_signer_groups(
+                &snapshot.accepted_votes,
+                &snapshot.signers,
+                height,
+                view,
+                epoch,
+            );
+            let group_count = groups.len();
+            let selected = match consensus_mode {
+                ConsensusMode::Permissioned => groups
+                    .into_iter()
+                    .filter(|(_, group)| voting_signer_count(group, voting_len) >= required)
+                    .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc)),
+                ConsensusMode::Npos => {
+                    let Some(stake_roster) = npos_stake_roster.as_deref() else {
+                        warn!(
+                            height,
+                            view,
+                            block = ?block_hash,
+                            "skipping NEW_VIEW certificate: stake roster unavailable"
+                        );
+                        return;
+                    };
+                    let world = self.state.world_view();
+                    groups
+                        .into_iter()
+                        .filter_map(|(highest_qc, group)| {
+                            let signer_peers =
+                                signer_peers_for_topology(&group, &signature_topology).ok()?;
+                            let quorum = super::stake_snapshot::stake_quorum_reached_for_world(
+                                &world,
+                                stake_roster,
+                                &signer_peers,
+                            )
+                            .ok()?;
+                            quorum.then_some((highest_qc, group))
+                        })
+                        .max_by_key(|(highest_qc, _)| super::new_view_highest_qc_rank(*highest_qc))
+                }
+            };
+            let Some((highest_qc, filtered_signers)) = selected else {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    groups = group_count,
+                    voting_signers = snapshot.voting_signers,
+                    total_signers = snapshot.total_signers,
+                    required,
+                    "skipping NEW_VIEW certificate: no single highest-QC vote group reached quorum"
+                );
+                return;
+            };
+            if filtered_signers.len() < snapshot.signers.len() {
+                info!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    selected_signers = filtered_signers.len(),
+                    valid_signers = snapshot.signers.len(),
+                    groups = group_count,
+                    "NEW_VIEW votes split across highest-QC references; selected same-highest signer set for QC"
+                );
+            }
+            snapshot.retain_signers(filtered_signers, voting_len);
+            selected_new_view_highest_qc = Some(highest_qc);
         }
         if let Some((signer_peer, conflicting_vote)) = self.qc_conflicts_with_vote_history(
             phase,
@@ -3820,13 +3892,7 @@ impl Actor {
             }
         };
         let highest_qc = if phase == crate::sumeragi::consensus::Phase::NewView {
-            super::select_new_view_highest_qc_from_votes(
-                &snapshot.accepted_votes,
-                &snapshot.signers,
-                height,
-                view,
-                epoch,
-            )
+            selected_new_view_highest_qc
         } else {
             None
         };

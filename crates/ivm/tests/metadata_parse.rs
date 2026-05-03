@@ -73,12 +73,11 @@ fn parse_skips_literal_section_when_present() {
     // Literal table header: magic + count (2 entries)
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(2u32).to_le_bytes());
-    bytes.extend_from_slice(&(1u32).to_le_bytes());
+    bytes.extend_from_slice(&(0u32).to_le_bytes());
     bytes.extend_from_slice(&0u32.to_le_bytes());
     // Two dummy literal entries (16 bytes)
     bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
     bytes.extend_from_slice(&0x99AA_BBCC_DDEE_F010u64.to_le_bytes());
-    bytes.push(0); // post-pad to keep code offset aligned
     // Append a couple of code bytes so the parser sees a non-empty code region
     bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
     let parsed = ProgramMetadata::parse(&bytes).expect("parse ok with literals");
@@ -87,7 +86,7 @@ fn parse_skips_literal_section_when_present() {
 
     let off = parsed.code_offset;
     assert_eq!(meta.version_major, 1);
-    assert_eq!(off, 17 + 16 + 16 + 1);
+    assert_eq!(off, 17 + 16 + 16);
     assert!(off < bytes.len());
 }
 
@@ -101,5 +100,49 @@ fn parse_rejects_literal_padding() {
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
     bytes.extend_from_slice(&[0xAA, 0xBB]);
+    assert!(ProgramMetadata::parse(&bytes).is_err());
+}
+
+#[test]
+fn parse_rejects_noncanonical_literal_post_padding() {
+    let mut bytes = build_header(1, 0, 0, 0, 1);
+    bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+    bytes.extend_from_slice(&(1u32).to_le_bytes());
+    bytes.extend_from_slice(&(2u32).to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+    bytes.push(0x55);
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+
+    assert!(ProgramMetadata::parse(&bytes).is_err());
+}
+
+#[test]
+fn parse_rejects_nonzero_literal_post_padding() {
+    let mut bytes = build_header(1, 0, 0, 0, 1);
+    bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+    bytes.extend_from_slice(&(1u32).to_le_bytes());
+    bytes.extend_from_slice(&(3u32).to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+    bytes.push(0x55);
+    bytes.extend_from_slice(&[0, 1, 0]);
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+
+    assert!(ProgramMetadata::parse(&bytes).is_err());
+}
+
+#[test]
+fn parse_rejects_oversized_literal_post_padding() {
+    let mut bytes = build_header(1, 0, 0, 0, 1);
+    bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+    bytes.extend_from_slice(&(1u32).to_le_bytes());
+    bytes.extend_from_slice(&(4u32).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+
     assert!(ProgramMetadata::parse(&bytes).is_err());
 }
