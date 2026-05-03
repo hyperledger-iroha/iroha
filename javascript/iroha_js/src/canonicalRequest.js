@@ -177,16 +177,41 @@ function normalizeSignatureBase64(signature, context = "signature") {
 
 function splitPathAndQuery(path, query) {
   const pathText = String(path);
-  if (query !== undefined && query !== null) {
-    return { path: pathText, query };
-  }
   const queryIndex = pathText.indexOf("?");
+  if (query !== undefined && query !== null) {
+    return {
+      path: queryIndex < 0 ? pathText : pathText.slice(0, queryIndex),
+      query,
+    };
+  }
   if (queryIndex < 0) {
     return { path: pathText, query: undefined };
   }
   return {
     path: pathText.slice(0, queryIndex),
     query: pathText.slice(queryIndex + 1),
+  };
+}
+
+function canonicalTargetFromPath({ path, query, baseUrl }) {
+  const absoluteUrlPattern = /^[a-z][a-z0-9+.-]*:\/\//i;
+  if (absoluteUrlPattern.test(String(path))) {
+    const url = new URL(String(path));
+    return splitPathAndQuery(url.pathname + url.search, query);
+  }
+
+  const target = splitPathAndQuery(path, query);
+  if (!baseUrl) {
+    return target;
+  }
+
+  const base = new URL(String(baseUrl));
+  const basePath = base.pathname.replace(/\/+$/, "");
+  const requestPath = String(target.path || "").replace(/^\/+/, "");
+  const joinedPath = [basePath, requestPath].filter(Boolean).join("/");
+  return {
+    path: joinedPath ? `/${joinedPath}`.replace(/\/{2,}/g, "/") : "/",
+    query: target.query,
   };
 }
 
@@ -197,13 +222,14 @@ function splitPathAndQuery(path, query) {
  * Callers with private key bytes can pass `privateKey`; browser keystores can
  * pass an async `sign` callback and keep private keys out of application code.
  *
- * @param {{accountId: string, method?: string, path: string, query?: string | URLSearchParams, body?: unknown, headers?: Headers | Array<[string, string]> | Record<string, string>, privateKey?: Buffer | ArrayBuffer | ArrayBufferView, sign?: (input: {message: Buffer, messageBase64: string, method: string, path: string, query?: string | URLSearchParams, body: string, timestampMs: number, nonce: string}) => Promise<Buffer | ArrayBuffer | ArrayBufferView | string> | Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs?: number, nonce?: string}} params
+ * @param {{accountId: string, method?: string, path: string, baseUrl?: string, query?: string | URLSearchParams, body?: unknown, headers?: Headers | Array<[string, string]> | Record<string, string>, privateKey?: Buffer | ArrayBuffer | ArrayBufferView, sign?: (input: {message: Buffer, messageBase64: string, method: string, path: string, query?: string | URLSearchParams, body: string, timestampMs: number, nonce: string}) => Promise<Buffer | ArrayBuffer | ArrayBufferView | string> | Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs?: number, nonce?: string}} params
  * @returns {Promise<{method: string, headers: Record<string, string>, body: string}>}
  */
 export async function buildCanonicalJsonRequest({
   accountId,
   method = "POST",
   path,
+  baseUrl,
   query,
   body = {},
   headers,
@@ -229,7 +255,7 @@ export async function buildCanonicalJsonRequest({
   }
   const methodUpper = String(method).toUpperCase();
   const normalizedTimestampMs = Math.trunc(timestampMs);
-  const canonicalTarget = splitPathAndQuery(path, query);
+  const canonicalTarget = canonicalTargetFromPath({ path, query, baseUrl });
   const bodyJson = JSON.stringify(body);
   const message = canonicalRequestSignatureMessage({
     method: methodUpper,

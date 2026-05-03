@@ -4,6 +4,8 @@ enum IrohaTransportSecurity {
     private static let credentialHeaders: Set<String> = [
         "authorization",
         "x-api-token",
+        "x-account-id",
+        "x-dataspace-id",
         "x-iroha-account",
         "x-iroha-signature",
         "x-iroha-timestamp-ms",

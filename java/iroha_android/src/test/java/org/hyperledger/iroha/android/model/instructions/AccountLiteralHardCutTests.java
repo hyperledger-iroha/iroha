@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -79,9 +81,18 @@ public final class AccountLiteralHardCutTests {
 
     final byte[] preimage =
         ConnectCrypto.buildApprovePreimage(sessionId, appPublic, walletPublic, account, null, null);
-    final String marker = "iroha-connect|approve|";
-    final String rendered = new String(preimage, StandardCharsets.UTF_8);
-    assert rendered.startsWith(marker) : "preimage prefix mismatch";
+    final ByteBuffer preimageReader = ByteBuffer.wrap(preimage).order(ByteOrder.LITTLE_ENDIAN);
+    assert "iroha-connect|approve|v1".equals(readTaggedUtf8(preimageReader, "domain"))
+        : "preimage domain mismatch";
+    assert Arrays.equals(sessionId, readTagged(preimageReader, "sid"))
+        : "preimage session id mismatch";
+    assert Arrays.equals(appPublic, readTagged(preimageReader, "app_pk"))
+        : "preimage app key mismatch";
+    assert Arrays.equals(walletPublic, readTagged(preimageReader, "wallet_pk"))
+        : "preimage wallet key mismatch";
+    assert account.equals(readTaggedUtf8(preimageReader, "account_id"))
+        : "preimage account mismatch";
+    assert !preimageReader.hasRemaining() : "preimage has unexpected trailing fields";
 
     try {
       ConnectCrypto.buildApprovePreimage(
@@ -106,6 +117,23 @@ public final class AccountLiteralHardCutTests {
     final byte[] out = new byte[size];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static String readTaggedUtf8(final ByteBuffer reader, final String expectedTag) {
+    return new String(readTagged(reader, expectedTag), StandardCharsets.UTF_8);
+  }
+
+  private static byte[] readTagged(final ByteBuffer reader, final String expectedTag) {
+    final int tagLength = Short.toUnsignedInt(reader.getShort());
+    final byte[] tagBytes = new byte[tagLength];
+    reader.get(tagBytes);
+    final String tag = new String(tagBytes, StandardCharsets.UTF_8);
+    assert expectedTag.equals(tag) : "expected tag " + expectedTag + " got " + tag;
+    final long valueLength = reader.getLong();
+    assert valueLength <= Integer.MAX_VALUE : "tagged value too large";
+    final byte[] value = new byte[Math.toIntExact(valueLength)];
+    reader.get(value);
+    return value;
   }
 
   private static String sampleI105(final int fill) throws Exception {

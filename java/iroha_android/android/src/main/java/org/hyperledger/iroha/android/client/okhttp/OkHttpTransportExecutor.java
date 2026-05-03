@@ -188,10 +188,26 @@ public final class OkHttpTransportExecutor
     headers.forEach(
         (name, values) -> {
           for (final String value : values) {
-            headersBuilder.add(name, value);
+            if (requiresUnsafeNonAscii(value)) {
+              headersBuilder.addUnsafeNonAscii(name, value);
+            } else {
+              headersBuilder.add(name, value);
+            }
           }
         });
     builder.headers(headersBuilder.build());
+  }
+
+  private static boolean requiresUnsafeNonAscii(final String value) {
+    if (value == null) {
+      return false;
+    }
+    for (int index = 0; index < value.length(); index++) {
+      if (value.charAt(index) > 0x7E) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static RequestBody buildRequestBody(final TransportRequest request) {

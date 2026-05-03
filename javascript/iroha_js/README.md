@@ -1075,6 +1075,7 @@ import { buildCanonicalJsonRequest } from "@iroha/iroha-js/canonical-request";
 
 const request = await buildCanonicalJsonRequest({
   accountId: operatorAccountIdOrAlias,
+  baseUrl: toriiBaseUrl,
   path: "/v1/aliases/resolve",
   body: { alias: "tidal-river-4160@mibank.bpng" },
   sign: ({ messageBase64 }) => signWithWalletKey(messageBase64),
