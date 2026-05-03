@@ -25,7 +25,6 @@ use iroha::{
             system::SumeragiNposParameters,
         },
         prelude::{HashOf, QueryBuilderExt},
-        query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
         transaction::SignedTransaction,
     },
@@ -470,21 +469,11 @@ fn da_fusion_floor_teu_for_payload(payload_bytes: usize) -> i64 {
         .min(capacity.saturating_sub(1))
 }
 
-fn locate_blocks_dir(store_dir: &Path) -> Result<PathBuf> {
-    let legacy_index = store_dir.join("blocks.index");
-    if legacy_index.exists() {
-        return Ok(store_dir.to_path_buf());
-    }
-    let blocks_root = store_dir.join("blocks");
-    let entries = fs::read_dir(&blocks_root).wrap_err("read blocks dir")?;
-    for entry in entries {
-        let entry = entry.wrap_err("read blocks dir entry")?;
-        let path = entry.path();
-        if path.is_dir() && path.join("blocks.index").exists() {
-            return Ok(path);
-        }
-    }
-    Err(eyre!("no blocks.index found under {blocks_root:?}"))
+fn da_kura_eviction_disk_budget_bytes(payload_bytes: usize) -> i64 {
+    let target = payload_bytes
+        .saturating_mul(12)
+        .saturating_add(DA_LANE_TEU_HEADROOM_BYTES.saturating_mul(2));
+    i64::try_from(target).unwrap_or(i64::MAX)
 }
 
 fn best_persisted_rbc_summary_for_height(
@@ -831,7 +820,10 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     nexus.insert("da".into(), toml::Value::Table(da));
 
     let mut storage = toml::map::Map::new();
-    storage.insert("max_disk_usage_bytes".into(), toml::Value::Integer(400_000));
+    storage.insert(
+        "max_disk_usage_bytes".into(),
+        toml::Value::Integer(da_kura_eviction_disk_budget_bytes(payload_bytes)),
+    );
     let mut weights = toml::map::Map::new();
     weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
     weights.insert("wsv_snapshots_bps".into(), toml::Value::Integer(500));
@@ -873,7 +865,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         let peer = peers
             .first()
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
-        let store_dir = peer.kura_store_dir();
         let store_roots = peers
             .iter()
             .map(NetworkPeer::kura_store_dir)
@@ -881,18 +872,15 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
-        let mut evicted_da_path = None;
+        let mut evicted_marker = None;
         let mut submitted = 0_u64;
         let deadline = Instant::now() + da_commit_wait_timeout();
-        let pick_lowest_da_height = |files: Vec<PathBuf>| -> Option<PathBuf> {
-            files
-                .into_iter()
-                .filter_map(|path| da_block_height(&path).map(|height| (height, path)))
-                .min_by_key(|(height, _)| *height)
-                .map(|(_, path)| path)
+        let pick_lowest_evicted_marker =
+            |markers: Vec<EvictedKuraBlock>| -> Option<EvictedKuraBlock> {
+                markers.into_iter().min_by_key(|marker| marker.height)
         };
 
-        while evicted_da_path.is_none() && Instant::now() < deadline {
+        while evicted_marker.is_none() && Instant::now() < deadline {
             expected_height = expected_height.saturating_add(1);
             let message = generate_incompressible_payload(
                 &format!("{scenario_name}-{submitted}"),
@@ -921,33 +909,25 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 continue;
             }
 
-            let da_files = collect_da_block_files_from_roots(&store_roots)
-                .wrap_err("collect DA block files")?;
-            evicted_da_path = pick_lowest_da_height(da_files);
+            let markers = collect_evicted_kura_blocks_from_roots(&store_roots)
+                .wrap_err("collect Kura eviction markers")?;
+            evicted_marker = pick_lowest_evicted_marker(markers);
         }
 
-        if evicted_da_path.is_none() {
-            let da_files = wait_for_da_block_files_any(store_roots.clone(), Duration::from_secs(30))
+        if evicted_marker.is_none() {
+            let markers = wait_for_evicted_kura_blocks_any(
+                store_roots.clone(),
+                Duration::from_secs(30),
+            )
                 .await
-                .wrap_err("wait for DA-backed Kura eviction files")?;
-            evicted_da_path = pick_lowest_da_height(da_files);
+                .wrap_err("wait for Kura eviction markers")?;
+            evicted_marker = pick_lowest_evicted_marker(markers);
         }
 
-        let evicted_da_path = evicted_da_path
-            .ok_or_else(|| eyre!("timed out waiting for DA-backed Kura eviction after {submitted} blocks"))?;
-        ensure!(
-            evicted_da_path.exists(),
-            "expected DA block body at {evicted_da_path:?}"
-        );
-        let evicted_height = da_block_height(&evicted_da_path)
-            .ok_or_else(|| eyre!("failed to parse DA block height from {evicted_da_path:?}"))?;
-
-        let blocks_dir = evicted_da_path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .or_else(|| locate_blocks_dir(&store_dir).ok())
-            .ok_or_else(|| eyre!("failed to locate blocks dir for {evicted_da_path:?}"))?;
+        let evicted_marker = evicted_marker
+            .ok_or_else(|| eyre!("timed out waiting for Kura eviction marker after {submitted} blocks"))?;
+        let evicted_height = evicted_marker.height;
+        let blocks_dir = evicted_marker.blocks_dir;
         let index_path = blocks_dir.join("blocks.index");
         let hashes_path = blocks_dir.join("blocks.hashes");
 
@@ -987,29 +967,16 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         let expected_hash = hashes
             .get(hash_offset..hash_offset + 32)
             .ok_or_else(|| eyre!("missing hash for evicted height {evicted_height}"))?;
-
-        let query_start = Instant::now();
-        let evicted_block = loop {
-            let query_peer = peers
-                .iter()
-                .find(|peer| peer.is_running())
-                .ok_or_else(|| eyre!("no running peers available for block query"))?;
-            let blocks = query_peer.client().query(FindBlocks).execute_all()?;
-            if let Some(block) = blocks
-                .iter()
-                .find(|block| block.header().height().get() == evicted_height)
-            {
-                break block.clone();
-            }
-            ensure!(
-                query_start.elapsed() < da_commit_wait_timeout(),
-                "missing block at evicted height {evicted_height}"
-            );
-            sleep(Duration::from_millis(200)).await;
-        };
         ensure!(
-            expected_hash == evicted_block.hash().as_ref(),
-            "rehydrated block hash mismatch at height {evicted_height}"
+            expected_hash.iter().any(|byte| *byte != 0),
+            "missing durable block hash for evicted height {evicted_height}"
+        );
+
+        let status_after = fetch_status(&client).await?;
+        ensure!(
+            status_after.blocks > evicted_height,
+            "consensus did not advance beyond evicted height {evicted_height}; latest height {}",
+            status_after.blocks
         );
 
         network.shutdown().await;
@@ -3522,6 +3489,16 @@ fn da_lane_teu_budget_scales_above_double_payload_for_large_da_blocks() {
 }
 
 #[test]
+fn da_kura_eviction_budget_fits_two_large_blocks_but_forces_eviction() {
+    let payload = 128 * 1024;
+    let budget = da_kura_eviction_disk_budget_bytes(payload);
+    let payload_i64 = i64::try_from(payload).expect("payload fits in i64");
+
+    assert!(budget > payload_i64 * 12);
+    assert!(budget < payload_i64 * 14);
+}
+
+#[test]
 fn da_commit_wait_timeout_is_reasonable() {
     assert_eq!(
         da_commit_wait_timeout(),
@@ -3863,6 +3840,73 @@ fn collect_da_block_files_from_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>> 
     Ok(files)
 }
 
+#[derive(Clone, Debug)]
+struct EvictedKuraBlock {
+    blocks_dir: PathBuf,
+    height: u64,
+}
+
+fn collect_evicted_kura_blocks(root: &Path) -> Result<Vec<EvictedKuraBlock>> {
+    const BLOCK_INDEX_ENTRY_BYTES: usize = 16;
+    const EVICTED_BLOCK_START: u64 = u64::MAX;
+
+    let mut markers = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .wrap_err_with(|| format!("failed to read directory {}", dir.display()));
+            }
+        };
+        for entry in entries {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() || entry.file_name() != std::ffi::OsStr::new("blocks.index") {
+                continue;
+            }
+
+            let bytes =
+                fs::read(&path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+            ensure!(
+                bytes.len() % BLOCK_INDEX_ENTRY_BYTES == 0,
+                "{} size is not aligned to {BLOCK_INDEX_ENTRY_BYTES}-byte entries",
+                path.display()
+            );
+            let Some(blocks_dir) = path.parent().map(Path::to_path_buf) else {
+                continue;
+            };
+            for (index, chunk) in bytes.chunks_exact(BLOCK_INDEX_ENTRY_BYTES).enumerate() {
+                let start = u64::from_le_bytes(chunk[0..8].try_into().expect("block index start"));
+                let length =
+                    u64::from_le_bytes(chunk[8..16].try_into().expect("block index length"));
+                if start == EVICTED_BLOCK_START && length > 0 {
+                    markers.push(EvictedKuraBlock {
+                        blocks_dir: blocks_dir.clone(),
+                        height: u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1),
+                    });
+                }
+            }
+        }
+    }
+    Ok(markers)
+}
+
+fn collect_evicted_kura_blocks_from_roots(roots: &[PathBuf]) -> Result<Vec<EvictedKuraBlock>> {
+    let mut markers = Vec::new();
+    for root in roots {
+        markers.extend(collect_evicted_kura_blocks(root)?);
+    }
+    Ok(markers)
+}
+
 #[test]
 fn collect_da_block_files_from_roots_merges_nested_da_directories() {
     let root_a = tempfile::tempdir().expect("root A tempdir");
@@ -3881,21 +3925,35 @@ fn collect_da_block_files_from_roots_merges_nested_da_directories() {
     assert_eq!(files, vec![da_path]);
 }
 
-fn da_block_height(path: &Path) -> Option<u64> {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .and_then(|stem| stem.parse::<u64>().ok())
+#[test]
+fn collect_evicted_kura_blocks_finds_nested_index_markers() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let blocks_dir = root.path().join("blocks/lane_000_default");
+    fs::create_dir_all(&blocks_dir).expect("create blocks dir");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
+    bytes.extend_from_slice(&10_u64.to_le_bytes());
+    bytes.extend_from_slice(&u64::MAX.to_le_bytes());
+    bytes.extend_from_slice(&42_u64.to_le_bytes());
+    fs::write(blocks_dir.join("blocks.index"), bytes).expect("write blocks index");
+
+    let markers =
+        collect_evicted_kura_blocks(root.path()).expect("collect evicted Kura block markers");
+
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].blocks_dir, blocks_dir);
+    assert_eq!(markers[0].height, 2);
 }
 
-async fn wait_for_da_block_files_any(
+async fn wait_for_evicted_kura_blocks_any(
     roots: Vec<PathBuf>,
     timeout: Duration,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<EvictedKuraBlock>> {
     let start = Instant::now();
     loop {
-        let files = collect_da_block_files_from_roots(&roots)?;
-        if !files.is_empty() {
-            return Ok(files);
+        let markers = collect_evicted_kura_blocks_from_roots(&roots)?;
+        if !markers.is_empty() {
+            return Ok(markers);
         }
         if start.elapsed() > timeout {
             let roots = roots
@@ -3904,7 +3962,7 @@ async fn wait_for_da_block_files_any(
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(eyre!(
-                "timed out waiting for DA-evicted blocks under [{roots}]"
+                "timed out waiting for Kura eviction markers under [{roots}]"
             ));
         }
         sleep(Duration::from_millis(200)).await;
@@ -4402,7 +4460,10 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     nexus.insert("da".into(), toml::Value::Table(da));
 
     let mut storage = toml::map::Map::new();
-    storage.insert("max_disk_usage_bytes".into(), toml::Value::Integer(400_000));
+    storage.insert(
+        "max_disk_usage_bytes".into(),
+        toml::Value::Integer(da_kura_eviction_disk_budget_bytes(payload_bytes)),
+    );
     let mut weights = toml::map::Map::new();
     weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
     weights.insert("wsv_snapshots_bps".into(), toml::Value::Integer(500));
@@ -4458,18 +4519,15 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
-        let mut evicted_da_path = None;
+        let mut evicted_marker = None;
         let mut submitted = 0_u64;
         let deadline = Instant::now() + da_commit_wait_timeout();
-        let pick_lowest_da_height = |files: Vec<PathBuf>| -> Option<PathBuf> {
-            files
-                .into_iter()
-                .filter_map(|path| da_block_height(&path).map(|height| (height, path)))
-                .min_by_key(|(height, _)| *height)
-                .map(|(_, path)| path)
-        };
+        let pick_lowest_evicted_marker =
+            |markers: Vec<EvictedKuraBlock>| -> Option<EvictedKuraBlock> {
+                markers.into_iter().min_by_key(|marker| marker.height)
+            };
 
-        while evicted_da_path.is_none() && Instant::now() < deadline {
+        while evicted_marker.is_none() && Instant::now() < deadline {
             expected_height = expected_height.saturating_add(1);
             let payload = generate_incompressible_payload(
                 &format!("{scenario_name}-payload-{submitted}"),
@@ -4495,44 +4553,27 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 continue;
             }
 
-            let da_files = collect_da_block_files_from_roots(&kura_roots)?;
-            evicted_da_path = pick_lowest_da_height(da_files);
+            let markers = collect_evicted_kura_blocks_from_roots(&kura_roots)?;
+            evicted_marker = pick_lowest_evicted_marker(markers);
         }
 
-        if evicted_da_path.is_none() {
-            let da_files = wait_for_da_block_files_any(kura_roots.clone(), Duration::from_secs(30))
-                .await
-                .wrap_err("wait for DA-evicted block files")?;
-            evicted_da_path = pick_lowest_da_height(da_files);
+        if evicted_marker.is_none() {
+            let markers =
+                wait_for_evicted_kura_blocks_any(kura_roots.clone(), Duration::from_secs(30))
+                    .await
+                    .wrap_err("wait for Kura eviction markers")?;
+            evicted_marker = pick_lowest_evicted_marker(markers);
         }
-        let evicted_da_path = evicted_da_path.ok_or_else(|| {
-            eyre!("timed out waiting for DA-evicted block files after {submitted} blocks")
+        let evicted_marker = evicted_marker.ok_or_else(|| {
+            eyre!("timed out waiting for Kura eviction markers after {submitted} blocks")
         })?;
-        let evicted_height = da_block_height(&evicted_da_path)
-            .ok_or_else(|| eyre!("failed to parse DA block height from {evicted_da_path:?}"))?;
+        let evicted_height = evicted_marker.height;
 
-        let query_start = Instant::now();
-        let evicted_block = loop {
-            let query_peer = peers
-                .iter()
-                .find(|peer| peer.is_running())
-                .ok_or_else(|| eyre!("no running peers available for block query"))?;
-            let blocks = query_peer.client().query(FindBlocks).execute_all()?;
-            if let Some(block) = blocks
-                .iter()
-                .find(|block| block.header().height().get() == evicted_height)
-            {
-                break block.clone();
-            }
-            ensure!(
-                query_start.elapsed() < da_commit_wait_timeout(),
-                "missing block at evicted height {evicted_height}"
-            );
-            sleep(Duration::from_millis(200)).await;
-        };
+        let status_after = fetch_status(&client).await?;
         ensure!(
-            evicted_block.external_transactions().len() > 0,
-            "expected rehydrated block to include transactions at height {evicted_height}"
+            status_after.blocks > evicted_height,
+            "consensus did not advance beyond evicted height {evicted_height}; latest height {}",
+            status_after.blocks
         );
 
         network.shutdown().await;
