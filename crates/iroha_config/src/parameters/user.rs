@@ -11639,6 +11639,9 @@ pub struct NexusFees {
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
     #[config(default = "defaults::nexus::fees::sponsor_max_fee()")]
     pub sponsor_max_fee: Numeric,
+    /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
+    #[config(default = "defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS")]
+    pub burn_from_unix_timestamp_ms: u64,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     #[config(default = "Vec::new()")]
     pub successful_claim_fee_exempt_authorities: Vec<String>,
@@ -11827,6 +11830,7 @@ impl Default for NexusFees {
             per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
             sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
+            burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             successful_claim_fee_exempt_authorities: Vec::new(),
         }
     }
@@ -11861,6 +11865,7 @@ impl NexusFees {
             per_gas_unit_fee: self.per_gas_unit_fee,
             sponsorship_enabled: self.sponsorship_enabled,
             sponsor_max_fee: self.sponsor_max_fee,
+            burn_from_unix_timestamp_ms: self.burn_from_unix_timestamp_ms,
             successful_claim_fee_exempt_authorities: self
                 .successful_claim_fee_exempt_authorities
                 .into_iter()
