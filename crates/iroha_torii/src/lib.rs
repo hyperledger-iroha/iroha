@@ -3528,6 +3528,16 @@ async fn handler_gov_council_current(
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 
+async fn handler_gov_citizen_count(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<JsonBody<crate::gov::CitizenCountResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
+    crate::gov::handle_gov_citizen_count(app.state.clone()).await
+}
+
 async fn handler_gov_citizen_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -10040,6 +10050,44 @@ fn soracloud_runtime_status_sections(
             json_object(vec![json_entry("available", false)]),
         );
     };
+
+    if !runtime.materialization_available() {
+        let snapshot = runtime.snapshot();
+        let state_dir = runtime.state_dir().display().to_string();
+        return (
+            json_object(vec![
+                json_entry("mode", "embedded_runtime_manager"),
+                json_entry("status", "unavailable"),
+                json_entry(
+                    "message",
+                    "irohad is compiled without the `embedded-soracloud-runtime` feature; hosted Inrou materialization is disabled",
+                ),
+                json_entry("observed_height", snapshot.observed_height),
+                json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
+                json_entry("state_dir", state_dir.clone()),
+                json_entry("service_revisions", 0_u64),
+                json_entry("healthy_service_revisions", 0_u64),
+                json_entry("hydrating_service_revisions", 0_u64),
+                json_entry("degraded_service_revisions", 0_u64),
+                json_entry("unavailable_service_revisions", 0_u64),
+                json_entry("apartments", 0_u64),
+                json_entry("running_apartments", 0_u64),
+                json_entry("expired_apartments", 0_u64),
+            ]),
+            json_object(vec![
+                json_entry("enabled", false),
+                json_entry("state_dir", state_dir.clone()),
+                json_entry("observed_height", snapshot.observed_height),
+                json_entry("service_revisions", 0_u64),
+                json_entry("apartments", 0_u64),
+            ]),
+            json_object(vec![
+                json_entry("available", false),
+                json_entry("state_dir", state_dir),
+                json_entry("snapshot", snapshot),
+            ]),
+        );
+    }
 
     let snapshot = runtime.snapshot();
     let state_dir = runtime.state_dir().display().to_string();
@@ -33637,6 +33685,10 @@ impl Torii {
                 .route(
                     iroha_torii_shared::uri::GOV_COUNCIL_CURRENT,
                     get(handler_gov_council_current),
+                )
+                .route(
+                    iroha_torii_shared::uri::GOV_CITIZENS_COUNT,
+                    get(handler_gov_citizen_count),
                 )
                 .route(
                     iroha_torii_shared::uri::GOV_CITIZEN_STATUS,

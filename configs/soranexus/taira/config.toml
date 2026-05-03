@@ -107,6 +107,21 @@ max_deletions_per_run = 500
 retention_grace_secs = 86400
 pre_admission_sweep = true
 
+[soracloud_runtime]
+production_mode = true
+
+[soracloud_runtime.inrou]
+max_concurrent_vms = 8
+proxy_only = false
+start_grace_ms = 30000
+stop_grace_ms = 10000
+
+[soracloud_runtime.egress]
+default_allow = false
+allowed_hosts = []
+rate_per_minute = 600
+max_bytes_per_minute = 104857600
+
 [sumeragi.da]
 enabled = true
 

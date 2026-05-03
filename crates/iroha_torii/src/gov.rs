@@ -799,6 +799,25 @@ pub struct CitizenStatusResponse {
     pub cooldown_until: Option<u64>,
 }
 
+/// Exact citizen registry count response.
+#[derive(Debug, JsonSerialize)]
+pub struct CitizenCountResponse {
+    pub total: usize,
+}
+
+/// GET /v1/gov/citizens — return the exact citizenship registry count.
+///
+/// # Errors
+/// This handler never returns an error; an empty registry is represented as `total = 0`.
+pub async fn handle_gov_citizen_count(
+    state: Arc<iroha_core::state::State>,
+) -> Result<JsonBody<CitizenCountResponse>, crate::Error> {
+    let world = state.world_view();
+    Ok(JsonBody(CitizenCountResponse {
+        total: world.citizens().iter().count(),
+    }))
+}
+
 /// GET /v1/gov/citizens/{account_id} — read the citizenship registry entry for an account.
 ///
 /// # Errors
@@ -3317,6 +3336,54 @@ mod tests {
         assert_eq!(response.account_id, harness.authority.to_string());
         assert_eq!(response.amount.as_deref(), Some("0"));
         assert_eq!(response.bonded_height, Some(1));
+    }
+
+    #[tokio::test]
+    async fn citizen_count_reports_exact_registry_total() {
+        let harness = mk_governance_harness(false);
+        assert_eq!(
+            handle_gov_citizen_count(harness.state.clone())
+                .await
+                .expect("empty citizen count")
+                .0
+                .total,
+            0
+        );
+
+        let instruction = InstructionBox::from(RegisterCitizen {
+            owner: harness.authority.clone(),
+            amount: 0,
+        });
+        let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+            (*harness.chain_id).clone(),
+            harness.authority.clone(),
+        )
+        .with_instructions([instruction])
+        .sign(harness.authority_keypair.private_key());
+        let params = harness.state.view().world().parameters().clone();
+        let accepted = iroha_core::tx::AcceptedTransaction::accept(
+            tx,
+            harness.chain_id.as_ref(),
+            params.sumeragi().max_clock_drift(),
+            params.transaction(),
+            harness.state.crypto().as_ref(),
+        )
+        .expect("accepted register citizen transaction");
+        harness
+            .queue
+            .push(accepted, harness.state.view())
+            .expect("push register citizen transaction");
+        assert_eq!(
+            apply_queued_block_allow_errors(&harness.state, &harness.queue, 1),
+            vec![false]
+        );
+
+        let response = handle_gov_citizen_count(harness.state.clone())
+            .await
+            .expect("citizen count response")
+            .0;
+
+        assert_eq!(response.total, 1);
     }
 
     #[test]
