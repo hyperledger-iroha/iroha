@@ -33,6 +33,31 @@ Last updated: 2026-05-03
   - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --nocapture --test-threads=1`
   - `bash ci/check_sumeragi_formal.sh`
 
+## 2026-05-03 Taira Inrou rollout fail-closed hardening
+
+- Taira's shipped systemd unit now starts the bundled `/opt/iroha/bin/irohad`
+  from the rollout bundle instead of an ambient `/usr/local/bin/irohad`, so the
+  release cannot accidentally keep running a binary built without
+  `embedded-soracloud-runtime`.
+- The checked-in Taira validator config now enables Soracloud production mode
+  with bounded fail-closed egress and non-proxy Inrou hosting, causing startup
+  to reject stub/non-production runtime posture instead of silently exposing an
+  empty runtime snapshot.
+- The Taira container path now installs PortableVm QEMU tooling, passes the
+  portable acceleration setting through, and exposes `/dev/kvm` when present.
+- Soracloud status now reports the runtime manager as unavailable when `irohad`
+  is compiled without `embedded-soracloud-runtime`, rather than presenting the
+  stub as an idle materializer.
+- Focused validation for this slice:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/taira-validator-container.sh configs/soranexus/taira/build_taira_rollout_bundle.sh scripts/build_release_image.sh`
+  - `cargo test -p iroha_config soracloud_runtime_production_mode_accepts_bounded_posture --lib -- --nocapture`
+  - `cargo test -p iroha_config --test fixtures taira_config_enables_untrusted_cid_hosting -- --nocapture`
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_runtime_status_sections_report_unavailable_without_runtime -- --nocapture`
+  - `cargo test -p irohad --features embedded-soracloud-runtime --bin irohad manager_config_ -- --nocapture`
+  - `python3 scripts/tests/taira_validator_container_test.py`
+  - `configs/soranexus/taira/build_taira_rollout_bundle.sh --profile debug --allow-dirty`
+
 ## 2026-05-03 Sumeragi frontier formal process hardening
 
 - Hardened the bounded Taira frontier-recovery model again after the latest
@@ -120,18 +145,24 @@ Last updated: 2026-05-03
   - `cargo test -p iroha_torii` (passed, including `1680` library tests, `1`
     ignored, all integration binaries, and doctests)
 
-## 2026-05-03 Nexus fee burn semantics
+## 2026-05-03 Nexus fee burn activation gate
 
-- Nexus transaction fees are now burned from the fee payer or authorized fee
-  sponsor instead of being transferred to `nexus.fees.fee_sink_account_id`.
-  Sponsored fees still require `CanUseFeeSponsor`, but a sponsor that is also
-  configured as the fee sink no longer receives a self-fee no-op.
-- Admission checks now require the payer/sponsor fee asset balance even when
-  the payer equals the configured fee sink, matching the burn-on-execution
-  behavior.
-- Focused validation for this slice:
+- Normal Nexus transaction fees are now burned from the fee payer or authorized
+  fee sponsor once `nexus.fees.burn_from_unix_timestamp_ms` is reached. Before
+  that timestamp, the executor preserves legacy fee transfer/self-fee behavior
+  so existing live Minamoto blocks replay without changing holder balances or
+  total supply.
+- Sponsored fees still require `CanUseFeeSponsor`, and admission checks now
+  require the payer/sponsor fee asset balance even when the payer equals the
+  configured fee sink, matching the burn-on-execution behavior after activation.
+- Added regression coverage for sponsor-as-sink legacy no-op before activation,
+  legacy transfer before activation, and burn behavior after activation.
+- The default activation timestamp is `u64::MAX`; operators must explicitly set
+  a future timestamp after deploying the compatible binary to every peer.
+- Focused validation:
   - `cargo fmt --all`
-  - `cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
+  - `env -u LOG_FORMAT cargo test -p iroha_config`
+  - `env -u LOG_FORMAT cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
 
 ## 2026-05-02 SoraFS pin registry metrics test isolation
 
@@ -2056,20 +2087,6 @@ Last updated: 2026-05-03
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::known_block_commit_evidence_replay_skips_without_new_progress' --nocapture`
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_keeps_retry_armed_when_body_present_but_commit_qc_repair_active' --nocapture`
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_ignores_passive_catchup_slot_even_with_targets' --nocapture`
-
-## 2026-05-03 Nexus Fee Burn Activation Gate
-
-- Normal Nexus transaction fees are now burned from the fee payer/sponsor once
-  `nexus.fees.burn_from_unix_timestamp_ms` is reached. Before that timestamp,
-  the executor preserves legacy fee transfer/self-fee behavior so existing live
-  Minamoto blocks replay without changing holder balances or total supply.
-- Added regression coverage for sponsor-as-sink legacy no-op before activation,
-  legacy transfer before activation, and burn behavior after activation.
-- The default activation timestamp is `u64::MAX`; operators must explicitly set
-  a future timestamp after deploying the compatible binary to every peer.
-- Focused validation:
-  - `env -u LOG_FORMAT cargo test -p iroha_config`
-  - `env -u LOG_FORMAT cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
 
 ## 2026-04-22 Sumeragi targeted main_loop regression sweep
 

@@ -146,6 +146,10 @@ fn unavailable(message: &str) -> SoracloudRuntimeExecutionError {
 }
 
 impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
+    fn materialization_available(&self) -> bool {
+        false
+    }
+
     fn snapshot(&self) -> SoracloudRuntimeSnapshot {
         Self::snapshot(self)
     }
