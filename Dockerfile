@@ -62,6 +62,9 @@ RUN <<EOT
   set -ex
   apt-get update -y && \
     apt-get install -y curl ca-certificates jq
+  if [ "$CONFIG_PROFILE" = "taira" ]; then
+    apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
+  fi
   addgroup --gid $GID $USER &&
   adduser \
     --disabled-password \
