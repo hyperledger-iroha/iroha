@@ -181,7 +181,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -1747,6 +1747,8 @@ struct PipelineStatusCache {
     pending_blocks: DashMap<NonZeroU64, PendingBlockStatus>,
     entry_order: parking_lot::Mutex<VecDeque<(Instant, HashOf<SignedTransaction>)>>,
     pending_order: parking_lot::Mutex<VecDeque<(Instant, NonZeroU64)>>,
+    entry_count: AtomicUsize,
+    pending_count: AtomicUsize,
     capacity: usize,
     ttl: Duration,
     start: Instant,
@@ -1775,6 +1777,8 @@ impl PipelineStatusCache {
             pending_blocks: DashMap::new(),
             entry_order: parking_lot::Mutex::new(VecDeque::new()),
             pending_order: parking_lot::Mutex::new(VecDeque::new()),
+            entry_count: AtomicUsize::new(0),
+            pending_count: AtomicUsize::new(0),
             capacity: cap,
             ttl,
             start: Instant::now(),
@@ -1797,9 +1801,10 @@ impl PipelineStatusCache {
                 (PipelineStatusKind::Rejected, Some((**reason).clone()))
             }
         };
-        let incoming = PipelineStatusEntry::fresh(kind, event.block_height(), rejection);
+        let now = Instant::now();
+        let incoming = PipelineStatusEntry::at_time(kind, event.block_height(), rejection, now);
         self.record_entry_inner(*event.hash(), incoming);
-        self.prune_if_needed(Instant::now());
+        self.prune_if_needed(now);
     }
 
     fn record_block_event(
@@ -1817,7 +1822,7 @@ impl PipelineStatusCache {
         let now = Instant::now();
         match self.record_block_results(height, block_hash, kind, kura, now) {
             BlockRecordOutcome::Recorded => {
-                self.pending_blocks.remove(&height);
+                self.remove_pending_by_height(&height);
                 self.prune_if_needed(now);
             }
             BlockRecordOutcome::MissingBlock => {
@@ -1852,6 +1857,7 @@ impl PipelineStatusCache {
             }
             DashEntry::Vacant(entry) => {
                 let observed_at = incoming.observed_at;
+                self.entry_count.fetch_add(1, AtomicOrdering::Relaxed);
                 entry.insert(incoming);
                 observed_at
             }
@@ -1861,7 +1867,15 @@ impl PipelineStatusCache {
 
     fn record_pending_block(&self, height: NonZeroU64, pending: PendingBlockStatus) {
         let observed_at = pending.observed_at;
-        self.pending_blocks.insert(height, pending);
+        match self.pending_blocks.entry(height) {
+            DashEntry::Occupied(mut entry) => {
+                entry.insert(pending);
+            }
+            DashEntry::Vacant(entry) => {
+                self.pending_count.fetch_add(1, AtomicOrdering::Relaxed);
+                entry.insert(pending);
+            }
+        }
         self.push_pending_order(height, observed_at);
     }
 
@@ -1902,7 +1916,7 @@ impl PipelineStatusCache {
         for (height, pending) in pending {
             match self.record_block_results(height, pending.block_hash, pending.kind, kura, now) {
                 BlockRecordOutcome::Recorded | BlockRecordOutcome::HashMismatch => {
-                    self.pending_blocks.remove(&height);
+                    self.remove_pending_by_height(&height);
                 }
                 BlockRecordOutcome::MissingBlock => {}
             }
@@ -1911,15 +1925,14 @@ impl PipelineStatusCache {
     }
 
     fn prune_if_needed(&self, now: Instant) {
-        let entries_len = self.entries.len();
-        let pending_len = self.pending_blocks.len();
         let elapsed_secs = now.saturating_duration_since(self.start).as_secs().max(1);
         let last_prune = self
             .last_prune_secs
             .load(std::sync::atomic::Ordering::Relaxed);
         let prune_due =
             elapsed_secs.saturating_sub(last_prune) >= PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS;
-        let over_cap = entries_len > self.capacity || pending_len > self.capacity;
+        let over_cap = self.entry_count.load(AtomicOrdering::Relaxed) > self.capacity
+            || self.pending_count.load(AtomicOrdering::Relaxed) > self.capacity;
         if !over_cap && !prune_due {
             return;
         }
@@ -1928,14 +1941,13 @@ impl PipelineStatusCache {
             return;
         };
 
-        let entries_len = self.entries.len();
-        let pending_len = self.pending_blocks.len();
         let last_prune = self
             .last_prune_secs
             .load(std::sync::atomic::Ordering::Relaxed);
         let prune_due =
             elapsed_secs.saturating_sub(last_prune) >= PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS;
-        let over_cap = entries_len > self.capacity || pending_len > self.capacity;
+        let over_cap = self.entry_count.load(AtomicOrdering::Relaxed) > self.capacity
+            || self.pending_count.load(AtomicOrdering::Relaxed) > self.capacity;
         if !over_cap && !prune_due {
             return;
         }
@@ -1973,7 +1985,7 @@ impl PipelineStatusCache {
                     && now.saturating_duration_since(entry.observed_at) > ttl
             });
             if should_remove {
-                self.entries.remove(&hash);
+                self.remove_entry_by_hash(&hash);
             }
         }
     }
@@ -1991,7 +2003,7 @@ impl PipelineStatusCache {
                     && now.saturating_duration_since(entry.observed_at) > ttl
             });
             if should_remove {
-                self.pending_blocks.remove(&height);
+                self.remove_pending_by_height(&height);
             }
         }
     }
@@ -2028,7 +2040,7 @@ impl PipelineStatusCache {
                 .get(&hash)
                 .is_some_and(|entry| entry.observed_at == observed_at);
             if should_remove {
-                self.entries.remove(&hash);
+                self.remove_entry_by_hash(&hash);
                 return true;
             }
         }
@@ -2043,7 +2055,7 @@ impl PipelineStatusCache {
                 .get(&height)
                 .is_some_and(|entry| entry.observed_at == observed_at);
             if should_remove {
-                self.pending_blocks.remove(&height);
+                self.remove_pending_by_height(&height);
                 return true;
             }
         }
@@ -2102,6 +2114,32 @@ impl PipelineStatusCache {
             .collect();
         ordered.sort_by_key(|(observed_at, _)| *observed_at);
         *self.pending_order.lock() = ordered.into_iter().collect();
+    }
+
+    fn remove_entry_by_hash(&self, hash: &HashOf<SignedTransaction>) -> bool {
+        if self.entries.remove(hash).is_some() {
+            Self::decrement_live_count(&self.entry_count);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remove_pending_by_height(&self, height: &NonZeroU64) -> bool {
+        if self.pending_blocks.remove(height).is_some() {
+            Self::decrement_live_count(&self.pending_count);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn decrement_live_count(count: &AtomicUsize) {
+        let _ = count.fetch_update(
+            AtomicOrdering::Relaxed,
+            AtomicOrdering::Relaxed,
+            |current| Some(current.saturating_sub(1)),
+        );
     }
 
     fn record_block_results(
@@ -43912,6 +43950,64 @@ pub(crate) mod tests_runtime_handlers {
         cache.prune(now);
         assert!(cache.lookup(&hash_a).is_none());
         assert!(cache.lookup(&hash_b).is_some());
+    }
+
+    #[test]
+    fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
+        let cache = PipelineStatusCache::with_limits(1, Duration::from_secs(60));
+        let (block_a, _) = make_signed_block(1, None);
+        let (block_b, _) = make_signed_block(2, None);
+        let hash_a = block_a.external_transactions().next().expect("tx").hash();
+        let hash_b = block_b.external_transactions().next().expect("tx").hash();
+        let height_a = NonZeroU64::new(1).expect("height");
+        let now = Instant::now();
+
+        cache.record_entry(
+            hash_a,
+            PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, now),
+        );
+        cache.record_entry(
+            hash_a,
+            PipelineStatusEntry::at_time(PipelineStatusKind::Approved, None, None, now),
+        );
+        assert_eq!(cache.entry_count.load(Ordering::Relaxed), 1);
+
+        cache.record_entry(
+            hash_b,
+            PipelineStatusEntry::at_time(
+                PipelineStatusKind::Queued,
+                None,
+                None,
+                now + Duration::from_secs(1),
+            ),
+        );
+        cache.prune(now + Duration::from_secs(1));
+        assert_eq!(
+            cache.entry_count.load(Ordering::Relaxed),
+            cache.entries.len()
+        );
+        assert!(cache.lookup(&hash_a).is_none());
+        assert!(cache.lookup(&hash_b).is_some());
+
+        cache.record_pending_block(
+            height_a,
+            PendingBlockStatus {
+                kind: PipelineStatusKind::Committed,
+                block_hash: block_a.header().hash(),
+                observed_at: now,
+            },
+        );
+        cache.record_pending_block(
+            height_a,
+            PendingBlockStatus {
+                kind: PipelineStatusKind::Applied,
+                block_hash: block_b.header().hash(),
+                observed_at: now + Duration::from_secs(1),
+            },
+        );
+        assert_eq!(cache.pending_count.load(Ordering::Relaxed), 1);
+        assert!(cache.remove_pending_by_height(&height_a));
+        assert_eq!(cache.pending_count.load(Ordering::Relaxed), 0);
     }
 
     #[test]

@@ -2413,7 +2413,7 @@ impl IVM {
     }
 
     fn classify_trap(err: &VMError) -> VmTrapKind {
-        match err {
+        match err.as_unmetered() {
             VMError::OutOfGas => VmTrapKind::OutOfGas,
             VMError::OutOfMemory => VmTrapKind::OutOfMemory,
             VMError::MemoryAccessViolation { .. }
@@ -2440,6 +2440,7 @@ impl IVM {
             VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
             VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
             VMError::AmxBudgetExceeded { .. } => VmTrapKind::AmxBudgetExceeded,
+            VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
         }
     }
 
@@ -2478,11 +2479,11 @@ impl IVM {
             context: VmExecutionContext {
                 entrypoint_pc: self.entrypoint_pc,
                 current_function,
-                opcode: match err {
+                opcode: match err.as_unmetered() {
                     VMError::InvalidOpcode(op) => Some(*op),
                     _ => None,
                 },
-                syscall: match err {
+                syscall: match err.as_unmetered() {
                     VMError::UnknownSyscall(syscall) | VMError::NotImplemented { syscall } => {
                         Some(*syscall)
                     }
@@ -3420,6 +3421,29 @@ impl IVM {
         }
     }
 
+    #[inline]
+    fn debit_gas(&mut self, gas: u64) -> Result<(), VMError> {
+        if unlikely(self.gas_remaining < gas) {
+            return Err(VMError::OutOfGas);
+        }
+        self.gas_remaining -= gas;
+        Ok(())
+    }
+
+    #[inline]
+    fn apply_syscall_gas_result(&mut self, result: Result<u64, VMError>) -> Result<(), VMError> {
+        match result {
+            Ok(extra) => self.debit_gas(extra),
+            Err(error) => {
+                let (metered_gas, source) = error.split_metered();
+                if let Some(gas) = metered_gas {
+                    self.debit_gas(gas)?;
+                }
+                Err(source)
+            }
+        }
+    }
+
     /// Execute the loaded program starting at the current `pc`.
     ///
     /// This is the heart of the VM: a classic fetch‑decode‑execute loop.  For
@@ -3551,16 +3575,8 @@ impl IVM {
                         if !host.allows_syscall(self.syscall_policy(), imm8) {
                             return Err(VMError::UnknownSyscall(imm8));
                         }
-                        let extra_cost = host.syscall(imm8, self);
-                        match extra_cost {
-                            Ok(extra) => {
-                                if self.gas_remaining < extra {
-                                    return Err(VMError::OutOfGas);
-                                }
-                                self.gas_remaining -= extra;
-                            }
-                            Err(e) => return Err(e),
-                        }
+                        let syscall_result = host.syscall(imm8, self);
+                        self.apply_syscall_gas_result(syscall_result)?;
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -3570,16 +3586,8 @@ impl IVM {
                         if !host.allows_syscall(self.syscall_policy(), number) {
                             return Err(VMError::UnknownSyscall(number));
                         }
-                        let extra_cost = host.syscall(number, self);
-                        match extra_cost {
-                            Ok(extra) => {
-                                if self.gas_remaining < extra {
-                                    return Err(VMError::OutOfGas);
-                                }
-                                self.gas_remaining -= extra;
-                            }
-                            Err(e) => return Err(e),
-                        }
+                        let syscall_result = host.syscall(number, self);
+                        self.apply_syscall_gas_result(syscall_result)?;
                         self.pc = self.pc.wrapping_add(length as u64);
                         self.cycles += 1;
                         continue;
@@ -6973,6 +6981,12 @@ seiyaku Demo {
             IVM::classify_trap(&VMError::MissingHalt),
             VmTrapKind::MissingHalt
         );
+    }
+
+    #[test]
+    fn metered_trap_classifies_as_source_error() {
+        let err = VMError::metered(17, VMError::PermissionDenied);
+        assert_eq!(IVM::classify_trap(&err), VmTrapKind::PermissionDenied);
     }
 
     #[test]

@@ -57,15 +57,55 @@ impl Hash {
     /// Hash the given bytes.
     #[must_use]
     pub fn new(bytes: impl AsRef<[u8]>) -> Self {
-        let vec_hash = Blake2bVar::new(Self::LENGTH)
-            .expect("Failed to initialize variable size hash")
-            .chain(bytes)
-            .finalize_boxed();
+        let mut hasher =
+            Blake2bVar::new(Self::LENGTH).expect("Failed to initialize variable size hash");
+        Update::update(&mut hasher, bytes.as_ref());
+        finalize_blake2b(hasher)
+    }
 
-        let mut hash = [0; Self::LENGTH];
-        hash.copy_from_slice(&vec_hash);
+    pub(crate) fn new_from_chunks(chunks: &[&[u8]]) -> Self {
+        let mut hasher =
+            Blake2bVar::new(Self::LENGTH).expect("Failed to initialize variable size hash");
+        for chunk in chunks {
+            Update::update(&mut hasher, chunk);
+        }
+        finalize_blake2b(hasher)
+    }
+}
 
-        Hash::prehashed(hash)
+fn finalize_blake2b(hasher: Blake2bVar) -> Hash {
+    let mut hash = [0; Hash::LENGTH];
+    hasher
+        .finalize_variable(&mut hash)
+        .expect("Blake2b output length matches Hash::LENGTH");
+
+    Hash::prehashed(hash)
+}
+
+struct HashWriter {
+    hasher: Blake2bVar,
+}
+
+impl HashWriter {
+    fn new() -> Self {
+        Self {
+            hasher: Blake2bVar::new(Hash::LENGTH).expect("Failed to initialize variable size hash"),
+        }
+    }
+
+    fn finalize(self) -> Hash {
+        finalize_blake2b(self.hasher)
+    }
+}
+
+impl std::io::Write for HashWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Update::update(&mut self.hasher, buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -319,8 +359,9 @@ impl<T: norito::codec::Encode> HashOf<T> {
     /// Construct typed hash
     #[must_use]
     pub fn new(value: &T) -> Self {
-        let bytes = norito::codec::Encode::encode(value);
-        Self(Hash::new(bytes), PhantomData)
+        let mut writer = HashWriter::new();
+        norito::codec::Encode::encode_to(value, &mut writer);
+        Self(writer.finalize(), PhantomData)
     }
 }
 
@@ -419,10 +460,37 @@ mod tests {
     fn blake2_32b() {
         let mut hasher = Blake2bVar::new(32).unwrap();
         hasher.update(&hex_literal::hex!("6920616d2064617461"));
+        let mut hash = [0_u8; Hash::LENGTH];
+        hasher.finalize_variable(&mut hash).unwrap();
         assert_eq!(
-            hasher.finalize_boxed().as_ref(),
-            &hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2")
-                [..]
+            hash,
+            hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2")
+        );
+    }
+
+    #[test]
+    fn hash_new_matches_blake2b_32b_with_lsb_marker() {
+        let bytes = hex_literal::hex!("6920616d2064617461");
+        let mut expected =
+            hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2");
+        expected[Hash::LENGTH - 1] |= 1;
+
+        assert_eq!(<[u8; Hash::LENGTH]>::from(Hash::new(bytes)), expected);
+    }
+
+    #[test]
+    fn hash_new_from_chunks_matches_concatenated_bytes() {
+        let left: &[u8] = b"iroha:";
+        let middle: &[u8] = b"chunked:";
+        let right: &[u8] = b"hash";
+        let mut concatenated = Vec::new();
+        concatenated.extend_from_slice(left);
+        concatenated.extend_from_slice(middle);
+        concatenated.extend_from_slice(right);
+
+        assert_eq!(
+            Hash::new_from_chunks(&[left, middle, right]),
+            Hash::new(concatenated)
         );
     }
 
@@ -434,6 +502,15 @@ mod tests {
         let bytes = original.encode();
         let decoded = HashOf::<()>::decode(&mut &bytes[..]).expect("failed to decode HashOf");
         assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn hash_of_new_matches_encoded_bytes_hash() {
+        let value = vec![1_u64, 2, 3, 5, 8, 13];
+        let encoded = norito::codec::Encode::encode(&value);
+        let expected = HashOf::<Vec<u64>>::from_untyped_unchecked(Hash::new(encoded));
+
+        assert_eq!(HashOf::new(&value), expected);
     }
 
     #[test]

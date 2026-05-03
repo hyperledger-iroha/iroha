@@ -36,6 +36,7 @@ use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
 use crate::{
     VMError,
     axt::{self, AxtPolicy},
+    gas,
     host::{AccessLog, IVMHost},
     ivm::IVM,
     memory::Memory,
@@ -672,11 +673,14 @@ impl CoreHost {
 
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::PermissionDenied,
+            ));
         }
         self.fastpq_batch_active = true;
         self.fastpq_batch_has_entries = false;
-        Ok(0)
+        Ok(gas::G_FASTPQ_BATCH)
     }
 
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
@@ -693,15 +697,18 @@ impl CoreHost {
 
     fn finish_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if !self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::PermissionDenied,
+            ));
         }
         if !self.fastpq_batch_has_entries {
             self.fastpq_batch_active = false;
-            return Err(VMError::DecodeError);
+            return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
         }
         self.fastpq_batch_active = false;
         self.fastpq_batch_has_entries = false;
-        Ok(0)
+        Ok(gas::G_FASTPQ_BATCH)
     }
 
     fn apply_fastpq_batch(&mut self, vm: &IVM) -> Result<u64, VMError> {
@@ -719,6 +726,14 @@ impl CoreHost {
             return Err(VMError::DecodeError);
         }
         Ok(MUTATION_GAS.saturating_mul(u64::try_from(batch.entries().len()).unwrap_or(u64::MAX)))
+    }
+
+    fn unsupported_syscall_error(number: u32) -> VMError {
+        if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
+            VMError::metered_not_implemented(MUTATION_GAS, number)
+        } else {
+            VMError::UnknownSyscall(number)
+        }
     }
 
     fn build_schema_fallback(&self, schema: &str, payload: &[u8]) -> njson::Value {
@@ -2731,7 +2746,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
             syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
 
@@ -3484,12 +3499,15 @@ mod tests {
     fn fastpq_batch_requires_entries() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(1_000);
-        host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
-            .expect("begin batch");
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
+            Ok(gas::G_FASTPQ_BATCH)
+        );
         let err = host
             .syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)
             .expect_err("ending empty batch should fail");
-        assert!(matches!(err, VMError::DecodeError));
+        assert!(matches!(err.as_unmetered(), VMError::DecodeError));
+        assert_eq!(err.metered_gas(), Some(gas::G_FASTPQ_BATCH));
     }
 
     #[test]
@@ -3524,11 +3542,15 @@ mod tests {
         );
         vm.set_register(13, Memory::INPUT_START + amount_offset);
 
-        host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
-            .expect("begin batch");
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
+            Ok(gas::G_FASTPQ_BATCH)
+        );
         host.syscall(syscalls::SYSCALL_TRANSFER_ASSET, &mut vm)
             .expect("push entry");
-        host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)
-            .expect("finish batch");
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm),
+            Ok(gas::G_FASTPQ_BATCH)
+        );
     }
 }

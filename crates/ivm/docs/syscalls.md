@@ -21,7 +21,9 @@ Admission/host guardrails
   `ValidationFail::NotPermitted` before execution, so mutated or malformed bytecode never reaches the
   host.
 - Runtime hosts must return `VMError::UnknownSyscall` for disallowed syscall numbers; the executor
-  surfaces the failure during validation so contracts cannot rely on undefined syscalls.
+  surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
+  syscall numbers that are not meaningful for a specific host return a metered
+  `VMError::NotImplemented` instead.
 - Regression tests cover host-side `UnknownSyscall` rejections, admission-time `SCALL` gating
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
@@ -75,7 +77,13 @@ Legend
 
 Gas enforcement (CoreHost)
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
-- FASTPQ transfer batches are charged per entry (same as individual transfers).
+- FASTPQ transfer batch scope syscalls charge the fixed gas. Gas: `G_fastpq_batch`; batch
+  entries are charged separately with the transfer gas family when applied.
+- Contract administration bridge syscalls charge `G_contract_admin + bytes`.
+- `CALL_CONTRACT` charges `G_call_contract + request bytes + return bytes` in
+  the parent VM; child execution gas is consumed by the child VM.
+- Native and anonymous escrow bridge syscalls charge `G_escrow + bytes`.
+- Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
 - ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
 - `JSON_OBJECT` helper — Gas: `G_json_object + bytes`.
@@ -120,7 +128,9 @@ Numeric helpers (Norito)
 - Kotodama numeric aliases (`fixed_u128`, `Amount`, `Balance`) lower to these syscalls for deterministic unsigned, scale‑0 arithmetic.
 
 Domains / Peers
-- 0x10..0x12 are unused in ABI v1 after removing domain ownership/registration syscalls.
+- 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
+- 0x11 UNREGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_unreg_domain
+- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&AccountId(to)` → 0 — Gas: G_transfer_domain
 - 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
   - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
   - `peer` may be a string or an object with `public_key`/`publicKey`/`peer_id`/`peerId`/`key`; those keys are also accepted at top level.
@@ -197,11 +207,11 @@ Triggers
 - 0x41 REMOVE_TRIGGER — Args: `r10=&Name` → 0 — Gas: G_remove_trig
 - 0x42 SET_TRIGGER_ENABLED — Args: `r10=&Name, r11=enabled:u64` → 0 — Gas: G_set_trig
   - Writes trigger metadata key `__enabled` to `true`/`false`; missing key defaults to enabled.
-- 0x43 DEACTIVATE_CONTRACT_INSTANCE — Args: `r10=&NoritoBytes(DeactivateContractInstance)` → 0 — Gas: -
-- 0x44 REMOVE_SMART_CONTRACT_BYTES — Args: `r10=&NoritoBytes(RemoveSmartContractBytes)` → 0 — Gas: -
-- 0x45 REGISTER_SMART_CONTRACT_CODE — Args: `r10=&NoritoBytes(RegisterSmartContractCode)` → 0 — Gas: -
-- 0x46 REGISTER_SMART_CONTRACT_BYTES — Args: `r10=&NoritoBytes(RegisterSmartContractBytes)` → 0 — Gas: -
-- 0x47 ACTIVATE_CONTRACT_INSTANCE — Args: `r10=&NoritoBytes(ActivateContractInstance)` → 0 — Gas: -
+- 0x43 DEACTIVATE_CONTRACT_INSTANCE — Args: `r10=&NoritoBytes(DeactivateContractInstance)` → 0 — Gas: G_contract_admin + bytes
+- 0x44 REMOVE_SMART_CONTRACT_BYTES — Args: `r10=&NoritoBytes(RemoveSmartContractBytes)` → 0 — Gas: G_contract_admin + bytes
+- 0x45 REGISTER_SMART_CONTRACT_CODE — Args: `r10=&NoritoBytes(RegisterSmartContractCode)` → 0 — Gas: G_contract_admin + bytes
+- 0x46 REGISTER_SMART_CONTRACT_BYTES — Args: `r10=&NoritoBytes(RegisterSmartContractBytes)` → 0 — Gas: G_contract_admin + bytes
+- 0x47 ACTIVATE_CONTRACT_INSTANCE — Args: `r10=&NoritoBytes(ActivateContractInstance)` → 0 — Gas: G_contract_admin + bytes
 
 Lifecycle operations expect canonical Norito encodings of the corresponding ISI structs. Hosts
 trim empty `reason` strings for `DeactivateContractInstance`/`RemoveSmartContractBytes` and
@@ -222,6 +232,8 @@ Smart‑contract helpers (Norito)
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
   - Parses `SubscriptionUsageDelta` from trigger args, increments usage counters, and updates subscription metadata.
+- 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)` → `r10=ptr (&NoritoBytes(return))` or `0` — Gas: G_call_contract + request bytes + return bytes
+  - Executes the callee in a child VM. The parent pays only the fixed request/return overhead; child instructions and child syscalls consume the child VM budget.
 
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
@@ -279,20 +291,20 @@ AXT host flow
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
 Native asset escrow
-- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&NoritoBytes(Numeric)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
-- 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Queues `AcceptAssetEscrow` for the buyer authority.
-- 0xBA ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Queues `MarkEscrowPaymentSent` for the accepted buyer.
-- 0xBB ESCROW_RELEASE — Args: `r10=&Name(escrow)` → 0. Queues `ReleaseAssetEscrow` for the seller authority after payment is marked.
-- 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
-- 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `OpenEscrowDispute` for the seller or accepted buyer.
-- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Numeric buyer_amount)`, `r12=&NoritoBytes(Numeric seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
-- 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Queues the proof-carrying anonymous escrow opening ISI.
-- 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Queues `AcceptAnonymousAssetEscrow`.
-- 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Queues `MarkAnonymousEscrowPaymentSent`.
-- 0xAD ANONYMOUS_ESCROW_RELEASE — Args: `r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)` → 0. Queues the proof-carrying anonymous escrow release ISI.
-- 0xAE ANONYMOUS_ESCROW_CANCEL — Args: `r10=&NoritoBytes(CancelAnonymousAssetEscrow)` → 0. Queues the proof-carrying anonymous escrow cancellation ISI.
-- 0xAF ANONYMOUS_ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `OpenAnonymousEscrowDispute`.
-- 0xBF ANONYMOUS_ESCROW_RESOLVE_DISPUTE — Args: `r10=&NoritoBytes(ResolveAnonymousEscrowDispute)` → 0. Queues the proof-carrying anonymous escrow dispute-resolution ISI.
+- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&NoritoBytes(Numeric)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
+- 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAssetEscrow` for the buyer authority.
+- 0xBA ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkEscrowPaymentSent` for the accepted buyer.
+- 0xBB ESCROW_RELEASE — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `ReleaseAssetEscrow` for the seller authority after payment is marked.
+- 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
+- 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenEscrowDispute` for the seller or accepted buyer.
+- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Numeric buyer_amount)`, `r12=&NoritoBytes(Numeric seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
+- 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow opening ISI.
+- 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAnonymousAssetEscrow`.
+- 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkAnonymousEscrowPaymentSent`.
+- 0xAD ANONYMOUS_ESCROW_RELEASE — Args: `r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow release ISI.
+- 0xAE ANONYMOUS_ESCROW_CANCEL — Args: `r10=&NoritoBytes(CancelAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow cancellation ISI.
+- 0xAF ANONYMOUS_ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAnonymousEscrowDispute`.
+- 0xBF ANONYMOUS_ESCROW_RESOLVE_DISPUTE — Args: `r10=&NoritoBytes(ResolveAnonymousEscrowDispute)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow dispute-resolution ISI.
 - Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and generic `TRANSFER_ASSET` remains unable to drain active escrow custody accounts.
 
 Soracloud runtime host surface
@@ -306,7 +318,7 @@ Soracloud runtime host surface
 - 0xC7 SORACLOUD_EGRESS_FETCH — Args: `r10=&SoracloudRequest(EgressFetch)` → `r10=&SoracloudResponse(EgressFetch)`. Performs a bounded host-allowlisted fetch and fails deterministically on policy or hash mismatch.
 - 0xC8 SORACLOUD_READ_CONFIG — Args: `r10=&SoracloudRequest(ReadConfig)` → `r10=&SoracloudResponse(ReadConfig)`. Reads authoritative service config payload bytes for the active revision and is valid from ordinary Soracloud handlers.
 - 0xC9 SORACLOUD_READ_SECRET_ENVELOPE — Args: `r10=&SoracloudRequest(ReadSecretEnvelope)` → `r10=&SoracloudResponse(ReadSecretEnvelope)`. Reads the authoritative committed secret envelope for the active revision and is valid from ordinary Soracloud handlers; plaintext/ciphertext payload reads remain on the private-runtime `READ_SECRET` path.
-- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
+- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Gas: G_soracloud + request bytes + response bytes. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
 
 ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
@@ -379,9 +391,9 @@ node enforces that policy unconditionally.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
-| 0x10 | REGISTER_DOMAIN | - | u64=0 | - |
-| 0x11 | UNREGISTER_DOMAIN | - | u64=0 | - |
-| 0x12 | TRANSFER_DOMAIN | - | u64=0 | - |
+| 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
+| 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
+| 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId(to) | u64=0 | asset:gas/G_transfer_domain@ivm.core/v2 |
 | 0x13 | REGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v2 |
 | 0x14 | UNREGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v2 |
 | 0x15 | REGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_reg_peer@ivm.core/v2 |
@@ -399,8 +411,8 @@ node enforces that policy unconditionally.
 | 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
 | 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
 | 0x28 | NFT_BURN_ASSET | r10=&NftId | u64=0 | asset:gas/G_nft_burn_asset@ivm.core/v2 |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | - |
-| 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | - |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
+| 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | asset:gas/G_fastpq_batch@ivm.core/v2 |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
@@ -411,11 +423,11 @@ node enforces that policy unconditionally.
 | 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v2 |
 | 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v2 |
 | 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v2 |
-| 0x43 | DEACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(DeactivateContractInstance) | u64=0 | - |
-| 0x44 | REMOVE_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RemoveSmartContractBytes) | u64=0 | - |
-| 0x45 | REGISTER_SMART_CONTRACT_CODE | r10=&NoritoBytes(RegisterSmartContractCode) | u64=0 | - |
-| 0x46 | REGISTER_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RegisterSmartContractBytes) | u64=0 | - |
-| 0x47 | ACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(ActivateContractInstance) | u64=0 | - |
+| 0x43 | DEACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(DeactivateContractInstance) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
+| 0x44 | REMOVE_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RemoveSmartContractBytes) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
+| 0x45 | REGISTER_SMART_CONTRACT_CODE | r10=&NoritoBytes(RegisterSmartContractCode) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
+| 0x46 | REGISTER_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RegisterSmartContractBytes) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
+| 0x47 | ACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(ActivateContractInstance) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
 | 0x50 | STATE_GET | r10=&Name | r10=ptr (&NoritoBytes) or 0 | asset:gas/G_state_get@ivm.core/v2 + bytes |
 | 0x51 | STATE_SET | r10=&Name, r11=&NoritoBytes | u64=0 | asset:gas/G_state_set@ivm.core/v2 + bytes |
 | 0x52 | STATE_DEL | r10=&Name | u64=0 | asset:gas/G_state_del@ivm.core/v2 |
@@ -500,36 +512,36 @@ node enforces that policy unconditionally.
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
-| 0xA9 | CALL_CONTRACT | - | u64=0 | - |
-| 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | - |
-| 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | - |
-| 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | - |
-| 0xAD | ANONYMOUS_ESCROW_RELEASE | r10=&NoritoBytes(ReleaseAnonymousAssetEscrow) | u64=0 | - |
-| 0xAE | ANONYMOUS_ESCROW_CANCEL | r10=&NoritoBytes(CancelAnonymousAssetEscrow) | u64=0 | - |
-| 0xAF | ANONYMOUS_ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload) | r10=ptr (&NoritoBytes(return)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes |
+| 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xAD | ANONYMOUS_ESCROW_RELEASE | r10=&NoritoBytes(ReleaseAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xAE | ANONYMOUS_ESCROW_CANCEL | r10=&NoritoBytes(CancelAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xAF | ANONYMOUS_ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
-| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
-| 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | - |
-| 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | - |
-| 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | - |
-| 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | - |
-| 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
-| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
-| 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | - |
-| 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) | - |
-| 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) | - |
-| 0xC2 | SORACLOUD_EMIT_MAILBOX_MESSAGE | r10=&SoracloudRequest(EmitMailboxMessage) | r10=&SoracloudResponse(EmitMailboxMessage) | - |
-| 0xC3 | SORACLOUD_APPEND_JOURNAL | r10=&SoracloudRequest(AppendJournal) | r10=&SoracloudResponse(AppendJournal) | - |
-| 0xC4 | SORACLOUD_PUBLISH_CHECKPOINT | r10=&SoracloudRequest(PublishCheckpoint) | r10=&SoracloudResponse(PublishCheckpoint) | - |
-| 0xC5 | SORACLOUD_READ_SECRET | r10=&SoracloudRequest(ReadSecret) | r10=&SoracloudResponse(ReadSecret) | - |
-| 0xC6 | SORACLOUD_READ_CREDENTIAL | r10=&SoracloudRequest(ReadCredential) | r10=&SoracloudResponse(ReadCredential) | - |
-| 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | - |
-| 0xC8 | SORACLOUD_READ_CONFIG | r10=&SoracloudRequest(ReadConfig) | r10=&SoracloudResponse(ReadConfig) | - |
-| 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) | - |
+| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
+| 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC2 | SORACLOUD_EMIT_MAILBOX_MESSAGE | r10=&SoracloudRequest(EmitMailboxMessage) | r10=&SoracloudResponse(EmitMailboxMessage) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC3 | SORACLOUD_APPEND_JOURNAL | r10=&SoracloudRequest(AppendJournal) | r10=&SoracloudResponse(AppendJournal) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC4 | SORACLOUD_PUBLISH_CHECKPOINT | r10=&SoracloudRequest(PublishCheckpoint) | r10=&SoracloudResponse(PublishCheckpoint) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC5 | SORACLOUD_READ_SECRET | r10=&SoracloudRequest(ReadSecret) | r10=&SoracloudResponse(ReadSecret) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC6 | SORACLOUD_READ_CREDENTIAL | r10=&SoracloudRequest(ReadCredential) | r10=&SoracloudResponse(ReadCredential) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC8 | SORACLOUD_READ_CONFIG | r10=&SoracloudRequest(ReadConfig) | r10=&SoracloudResponse(ReadConfig) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
+| 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) | asset:gas/G_soracloud@ivm.core/v2 + request bytes + response bytes |
 | 0xD0 | SCHEMA_ENCODE_DIRECT | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0xD1 | SCHEMA_DECODE_DIRECT | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0xD2 | NUMERIC_TO_INT_DIRECT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |

@@ -12,8 +12,12 @@ use iroha::data_model::{
 use iroha_core::zk::test_utils::halo2_fixture_envelope;
 use iroha_test_network::NetworkBuilder;
 
-fn halo2_attachment(nonce: u8) -> ProofAttachment {
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [nonce; 32]);
+fn halo2_attachment(circuit_id: &str) -> ProofAttachment {
+    let seed = halo2_fixture_envelope(circuit_id, [0u8; 32]);
+    let vk_hash = seed
+        .vk_hash("halo2/ipa")
+        .expect("fixture must include a verifying key");
+    let fixture = halo2_fixture_envelope(circuit_id, vk_hash);
     let proof_box = fixture.proof_box("halo2/ipa");
     let vk_box = fixture
         .vk_box("halo2/ipa")
@@ -38,7 +42,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_lists_after_verify
     {
-        let attachment = halo2_attachment(0);
+        let attachment = halo2_attachment("halo2/ipa:tiny-add");
         client.submit_blocking(iroha::data_model::isi::zk::VerifyProof::new(attachment))?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
@@ -51,7 +55,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_backend_filters
     {
-        let att1 = halo2_attachment(1);
+        let att1 = halo2_attachment("halo2/ipa:tiny-add-public");
         let att2 = iroha::data_model::proof::ProofAttachment::new_inline(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x03]),
@@ -80,7 +84,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_status_filters
     {
-        let att_ok = halo2_attachment(2);
+        let att_ok = halo2_attachment("halo2/ipa:tiny-add2inst-public");
         let att_bad = iroha::data_model::proof::ProofAttachment::new_inline(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x20]),
@@ -138,10 +142,10 @@ fn retry_records_by_status(
 }
 
 #[test]
-fn halo2_attachment_nonce_changes_proof_hash() {
-    let a = halo2_attachment(0);
-    let b = halo2_attachment(1);
+fn halo2_attachment_circuit_changes_proof_hash() {
+    let a = halo2_attachment("halo2/ipa:tiny-add");
+    let b = halo2_attachment("halo2/ipa:tiny-add-public");
     let hash_a = iroha_core::zk::hash_proof(&a.proof);
     let hash_b = iroha_core::zk::hash_proof(&b.proof);
-    assert_ne!(hash_a, hash_b, "nonce should change proof hash");
+    assert_ne!(hash_a, hash_b, "fixture circuit should change proof hash");
 }

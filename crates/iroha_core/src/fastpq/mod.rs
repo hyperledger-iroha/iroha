@@ -158,6 +158,17 @@ fn u64_from_le_bytes(bytes: &[u8]) -> u64 {
     ])
 }
 
+#[inline(always)]
+fn partial_u64_from_le_bytes(bytes: &[u8; 8], len: usize) -> u64 {
+    debug_assert!(len <= bytes.len());
+    let word = u64::from_le_bytes(*bytes);
+    match len {
+        0 => 0,
+        8 => word,
+        _ => word & ((1u64 << (len * 8)) - 1),
+    }
+}
+
 #[derive(Debug)]
 struct PoseidonWordPacker<'a> {
     words: &'a mut Vec<u64>,
@@ -186,16 +197,14 @@ impl<'a> PoseidonWordPacker<'a> {
             bytes = &bytes[take..];
             if self.pending_len == self.pending_bytes.len() {
                 self.words.push(u64::from_le_bytes(self.pending_bytes));
-                self.pending_bytes = [0; 8];
                 self.pending_len = 0;
             }
         }
 
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.words.push(u64_from_le_bytes(chunk));
+        while bytes.len() >= 8 {
+            self.words.push(u64_from_le_bytes(&bytes[..8]));
+            bytes = &bytes[8..];
         }
-        bytes = chunks.remainder();
 
         if !bytes.is_empty() {
             self.pending_bytes[..bytes.len()].copy_from_slice(bytes);
@@ -206,7 +215,10 @@ impl<'a> PoseidonWordPacker<'a> {
     #[inline]
     fn finish(self) {
         if self.pending_len > 0 {
-            self.words.push(u64::from_le_bytes(self.pending_bytes));
+            self.words.push(partial_u64_from_le_bytes(
+                &self.pending_bytes,
+                self.pending_len,
+            ));
         }
     }
 }

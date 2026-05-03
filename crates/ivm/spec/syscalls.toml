@@ -17,6 +17,24 @@ ret = "u64=0"
 gas = "G_debug"
 
 [[syscall]]
+number = "0x10"
+args = "r10=&DomainId"
+ret = "u64=0"
+gas = "G_reg_domain"
+
+[[syscall]]
+number = "0x11"
+args = "r10=&DomainId"
+ret = "u64=0"
+gas = "G_unreg_domain"
+
+[[syscall]]
+number = "0x12"
+args = "r10=&DomainId, r11=&AccountId(to)"
+ret = "u64=0"
+gas = "G_transfer_domain"
+
+[[syscall]]
 number = "0x13"
 args = "r10=&AccountId"
 ret = "u64=0"
@@ -122,13 +140,13 @@ gas = "G_nft_burn_asset"
 number = "0x29"
 args = "-"
 ret = "u64=0"
-gas = "-"
+gas = "G_fastpq_batch"
 
 [[syscall]]
 number = "0x2A"
 args = "-"
 ret = "u64=0"
-gas = "-"
+gas = "G_fastpq_batch"
 
 [[syscall]]
 number = "0x2B"
@@ -194,31 +212,31 @@ gas = "G_set_trig"
 number = "0x43"
 args = "r10=&NoritoBytes(DeactivateContractInstance)"
 ret = "u64=0"
-gas = "-"
+gas = "G_contract_admin + bytes"
 
 [[syscall]]
 number = "0x44"
 args = "r10=&NoritoBytes(RemoveSmartContractBytes)"
 ret = "u64=0"
-gas = "-"
+gas = "G_contract_admin + bytes"
 
 [[syscall]]
 number = "0x45"
 args = "r10=&NoritoBytes(RegisterSmartContractCode)"
 ret = "u64=0"
-gas = "-"
+gas = "G_contract_admin + bytes"
 
 [[syscall]]
 number = "0x46"
 args = "r10=&NoritoBytes(RegisterSmartContractBytes)"
 ret = "u64=0"
-gas = "-"
+gas = "G_contract_admin + bytes"
 
 [[syscall]]
 number = "0x47"
 args = "r10=&NoritoBytes(ActivateContractInstance)"
 ret = "u64=0"
-gas = "-"
+gas = "G_contract_admin + bytes"
 
 [[syscall]]
 number = "0x50"
@@ -613,40 +631,52 @@ ret = "ptr (&AccountId in INPUT)"
 gas = "G_alias_resolve"
 
 [[syscall]]
+number = "0xA8"
+args = "-"
+ret = "r10=unix_time_ms:u64"
+gas = "G_sysvar"
+
+[[syscall]]
+number = "0xA9"
+args = "r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)"
+ret = "r10=ptr (&NoritoBytes(return)) or 0"
+gas = "G_call_contract + request bytes + return bytes"
+
+[[syscall]]
 number = "0xAA"
 args = "r10=&NoritoBytes(OpenAnonymousAssetEscrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xAB"
 args = "r10=&Name(escrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xAC"
 args = "r10=&Name(escrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xAD"
 args = "r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xAE"
 args = "r10=&NoritoBytes(CancelAnonymousAssetEscrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xAF"
 args = "r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xB0"
@@ -682,109 +712,109 @@ gas = "G_axt + bytes"
 number = "0xB8"
 args = "r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xB9"
 args = "r10=&Name(escrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBA"
 args = "r10=&Name(escrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBB"
 args = "r10=&Name(escrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBC"
 args = "r10=&Name(escrow)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBD"
 args = "r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBE"
 args = "r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xBF"
 args = "r10=&NoritoBytes(ResolveAnonymousEscrowDispute)"
 ret = "u64=0"
-gas = "-"
+gas = "G_escrow + bytes"
 
 [[syscall]]
 number = "0xC0"
 args = "r10=&SoracloudRequest(ReadCommittedState)"
 ret = "r10=&SoracloudResponse(ReadCommittedState)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC1"
 args = "r10=&SoracloudRequest(EmitStateMutation)"
 ret = "r10=&SoracloudResponse(EmitStateMutation)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC2"
 args = "r10=&SoracloudRequest(EmitMailboxMessage)"
 ret = "r10=&SoracloudResponse(EmitMailboxMessage)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC3"
 args = "r10=&SoracloudRequest(AppendJournal)"
 ret = "r10=&SoracloudResponse(AppendJournal)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC4"
 args = "r10=&SoracloudRequest(PublishCheckpoint)"
 ret = "r10=&SoracloudResponse(PublishCheckpoint)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC5"
 args = "r10=&SoracloudRequest(ReadSecret)"
 ret = "r10=&SoracloudResponse(ReadSecret)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC6"
 args = "r10=&SoracloudRequest(ReadCredential)"
 ret = "r10=&SoracloudResponse(ReadCredential)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC7"
 args = "r10=&SoracloudRequest(EgressFetch)"
 ret = "r10=&SoracloudResponse(EgressFetch)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC8"
 args = "r10=&SoracloudRequest(ReadConfig)"
 ret = "r10=&SoracloudResponse(ReadConfig)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xC9"
 args = "r10=&SoracloudRequest(ReadSecretEnvelope)"
 ret = "r10=&SoracloudResponse(ReadSecretEnvelope)"
-gas = "-"
+gas = "G_soracloud + request bytes + response bytes"
 
 [[syscall]]
 number = "0xF0"

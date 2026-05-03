@@ -640,6 +640,8 @@ pub(crate) enum QcValidationError {
     AggregateMismatch,
     #[error("QC subject mismatch for signer {signer}")]
     SubjectMismatch { signer: ValidatorIndex },
+    #[error("QC state roots mismatch for signer {signer}")]
+    RootsMismatch { signer: ValidatorIndex },
     #[error("NEW_VIEW QC highest certificate mismatch")]
     HighestQcMismatch,
     #[error("QC contains an invalid signature from signer {signer}")]
@@ -666,6 +668,7 @@ impl QcValidationError {
             Self::ViewMismatch { .. } => "view_mismatch",
             Self::AggregateMismatch => "aggregate_mismatch",
             Self::SubjectMismatch { .. } => "subject_mismatch",
+            Self::RootsMismatch { .. } => "roots_mismatch",
             Self::HighestQcMismatch => "highest_qc_mismatch",
             Self::InvalidSignature { .. } => "invalid_signature",
             Self::SignerMissingFromBlock { .. } => "signer_missing_from_block",
@@ -1109,7 +1112,8 @@ fn qc_validation_error_to_evidence(
         | QcValidationError::AggregateMismatch
         | QcValidationError::DuplicateSigners
         | QcValidationError::HighestQcMismatch
-        | QcValidationError::SubjectMismatch { .. } => Some(Evidence {
+        | QcValidationError::SubjectMismatch { .. }
+        | QcValidationError::RootsMismatch { .. } => Some(Evidence {
             kind: EvidenceKind::InvalidQc,
             payload: EvidencePayload::InvalidQc {
                 certificate: qc.clone(),
@@ -2455,6 +2459,11 @@ fn validate_qc_against_votes(
         };
         if vote.block_hash != qc.subject_block_hash {
             return Err(QcValidationError::SubjectMismatch { signer: *signer });
+        }
+        if vote.parent_state_root != qc.parent_state_root
+            || vote.post_state_root != qc.post_state_root
+        {
+            return Err(QcValidationError::RootsMismatch { signer: *signer });
         }
         if !skip_vote_sig_check
             && !vote_signature_valid(vote, &signature_topology, chain_id, mode_tag)

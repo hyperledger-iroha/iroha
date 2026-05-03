@@ -29,7 +29,8 @@ use norito::json::{self, FastJsonWrite, JsonDeserialize};
 #[cfg(feature = "sm")]
 use crate::sm::Sm2Signature;
 use crate::{
-    Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, ffi, hex_decode,
+    Algorithm, Error, HashOf, PrivateKey, PublicKey, PublicKeyFull, error::ParseError, ffi,
+    hex_decode,
 };
 
 ffi::ffi_item! {
@@ -49,6 +50,7 @@ ffi::ffi_item! {
 }
 
 const PUBLIC_KEY_FULL_CACHE_LIMIT: usize = 128;
+const ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE: usize = 16_384;
 
 struct PublicKeyFullCacheEntry {
     algorithm: u8,
@@ -56,13 +58,137 @@ struct PublicKeyFullCacheEntry {
     full: PublicKeyFull,
 }
 
+#[derive(Clone, Copy)]
+struct Ed25519PublicKeyFullFastEntry {
+    payload: [u8; 32],
+    full: ed25519::PublicKey,
+}
+
+struct PublicKeyFullFastCache {
+    ed25519: Box<[Option<Ed25519PublicKeyFullFastEntry>]>,
+    #[cfg(test)]
+    ed25519_hits: usize,
+    #[cfg(test)]
+    ed25519_misses: usize,
+    #[cfg(test)]
+    ed25519_inserts: usize,
+}
+
+impl PublicKeyFullFastCache {
+    fn new() -> Self {
+        Self {
+            ed25519: vec![None; ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE].into_boxed_slice(),
+            #[cfg(test)]
+            ed25519_hits: 0,
+            #[cfg(test)]
+            ed25519_misses: 0,
+            #[cfg(test)]
+            ed25519_inserts: 0,
+        }
+    }
+
+    fn get_ed25519(&mut self, payload: &[u8]) -> Option<ed25519::PublicKey> {
+        let payload: [u8; 32] = payload.try_into().ok()?;
+        let slot = ed25519_public_key_full_fast_index(&payload);
+        if let Some(entry) = self.ed25519[slot]
+            && entry.payload == payload
+        {
+            #[cfg(test)]
+            {
+                self.ed25519_hits = self.ed25519_hits.saturating_add(1);
+            }
+            return Some(entry.full);
+        }
+        #[cfg(test)]
+        {
+            self.ed25519_misses = self.ed25519_misses.saturating_add(1);
+        }
+        None
+    }
+
+    fn insert_ed25519(&mut self, payload: [u8; 32], full: ed25519::PublicKey) {
+        let slot = ed25519_public_key_full_fast_index(&payload);
+        self.ed25519[slot] = Some(Ed25519PublicKeyFullFastEntry { payload, full });
+        #[cfg(test)]
+        {
+            self.ed25519_inserts = self.ed25519_inserts.saturating_add(1);
+        }
+    }
+
+    #[cfg(test)]
+    fn reset(&mut self) {
+        self.ed25519.fill(None);
+        self.ed25519_hits = 0;
+        self.ed25519_misses = 0;
+        self.ed25519_inserts = 0;
+    }
+
+    #[cfg(test)]
+    fn stats(&self) -> PublicKeyFullFastCacheStats {
+        PublicKeyFullFastCacheStats {
+            ed25519_hits: self.ed25519_hits,
+            ed25519_misses: self.ed25519_misses,
+            ed25519_inserts: self.ed25519_inserts,
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PublicKeyFullFastCacheStats {
+    ed25519_hits: usize,
+    ed25519_misses: usize,
+    ed25519_inserts: usize,
+}
+
 thread_local! {
+    static PUBLIC_KEY_FULL_FAST_CACHE: RefCell<PublicKeyFullFastCache> =
+        RefCell::new(PublicKeyFullFastCache::new());
     static PUBLIC_KEY_FULL_CACHE: RefCell<Vec<PublicKeyFullCacheEntry>> =
         const { RefCell::new(Vec::new()) };
 }
 
+#[inline]
+fn ed25519_public_key_full_fast_index(payload: &[u8; 32]) -> usize {
+    let a = u64::from_le_bytes(payload[0..8].try_into().expect("slice length checked"));
+    let b = u64::from_le_bytes(payload[8..16].try_into().expect("slice length checked"));
+    let c = u64::from_le_bytes(payload[16..24].try_into().expect("slice length checked"));
+    let d = u64::from_le_bytes(payload[24..32].try_into().expect("slice length checked"));
+    let mixed = a ^ b.rotate_left(17) ^ c.rotate_left(31) ^ d.rotate_left(47);
+    let mask =
+        u64::try_from(ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE - 1).expect("cache mask fits in u64");
+    usize::try_from(mixed & mask).expect("masked cache index fits in usize")
+}
+
+#[cfg(test)]
+fn reset_public_key_full_fast_cache_for_tests() {
+    PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow_mut().reset());
+}
+
+#[cfg(test)]
+fn public_key_full_fast_cache_stats_for_tests() -> PublicKeyFullFastCacheStats {
+    PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow().stats())
+}
+
 fn public_key_full_cached(public_key: &PublicKey) -> PublicKeyFull {
     let (algorithm, payload) = public_key.to_bytes();
+    if algorithm == Algorithm::Ed25519 {
+        if let Some(full) =
+            PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow_mut().get_ed25519(payload))
+        {
+            return PublicKeyFull::Ed25519(full);
+        }
+        let payload_bytes: [u8; 32] = payload
+            .try_into()
+            .expect("Ed25519 PublicKey invariant requires 32-byte payload");
+        let full = ed25519::Ed25519Sha512::parse_public_key(&payload_bytes)
+            .expect("Ed25519 PublicKey invariant requires valid payload");
+        PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| {
+            cache.borrow_mut().insert_ed25519(payload_bytes, full);
+        });
+        return PublicKeyFull::Ed25519(full);
+    }
+
     let algorithm = algorithm as u8;
     PUBLIC_KEY_FULL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -500,7 +626,7 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
 mod tests {
 
     use super::*;
-    use crate::{Algorithm, HashOf, KeyPair};
+    use crate::{Algorithm, HashOf, KeyGenOption, KeyPair};
 
     #[test]
     #[cfg(feature = "rand")]
@@ -552,6 +678,35 @@ mod tests {
             "cache must not mix distinct public keys"
         );
         signature.verify(key_one.public_key(), message).unwrap();
+    }
+
+    #[test]
+    fn ed25519_public_key_full_fast_cache_hits_after_first_lookup() {
+        let (raw_public, _) = ed25519::Ed25519Sha512::keypair(KeyGenOption::UseSeed(vec![7u8; 32]));
+        let public_key = PublicKey::new(PublicKeyFull::Ed25519(raw_public));
+        reset_public_key_full_fast_cache_for_tests();
+
+        let first = public_key_full_cached(&public_key);
+        assert!(matches!(first, PublicKeyFull::Ed25519(_)));
+        assert_eq!(
+            public_key_full_fast_cache_stats_for_tests(),
+            PublicKeyFullFastCacheStats {
+                ed25519_hits: 0,
+                ed25519_misses: 1,
+                ed25519_inserts: 1,
+            }
+        );
+
+        let second = public_key_full_cached(&public_key);
+        assert!(matches!(second, PublicKeyFull::Ed25519(_)));
+        assert_eq!(
+            public_key_full_fast_cache_stats_for_tests(),
+            PublicKeyFullFastCacheStats {
+                ed25519_hits: 1,
+                ed25519_misses: 1,
+                ed25519_inserts: 1,
+            }
+        );
     }
 
     #[test]

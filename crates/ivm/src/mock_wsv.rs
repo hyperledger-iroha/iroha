@@ -29,6 +29,7 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     VMError,
     axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest},
+    gas,
     host::IVMHost,
     ivm::IVM,
     parallel::StateUpdate,
@@ -2695,10 +2696,13 @@ impl WsvHost {
 
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if self.fastpq_batch_entries.is_some() {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::PermissionDenied,
+            ));
         }
         self.fastpq_batch_entries = Some(Vec::new());
-        Ok(0)
+        Ok(gas::G_FASTPQ_BATCH)
     }
 
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
@@ -2718,10 +2722,13 @@ impl WsvHost {
 
     fn finish_fastpq_batch(&mut self) -> Result<u64, VMError> {
         let Some(entries) = self.fastpq_batch_entries.take() else {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::PermissionDenied,
+            ));
         };
         if entries.is_empty() {
-            return Err(VMError::DecodeError);
+            return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
         }
         for (from, to, asset, amount) in entries {
             if !self.wsv.transfer_with_permission_bypass(
@@ -2735,7 +2742,7 @@ impl WsvHost {
                 return Err(VMError::PermissionDenied);
             }
         }
-        Ok(0)
+        Ok(gas::G_FASTPQ_BATCH)
     }
 
     fn apply_fastpq_batch_tlv(&mut self, vm: &IVM) -> Result<u64, VMError> {
@@ -2768,6 +2775,14 @@ impl WsvHost {
             }
         }
         Ok(Self::mutation_batch_gas(entry_count))
+    }
+
+    fn unsupported_syscall_error(number: u32) -> VMError {
+        if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
+            VMError::metered_not_implemented(MUTATION_GAS, number)
+        } else {
+            VMError::UnknownSyscall(number)
+        }
     }
 
     fn axt_expiry_slot_with_skew(&self, expiry_slot: u64) -> u64 {
@@ -6227,7 +6242,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
             syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
 
@@ -7599,7 +7614,7 @@ mod tests_null_decode {
 
         assert_eq!(
             host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
-            Ok(0)
+            Ok(gas::G_FASTPQ_BATCH)
         );
         vm.set_register(10, 1);
         vm.set_register(11, 2);
@@ -7615,7 +7630,7 @@ mod tests_null_decode {
         );
         assert_eq!(
             host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm),
-            Ok(0)
+            Ok(gas::G_FASTPQ_BATCH)
         );
 
         let mut apply_wsv = MockWorldStateView::with_balances(&[

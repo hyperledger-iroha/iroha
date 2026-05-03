@@ -1245,6 +1245,13 @@ struct NestedContractCallHostSnapshot {
 }
 
 impl HostExecutionArtifacts {
+    pub(crate) fn queued_instructions(&self) -> Vec<InstructionBox> {
+        self.queued
+            .iter()
+            .map(|queued| queued.instruction.clone())
+            .collect()
+    }
+
     pub(crate) fn apply_to_transaction(
         self,
         tx: &mut StateTransaction<'_, '_>,
@@ -4131,25 +4138,66 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        let mut request_bytes = 0usize;
         let caller_context = self
             .current_contract_runtime_context
             .clone()
-            .ok_or(ivm::VMError::PermissionDenied)?;
-        let contract_literal = String::from_utf8(Self::decode_tlv_blob(vm, vm.register(10))?)
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .ok_or_else(|| {
+                ivm::VMError::metered(ivm::gas::G_CALL_CONTRACT, ivm::VMError::PermissionDenied)
+            })?;
+        let contract_literal_blob = Self::decode_tlv_blob(vm, vm.register(10))
+            .map_err(|err| ivm::VMError::metered(ivm::gas::G_CALL_CONTRACT, err))?;
+        request_bytes = request_bytes.saturating_add(contract_literal_blob.len());
+        let contract_literal = String::from_utf8(contract_literal_blob).map_err(|_| {
+            ivm::VMError::metered(
+                ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                ivm::VMError::DecodeError,
+            )
+        })?;
         let contract_address = contract_literal
             .parse::<iroha_data_model::smart_contract::ContractAddress>()
-            .map_err(|_| ivm::VMError::PermissionDenied)?;
-        let entrypoint_blob = Self::decode_tlv_blob(vm, vm.register(11))?;
-        let entrypoint =
-            String::from_utf8(entrypoint_blob).map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| {
+                ivm::VMError::metered(
+                    ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                    ivm::VMError::PermissionDenied,
+                )
+            })?;
+        let entrypoint_blob = Self::decode_tlv_blob(vm, vm.register(11)).map_err(|err| {
+            ivm::VMError::metered(
+                ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                err,
+            )
+        })?;
+        request_bytes = request_bytes.saturating_add(entrypoint_blob.len());
+        let entrypoint = String::from_utf8(entrypoint_blob).map_err(|_| {
+            ivm::VMError::metered(
+                ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                ivm::VMError::DecodeError,
+            )
+        })?;
         if entrypoint.trim().is_empty() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::metered(
+                ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                ivm::VMError::PermissionDenied,
+            ));
         }
-        let payload = Self::decode_tlv_json(vm, vm.register(12))?;
+        let payload = Self::decode_tlv_json(vm, vm.register(12)).map_err(|err| {
+            ivm::VMError::metered(
+                ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                err,
+            )
+        })?;
+        let payload_bytes = norito::to_bytes(&payload).map_err(|_| {
+            ivm::VMError::metered(
+                ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0),
+                ivm::VMError::NoritoInvalid,
+            )
+        })?;
+        request_bytes = request_bytes.saturating_add(payload_bytes.len());
+        let request_gas = ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, 0);
         let record = self
             .resolve_bound_contract_record_by_address(&contract_address)
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: record.contract_address.clone(),
             entrypoint,
@@ -4161,10 +4209,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             record.code_bytes.as_ref(),
             record.contract_alias.clone(),
         )
-        .map_err(|err| map_validation_fail(&err))?;
+        .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
         let callee_context = call_context
             .runtime_context()
-            .ok_or(ivm::VMError::PermissionDenied)?;
+            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
         let return_type = record
             .manifest
             .entrypoints
@@ -4175,15 +4223,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .find(|descriptor| descriptor.name == entrypoint_name)
             })
             .and_then(|descriptor| descriptor.return_type.as_deref());
-        let return_schema = NestedCallReturnSchema::parse(return_type)?;
-        let child_gas_limit = vm.remaining_gas();
+        let return_schema = NestedCallReturnSchema::parse(return_type)
+            .map_err(|err| ivm::VMError::metered(request_gas, err))?;
+        if vm.remaining_gas() < request_gas {
+            return Err(ivm::VMError::OutOfGas);
+        }
+        let child_gas_limit = vm.remaining_gas().saturating_sub(request_gas);
         let mut child_vm = IVM::new(child_gas_limit);
         child_vm
             .load_program(record.code_bytes.as_ref())
-            .map_err(|_| ivm::VMError::DecodeError)?;
+            .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
         if let Some(entrypoint_pc) = call_context.entrypoint_pc() {
             child_vm.set_register(1, child_vm.memory.code_len());
-            child_vm.set_program_counter(entrypoint_pc)?;
+            child_vm
+                .set_program_counter(entrypoint_pc)
+                .map_err(|err| ivm::VMError::metered(request_gas, err))?;
         }
         child_vm.set_gas_limit(child_gas_limit);
 
@@ -4196,22 +4250,40 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let run_result = child_vm.run_with_host(self);
         match run_result {
             Ok(()) => {
-                let encoded_return =
-                    Self::encode_nested_contract_return(&child_vm, &return_schema)?;
-                vm.gas_remaining = child_vm.remaining_gas();
+                let encoded_return = Self::encode_nested_contract_return(&child_vm, &return_schema)
+                    .map_err(|err| ivm::VMError::metered(request_gas, err))?;
+                vm.gas_remaining = child_vm.remaining_gas().saturating_add(request_gas);
                 self.restore_nested_contract_call_frame(&snapshot);
                 match encoded_return {
                     Some(encoded_return) => {
-                        let ptr = Self::alloc_norito_bytes(vm, &encoded_return)?;
+                        let return_bytes = encoded_return.len();
+                        let ptr = Self::alloc_norito_bytes(vm, &encoded_return).map_err(|err| {
+                            ivm::VMError::metered(
+                                ivm::gas::syscall_byte_gas(
+                                    ivm::gas::G_CALL_CONTRACT,
+                                    request_bytes,
+                                    return_bytes,
+                                ),
+                                err,
+                            )
+                        })?;
                         vm.set_register(10, ptr);
+                        Ok(ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_CALL_CONTRACT,
+                            request_bytes,
+                            return_bytes,
+                        ))
                     }
-                    None => vm.set_register(10, 0),
+                    None => {
+                        vm.set_register(10, 0);
+                        Ok(request_gas)
+                    }
                 }
-                Ok(0)
             }
             Err(err) => {
+                vm.gas_remaining = child_vm.remaining_gas().saturating_add(request_gas);
                 self.rollback_nested_contract_call(&snapshot);
-                Err(err)
+                Err(ivm::VMError::metered(request_gas, err))
             }
         }
     }
@@ -5326,10 +5398,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn begin_fastpq_batch(&mut self) -> Result<u64, ivm::VMError> {
         if self.fastpq_batch_entries.is_some() {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::metered(
+                ivm::gas::G_FASTPQ_BATCH,
+                ivm::VMError::PermissionDenied,
+            ));
         }
         self.fastpq_batch_entries = Some(Vec::new());
-        Ok(0)
+        Ok(ivm::gas::G_FASTPQ_BATCH)
     }
 
     fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -5354,13 +5429,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn finish_fastpq_batch(&mut self) -> Result<u64, ivm::VMError> {
         let Some(entries) = self.fastpq_batch_entries.take() else {
-            return Err(ivm::VMError::PermissionDenied);
+            return Err(ivm::VMError::metered(
+                ivm::gas::G_FASTPQ_BATCH,
+                ivm::VMError::PermissionDenied,
+            ));
         };
         if entries.is_empty() {
-            return Err(ivm::VMError::DecodeError);
+            return Err(ivm::VMError::metered(
+                ivm::gas::G_FASTPQ_BATCH,
+                ivm::VMError::DecodeError,
+            ));
         }
         self.enqueue_fastpq_batch(entries);
-        Ok(0)
+        Ok(ivm::gas::G_FASTPQ_BATCH)
     }
 
     fn apply_fastpq_batch_from_tlv(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -7893,8 +7974,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
             ivm::syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
 
-            // All other stateful operations must be routed via ISIs (not yet implemented).
-            _ => Err(ivm::VMError::UnknownSyscall(number)),
+            // All other allowed stateful operations must be routed via ISIs
+            // before this host can execute them directly.
+            _ => Err(ivm::VMError::metered_not_implemented(
+                ivm::gas::G_CONTRACT_ADMIN,
+                number,
+            )),
         }
     }
 

@@ -36,6 +36,7 @@ use crate::{
     SyscallPolicy,
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
     error::VMError,
+    gas,
     ivm::IVM,
     memory::Memory,
     metadata::{CONTRACT_INTERFACE_SECTION_MAGIC, LITERAL_SECTION_MAGIC},
@@ -537,11 +538,14 @@ impl DefaultHost {
 
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::PermissionDenied,
+            ));
         }
         self.fastpq_batch_active = true;
         self.fastpq_batch_has_entries = false;
-        Ok(0)
+        Ok(gas::G_FASTPQ_BATCH)
     }
 
     fn push_fastpq_batch_entry(&mut self, vm: &IVM) -> Result<u64, VMError> {
@@ -558,14 +562,17 @@ impl DefaultHost {
 
     fn finish_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if !self.fastpq_batch_active {
-            return Err(VMError::PermissionDenied);
+            return Err(VMError::metered(
+                gas::G_FASTPQ_BATCH,
+                VMError::PermissionDenied,
+            ));
         }
         self.fastpq_batch_active = false;
         if !self.fastpq_batch_has_entries {
-            return Err(VMError::DecodeError);
+            return Err(VMError::metered(gas::G_FASTPQ_BATCH, VMError::DecodeError));
         }
         self.fastpq_batch_has_entries = false;
-        Ok(0)
+        Ok(gas::G_FASTPQ_BATCH)
     }
 
     fn apply_fastpq_batch(&mut self, vm: &IVM) -> Result<u64, VMError> {
@@ -583,6 +590,14 @@ impl DefaultHost {
             return Err(VMError::DecodeError);
         }
         Ok(MUTATION_GAS.saturating_mul(u64::try_from(batch.entries().len()).unwrap_or(u64::MAX)))
+    }
+
+    fn unsupported_syscall_error(number: u32) -> VMError {
+        if syscalls::abi_syscall_list().binary_search(&number).is_ok() {
+            VMError::metered_not_implemented(MUTATION_GAS, number)
+        } else {
+            VMError::UnknownSyscall(number)
+        }
     }
 
     /// Retrieve and clear the output committed by the last program run.
@@ -1271,9 +1286,9 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_QUERY_GET_NFT
             | crate::syscalls::SYSCALL_QUERY_GET_PARAMETER
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST
-            | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => {
-                Err(VMError::NotImplemented { syscall: number })
-            }
+            | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => Err(
+                VMError::metered_not_implemented(STATE_QUERY_GAS_BASE, number),
+            ),
             crate::syscalls::SYSCALL_STATE_GET => {
                 let path = Self::decode_name_tlv(vm, 10)?;
                 self.access_log.read_keys.insert(path.as_ref().to_string());
@@ -2072,7 +2087,10 @@ impl IVMHost for DefaultHost {
                     vm.set_register(10, val);
                     Ok(GET_PRIVATE_INPUT_GAS)
                 } else {
-                    Err(VMError::UnknownSyscall(number))
+                    Err(VMError::metered(
+                        GET_PRIVATE_INPUT_GAS,
+                        VMError::PermissionDenied,
+                    ))
                 }
             }
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
@@ -2143,7 +2161,7 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_VERIFY_PROOF => {
                 // Execution proof verification is implemented at the node layer (CoreHost),
                 // not inside the standalone IVM host.
-                Err(VMError::NotImplemented { syscall: number })
+                Err(VMError::metered_not_implemented(VERIFY_GAS_BASE, number))
             }
             crate::syscalls::SYSCALL_VERIFY_SIGNATURE => {
                 // r10 = &message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
@@ -2801,7 +2819,7 @@ impl IVMHost for DefaultHost {
             syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(),
             syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
             syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
-            _ => Err(VMError::UnknownSyscall(number)),
+            _ => Err(Self::unsupported_syscall_error(number)),
         }
     }
 

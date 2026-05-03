@@ -91416,6 +91416,10 @@ fn qc_validation_error_reports_reason_labels() {
         "subject_mismatch"
     );
     assert_eq!(
+        super::QcValidationError::RootsMismatch { signer: 0 }.telemetry_reason(),
+        "roots_mismatch"
+    );
+    assert_eq!(
         super::QcValidationError::InvalidSignature { signer: 1 }.telemetry_reason(),
         "invalid_signature"
     );
@@ -92207,6 +92211,18 @@ async fn recover_qc_from_aggregate_accepts_commit_subject_mismatch() {
     assert!(
         recovered.is_some(),
         "aggregate recovery should tolerate stale local vote subjects for catch-up QCs"
+    );
+    let recovered = actor.recover_qc_from_aggregate(
+        &qc,
+        &topology,
+        ConsensusMode::Permissioned,
+        None,
+        Some(true),
+        &super::QcValidationError::RootsMismatch { signer: 0 },
+    );
+    assert!(
+        recovered.is_some(),
+        "aggregate recovery should tolerate stale local vote roots for catch-up QCs"
     );
 
     harness.shutdown.send();
@@ -123973,6 +123989,63 @@ fn validate_qc_against_votes_rejects_subject_mismatch() {
     assert!(matches!(
         result,
         Err(super::QcValidationError::SubjectMismatch { signer: 0 })
+    ));
+}
+
+#[test]
+fn validate_qc_against_votes_rejects_state_root_mismatch() {
+    let chain: ChainId = "qc-root-mismatch".parse().expect("chain id parses");
+    let kp0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peers = vec![PeerId::new(kp0.public_key().clone())];
+    let topology = super::network_topology::Topology::new(peers);
+    let keypairs = vec![kp0.clone()];
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA2; Hash::LENGTH]));
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        1,
+        0,
+        0,
+        vec![0x01],
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+
+    let mut vote_log = BTreeMap::new();
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: Hash::prehashed([0xC3; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0xD4; Hash::LENGTH]),
+        height: qc.height,
+        view: qc.view,
+        epoch: qc.epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
+    vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+
+    let result = validate_qc_against_votes_with_keys(
+        &vote_log,
+        &qc,
+        &topology,
+        &keypairs,
+        &chain,
+        ConsensusMode::Permissioned,
+        None,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    assert!(matches!(
+        result,
+        Err(super::QcValidationError::RootsMismatch { signer: 0 })
     ));
 }
 

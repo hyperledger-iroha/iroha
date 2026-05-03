@@ -529,7 +529,8 @@ impl SignedTransaction {
     /// This matches the canonical transaction hash returned by [`Self::hash`].
     #[inline]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
-        HashOf::new(&TransactionEntrypoint::External(self.clone()))
+        let entry_hash = HashOf::new(&ExternalEntrypointRef(self));
+        HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
 
     /// Injects a set of fictitious instructions into the transaction payload for testing.
@@ -1023,6 +1024,32 @@ impl norito::json::JsonDeserialize for ExecutionStep {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         ConstVec::<InstructionBox>::json_deserialize(parser).map(ExecutionStep)
+    }
+}
+
+struct ExternalEntrypointRef<'a>(&'a SignedTransaction);
+
+impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&0_u32, &mut writer)?;
+        let mut tmp = norito::core::DeriveSmallBuf::new();
+        norito::core::write_len_prefixed(&mut writer, self.0, &mut tmp)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0
+            .encoded_len_hint()
+            .map(|len| 4_usize.saturating_add(8).saturating_add(len))
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let len = self.0.encoded_len_exact()?;
+        Some(
+            4_usize
+                .saturating_add(norito::core::len_prefix_len(len))
+                .saturating_add(len),
+        )
     }
 }
 

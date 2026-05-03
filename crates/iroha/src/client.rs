@@ -4,6 +4,7 @@
 use std::{
     collections::HashMap,
     fmt,
+    future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     str::FromStr,
@@ -7351,7 +7352,21 @@ impl Client {
                             .await
                         };
                         if let Some(iterator) = event_iterator {
-                            iterator.close().await;
+                            let close_timeout = Self::tx_confirmation_connect_timeout(
+                                client.transaction_status_timeout,
+                            );
+                            if !Self::close_tx_confirmation_stream_with_timeout(
+                                close_timeout,
+                                iterator.close(),
+                            )
+                            .await
+                            {
+                                warn!(
+                                    %hash,
+                                    timeout_ms = %close_timeout.as_millis(),
+                                    "timed out closing tx confirmation stream"
+                                );
+                            }
                         }
                         match result {
                                 Ok(inner) => match inner {
@@ -7444,6 +7459,13 @@ impl Client {
             candidate
         };
         bounded.min(timeout)
+    }
+
+    async fn close_tx_confirmation_stream_with_timeout<F>(close_timeout: Duration, close: F) -> bool
+    where
+        F: Future<Output = ()>,
+    {
+        tokio::time::timeout(close_timeout, close).await.is_ok()
     }
 
     fn tx_confirmation_poll_interval(timeout: Duration) -> Duration {
@@ -13022,7 +13044,7 @@ mod tx_hash_tests {
 
 #[cfg(test)]
 mod tx_confirmation_stream_tests {
-    use std::time::Duration;
+    use std::{future, time::Duration};
 
     use eyre::eyre;
     use futures_util::stream;
@@ -13048,6 +13070,26 @@ mod tx_confirmation_stream_tests {
             transaction::error::TransactionRejectionReason,
         },
     };
+
+    #[tokio::test]
+    async fn close_tx_confirmation_stream_timeout_is_bounded() {
+        let closed = super::Client::close_tx_confirmation_stream_with_timeout(
+            Duration::from_millis(1),
+            future::pending::<()>(),
+        )
+        .await;
+        assert!(!closed);
+    }
+
+    #[tokio::test]
+    async fn close_tx_confirmation_stream_reports_completed_close() {
+        let closed = super::Client::close_tx_confirmation_stream_with_timeout(
+            Duration::from_millis(1),
+            future::ready(()),
+        )
+        .await;
+        assert!(closed);
+    }
 
     #[tokio::test]
     async fn queued_timeout_honors_max_duration() {

@@ -18,6 +18,28 @@ use crate::instruction::wide;
 /// Gas accounting treats two lanes as the baseline for vector operations.
 pub const VECTOR_BASE_LANES: usize = 2;
 
+/// Default byte multiplier for syscall host-work gas families.
+pub const SYSCALL_GAS_PER_BYTE: u64 = 1;
+/// Fixed gas for `transfer_v1` FastPQ batch begin/end scope operations.
+pub const G_FASTPQ_BATCH: u64 = 16;
+/// Fixed gas for governance/admin contract-management bridge syscalls.
+pub const G_CONTRACT_ADMIN: u64 = 16;
+/// Fixed parent overhead for `CALL_CONTRACT`, before request/return byte charges.
+pub const G_CALL_CONTRACT: u64 = 16;
+/// Fixed gas for native and anonymous escrow bridge syscalls.
+pub const G_ESCROW: u64 = 16;
+/// Fixed gas for Soracloud runtime syscalls, before request/response byte charges.
+pub const G_SORACLOUD: u64 = 16;
+
+/// Deterministic syscall gas for a fixed family plus request/response bytes.
+#[must_use]
+pub fn syscall_byte_gas(base: u64, request_bytes: usize, response_bytes: usize) -> u64 {
+    let bytes = u64::try_from(request_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(u64::try_from(response_bytes).unwrap_or(u64::MAX));
+    base.saturating_add(SYSCALL_GAS_PER_BYTE.saturating_mul(bytes))
+}
+
 /// Scale a vector opcode's base cost by the actual logical lane count.
 pub(crate) fn scaled_vector_cost(base_cost: u64, vector_len: usize) -> u64 {
     let lanes = vector_len.max(1) as u64;

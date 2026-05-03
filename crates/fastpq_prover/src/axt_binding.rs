@@ -707,6 +707,103 @@ mod tests {
     }
 
     #[test]
+    fn canonicalize_binding_normalizes_labels_and_manifest_hash() {
+        let mut binding = sample_binding();
+        binding.parameter = "  ".to_owned();
+        binding.source_dataspace = "  taira  ".to_owned();
+        binding.source_receipt_id = "  receipt-0001  ".to_owned();
+        binding.claim_type = "  AUTHORIZATION  ".to_owned();
+        binding.claim_digest =
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_owned();
+        binding.verifier_id.clear();
+        binding.verifier_version.clear();
+        binding.corridor = "  corridor-a  ".to_owned();
+
+        let canonical = canonicalize_binding(&binding).expect("canonical binding");
+        assert_eq!(canonical.parameter, DEFAULT_PARAMETER);
+        assert_eq!(canonical.source_dataspace, "taira");
+        assert_eq!(canonical.source_receipt_id, "receipt-0001");
+        assert_eq!(canonical.claim_type, "authorization");
+        assert_eq!(
+            canonical.claim_digest,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(canonical.verifier_id, "fastpq");
+        assert_eq!(canonical.verifier_version, "v1");
+        assert_eq!(canonical.corridor, "corridor-a");
+        assert_eq!(
+            batch_manifest_sha256(&binding).expect("raw manifest"),
+            batch_manifest_sha256(&canonical).expect("canonical manifest")
+        );
+    }
+
+    #[test]
+    fn canonicalize_binding_rejects_malformed_digest_and_claim_type() {
+        let mut binding = sample_binding();
+        binding.claim_digest = "abcd".to_owned();
+        let err = canonicalize_binding(&binding).expect_err("short digest must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("claim_digest"))
+        );
+
+        let mut binding = sample_binding();
+        binding.claim_type = "synthetic".to_owned();
+        let err = canonicalize_binding(&binding).expect_err("unsupported claim type must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("claim_type"))
+        );
+    }
+
+    #[test]
+    fn transition_batch_model_roundtrip_preserves_operations_and_metadata() {
+        let mut batch = TransitionBatch::new(
+            DEFAULT_PARAMETER,
+            PublicInputs {
+                dsid: dsid_bytes(77),
+                slot: 321,
+                old_root: [0x01; 32],
+                new_root: [0x02; 32],
+                perm_root: [0x03; 32],
+                tx_set_hash: [0x04; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            b"asset/mint".to_vec(),
+            vec![0],
+            vec![1],
+            OperationKind::Mint,
+        ));
+        batch.push(StateTransition::new(
+            b"asset/burn".to_vec(),
+            vec![2],
+            vec![1],
+            OperationKind::Burn,
+        ));
+        batch.push(StateTransition::new(
+            b"role/revoke".to_vec(),
+            vec![1],
+            vec![0],
+            OperationKind::RoleRevoke {
+                role_id: vec![0xAA; 32],
+                permission_id: vec![0xBB; 32],
+                epoch: 9,
+            },
+        ));
+        batch.push(StateTransition::new(
+            b"account/meta".to_vec(),
+            b"old".to_vec(),
+            b"new".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        batch
+            .metadata
+            .insert("fixture".to_owned(), b"roundtrip".to_vec());
+
+        let roundtrip = transition_batch_from_model(&transition_batch_to_model(&batch));
+        assert_eq!(roundtrip, batch);
+    }
+
+    #[test]
     fn verify_axt_envelope_rejects_mismatched_verifier_label() {
         let good_binding = sample_binding();
         let batch = real_authorization_batch(&good_binding);
@@ -724,6 +821,401 @@ mod tests {
         assert!(
             matches!(err, Error::InvalidAxtBinding { details } if details.contains("verifier_id"))
         );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_missing_fastpq_binding() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let mut envelope = envelope_with_payload(binding, payload);
+        envelope.fastpq_binding = None;
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("missing binding must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("fastpq_binding"))
+        );
+    }
+
+    #[test]
+    fn bind_axt_batch_rejects_empty_execution_batch() {
+        let binding = sample_binding();
+        let mut batch = TransitionBatch::new(
+            DEFAULT_PARAMETER,
+            PublicInputs {
+                dsid: dsid_bytes(binding.source_dsid),
+                slot: 123,
+                old_root: [0x10; 32],
+                new_root: [0x20; 32],
+                perm_root: [0x30; 32],
+                tx_set_hash: [0x40; 32],
+            },
+        );
+        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
+            .expect("entry hash");
+        batch
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
+
+        let err = bind_axt_batch(&mut batch, &binding).expect_err("empty batch must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("state transitions"))
+        );
+    }
+
+    #[test]
+    fn bind_axt_batch_rejects_parameter_mismatch() {
+        let binding = sample_binding();
+        let mut batch = TransitionBatch::new(
+            "fastpq-lane-minimal",
+            PublicInputs {
+                dsid: dsid_bytes(binding.source_dsid),
+                slot: 123,
+                old_root: [0x10; 32],
+                new_root: [0x20; 32],
+                perm_root: [0x30; 32],
+                tx_set_hash: [0x40; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            b"account/real/axt-authorized".to_vec(),
+            b"pending".to_vec(),
+            b"authorized".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
+            .expect("entry hash");
+        batch
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
+
+        let err = bind_axt_batch(&mut batch, &binding).expect_err("parameter mismatch must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("parameter"))
+        );
+    }
+
+    #[test]
+    fn bind_axt_batch_rejects_missing_entry_hash() {
+        let binding = sample_binding();
+        let mut batch = TransitionBatch::new(
+            DEFAULT_PARAMETER,
+            PublicInputs {
+                dsid: dsid_bytes(binding.source_dsid),
+                slot: 123,
+                old_root: [0x10; 32],
+                new_root: [0x20; 32],
+                perm_root: [0x30; 32],
+                tx_set_hash: [0x40; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            b"account/real/axt-authorized".to_vec(),
+            b"pending".to_vec(),
+            b"authorized".to_vec(),
+            OperationKind::MetaSet,
+        ));
+
+        let err = bind_axt_batch(&mut batch, &binding).expect_err("entry hash is required");
+        assert!(matches!(err, Error::MissingMetadata { key } if key == ENTRY_HASH_METADATA_KEY));
+    }
+
+    #[test]
+    fn bind_axt_batch_rejects_entry_hash_mismatch() {
+        let binding = sample_binding();
+        let mut batch = TransitionBatch::new(
+            DEFAULT_PARAMETER,
+            PublicInputs {
+                dsid: dsid_bytes(binding.source_dsid),
+                slot: 123,
+                old_root: [0x10; 32],
+                new_root: [0x20; 32],
+                perm_root: [0x30; 32],
+                tx_set_hash: [0x40; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            b"account/real/axt-authorized".to_vec(),
+            b"pending".to_vec(),
+            b"authorized".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        batch
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), vec![0xAA; 32]);
+
+        let err = bind_axt_batch(&mut batch, &binding).expect_err("wrong entry hash fails");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains(ENTRY_HASH_METADATA_KEY))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_missing_required_binding_metadata() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+
+        for key in ["claim_digest", "policy_commitment", "verified_effect_type"] {
+            let mut tampered = batch.clone();
+            tampered.metadata.remove(key);
+            let payload = encode_axt_fastpq_payload(&tampered, proof.clone()).expect("payload");
+            let envelope = envelope_with_payload(binding.clone(), payload);
+
+            let err = match verify_axt_proof_envelope(&envelope) {
+                Ok(_) => panic!("missing {key} must fail"),
+                Err(err) => err,
+            };
+            assert!(matches!(err, Error::MissingMetadata { key: missing } if missing == key));
+        }
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_required_metadata_mismatches() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+
+        for key in ["source_receipt_id", "witness_commitment", "corridor"] {
+            let mut tampered = batch.clone();
+            tampered.metadata.insert(key.to_owned(), b"wrong".to_vec());
+            let payload = encode_axt_fastpq_payload(&tampered, proof.clone()).expect("payload");
+            let envelope = envelope_with_payload(binding.clone(), payload);
+
+            let err = match verify_axt_proof_envelope(&envelope) {
+                Ok(_) => panic!("mismatched {key} must fail"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, Error::InvalidAxtBinding { ref details } if details.contains(key)),
+                "unexpected error for {key}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_envelope_dsid_mismatch() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let mut envelope = envelope_with_payload(binding, payload);
+        envelope.dsid = DataSpaceId::new(envelope.dsid.as_u64() + 1);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("envelope dsid mismatch");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("source_dsid"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_batch_parameter_mismatch() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        batch.parameter = "fastpq-lane-minimal".to_owned();
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("parameter mismatch");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("parameter"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_batch_public_dsid_mismatch() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        batch.public_inputs.dsid = dsid_bytes(binding.source_dsid + 1);
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("batch dsid mismatch");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("public dsid"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_embedded_binding_metadata_mismatch() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let mut embedded = binding.clone();
+        embedded.claim_digest =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
+        batch.metadata.insert(
+            AXT_FASTPQ_BINDING_METADATA_KEY.into(),
+            to_bytes(&embedded).expect("encode embedded binding"),
+        );
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("binding metadata mismatch");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("metadata binding"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_malformed_embedded_binding_metadata() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_BINDING_METADATA_KEY.into(), vec![0xFF, 0x00]);
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("malformed binding metadata");
+        assert!(matches!(err, Error::TransferMetadataDecode { .. }));
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_source_tx_commitment_metadata_mismatch() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        batch
+            .metadata
+            .insert("source_tx_commitment".into(), vec![0xAA; 32]);
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("commitment metadata mismatch");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("source_tx_commitment"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_target_dsid_metadata_mismatch() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        batch.metadata.insert(
+            "target_dsids".into(),
+            encode_target_dsids(&[binding.target_dsids[0] + 1]),
+        );
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("target dsid mismatch");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("target_dsids"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_transfer_claim_missing_transcripts() {
+        let mut binding = sample_binding();
+        binding.claim_type = "tx_predicate".to_owned();
+        let mut batch = TransitionBatch::new(
+            DEFAULT_PARAMETER,
+            PublicInputs {
+                dsid: dsid_bytes(binding.source_dsid),
+                slot: 123,
+                old_root: [0x10; 32],
+                new_root: [0x20; 32],
+                perm_root: [0x30; 32],
+                tx_set_hash: [0x40; 32],
+            },
+        );
+        batch.push(StateTransition::new(
+            b"asset/rose/alice".to_vec(),
+            10_u64.to_le_bytes().to_vec(),
+            7_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
+            .expect("entry hash");
+        batch
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
+        bind_axt_batch(&mut batch, &binding).expect("bind transfer claim batch");
+        let proof_batch = real_authorization_batch(&sample_binding());
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&proof_batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("missing transfer transcripts");
+        assert!(
+            matches!(err, Error::MissingMetadata { key } if key == TRANSFER_TRANSCRIPTS_METADATA_KEY)
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_transfer_claim_without_transfer_rows() {
+        let mut binding = sample_binding();
+        binding.claim_type = "value_conservation".to_owned();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("non-transfer claim must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("transfer transitions"))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_accepts_empty_corridor_without_metadata() {
+        let mut binding = sample_binding();
+        binding.corridor.clear();
+        let batch = real_authorization_batch(&binding);
+        assert!(
+            !batch.metadata.contains_key("corridor"),
+            "empty corridor must not require a metadata field"
+        );
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        verify_axt_proof_envelope(&envelope).expect("empty corridor binding verifies");
     }
 
     #[test]
@@ -757,6 +1249,74 @@ mod tests {
         let verified = verify_axt_proof_envelope(&envelope).expect("verified AXT proof");
         assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
         assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn verify_axt_envelope_statement_digest_binds_optional_da_commitment() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let with_da =
+            verify_axt_proof_envelope(&envelope_with_payload(binding.clone(), payload.clone()))
+                .expect("with DA commitment");
+        let mut without_da = envelope_with_payload(binding, payload);
+        without_da.da_commitment = None;
+        let without_da = verify_axt_proof_envelope(&without_da).expect("without DA commitment");
+
+        assert_ne!(with_da.statement_digest, without_da.statement_digest);
+        assert_eq!(with_da.proof_digest, without_da.proof_digest);
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_batch_mutated_after_seal() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        batch.push(StateTransition::new(
+            b"account/real/axt-tampered".to_vec(),
+            b"before".to_vec(),
+            b"after".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        batch.sort();
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("tampered seal must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY))
+        );
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_proof_for_different_batch() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let mut other_batch = real_authorization_batch(&binding);
+        other_batch.push(StateTransition::new(
+            b"account/real/axt-other".to_vec(),
+            b"before".to_vec(),
+            b"after".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        other_batch.sort();
+        bind_axt_batch(&mut other_batch, &binding).expect("rebind mutated batch");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&other_batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope).expect_err("mismatched proof must fail");
+        assert!(matches!(err, Error::CommitmentMismatch));
     }
 
     #[test]

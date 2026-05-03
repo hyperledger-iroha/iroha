@@ -99,6 +99,14 @@ pub struct VmExecutionDiagnostic {
 /// VM errors.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VMError {
+    /// Host work failed after consuming a deterministic amount of syscall gas.
+    ///
+    /// The VM executor debits `gas` and then returns `source` so trap
+    /// classification and diagnostics preserve the original failure kind.
+    Metered {
+        gas: u64,
+        source: Box<VMError>,
+    },
     OutOfGas,
     OutOfMemory,
     MemoryAccessViolation {
@@ -159,9 +167,74 @@ pub enum VMError {
     },
 }
 
+impl VMError {
+    /// Wrap an error with deterministic gas charged before surfacing it.
+    #[must_use]
+    pub fn metered(gas: u64, source: VMError) -> Self {
+        match source {
+            VMError::Metered {
+                gas: existing,
+                source,
+            } => VMError::Metered {
+                gas: gas.saturating_add(existing),
+                source,
+            },
+            source => VMError::Metered {
+                gas,
+                source: Box::new(source),
+            },
+        }
+    }
+
+    /// Construct a metered `NotImplemented` error for a known syscall.
+    #[must_use]
+    pub fn metered_not_implemented(gas: u64, syscall: u32) -> Self {
+        Self::metered(gas, VMError::NotImplemented { syscall })
+    }
+
+    /// Return the original error kind, peeling metered wrappers.
+    #[must_use]
+    pub fn as_unmetered(&self) -> &VMError {
+        match self {
+            VMError::Metered { source, .. } => source.as_unmetered(),
+            error => error,
+        }
+    }
+
+    /// Return the gas attached to this error, if it is metered.
+    #[must_use]
+    pub fn metered_gas(&self) -> Option<u64> {
+        match self {
+            VMError::Metered { gas, .. } => Some(*gas),
+            _ => None,
+        }
+    }
+
+    /// Consume this error and return the original unmetered error kind.
+    #[must_use]
+    pub fn into_unmetered(self) -> VMError {
+        match self {
+            VMError::Metered { source, .. } => source.into_unmetered(),
+            error => error,
+        }
+    }
+
+    /// Consume this error and split any attached gas from the original error.
+    #[must_use]
+    pub fn split_metered(self) -> (Option<u64>, VMError) {
+        match self {
+            VMError::Metered { gas, source } => (Some(gas), source.into_unmetered()),
+            error => (None, error),
+        }
+    }
+}
+
 impl fmt::Display for VMError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            VMError::Metered { gas, source } => {
+                write!(f, "metered syscall error after {gas} gas: {source}")
+            }
             VMError::OutOfGas => write!(f, "out of gas"),
             VMError::OutOfMemory => write!(f, "out of memory"),
             VMError::MemoryAccessViolation { addr, perm } => {
@@ -218,4 +291,11 @@ impl fmt::Display for VMError {
     }
 }
 
-impl StdError for VMError {}
+impl StdError for VMError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            VMError::Metered { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}

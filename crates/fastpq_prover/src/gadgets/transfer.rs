@@ -896,11 +896,46 @@ mod tests {
     }
 
     #[test]
+    fn decode_transcripts_accepts_empty_transcript_list() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&Vec::<TransferTranscript>::new()).expect("encode empty transcripts"),
+        );
+
+        let decoded = decode_transcripts(&metadata)
+            .expect("decode")
+            .expect("metadata is present");
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn decode_transcripts_rejects_malformed_metadata() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(TRANSFER_TRANSCRIPTS_METADATA_KEY.into(), vec![0xFF, 0x00]);
+
+        let err = decode_transcripts(&metadata).expect_err("malformed transcript metadata");
+        assert!(matches!(err, Error::TransferMetadataDecode { .. }));
+    }
+
+    #[test]
     fn verify_transcripts_checks_balances() {
         let transcript = sample_transcript();
         let transitions = sample_transitions(&transcript);
         let result = verify_transcripts(&transitions, &[transcript]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_transcripts_accepts_empty_transcript_set() {
+        let transitions = vec![StateTransition::new(
+            b"asset/uncovered/transfer".to_vec(),
+            1_u64.to_le_bytes().to_vec(),
+            2_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        )];
+
+        verify_transcripts(&transitions, &[]).expect("empty transcript set is a no-op");
     }
 
     #[test]
@@ -910,6 +945,59 @@ mod tests {
         let transitions = sample_transitions(&transcript);
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn verify_transcripts_rejects_sender_underflow() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].amount = Numeric::from(201u32);
+        transcript.deltas[0].from_balance_after = Numeric::from(0u32);
+        transcript.deltas[0].to_balance_after = Numeric::from(202u32);
+        let transitions = sample_transitions(&transcript);
+
+        let err = verify_transcripts(&transitions, &[transcript]).expect_err("underflow fails");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("underflow"))
+        );
+    }
+
+    #[test]
+    fn verify_transcripts_rejects_receiver_mismatch() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].to_balance_after = Numeric::from(44u32);
+        let transitions = sample_transitions(&transcript);
+
+        let err = verify_transcripts(&transitions, &[transcript]).expect_err("receiver mismatch");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("receiver balance mismatch"))
+        );
+    }
+
+    #[test]
+    fn verify_transcripts_rejects_receiver_overflow() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].amount = Numeric::from(1u32);
+        transcript.deltas[0].from_balance_after = Numeric::from(199u32);
+        transcript.deltas[0].to_balance_before = Numeric::from(u64::MAX);
+        transcript.deltas[0].to_balance_after = Numeric::from(u64::MAX);
+        let transitions = sample_transitions(&transcript);
+
+        let err = verify_transcripts(&transitions, &[transcript]).expect_err("overflow fails");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("overflow"))
+        );
+    }
+
+    #[test]
+    fn verify_transcripts_rejects_negative_numeric_bounds() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].amount = Numeric::from(-1_i64);
+
+        let err = verify_transcripts(&[], &[transcript]).expect_err("negative amount fails");
+        assert!(matches!(
+            err,
+            Error::TransferNumericBounds { field } if field == "amount"
+        ));
     }
 
     #[test]
@@ -950,6 +1038,56 @@ mod tests {
         ));
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("extra row fails");
         assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn verify_transcripts_ignores_non_transfer_rows() {
+        let transcript = sample_transcript();
+        let mut transitions = sample_transitions(&transcript);
+        transitions.push(StateTransition::new(
+            b"asset/ignored/meta".to_vec(),
+            b"before".to_vec(),
+            b"after".to_vec(),
+            OperationKind::MetaSet,
+        ));
+
+        verify_transcripts(&transitions, &[transcript]).expect("non-transfer rows are ignored");
+    }
+
+    #[test]
+    fn verify_transcripts_rejects_sender_row_balance_mismatch() {
+        let transcript = sample_transcript();
+        let sender_key = balance_key(
+            &transcript.deltas[0].asset_definition,
+            &transcript.deltas[0].from_account,
+        );
+        let mut transitions = sample_transitions(&transcript);
+        let sender = transitions
+            .iter_mut()
+            .find(|transition| transition.key == sender_key)
+            .expect("sender transition");
+        sender.post_value = 157_u64.to_le_bytes().to_vec();
+
+        let err = verify_transcripts(&transitions, &[transcript]).expect_err("sender row mismatch");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("no transfer row (sender) matched"))
+        );
+    }
+
+    #[test]
+    fn verify_transcripts_rejects_missing_receiver_row() {
+        let transcript = sample_transcript();
+        let receiver_key = balance_key(
+            &transcript.deltas[0].asset_definition,
+            &transcript.deltas[0].to_account,
+        );
+        let mut transitions = sample_transitions(&transcript);
+        transitions.retain(|transition| transition.key != receiver_key);
+
+        let err = verify_transcripts(&transitions, &[transcript]).expect_err("receiver row absent");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("missing transfer row (receiver)"))
+        );
     }
 
     fn sample_transcript() -> TransferTranscript {
@@ -1052,6 +1190,120 @@ mod tests {
     }
 
     #[test]
+    fn transfer_merkle_proof_out_of_range_accessors_are_stable() {
+        let transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let witnesses =
+            transcripts_to_witnesses(&[transcript], &old_root, &new_root).expect("witnesses");
+        let proof = &witnesses[0].deltas[0].smt_proof.from;
+
+        assert_eq!(proof.bit(TRANSFER_MERKLE_HEIGHT), 0);
+        assert_eq!(
+            proof.sibling(TRANSFER_MERKLE_HEIGHT),
+            <[u8; 32]>::from(padding_hash(TRANSFER_MERKLE_HEIGHT))
+        );
+    }
+
+    #[test]
+    fn transfer_merkle_proof_rejects_extra_siblings() {
+        let transcript = sample_transcript();
+        let mut witness = transcript.deltas[0].from_smt_witness.clone();
+        witness.siblings.push([0xAA; 32]);
+
+        let err = TransferMerkleProof::from_witness(&witness).expect_err("extra sibling fails");
+        assert!(matches!(err, Error::TransferInvariant { details } if details.contains("sibling")));
+    }
+
+    #[test]
+    fn attach_transfer_smt_witnesses_rejects_empty_material() {
+        let err = attach_transfer_smt_witnesses(&mut []).expect_err("empty witnesses must fail");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("at least one delta"))
+        );
+    }
+
+    #[test]
+    fn attach_transfer_smt_witnesses_chains_multiple_transcripts() {
+        let mut transcripts = vec![sample_transcript(), chained_second_transcript()];
+        let (old_root, new_root) =
+            attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
+
+        let witnesses =
+            transcripts_to_witnesses(&transcripts, &old_root, &new_root).expect("witnesses");
+        assert_eq!(witnesses.len(), 2);
+        assert_eq!(
+            witnesses[0].deltas[0].smt_proof.to.root_after,
+            witnesses[1].deltas[0].smt_proof.from.root_before
+        );
+        let transitions: Vec<_> = transcripts.iter().flat_map(sample_transitions).collect();
+        verify_transcripts(&transitions, &transcripts).expect("transcripts verify");
+    }
+
+    #[test]
+    fn attach_transfer_smt_witnesses_rejects_stale_chained_balances() {
+        let mut transcripts = vec![sample_transcript(), sample_transcript()];
+
+        let err = attach_transfer_smt_witnesses(&mut transcripts)
+            .expect_err("second transfer pre-balance is stale");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("pre-balance"))
+        );
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_accepts_empty_list_when_roots_match() {
+        let root = [0x5A; 32];
+        let witnesses = transcripts_to_witnesses(&[], &root, &root).expect("empty witnesses");
+        assert!(witnesses.is_empty());
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_rejects_empty_list_when_roots_differ() {
+        let old_root = [0x5A; 32];
+        let new_root = [0xA5; 32];
+
+        let err =
+            transcripts_to_witnesses(&[], &old_root, &new_root).expect_err("root mismatch fails");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("final post-root"))
+        );
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_reject_missing_receiver_proof() {
+        let mut transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        transcript.deltas[0].to_smt_witness = TransferSmtWitness::default();
+
+        let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("missing receiver proof must fail");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_reject_missing_sender_proof() {
+        let mut transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        transcript.deltas[0].from_smt_witness = TransferSmtWitness::default();
+
+        let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("missing sender proof must fail");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_reject_unchained_transcript_roots() {
+        let transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+
+        let err = transcripts_to_witnesses(&[transcript.clone(), transcript], &old_root, &new_root)
+            .expect_err("second transcript must chain from first post-root");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("sender pre-root"))
+        );
+    }
+
+    #[test]
     fn transcripts_to_witnesses_reject_wrong_final_root() {
         let transcript = sample_transcript();
         let (old_root, mut new_root) = transcript_roots(&transcript);
@@ -1059,6 +1311,19 @@ mod tests {
         let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect_err("wrong final root");
         assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn transcripts_to_witnesses_reject_wrong_initial_root() {
+        let transcript = sample_transcript();
+        let (mut old_root, new_root) = transcript_roots(&transcript);
+        old_root[0] ^= 0x01;
+
+        let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
+            .expect_err("wrong initial root");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("sender pre-root"))
+        );
     }
 
     #[test]
@@ -1154,6 +1419,25 @@ mod tests {
         assert!(index.contains_key(&receiver_key));
     }
 
+    #[test]
+    fn transfer_row_key_from_transition_matches_explicit_key() {
+        let transition = StateTransition::new(
+            b"asset/row/key".to_vec(),
+            3_u64.to_le_bytes().to_vec(),
+            4_u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        );
+
+        assert_eq!(
+            TransferRowKey::from_transition(&transition),
+            TransferRowKey::new(
+                transition.key.clone(),
+                transition.pre_value.clone(),
+                transition.post_value.clone(),
+            )
+        );
+    }
+
     fn sample_multi_transcript() -> TransferTranscript {
         let mut transcript = sample_transcript();
         let second_delta = TransferDeltaTranscript {
@@ -1174,6 +1458,26 @@ mod tests {
         transcript.deltas.push(second_delta);
         transcript.poseidon_preimage_digest = None;
         attach_transcript_witnesses(&mut transcript);
+        transcript
+    }
+
+    fn chained_second_transcript() -> TransferTranscript {
+        let mut transcript = sample_transcript();
+        transcript.batch_hash = Hash::prehashed([0x22; 32]);
+        {
+            let delta = &mut transcript.deltas[0];
+            delta.amount = Numeric::from(8u32);
+            delta.from_balance_before = Numeric::from(158u32);
+            delta.from_balance_after = Numeric::from(150u32);
+            delta.to_balance_before = Numeric::from(43u32);
+            delta.to_balance_after = Numeric::from(51u32);
+            delta.from_smt_witness = TransferSmtWitness::default();
+            delta.to_smt_witness = TransferSmtWitness::default();
+        }
+        transcript.poseidon_preimage_digest = Some(compute_poseidon_digest(
+            &transcript.deltas[0],
+            &transcript.batch_hash,
+        ));
         transcript
     }
 

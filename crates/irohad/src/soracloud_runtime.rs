@@ -1583,14 +1583,20 @@ impl SoracloudIvmHost {
         if self.handler_class() == SoraServiceHandlerClassV1::PrivateUpdate {
             Ok(())
         } else {
-            Err(VMError::NotImplemented { syscall })
+            Err(VMError::metered_not_implemented(
+                ivm::gas::G_SORACLOUD,
+                syscall,
+            ))
         }
     }
 
     fn require_mutating_runtime(&self, _syscall: u32) -> Result<(), VMError> {
         match self.handler_class() {
             SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate => Ok(()),
-            _ => Err(VMError::PermissionDenied),
+            _ => Err(VMError::metered(
+                ivm::gas::G_SORACLOUD,
+                VMError::PermissionDenied,
+            )),
         }
     }
 
@@ -1599,21 +1605,32 @@ impl SoracloudIvmHost {
         vm: &mut IVM,
         expected_operation: SoracloudHostOperationV1,
         syscall: u32,
-    ) -> Result<SoracloudHostRequestPayloadV1, VMError> {
-        let tlv = vm.memory.validate_tlv(vm.register(10))?;
+    ) -> Result<(SoracloudHostRequestPayloadV1, usize), VMError> {
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .map_err(|err| VMError::metered(ivm::gas::G_SORACLOUD, err))?;
+        let request_bytes = tlv.payload.len();
+        let request_gas =
+            ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
         if tlv.type_id != PointerType::SoracloudRequest {
-            return Err(VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: tlv.type_id_raw(),
-            });
+            return Err(VMError::metered(
+                request_gas,
+                VMError::AbiTypeNotAllowed {
+                    abi: vm.abi_version(),
+                    type_id: tlv.type_id_raw(),
+                },
+            ));
         }
         let envelope = norito::decode_from_bytes::<SoracloudHostRequestEnvelopeV1>(tlv.payload)
-            .map_err(|_| VMError::NoritoInvalid)?;
-        envelope.validate().map_err(|_| VMError::NoritoInvalid)?;
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        envelope
+            .validate()
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
         if envelope.operation != expected_operation {
-            return Err(VMError::NotImplemented { syscall });
+            return Err(VMError::metered_not_implemented(request_gas, syscall));
         }
-        Ok(envelope.payload)
+        Ok((envelope.payload, request_bytes))
     }
 
     fn write_response(
@@ -1621,18 +1638,31 @@ impl SoracloudIvmHost {
         vm: &mut IVM,
         operation: SoracloudHostOperationV1,
         payload: SoracloudHostResponsePayloadV1,
-    ) -> Result<(), VMError> {
+        request_bytes: usize,
+    ) -> Result<u64, VMError> {
         let envelope = SoracloudHostResponseEnvelopeV1 {
             schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
             operation,
             payload,
         };
-        envelope.validate().map_err(|_| VMError::NoritoInvalid)?;
-        let payload_bytes = norito::to_bytes(&envelope).map_err(|_| VMError::NoritoInvalid)?;
+        let request_gas =
+            ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0);
+        envelope
+            .validate()
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        let payload_bytes = norito::to_bytes(&envelope)
+            .map_err(|_| VMError::metered(request_gas, VMError::NoritoInvalid))?;
+        let gas = ivm::gas::syscall_byte_gas(
+            ivm::gas::G_SORACLOUD,
+            request_bytes,
+            payload_bytes.len(),
+        );
         let tlv = make_pointer_tlv(PointerType::SoracloudResponse, &payload_bytes);
-        let ptr = vm.alloc_input_tlv(&tlv)?;
+        let ptr = vm
+            .alloc_input_tlv(&tlv)
+            .map_err(|err| VMError::metered(gas, err))?;
         vm.set_register(10, ptr);
-        Ok(())
+        Ok(gas)
     }
 
     fn binding(&self, binding_name: &Name) -> Result<&SoraStateBindingV1, VMError> {
@@ -2072,14 +2102,20 @@ impl IVMHost for SoracloudIvmHost {
         match number {
             ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT => self.read_public_input(vm),
             SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
-                let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::ReadCommittedState,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::ReadCommittedState,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
                 let entry = self
                     .committed_entries
@@ -2100,52 +2136,90 @@ impl IVMHost for SoracloudIvmHost {
                     SoracloudHostResponsePayloadV1::ReadCommittedState(
                         SoracloudReadCommittedStateResponseV1 { entry },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => {
-                let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::EmitStateMutation,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::EmitStateMutation,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.stage_state_mutation(request)?;
+                let response = self.stage_state_mutation(request).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        err.into_unmetered(),
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EmitStateMutation,
                     SoracloudHostResponsePayloadV1::EmitStateMutation(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => {
-                let SoracloudHostRequestPayloadV1::EmitMailboxMessage(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::EmitMailboxMessage,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::EmitMailboxMessage,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::EmitMailboxMessage(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.stage_outbound_mailbox_message(request)?;
+                let response = self.stage_outbound_mailbox_message(request).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        err.into_unmetered(),
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EmitMailboxMessage,
                     SoracloudHostResponsePayloadV1::EmitMailboxMessage(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_APPEND_JOURNAL => {
-                let SoracloudHostRequestPayloadV1::AppendJournal(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?;
+                let SoracloudHostRequestPayloadV1::AppendJournal(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                self.require_mutating_runtime(number)?;
+                self.require_mutating_runtime(number)
+                    .map_err(|err| VMError::metered(ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0), err))?;
                 let artifact_hash = Self::stage_artifact(
                     &mut self.staged_journal,
                     request.artifact_path,
@@ -2157,20 +2231,27 @@ impl IVMHost for SoracloudIvmHost {
                     SoracloudHostResponsePayloadV1::AppendJournal(
                         SoracloudAppendJournalResponseV1 { artifact_hash },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => {
-                let SoracloudHostRequestPayloadV1::PublishCheckpoint(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::PublishCheckpoint,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::PublishCheckpoint,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::PublishCheckpoint(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                self.require_mutating_runtime(number)?;
+                self.require_mutating_runtime(number)
+                    .map_err(|err| VMError::metered(ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0), err))?;
                 let artifact_hash = Self::stage_artifact(
                     &mut self.staged_checkpoint,
                     request.artifact_path,
@@ -2182,49 +2263,85 @@ impl IVMHost for SoracloudIvmHost {
                     SoracloudHostResponsePayloadV1::PublishCheckpoint(
                         SoracloudPublishCheckpointResponseV1 { artifact_hash },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_CONFIG => {
-                let SoracloudHostRequestPayloadV1::ReadConfig(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadConfig, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadConfig, number)?;
+                let SoracloudHostRequestPayloadV1::ReadConfig(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.read_service_config(&request.config_name)?;
+                let response = self.read_service_config(&request.config_name).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
+                        err,
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadConfig,
                     SoracloudHostResponsePayloadV1::ReadConfig(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
-                let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = self
-                    .read_request_payload(
-                        vm,
-                        SoracloudHostOperationV1::ReadSecretEnvelope,
-                        number,
-                    )?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) = self.read_request_payload(
+                    vm,
+                    SoracloudHostOperationV1::ReadSecretEnvelope,
+                    number,
+                )?;
+                let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
                 let response = self.read_service_secret_envelope(&request.secret_name);
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadSecretEnvelope,
                     SoracloudHostResponsePayloadV1::ReadSecretEnvelope(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_SECRET => {
                 self.require_private_runtime(number)?;
-                let SoracloudHostRequestPayloadV1::ReadSecret(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadSecret, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadSecret, number)?;
+                let SoracloudHostRequestPayloadV1::ReadSecret(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let payload_bytes = self.read_material("secrets", &request.secret_name)?;
+                let payload_bytes = self
+                    .read_material("secrets", &request.secret_name)
+                    .map_err(|err| {
+                        VMError::metered(
+                            ivm::gas::syscall_byte_gas(
+                                ivm::gas::G_SORACLOUD,
+                                request_bytes,
+                                0,
+                            ),
+                            err,
+                        )
+                    })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadSecret,
@@ -2232,17 +2349,35 @@ impl IVMHost for SoracloudIvmHost {
                         found: payload_bytes.is_some(),
                         payload_bytes: payload_bytes.unwrap_or_default(),
                     }),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_READ_CREDENTIAL => {
                 self.require_private_runtime(number)?;
-                let SoracloudHostRequestPayloadV1::ReadCredential(request) = self
-                    .read_request_payload(vm, SoracloudHostOperationV1::ReadCredential, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadCredential, number)?;
+                let SoracloudHostRequestPayloadV1::ReadCredential(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let payload_bytes = self.read_material("credentials", &request.credential_name)?;
+                let payload_bytes = self
+                    .read_material("credentials", &request.credential_name)
+                    .map_err(|err| {
+                        VMError::metered(
+                            ivm::gas::syscall_byte_gas(
+                                ivm::gas::G_SORACLOUD,
+                                request_bytes,
+                                0,
+                            ),
+                            err,
+                        )
+                    })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadCredential,
@@ -2252,22 +2387,34 @@ impl IVMHost for SoracloudIvmHost {
                             payload_bytes: payload_bytes.unwrap_or_default(),
                         },
                     ),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             SYSCALL_SORACLOUD_EGRESS_FETCH => {
-                let SoracloudHostRequestPayloadV1::EgressFetch(request) =
-                    self.read_request_payload(vm, SoracloudHostOperationV1::EgressFetch, number)?
-                else {
-                    return Err(VMError::NoritoInvalid);
+                let (payload, request_bytes) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::EgressFetch, number)?;
+                let SoracloudHostRequestPayloadV1::EgressFetch(request) = payload else {
+                    return Err(VMError::metered(
+                        ivm::gas::syscall_byte_gas(
+                            ivm::gas::G_SORACLOUD,
+                            request_bytes,
+                            0,
+                        ),
+                        VMError::NoritoInvalid,
+                    ));
                 };
-                let response = self.egress_fetch(request)?;
+                let response = self.egress_fetch(request).map_err(|err| {
+                    VMError::metered(
+                        ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, request_bytes, 0),
+                        err.into_unmetered(),
+                    )
+                })?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EgressFetch,
                     SoracloudHostResponsePayloadV1::EgressFetch(response),
-                )?;
-                Ok(0)
+                    request_bytes,
+                )
             }
             _ => self.core_host.syscall(number, vm),
         }
@@ -6433,6 +6580,13 @@ fn json_value_from_tlv(tlv_bytes: &[u8]) -> Result<norito::json::Value, VMError>
     }
 }
 
+fn json_pointer_response_payload(payload: &[u8]) -> Vec<u8> {
+    norito::decode_from_bytes::<Json>(payload).map_or_else(
+        |_| payload.to_vec(),
+        |json| json.get().as_bytes().to_vec(),
+    )
+}
+
 fn trigger_event_json_tlv(fields: norito::json::Map) -> Result<Vec<u8>, VMError> {
     let value = norito::json::Value::Object(fields);
     let json = Json::from_norito_value_ref(&value).map_err(|_| VMError::DecodeError)?;
@@ -6613,10 +6767,19 @@ fn decode_vm_output(
             ),
         )
     })?;
-    let content_type = match tlv.type_id {
-        PointerType::Json => Some("application/json".to_owned()),
-        PointerType::Blob => Some("application/octet-stream".to_owned()),
-        PointerType::NoritoBytes => Some("application/x-norito".to_owned()),
+    let (response_bytes, content_type) = match tlv.type_id {
+        PointerType::Json => (
+            json_pointer_response_payload(tlv.payload),
+            Some("application/json".to_owned()),
+        ),
+        PointerType::Blob => (
+            tlv.payload.to_vec(),
+            Some("application/octet-stream".to_owned()),
+        ),
+        PointerType::NoritoBytes => (
+            tlv.payload.to_vec(),
+            Some("application/x-norito".to_owned()),
+        ),
         other => {
             return Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Internal,
@@ -6627,7 +6790,7 @@ fn decode_vm_output(
             ));
         }
     };
-    Ok((tlv.payload.to_vec(), content_type))
+    Ok((response_bytes, content_type))
 }
 
 fn execute_generated_hf_local_read(
@@ -10430,7 +10593,7 @@ fn make_pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 
 fn vm_error_label(error: &VMError) -> &'static str {
-    match error {
+    match error.as_unmetered() {
         VMError::OutOfGas => "out_of_gas",
         VMError::OutOfMemory => "out_of_memory",
         VMError::MemoryAccessViolation { .. } => "memory_access_violation",
@@ -10446,6 +10609,8 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::AssertionFailed => "assertion_failed",
         VMError::ExceededMaxCycles => "exceeded_max_cycles",
         VMError::InvalidMetadata => "invalid_metadata",
+        VMError::InvalidVectorLength { .. } => "invalid_vector_length",
+        VMError::MissingHalt => "missing_halt",
         VMError::VectorExtensionDisabled => "vector_disabled",
         VMError::ZkExtensionDisabled => "zk_disabled",
         VMError::NullifierAlreadyUsed => "nullifier_used",
@@ -10456,6 +10621,7 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::NoritoInvalid => "norito_invalid",
         VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
         VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
+        VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
     }
 }
 
@@ -21061,17 +21227,28 @@ mod tests {
             test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
             BTreeMap::new(),
         );
+        let secret_error = public_host
+            .require_private_runtime(SYSCALL_SORACLOUD_READ_SECRET)
+            .expect_err("public handlers cannot read secrets");
+        assert_eq!(secret_error.metered_gas(), Some(ivm::gas::G_SORACLOUD));
         assert!(matches!(
-            public_host.require_private_runtime(SYSCALL_SORACLOUD_READ_SECRET),
-            Err(VMError::NotImplemented {
+            secret_error.as_unmetered(),
+            VMError::NotImplemented {
                 syscall: SYSCALL_SORACLOUD_READ_SECRET
-            })
+            }
         ));
+        let credential_error = public_host
+            .require_private_runtime(SYSCALL_SORACLOUD_READ_CREDENTIAL)
+            .expect_err("public handlers cannot read credentials");
+        assert_eq!(
+            credential_error.metered_gas(),
+            Some(ivm::gas::G_SORACLOUD)
+        );
         assert!(matches!(
-            public_host.require_private_runtime(SYSCALL_SORACLOUD_READ_CREDENTIAL),
-            Err(VMError::NotImplemented {
+            credential_error.as_unmetered(),
+            VMError::NotImplemented {
                 syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL
-            })
+            }
         ));
         Ok(())
     }

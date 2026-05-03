@@ -17,7 +17,8 @@ Completed history lives in `status.md`. This file should only track unfinished w
     Kura-eviction DA rehydration, and block-body DA rehydration focused
     reruns. The remaining broad-run Sumeragi DA payload-loss case is also green
     as of 2026-05-03 with the same target dir.
-  - NewView QC `highest_qc` binding, non-NewView `highest_qc` rejection, and
+  - NewView QC `highest_qc` binding, exact local-vote `highest_qc` and
+    parent/post-root matching, non-NewView `highest_qc` rejection, and
     same-highest aggregate formation are green as of 2026-05-03 with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-highest` for the NPoS
     aggregate-only substitution regression, the `new_view_highest` focused
@@ -38,6 +39,12 @@ Completed history lives in `status.md`. This file should only track unfinished w
     irohad --all-targets -- -D warnings` is green as of 2026-05-02 with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-clippy`.
   - Full workspace all-target clippy is green as of 2026-05-03 with
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target`.
+  - The broad workspace test rerun reached `events_and_triggers` after passing
+    `consensus_and_da` and `core_api`; the exposed by-call trigger fixture and
+    subscription time-trigger billing failures are repaired as of 2026-05-03.
+    Focused `events_and_triggers` reruns for the two by-call trigger cases and
+    `subscriptions::subscription_scenarios` are green with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target`.
   - Broader `cargo test --workspace` remains for an uncontended validation
     window.
@@ -102,7 +109,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
     2026-05-02.
   - CoreHost raw-root rejection and real FastPQ proof-envelope validation is
     covered by the focused `ivm_corehost_axt` proof-binding test with
-    `iroha-core-tests,app_api`.
+    `iroha-core-tests,app_api`; the correctly-featured target is green as of
+    2026-05-03 with `28` tests. The `app_api`-only command lists zero tests and
+    should not be treated as coverage for this target.
   - Block-level app-API AXT validation and host proof-cache success fixtures now
     use reusable FastPQ-backed proof envelopes. The full
     `axt_validation_tests` module and focused `axt_verify_ds_proof` host sweep
@@ -258,6 +267,9 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - Fold the 2026-05-03 Kotodama access-hint, contract artifact registry, and
     literal-padding hardening through the next clean full workspace test and
     clippy corridor after the focused validation recorded in `status.md`.
+  - Fold the 2026-05-03 IVM ABI v1 gas/error hardening through the next full
+    workspace test and strict clippy corridor after the focused syscall-doc,
+    host-policy, AXT, and Soracloud validation recorded in `status.md`.
 - Carry the UAID onboarding hardening through the next workspace validation
   corridor.
   - Focused formatting, Python syntax checks, Torii UAID parser tests, Torii
@@ -425,10 +437,28 @@ Completed history lives in `status.md`. This file should only track unfinished w
   - The next throughput slice should target the post-GPU peer CPU stack:
     Ed25519/Curve25519 public-key parse and verification, Norito
     transaction/transfer serialization and decode, transaction metadata
-    hashing, allocation/copy traffic, and CRC64/SHA-256 helpers. Use the final
-    GPU gate as the throughput baseline and rerun the 30s sampled 20k profile
-    in an uncontended host window before making fine-grained percentage claims
-    from sampled stack counts.
+    hashing, allocation/copy traffic, and CRC64/SHA-256 helpers. The first
+    bookkeeping slice already removed per-transaction `DashMap::len()` from
+    `PipelineStatusCache::prune_if_needed`, and the Ed25519 thread-local slice
+    now includes a direct-mapped full-key cache before the generic linear
+    verifier cache. The current allocation slice streams typed Norito hashes
+    directly into Blake2b, finalizes direct Blake2b hashes into fixed buffers
+    without boxed digest allocation, absorbs Merkle parent/commitment chunks
+    without staging concatenation buffers, and hashes external transaction
+    entrypoints through a borrowed encoder instead of cloning the signed
+    transaction into an enum wrapper. The release Izanami/iroha3d binaries now
+    rebuild with the allocation slice; rerun the 30s sampled 20k profile and
+    120s gate in an uncontended host window before making fine-grained
+    percentage claims from sampled stack counts.
+  - Avoid repeating the rejected process-wide Ed25519 public-key parse cache
+    approach without new evidence: the 2026-05-03 sharded shared-cache
+    experiment regressed short-gate commit progress and was backed out. Keep
+    near-term Ed25519 work thread-local, allocation-focused, or validation-path
+    specific unless a clean before/after gate proves otherwise. The accepted
+    thread-local slice pre-sizes only the public-key parse map, keeps parsed key
+    entries boxed to satisfy `variant-size-differences`, and keeps the generic
+    verify-ok map lazy so 32-byte transaction hashes do not allocate unused
+    generic cache state.
   - Keep broader trait-wide parallel decode, deeper GPU decode materialization,
     deeper dalek backend experimentation, and deterministic hardware-specific
     Ed25519/Curve25519 acceleration as follow-up work until the current

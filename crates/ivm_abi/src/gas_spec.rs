@@ -51,8 +51,22 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_call_contract",
+        asset_id: "asset:gas/G_call_contract@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_commit",
         asset_id: "asset:gas/G_commit@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
+        key: "G_contract_admin",
+        asset_id: "asset:gas/G_contract_admin@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",
@@ -93,8 +107,22 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_escrow",
+        asset_id: "asset:gas/G_escrow@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_exit",
         asset_id: "asset:gas/G_exit@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
+        key: "G_fastpq_batch",
+        asset_id: "asset:gas/G_fastpq_batch@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",
@@ -289,6 +317,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_reg_domain",
+        asset_id: "asset:gas/G_reg_domain@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_reg_peer",
         asset_id: "asset:gas/G_reg_peer@ivm.core/v2",
         unit: "gas",
@@ -387,6 +422,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_soracloud",
+        asset_id: "asset:gas/G_soracloud@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_state_count",
         asset_id: "asset:gas/G_state_count@ivm.core/v2",
         unit: "gas",
@@ -478,6 +520,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_transfer_domain",
+        asset_id: "asset:gas/G_transfer_domain@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_unreg_acct",
         asset_id: "asset:gas/G_unreg_acct@ivm.core/v2",
         unit: "gas",
@@ -487,6 +536,13 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset {
         key: "G_unreg_asset",
         asset_id: "asset:gas/G_unreg_asset@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
+        key: "G_unreg_domain",
+        asset_id: "asset:gas/G_unreg_domain@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",

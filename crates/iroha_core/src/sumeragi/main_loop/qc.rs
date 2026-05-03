@@ -6516,6 +6516,7 @@ impl Actor {
         match err {
             QcValidationError::MissingVotes { .. }
             | QcValidationError::SubjectMismatch { .. }
+            | QcValidationError::RootsMismatch { .. }
             | QcValidationError::InvalidSignature { .. } => {}
             _ => return None,
         }

@@ -24251,6 +24251,7 @@ impl<'state> StateBlock<'state> {
     ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
         let nft_seq_base =
             Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
+        let current_block_height = self._curr_block.height().get();
         let mut transaction = self.transaction();
 
         let mut entrypoint = TimeTriggerEntrypoint {
@@ -24283,10 +24284,28 @@ impl<'state> StateBlock<'state> {
             .world
             .triggers
             .set_time_trigger_retry_state(trg_id, None);
-        transaction
+        let registered_in_current_block = transaction
             .world
             .triggers
-            .decrease_repeats([trg_id].into_iter());
+            .time_triggers()
+            .get(trg_id)
+            .and_then(|action| {
+                let key = "__registered_block_height".parse::<Name>().ok()?;
+                action
+                    .metadata()
+                    .get(&key)
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok())
+            })
+            .is_some_and(|height| height == current_block_height);
+        // A trigger body may unregister and re-register the same id, for example
+        // subscription billing scheduling its next charge. The fresh action has
+        // its own repeat budget and must not be consumed by this invocation.
+        if !registered_in_current_block {
+            transaction
+                .world
+                .triggers
+                .decrease_repeats([trg_id].into_iter());
+        }
 
         transaction.apply();
 
@@ -28368,12 +28387,16 @@ impl StateTransaction<'_, '_> {
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let (res, outcome_override) = match executable {
-            ExecutableRef::Instructions(instructions) => (
-                // Route trigger instructions through the executor so custom
-                // validation/fuel policies apply consistently.
-                self.execute_instructions(instructions.clone(), authority),
-                None,
-            ),
+            ExecutableRef::Instructions(instructions) => {
+                let step = ExecutionStep(instructions.clone());
+                self.seed_time_trigger_call_hash(id, authority, &event, &step);
+                (
+                    // Route trigger instructions through the executor so custom
+                    // validation/fuel policies apply consistently.
+                    self.execute_instructions(instructions.clone(), authority),
+                    None,
+                )
+            }
             ExecutableRef::ContractCall(invocation) => {
                 let record = crate::smartcontracts::code::fetch_bound_contract_record(
                     self,
@@ -28494,6 +28517,8 @@ impl StateTransaction<'_, '_> {
                     );
                 }
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let step = ExecutionStep(ConstVec::from(artifacts.queued_instructions()));
+                self.seed_time_trigger_call_hash(id, authority, &event, &step);
                 let queued = artifacts.apply_to_transaction(self, authority)?;
                 let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                 (Ok(cvs.into()), None)
@@ -28627,6 +28652,8 @@ impl StateTransaction<'_, '_> {
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
                     let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                    let step = ExecutionStep(ConstVec::from(artifacts.queued_instructions()));
+                    self.seed_time_trigger_call_hash(id, authority, &event, &step);
                     let queued = artifacts.apply_to_transaction(self, authority)?;
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                     (Ok(cvs.into()), None)
@@ -28824,6 +28851,24 @@ impl StateTransaction<'_, '_> {
         buf.extend_from_slice(&authority.encode());
         buf.extend_from_slice(&args.encode());
         self.tx_call_hash = Some(iroha_crypto::Hash::new(buf));
+    }
+
+    fn seed_time_trigger_call_hash(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        event: &EventBox,
+        step: &ExecutionStep,
+    ) {
+        if self.tx_call_hash.is_some() || !matches!(event, EventBox::Time(_)) {
+            return;
+        }
+        let entrypoint = TimeTriggerEntrypoint {
+            id: id.clone(),
+            instructions: step.clone(),
+            authority: authority.clone(),
+        };
+        self.tx_call_hash = Some(iroha_crypto::Hash::from(entrypoint.hash_as_entrypoint()));
     }
 }
 
@@ -42997,6 +43042,107 @@ mod tests {
         assert_eq!(entrypoint.instructions, expected_step);
         assert_eq!(entrypoint.id, trigger_id);
         assert_eq!(entrypoint.authority, *ALICE_ID);
+
+        Ok(())
+    }
+
+    #[test]
+    fn time_trigger_same_id_reschedule_keeps_new_repeat_budget() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+            h.creation_time_ms = 0;
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let trigger_id: TriggerId = "self_reschedule".parse()?;
+        {
+            let mut stx = state_block.transaction();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+            Register::domain(Domain::new(domain_id))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+
+            let replacement_schedule = Schedule {
+                start_ms: 10_000,
+                period_ms: None,
+            };
+            let replacement_trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter(ExecutionTime::Schedule(replacement_schedule)),
+                ),
+            );
+            let instructions = vec![
+                InstructionBox::from(Unregister::trigger(trigger_id.clone())),
+                InstructionBox::from(Register::trigger(replacement_trigger)),
+            ];
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    instructions,
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter(ExecutionTime::Schedule(Schedule {
+                        start_ms: 0,
+                        period_ms: None,
+                    })),
+                ),
+            );
+            Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
+            stx.apply();
+        }
+        let _ = state_block.apply_without_execution(&block1, Vec::new());
+        state_block.commit()?;
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+            h.creation_time_ms = 2;
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let time_event = state_block.create_time_event(&block2.as_ref().header());
+        let original_action = state_block
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .expect("original trigger should be registered")
+            .clone();
+        let (_entrypoint, result) =
+            state_block.execute_time_trigger(&trigger_id, &original_action, &time_event, 0);
+        assert!(
+            result.is_ok(),
+            "self-rescheduling trigger should execute successfully: {:?}",
+            result
+        );
+
+        let action = state_block
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .expect("replacement trigger should remain registered");
+        assert_eq!(action.repeats, Repeats::Exactly(1));
+        assert_eq!(
+            action
+                .metadata()
+                .get(&"__registered_block_height".parse::<Name>()?)
+                .and_then(|json| json.try_into_any_norito::<u64>().ok()),
+            Some(2)
+        );
+        match action.filter.0 {
+            ExecutionTime::Schedule(schedule) => {
+                assert_eq!(schedule.start_ms, 10_000);
+                assert_eq!(schedule.period_ms, None);
+            }
+            ExecutionTime::PreCommit => panic!("expected replacement schedule"),
+        }
 
         Ok(())
     }

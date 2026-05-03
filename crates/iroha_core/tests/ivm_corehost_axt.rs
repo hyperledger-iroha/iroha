@@ -424,6 +424,106 @@ fn core_host_handles_axt_flow() {
 }
 
 #[test]
+fn core_host_rejects_proof_envelope_for_other_dataspace() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(17);
+    let other_dsid = DataSpaceId::new(18);
+    let manifest_root = [0x31; 32];
+    let mut vm = IVM::new(1_000_000);
+    let mut host = host_with_policy(authority, dsid, manifest_root, LaneId::new(0), 5);
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
+    vm.set_register(10, desc_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
+
+    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
+    let manifest = TouchManifest {
+        read: vec!["orders/0".into()],
+        write: vec!["ledger/0".into()],
+    };
+    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
+
+    let wrong_proof = proof_blob_for(other_dsid, manifest_root, b"other-dsid".to_vec(), 25);
+    let wrong_proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &wrong_proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, wrong_proof_ptr);
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
+    let reject = host
+        .take_axt_reject_for_tests()
+        .expect("proof rejection context");
+    assert_eq!(reject.reason, AxtRejectReason::Manifest);
+    assert!(reject.detail.contains("proof does not match policy"));
+}
+
+#[test]
+fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(19);
+    let manifest_root = [0x32; 32];
+    let mut vm = IVM::new(1_000_000);
+    let mut host = host_with_policy(authority, dsid, manifest_root, LaneId::new(0), 5);
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
+    vm.set_register(10, desc_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
+
+    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
+    let manifest = TouchManifest {
+        read: vec!["orders/0".into()],
+        write: vec!["ledger/0".into()],
+    };
+    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
+
+    let mut proof = proof_blob_for(dsid, manifest_root, b"source-dsid-mismatch".to_vec(), 25);
+    let mut envelope: axt::AxtProofEnvelope =
+        norito::decode_from_bytes(&proof.payload).expect("decode proof envelope");
+    envelope
+        .fastpq_binding
+        .as_mut()
+        .expect("proof helper should bind FastPQ metadata")
+        .source_dsid = dsid.as_u64() + 1;
+    proof.payload = norito::to_bytes(&envelope).expect("re-encode mutated proof envelope");
+
+    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::PermissionDenied)
+    ));
+    let reject = host
+        .take_axt_reject_for_tests()
+        .expect("proof rejection context");
+    assert_eq!(reject.reason, AxtRejectReason::Proof);
+    assert!(reject.detail.contains("source_dsid mismatch"));
+}
+
+#[test]
 fn axt_policy_reject_exposes_context() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(13);
@@ -3435,14 +3535,8 @@ fn core_host_records_multi_dataspace_envelope() {
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch b");
 
-    let proof_a = axt::ProofBlob {
-        payload: vec![0xA1; 32],
-        expiry_slot: None,
-    };
-    let proof_b = axt::ProofBlob {
-        payload: vec![0xB2; 32],
-        expiry_slot: None,
-    };
+    let proof_a = proof_blob_for(dsid_a, [0xA1; 32], b"multi-ds-a".to_vec(), 50);
+    let proof_b = proof_blob_for(dsid_b, [0xB2; 32], b"multi-ds-b".to_vec(), 50);
     let proof_a_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_a);
     let proof_b_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof_b);
     vm.set_register(10, ds_a_ptr);

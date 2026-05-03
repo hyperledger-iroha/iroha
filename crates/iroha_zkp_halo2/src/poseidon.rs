@@ -116,6 +116,17 @@ fn fr_from_le_bytes(bytes: &[u8]) -> Fr {
 }
 
 #[inline(always)]
+fn partial_u64_from_le_bytes(bytes: &[u8; 8], len: usize) -> u64 {
+    debug_assert!(len <= bytes.len());
+    let word = u64::from_le_bytes(*bytes);
+    match len {
+        0 => 0,
+        8 => word,
+        _ => word & ((1u64 << (len * 8)) - 1),
+    }
+}
+
+#[inline(always)]
 fn apply_mds6(state: &mut [Fr; 6], mds: &[[Fr; 6]; 6]) {
     let s0 = state[0];
     let s1 = state[1];
@@ -396,7 +407,6 @@ impl PoseidonByteHasher {
             bytes = &bytes[take..];
             if self.pending_len == 8 {
                 self.absorb_word(Fr::from(u64::from_le_bytes(self.pending_bytes)));
-                self.pending_bytes = [0; 8];
                 self.pending_len = 0;
             }
         }
@@ -430,7 +440,10 @@ impl PoseidonByteHasher {
     #[inline]
     pub fn finalize(mut self) -> [u8; 32] {
         if self.pending_len > 0 {
-            self.absorb_word(Fr::from(u64::from_le_bytes(self.pending_bytes)));
+            self.absorb_word(Fr::from(partial_u64_from_le_bytes(
+                &self.pending_bytes,
+                self.pending_len,
+            )));
         }
         match self.rate_len {
             0 => {
