@@ -1939,6 +1939,20 @@ Last updated: 2026-05-03
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_keeps_retry_armed_when_body_present_but_commit_qc_repair_active' --nocapture`
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_ignores_passive_catchup_slot_even_with_targets' --nocapture`
 
+## 2026-05-03 Nexus Fee Burn Activation Gate
+
+- Normal Nexus transaction fees are now burned from the fee payer/sponsor once
+  `nexus.fees.burn_from_unix_timestamp_ms` is reached. Before that timestamp,
+  the executor preserves legacy fee transfer/self-fee behavior so existing live
+  Minamoto blocks replay without changing holder balances or total supply.
+- Added regression coverage for sponsor-as-sink legacy no-op before activation,
+  legacy transfer before activation, and burn behavior after activation.
+- The default activation timestamp is `u64::MAX`; operators must explicitly set
+  a future timestamp after deploying the compatible binary to every peer.
+- Focused validation:
+  - `env -u LOG_FORMAT cargo test -p iroha_config`
+  - `env -u LOG_FORMAT cargo test -p iroha_core nexus_fee -- --nocapture --test-threads=1`
+
 ## 2026-04-22 Sumeragi targeted main_loop regression sweep
 
 - `crates/iroha_core/src/sumeragi/main_loop/commit.rs` now keeps the initial local commit/precommit emit on the seeded collector set plus explicit parallel fanout, instead of widening that very first send through the generic commit-evidence replay path.
