@@ -44,13 +44,6 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Vec::is_empty")]
         pub external_entrypoints: Vec<TransactionEntrypoint>,
-        /// Durable execution context for external entrypoints.
-        ///
-        /// New committed blocks include this context so replay does not need to
-        /// re-derive route-dependent execution inputs from the current WSV.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
-        pub execution_context: Option<BlockExecutionContextBundle>,
         /// Optional DA commitment bundle embedded in this block.
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
@@ -67,6 +60,13 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub previous_roster_evidence: Option<PreviousRosterEvidence>,
+        /// Durable execution context for external entrypoints.
+        ///
+        /// New committed blocks include this context so replay does not need to
+        /// re-derive route-dependent execution inputs from the current WSV.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub execution_context: Option<BlockExecutionContextBundle>,
     }
 
     /// Secondary block state resulting from execution.

@@ -6,15 +6,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_core::{
-    sns::{
-        SnsError as CoreSnsError, SnsNamespace, apply_with_state_block, get_name_record,
-        policy_by_id, register_name, renew_name, transfer_name, update_name_controllers,
-    },
+    sns::{SnsError as CoreSnsError, SnsNamespace, get_name_record, policy_by_id},
     state::{StateReadOnly, StateReadOnlyWithTransactions},
 };
 use iroha_data_model::sns::{
-    FreezeNameRequestV1, GovernanceHookV1, RegisterNameRequestV1, RegisterNameResponseV1,
-    RenewNameRequestV1, SuffixId, TransferNameRequestV1, UpdateControllersRequestV1,
+    FreezeNameRequestV1, GovernanceHookV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId,
+    TransferNameRequestV1, UpdateControllersRequestV1,
 };
 use std::sync::Arc;
 
@@ -109,15 +106,10 @@ where
     run_blocking_sns(op, job).await
 }
 
-async fn run_serialized_sns_mutation<T>(
-    app: &SharedAppState,
-    op: &'static str,
-    job: impl FnOnce() -> Result<T, SnsError> + Send + 'static,
-) -> Result<T, SnsError>
-where
-    T: Send + 'static,
-{
-    run_serialized_blocking(Arc::clone(&app.sns_mutation_lock), op, job).await
+fn direct_sns_mutation_disabled(op: &str) -> SnsError {
+    SnsError::BadRequest(format!(
+        "SNS {op} must be submitted as a consensus transaction; direct Torii WSV mutation is disabled"
+    ))
 }
 
 /// Handle `POST /v1/sns/names`.
@@ -125,22 +117,11 @@ where
 pub async fn handle_register_name(
     State(app): State<SharedAppState>,
     crate::JsonOnly(request): crate::JsonOnly<RegisterNameRequestV1>,
-) -> Result<impl IntoResponse, SnsError> {
+) -> Result<Response, SnsError> {
     let namespace = metric_namespace_from_suffix_id(request.selector.suffix_id);
-    let app_for_job = Arc::clone(&app);
-    let outcome = run_serialized_sns_mutation(&app, "register_name", move || {
-        apply_with_state_block(app_for_job.state.as_ref(), |tx| register_name(tx, request))
-            .map_err(SnsError::from)
-    })
-    .await;
+    let outcome = Err(direct_sns_mutation_disabled("register_name"));
     record_registrar_status(&app, &namespace, &outcome);
-    let record = outcome?;
-    Ok((
-        StatusCode::CREATED,
-        JsonBody(RegisterNameResponseV1 {
-            name_record: record,
-        }),
-    ))
+    outcome
 }
 
 /// Handle `GET /v1/sns/names/{namespace}/{literal}`.
@@ -169,100 +150,70 @@ pub async fn handle_get_name(
 pub async fn handle_renew_name(
     Path((namespace, literal)): Path<(String, String)>,
     State(app): State<SharedAppState>,
-    crate::JsonOnly(request): crate::JsonOnly<RenewNameRequestV1>,
-) -> Result<impl IntoResponse, SnsError> {
+    crate::JsonOnly(_request): crate::JsonOnly<RenewNameRequestV1>,
+) -> Result<Response, SnsError> {
+    let _ = literal;
     let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
     let namespace_label = namespace.as_path().to_owned();
-    let app_for_job = Arc::clone(&app);
-    let outcome = run_serialized_sns_mutation(&app, "renew_name", move || {
-        apply_with_state_block(app_for_job.state.as_ref(), |tx| {
-            renew_name(tx, namespace, &literal, request)
-        })
-        .map_err(SnsError::from)
-    })
-    .await;
+    let outcome = Err(direct_sns_mutation_disabled("renew_name"));
     record_registrar_status(&app, &namespace_label, &outcome);
-    Ok(JsonBody(outcome?))
+    outcome
 }
 
 /// Handle `POST /v1/sns/names/{namespace}/{literal}/transfer`.
 pub async fn handle_transfer_name(
     Path((namespace, literal)): Path<(String, String)>,
     State(app): State<SharedAppState>,
-    crate::JsonOnly(request): crate::JsonOnly<TransferNameRequestV1>,
-) -> Result<impl IntoResponse, SnsError> {
+    crate::JsonOnly(_request): crate::JsonOnly<TransferNameRequestV1>,
+) -> Result<Response, SnsError> {
+    let _ = literal;
     let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
     let namespace_label = namespace.as_path().to_owned();
-    let app_for_job = Arc::clone(&app);
-    let outcome = run_serialized_sns_mutation(&app, "transfer_name", move || {
-        apply_with_state_block(app_for_job.state.as_ref(), |tx| {
-            transfer_name(tx, namespace, &literal, request)
-        })
-        .map_err(SnsError::from)
-    })
-    .await;
+    let outcome = Err(direct_sns_mutation_disabled("transfer_name"));
     record_registrar_status(&app, &namespace_label, &outcome);
-    Ok(JsonBody(outcome?))
+    outcome
 }
 
 /// Handle `POST /v1/sns/names/{namespace}/{literal}/controllers`.
 pub async fn handle_update_name_controllers(
     Path((namespace, literal)): Path<(String, String)>,
     State(app): State<SharedAppState>,
-    crate::JsonOnly(request): crate::JsonOnly<UpdateControllersRequestV1>,
-) -> Result<impl IntoResponse, SnsError> {
+    crate::JsonOnly(_request): crate::JsonOnly<UpdateControllersRequestV1>,
+) -> Result<Response, SnsError> {
+    let _ = literal;
     let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
     let namespace_label = namespace.as_path().to_owned();
-    let app_for_job = Arc::clone(&app);
-    let outcome = run_serialized_sns_mutation(&app, "update_name_controllers", move || {
-        apply_with_state_block(app_for_job.state.as_ref(), |tx| {
-            update_name_controllers(tx, namespace, &literal, request)
-        })
-        .map_err(SnsError::from)
-    })
-    .await;
+    let outcome = Err(direct_sns_mutation_disabled("update_name_controllers"));
     record_registrar_status(&app, &namespace_label, &outcome);
-    Ok(JsonBody(outcome?))
+    outcome
 }
 
 /// Handle `POST /v1/sns/names/{namespace}/{literal}/freeze`.
 pub async fn handle_freeze_name(
     Path((namespace, literal)): Path<(String, String)>,
     State(app): State<SharedAppState>,
-    crate::JsonOnly(request): crate::JsonOnly<FreezeNameRequestV1>,
-) -> Result<impl IntoResponse, SnsError> {
+    crate::JsonOnly(_request): crate::JsonOnly<FreezeNameRequestV1>,
+) -> Result<Response, SnsError> {
+    let _ = literal;
     let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
     let namespace_label = namespace.as_path().to_owned();
-    let app_for_job = Arc::clone(&app);
-    let outcome = run_serialized_sns_mutation(&app, "freeze_name", move || {
-        apply_with_state_block(app_for_job.state.as_ref(), |tx| {
-            iroha_core::sns::freeze_name(tx, namespace, &literal, request)
-        })
-        .map_err(SnsError::from)
-    })
-    .await;
+    let outcome = Err(direct_sns_mutation_disabled("freeze_name"));
     record_registrar_status(&app, &namespace_label, &outcome);
-    Ok(JsonBody(outcome?))
+    outcome
 }
 
 /// Handle `DELETE /v1/sns/names/{namespace}/{literal}/freeze`.
 pub async fn handle_unfreeze_name(
     Path((namespace, literal)): Path<(String, String)>,
     State(app): State<SharedAppState>,
-    crate::JsonOnly(governance): crate::JsonOnly<GovernanceHookV1>,
-) -> Result<impl IntoResponse, SnsError> {
+    crate::JsonOnly(_governance): crate::JsonOnly<GovernanceHookV1>,
+) -> Result<Response, SnsError> {
+    let _ = literal;
     let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
     let namespace_label = namespace.as_path().to_owned();
-    let app_for_job = Arc::clone(&app);
-    let outcome = run_serialized_sns_mutation(&app, "unfreeze_name", move || {
-        apply_with_state_block(app_for_job.state.as_ref(), |tx| {
-            iroha_core::sns::unfreeze_name(tx, namespace, &literal, governance)
-        })
-        .map_err(SnsError::from)
-    })
-    .await;
+    let outcome = Err(direct_sns_mutation_disabled("unfreeze_name"));
     record_registrar_status(&app, &namespace_label, &outcome);
-    Ok(JsonBody(outcome?))
+    outcome
 }
 
 /// Handle `GET /v1/sns/policies/{suffix_id}`.
@@ -328,6 +279,12 @@ mod tests {
         let internal: SnsError = CoreSnsError::Internal("boom".to_owned()).into();
         let response = internal.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn direct_sns_mutation_disabled_returns_client_error() {
+        let response = direct_sns_mutation_disabled("register_name").into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

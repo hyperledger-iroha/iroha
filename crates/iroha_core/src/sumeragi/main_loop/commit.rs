@@ -556,6 +556,18 @@ pub(super) fn execute_commit_work(
             }
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
+            let wsv_checkpoint_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+            if let Err(err) =
+                kura.store_wsv_checkpoint(block_height, block_hash, wsv_checkpoint_hash)
+            {
+                error!(
+                    ?err,
+                    height = block_height,
+                    block = %block_hash,
+                    checkpoint = %wsv_checkpoint_hash,
+                    "failed to persist Kura WSV checkpoint after state commit"
+                );
+            }
             crate::sumeragi::status::record_round_gap_state_commit(
                 block_height,
                 block_view,

@@ -2109,10 +2109,25 @@ Last updated: 2026-05-04
 
 - Blocks now carry a header-committed execution context bundle for external entrypoints, recording the lane and dataspace used during execution so future Kura replay does not need to re-derive route-sensitive state from the current WSV.
 - Live non-genesis block validation rejects missing, tampered, misaligned, or route-mismatched execution context. The replay-specific path remains compatible with older committed blocks while preferring embedded context whenever it is present.
+- Kura replay now hard-fails before applying a block if re-execution does not reproduce the committed result merkle root, full entry merkle root, entrypoint hash sequence, result hash sequence, and stored transaction result payloads. Stored committed blocks without execution results are treated as unreplayable for WSV rebuild.
+- Kura now writes a Norito WSV checkpoint sidecar after each live state commit, keyed by height and block hash, and replay compares the reconstructed canonical WSV snapshot hash against the checkpoint when present. Once checkpointed history has begun, later missing WSV checkpoints fail replay instead of silently accepting an unchecked rebuild.
+- WSV checkpoint sidecars are pruned when Kura truncates history or replaces the top block, so stale checkpoints cannot survive a local rollback/replacement path.
+- The optional execution-context fields are appended in the Norito header/payload layouts so older block data with absent context decodes with the intended default.
 - Snapshot tests now expose a canonical WSV byte surface and assert snapshot roundtrips preserve those bytes.
 - Focused validation so far:
+  - `cargo fmt --all`
   - `cargo check -p iroha_data_model`
   - `cargo check -p iroha_core`
+  - `cargo check -p irohad`
+  - `cargo test -p iroha_core wsv_checkpoint -- --nocapture`
+  - `cargo test -p iroha_core --lib replay_from_height_catches_up_state -- --nocapture`
+  - `cargo test -p iroha_core --lib replay_ -- --nocapture`
+  - `cargo test -p iroha_data_model header_decodes_legacy_payload_without_execution_context_hash -- --nocapture`
+  - `cargo test -p iroha_data_model block_payload_decodes_legacy_payload_without_execution_context -- --nocapture`
+  - `cargo test -p iroha_core replay_rejects_committed_result_mismatch_before_applying_block -- --nocapture`
+  - `cargo test -p iroha_core replay_legacy_route_sensitive_block_reconstructs_canonical_state -- --nocapture`
+  - `cargo test -p iroha_core replay_ -- --nocapture`
+  - `cargo test -p iroha_core execution_context -- --nocapture`
 
 ## 2026-04-22 Sumeragi targeted main_loop regression sweep
 
