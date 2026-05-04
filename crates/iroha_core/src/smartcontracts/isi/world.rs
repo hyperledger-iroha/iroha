@@ -12069,6 +12069,7 @@ pub mod isi {
                 total_xor_variance_micro: 0,
                 swap_metadata: None,
                 receipts: Vec::new(),
+                nexus_fee_receipts: Vec::new(),
             };
             let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
                 block_header,

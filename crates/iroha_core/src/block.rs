@@ -81,8 +81,8 @@ use iroha_data_model::{
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneFastpqProofMaterial, LaneId,
-        LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob,
+        proof_matches_manifest,
     },
     peer::PeerId,
     transaction::{
@@ -267,6 +267,7 @@ struct LaneSettlementBuilder {
     total_xor_variance_micro: u128,
     swap_evidence: Option<SwapEvidence>,
     receipts: Vec<LaneSettlementReceipt>,
+    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
 }
@@ -307,9 +308,12 @@ fn attach_manifest_roots_to_relays(
 }
 
 fn attach_fastpq_proof_material_to_relays(envelopes: &mut [LaneRelayEnvelope]) {
+    #[cfg(not(test))]
+    let _ = envelopes;
+    #[cfg(test)]
     for envelope in envelopes {
         let verified_at_height = Some(envelope.block_height);
-        envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
+        envelope.fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
             proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
             verified_at_height,
         });
@@ -3009,6 +3013,7 @@ pub(crate) mod valid {
     #[cfg(not(feature = "telemetry"))]
     type MetricsRef<'a> = ();
 
+    #[derive(Debug)]
     struct StaticValidationData {
         expected_block_height: usize,
         max_clock_drift: Duration,
@@ -7728,6 +7733,7 @@ pub(crate) mod valid {
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
             let mut pending_settlements = state_block.drain_settlement_records();
+            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
 
             let mut lane_settlement_builders: BTreeMap<
                 (LaneId, DataSpaceId),
@@ -7762,11 +7768,13 @@ pub(crate) mod valid {
                     summary.rbc_bytes_total =
                         summary.rbc_bytes_total.saturating_add(bytes.len() as u64);
 
+                    let mut counted_settlement_tx = false;
                     if let Some(record) = pending_settlements.remove(&txs[idx].hash()) {
                         let builder = lane_settlement_builders
                             .entry((decision.lane_id, decision.dataspace_id))
                             .or_default();
                         builder.tx_count = builder.tx_count.saturating_add(1);
+                        counted_settlement_tx = true;
                         builder.total_local_micro = builder
                             .total_local_micro
                             .saturating_add(record.local_amount_micro);
@@ -7803,6 +7811,19 @@ pub(crate) mod valid {
                             }
                         }
                         builder.receipts.push(record.into_lane_receipt());
+                    }
+                    if let Some(record) = pending_nexus_fee_receipts.remove(&txs[idx].hash()) {
+                        let builder = lane_settlement_builders
+                            .entry((decision.lane_id, decision.dataspace_id))
+                            .or_default();
+                        if !counted_settlement_tx {
+                            builder.tx_count = builder.tx_count.saturating_add(1);
+                        }
+                        builder.nexus_fee_receipts.push(record.into_lane_receipt(
+                            block.header().height().get(),
+                            decision.lane_id,
+                            decision.dataspace_id,
+                        ));
                     }
                 }
 
@@ -8087,6 +8108,7 @@ pub(crate) mod valid {
                                 .swap_evidence
                                 .map(SwapEvidence::into_lane_metadata),
                             receipts: builder.receipts,
+                            nexus_fee_receipts: builder.nexus_fee_receipts,
                         }
                     })
                     .collect()
@@ -15915,6 +15937,7 @@ mod tests {
             total_xor_variance_micro: receipt.xor_variance_micro,
             swap_metadata: None,
             receipts: vec![receipt],
+            nexus_fee_receipts: Vec::new(),
         };
 
         let mut lane_summaries = BTreeMap::new();
@@ -16017,6 +16040,7 @@ mod tests {
             total_xor_variance_micro: receipt.xor_variance_micro,
             swap_metadata: None,
             receipts: vec![receipt],
+            nexus_fee_receipts: Vec::new(),
         };
 
         let mut lane_summaries = BTreeMap::new();

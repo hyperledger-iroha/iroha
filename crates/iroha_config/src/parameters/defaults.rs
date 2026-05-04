@@ -2296,6 +2296,8 @@ pub mod nexus {
         /// The default keeps legacy transfer/self-fee behavior until an
         /// operator explicitly activates burning at a block timestamp.
         pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = u64::MAX;
+        /// Default Nexus fee settlement mode.
+        pub const SETTLEMENT_MODE: &str = "direct";
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {

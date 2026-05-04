@@ -2499,8 +2499,19 @@ pub struct NexusFees {
     pub sponsor_max_fee: Numeric,
     /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
     pub burn_from_unix_timestamp_ms: u64,
+    /// How fees are settled after they are computed.
+    pub settlement_mode: NexusFeeSettlementMode,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     pub successful_claim_fee_exempt_authorities: Vec<String>,
+}
+
+/// Settlement mode for Nexus fee debits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NexusFeeSettlementMode {
+    /// Fees are debited in the same chain transaction execution path.
+    Direct,
+    /// Fees are committed into lane receipts and burned during Nexus merge settlement.
+    LaneRelayBurn,
 }
 
 impl Default for NexusFees {
@@ -2515,6 +2526,7 @@ impl Default for NexusFees {
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
             sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
+            settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),
         }
     }

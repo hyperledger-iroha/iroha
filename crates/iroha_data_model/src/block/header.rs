@@ -709,6 +709,8 @@ impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
 
 #[cfg(test)]
 mod tests {
+    use crate::block::ExternalExecutionContext;
+
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{

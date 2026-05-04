@@ -81,6 +81,7 @@ mod tests {
             total_xor_variance_micro: 1,
             swap_metadata: None,
             receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
         }
     }
 

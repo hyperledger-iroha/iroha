@@ -18,11 +18,11 @@ use iroha_config::parameters::user::ParseError;
 use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, NexusStorage, OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource,
-        OracleChangeThresholds, OracleEconomics, OracleGovernance, OracleTwitterBinding, Queue,
-        RbcRs16InitialFanout, Root as Config, SoranetVpn, Streaming, StreamingSoranetAccessKind,
-        StreamingSoravpn, StreamingSync, SumeragiResilience, SumeragiResilienceProfile,
-        ToriiOperatorAuth, TransactionGossiper,
+        LaneProfile, NexusFeeSettlementMode, NexusStorage, OperatorAuthLockout,
+        OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
+        OracleGovernance, OracleTwitterBinding, Queue, RbcRs16InitialFanout, Root as Config,
+        SoranetVpn, Streaming, StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync,
+        SumeragiResilience, SumeragiResilienceProfile, ToriiOperatorAuth, TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -1488,6 +1488,7 @@ fn minimal_config_snapshot() {
                         scale: 0,
                     },
                     burn_from_unix_timestamp_ms: 18446744073709551615,
+                    settlement_mode: NexusFeeSettlementMode::Direct,
                     successful_claim_fee_exempt_authorities: [],
                 },
                 hf_shared_leases: NexusHfSharedLeases {

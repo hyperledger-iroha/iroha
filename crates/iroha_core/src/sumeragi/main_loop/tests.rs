@@ -743,6 +743,7 @@ fn sample_lane_relay_envelope_with_bitmap(
             xor_variance_micro: 0,
             timestamp_ms: 1_700_000_000_000,
         }],
+        nexus_fee_receipts: Vec::new(),
     };
     let envelope =
         LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");

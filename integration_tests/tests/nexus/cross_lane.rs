@@ -154,6 +154,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let mut header =
         iroha_data_model::block::BlockHeader::new(height, None, None, None, 1_700_000_000_000, 0);
@@ -230,6 +231,7 @@ fn cross_lane_builder_rejects_settlement_height_mismatch_at_construction() -> Re
         total_xor_variance_micro: 2,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
 
     let err = nexus::CrossLaneTransferBuilder::new(header, None, None, settlement)
@@ -258,6 +260,7 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
         total_xor_variance_micro: 4,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let mut header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(11).expect("height"),
@@ -299,6 +302,7 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
         total_xor_variance_micro: 0,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(12).expect("height"),
@@ -351,6 +355,7 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
         total_xor_variance_micro: 5,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(3).expect("height"),
@@ -451,6 +456,7 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(5).expect("height"),
@@ -493,6 +499,7 @@ fn lane_relay_quorum_rejects_zero_signature() {
         total_xor_variance_micro: 2,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(6).expect("height"),
@@ -534,6 +541,7 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
         total_xor_variance_micro: 2,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(7).expect("height"),
@@ -576,6 +584,7 @@ fn lane_relay_quorum_accepts_exact_min_quorum() {
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(9).expect("height"),
@@ -613,6 +622,7 @@ fn lane_relay_quorum_rejects_signer_bitmap_length_mismatch() {
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(8).expect("height"),
@@ -656,6 +666,7 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(first.block_height).expect("height"),
@@ -689,6 +700,7 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_heigh
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(first.block_height).expect("height"),
@@ -722,6 +734,7 @@ fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_heigh
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(first.block_height).expect("height"),
@@ -756,6 +769,7 @@ fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
         total_xor_variance_micro: 1,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(next_height).expect("height"),
@@ -933,6 +947,7 @@ fn sample_relay_envelope() -> LaneRelayEnvelope {
         total_xor_variance_micro: 5,
         swap_metadata: None,
         receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
     };
     let mut header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(4).expect("height"),

@@ -12,9 +12,13 @@ use std::collections::BTreeMap;
 use iroha_config::parameters::actual as config;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    asset::AssetDefinitionId, block::consensus::LaneSettlementReceipt,
+    account::AccountId,
+    asset::AssetDefinitionId,
+    block::consensus::{LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs},
+    nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
+use iroha_primitives::numeric::Numeric;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 pub use settlement_router::VolatilityBucket;
 use settlement_router::{
@@ -191,6 +195,44 @@ pub struct PendingSettlement {
     pub oracle_timestamp_ms: u64,
 }
 
+/// Nexus fee receipt staged during transaction execution before lane routing is known.
+#[derive(Debug, Clone)]
+pub struct PendingNexusFeeReceipt {
+    /// Source transaction hash/id.
+    pub source_id: [u8; 32],
+    /// Sponsor or payer Nexus account charged for the public XOR burn.
+    pub payer_account_id: AccountId,
+    /// Fee asset selector, fixed to `xor#universal` for DPN settlement.
+    pub fee_asset_id: String,
+    /// Computed Nexus fee amount.
+    pub fee_amount: Numeric,
+    /// Fee schedule inputs used to compute [`Self::fee_amount`].
+    pub schedule: NexusFeeScheduleInputs,
+}
+
+impl PendingNexusFeeReceipt {
+    /// Bind the pending receipt to the finalized lane block coordinates.
+    #[must_use]
+    pub fn into_lane_receipt(
+        self,
+        block_height: u64,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> NexusFeeReceipt {
+        NexusFeeReceipt {
+            version: 1,
+            source_id: self.source_id,
+            dataspace_id,
+            lane_id,
+            block_height,
+            payer_account_id: self.payer_account_id,
+            fee_asset_id: self.fee_asset_id,
+            fee_amount: self.fee_amount,
+            schedule: self.schedule,
+        }
+    }
+}
+
 impl PendingSettlement {
     /// Convert the pending record into a lane-level settlement receipt.
     #[must_use]
@@ -210,6 +252,7 @@ impl PendingSettlement {
 #[derive(Debug, Default, Clone)]
 pub struct SettlementAccumulator {
     records: BTreeMap<HashOf<SignedTransaction>, PendingSettlement>,
+    nexus_fee_records: BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt>,
 }
 
 impl SettlementAccumulator {
@@ -218,14 +261,30 @@ impl SettlementAccumulator {
         self.records.insert(tx_hash, record);
     }
 
+    /// Record a Nexus fee receipt for the given transaction hash.
+    pub fn record_nexus_fee(
+        &mut self,
+        tx_hash: HashOf<SignedTransaction>,
+        record: PendingNexusFeeReceipt,
+    ) {
+        self.nexus_fee_records.insert(tx_hash, record);
+    }
+
     /// Drain the accumulated receipts, returning ownership of the internal map.
     pub fn drain(&mut self) -> BTreeMap<HashOf<SignedTransaction>, PendingSettlement> {
         core::mem::take(&mut self.records)
     }
 
+    /// Drain accumulated Nexus fee receipts.
+    pub fn drain_nexus_fees(
+        &mut self,
+    ) -> BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt> {
+        core::mem::take(&mut self.nexus_fee_records)
+    }
+
     /// Whether the accumulator currently stores no receipts.
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.records.is_empty() && self.nexus_fee_records.is_empty()
     }
 }
 

@@ -611,6 +611,7 @@ mod tests {
             total_xor_variance_micro: 0,
             swap_metadata: None,
             receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
         };
         let manifest_root = [0x42; 32];
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?

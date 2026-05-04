@@ -171,6 +171,7 @@ mod tests {
                 xor_variance_micro: 0,
                 timestamp_ms: 1_700_000_000_000,
             }],
+            nexus_fee_receipts: Vec::new(),
         };
         let envelope =
             LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope");

@@ -21,7 +21,7 @@ use iroha_data_model::{
         id::{AssetDefinitionId, AssetId},
         value::Asset,
     },
-    block::BlockHeader,
+    block::{BlockHeader, consensus::NexusFeeScheduleInputs},
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
@@ -61,7 +61,7 @@ use settlement_router::haircut::LiquidityProfile;
 use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
-    settlement::{PendingSettlement, QuoteError, VolatilityBucket},
+    settlement::{PendingNexusFeeReceipt, PendingSettlement, QuoteError, VolatilityBucket},
     smartcontracts::{Execute as _, code, ivm::cache::IvmCache},
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
@@ -962,6 +962,12 @@ pub(crate) fn check_external_nexus_fee_admission(
         transaction.authority().clone()
     };
 
+    if nexus.fees.settlement_mode
+        == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+    {
+        return Ok(());
+    }
+
     if observation_time_ms < nexus.fees.burn_from_unix_timestamp_ms {
         let sink_account = crate::block::parse_account_literal_with_world(
             world,
@@ -1290,6 +1296,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
         Executor::charge_nexus_fees(
             state_transaction,
             authority,
+            tx_hash,
             fee_sponsor,
             tx_bytes_len,
             instruction_count,
@@ -1348,6 +1355,7 @@ impl Executor {
     fn charge_nexus_fees(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
+        tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         sponsor: Option<AccountId>,
         tx_bytes_len: usize,
         instruction_count: usize,
@@ -1448,6 +1456,39 @@ impl Executor {
         };
         let payer_id = payer.to_string();
         let asset_label = payer_asset.definition().to_string();
+        if cfg.settlement_mode
+            == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+        {
+            let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+            source_id.copy_from_slice(tx_hash.as_ref());
+            let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
+            let instruction_count = u64::try_from(instruction_count).unwrap_or(u64::MAX);
+            state_transaction.record_nexus_fee_receipt(
+                tx_hash,
+                PendingNexusFeeReceipt {
+                    source_id,
+                    payer_account_id: payer,
+                    fee_asset_id: cfg.fee_asset_id.clone(),
+                    fee_amount: fee.clone(),
+                    schedule: NexusFeeScheduleInputs {
+                        tx_bytes_len,
+                        instruction_count,
+                        gas_used,
+                        base_fee: cfg.base_fee.clone(),
+                        per_byte_fee: cfg.per_byte_fee.clone(),
+                        per_instruction_fee: cfg.per_instruction_fee.clone(),
+                        per_gas_unit_fee: cfg.per_gas_unit_fee.clone(),
+                    },
+                },
+            );
+            state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                payer_kind,
+                payer_id,
+                amount: fee,
+                asset_id: asset_label,
+            });
+            return Ok(());
+        }
         if state_transaction.block_unix_timestamp_ms() < cfg.burn_from_unix_timestamp_ms {
             let sink_account = crate::block::parse_account_literal_with_world(
                 &state_transaction.world,
@@ -1847,6 +1888,7 @@ impl Executor {
             Self::charge_nexus_fees(
                 state_transaction,
                 authority,
+                tx_hash,
                 fee_sponsor,
                 tx_bytes_len,
                 instruction_count,
@@ -2741,6 +2783,7 @@ impl Executor {
                 Self::charge_nexus_fees(
                     state_transaction,
                     authority,
+                    tx_hash,
                     fee_sponsor,
                     tx_bytes_len,
                     0,
@@ -6622,6 +6665,101 @@ mod tests {
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 10_000);
+    }
+
+    #[test]
+    fn nexus_fee_lane_relay_burn_records_receipt_without_local_xor_mutation() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer = Account::new(payer_id.clone()).build(&payer_id);
+        let sink = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [domain],
+            [payer, sink],
+            [asset_definition],
+            [payer_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+        }
+
+        let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+            payer_id.clone(),
+            "k".parse().unwrap(),
+            Json::new("v"),
+        )
+        .into();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(payer_kp.private_key());
+        let tx_hash = tx.hash();
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
+            .expect("execution records asynchronous fee receipt");
+
+        let payer_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), payer_id.clone()))
+            .expect("payer asset exists")
+            .0
+            .clone();
+        let sink_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, sink_id))
+            .expect("sink asset exists")
+            .0
+            .clone();
+        assert_eq!(payer_balance, Numeric::from(10_u32));
+        assert_eq!(sink_balance, Numeric::zero());
+
+        let pending = stx.drain_nexus_fee_records();
+        let receipt = pending.get(&tx_hash).expect("receipt recorded for tx");
+        assert_eq!(receipt.payer_account_id, payer_id);
+        assert_eq!(receipt.fee_amount, Numeric::from(1_u32));
+        assert_eq!(receipt.schedule.base_fee, Numeric::from(1_u32));
     }
 
     #[test]
