@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /** Factory helpers for Norito adapters. */
 public final class NoritoAdapters {
@@ -97,6 +98,30 @@ public final class NoritoAdapters {
 
   public static TypeAdapter<String> stringAdapter() {
     return StringAdapter.INSTANCE;
+  }
+
+  /**
+   * Adapter for Rust {@code #[norito(transparent)]} newtypes.
+   *
+   * <p>Transparent wrappers encode exactly like their inner value. They do not add a struct field
+   * frame or any additional length prefix.
+   */
+  public static <T> TypeAdapter<T> transparent(TypeAdapter<T> inner) {
+    return transparent(inner, Function.identity(), Function.identity());
+  }
+
+  /**
+   * Adapter for Rust {@code #[norito(transparent)]} newtypes with a distinct Java wrapper type.
+   *
+   * <p>Use this for Java models that wrap an inner Norito value. It delegates directly to the inner
+   * adapter, so callers still add the usual outer field delimiter when this transparent type appears
+   * as a field of a struct or variant.
+   */
+  public static <T, U> TypeAdapter<T> transparent(
+      TypeAdapter<U> inner,
+      Function<? super T, ? extends U> unwrap,
+      Function<? super U, ? extends T> wrap) {
+    return new TransparentAdapter<>(inner, unwrap, wrap);
   }
 
   public static <T> TypeAdapter<Optional<T>> option(TypeAdapter<T> inner) {
@@ -424,6 +449,41 @@ public final class NoritoAdapters {
     @Override
     public boolean isSelfDelimiting() {
       return true;
+    }
+  }
+
+  private static final class TransparentAdapter<T, U> implements TypeAdapter<T> {
+    private final TypeAdapter<U> inner;
+    private final Function<? super T, ? extends U> unwrap;
+    private final Function<? super U, ? extends T> wrap;
+
+    private TransparentAdapter(
+        final TypeAdapter<U> inner,
+        final Function<? super T, ? extends U> unwrap,
+        final Function<? super U, ? extends T> wrap) {
+      this.inner = Objects.requireNonNull(inner, "inner");
+      this.unwrap = Objects.requireNonNull(unwrap, "unwrap");
+      this.wrap = Objects.requireNonNull(wrap, "wrap");
+    }
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final T value) {
+      inner.encode(encoder, unwrap.apply(value));
+    }
+
+    @Override
+    public T decode(final NoritoDecoder decoder) {
+      return wrap.apply(inner.decode(decoder));
+    }
+
+    @Override
+    public int fixedSize() {
+      return inner.fixedSize();
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return inner.isSelfDelimiting();
     }
   }
 
