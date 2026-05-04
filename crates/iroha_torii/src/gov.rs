@@ -50,6 +50,7 @@ const CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY: &str = "/v1/gov/ballots/plain#authorit
 const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v1/gov/ballots/plain#owner";
 const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v1/gov/finalize#authority";
 const CONTEXT_GOV_ENACT_AUTHORITY: &str = "/v1/gov/enact#authority";
+const CONTEXT_GOV_PROTECTED_AUTHORITY: &str = "/v1/gov/protected-namespaces#authority";
 const CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT: &str =
     "/v1/gov/council/persist#candidate.account_id";
 const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
@@ -1764,28 +1765,32 @@ pub async fn handle_gov_enact(
 pub struct ProtectedNamespacesDto {
     /// Namespaces to protect (e.g., `["apps", "system"]`).
     pub namespaces: Vec<String>,
+    /// Optional canonical I105 account id used to build a signable transaction payload.
+    #[norito(default)]
+    pub authority: Option<String>,
 }
 
-#[derive(Debug, JsonSerialize, Clone, Copy)]
-/// Response to applying the protected namespaces parameter.
-/// Contains a success flag and the number of namespaces applied.
+#[derive(Debug, JsonSerialize)]
+/// Response to drafting a protected namespaces parameter transaction.
 pub struct ProtectedNamespacesApplyResponse {
     pub ok: bool,
-    pub applied: usize,
+    pub namespace_count: usize,
+    pub submitted: bool,
+    pub tx_instructions: Vec<TxInstr>,
+    pub signable_transaction_b64: Option<String>,
 }
 
-/// POST /v1/gov/protected-namespaces — apply the custom parameter directly.
-/// Requires API token (if configured) and rate-limit key.
+/// POST /v1/gov/protected-namespaces — draft a custom-parameter transaction.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the namespaces cannot be serialized into the custom
-/// parameter or when executing the synthetic `SetParameter` fails.
+/// Returns `crate::Error::Query` when the namespaces cannot be serialized into
+/// the custom parameter or the optional authority cannot be resolved.
 pub async fn handle_gov_protected_set(
+    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
+    telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<ProtectedNamespacesDto>,
 ) -> Result<JsonBody<ProtectedNamespacesApplyResponse>, crate::Error> {
-    // Build SetParameter(Custom) and execute inside a synthetic block
-    // note: using fully qualified paths below; no prelude/nonzero macros needed
     use std::str::FromStr as _;
 
     use iroha_data_model::parameter::{CustomParameterId, Parameter, custom::CustomParameter};
@@ -1797,7 +1802,7 @@ pub async fn handle_gov_protected_set(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    let applied = filtered.len();
+    let namespace_count = filtered.len();
     let name = iroha_data_model::name::Name::from_str("gov_protected_namespaces").map_err(|e| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
@@ -1814,36 +1819,30 @@ pub async fn handle_gov_protected_set(
     let json = iroha_primitives::json::Json::from(json_array);
     let custom = CustomParameter::new(id, json);
     let isi = iroha_data_model::isi::SetParameter::new(Parameter::Custom(custom));
-
-    // Create a minimal block header: height = current+1
-    let curr_h = state.committed_height() as u64;
-    let header = iroha_data_model::block::BlockHeader::new(
-        core::num::NonZeroU64::new(curr_h + 1).unwrap(),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
-    // Authority is not used by SetParameter currently. Keep it deterministic.
-    let dummy_auth = {
-        use iroha_crypto::{Algorithm, KeyPair};
-        let kp = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
-        iroha_data_model::account::AccountId::of(kp.public_key().clone())
-    };
-    isi.execute(&dummy_auth, &mut stx).map_err(|e| {
-        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
+    let instruction: iroha_data_model::isi::InstructionBox = isi.into();
+    let tx_instructions = vec![tx_instr_from_box(instruction.clone())];
+    let signable_transaction_b64 = if let Some(authority) = body.authority.as_deref() {
+        let authority_id = parse_canonical_authority_literal(
+            state.as_ref(),
+            authority,
+            &telemetry,
+            CONTEXT_GOV_PROTECTED_AUTHORITY,
+        )?;
+        Some(build_signable_transaction_b64(
+            chain_id.as_ref(),
+            &authority_id,
+            vec![instruction],
         ))
-    })?;
-    stx.apply();
-    // We do not commit a block here; parameter is applied at transaction granularity.
+    } else {
+        None
+    };
 
     Ok(JsonBody(ProtectedNamespacesApplyResponse {
         ok: true,
-        applied,
+        namespace_count,
+        submitted: false,
+        tx_instructions,
+        signable_transaction_b64,
     }))
 }
 
@@ -2593,7 +2592,7 @@ pub async fn handle_gov_council_persist(
         CouncilDerivationKind::Fallback
     };
 
-    let instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
+    let _instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
         epoch,
         members: members.clone(),
         alternates: alternates.clone(),
@@ -2617,41 +2616,13 @@ pub async fn handle_gov_council_persist(
         let _ = private_key;
         return Err(reject_server_side_signing("/v1/gov/council/persist"));
     } else {
-        // Fallback: direct WSV mutation (admin/testing only)
-        #[cfg(feature = "council_direct_wsv")]
-        {
-            let mut block = state.block_and_revert(iroha_core::block::BlockHeader::new(
-                nonzero_ext::nonzero!(v.height().max(1) as u64),
-                None,
-                None,
-                None,
-                0,
-                0,
-            ));
-            let mut stx = block.transaction();
-            stx.world.council.insert(
-                epoch,
-                iroha_core::state::CouncilState {
-                    epoch,
-                    members: members.clone(),
-                    alternates: alternates.clone(),
-                    verified: instr.verified,
-                    candidate_count: instr.candidates_count,
-                    derived_by: instr.derived_by,
-                },
-            );
-            stx.apply();
-        }
-        #[cfg(not(feature = "council_direct_wsv"))]
-        {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "direct persistence unavailable; submit a locally signed transaction instead".into(),
-                    ),
+        return Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "direct council persistence unavailable; submit a locally signed transaction instead".into(),
                 ),
-            ));
-        }
+            ),
+        ));
     }
 
     Ok(JsonBody(CouncilPersistResponse {
@@ -2720,7 +2691,7 @@ pub async fn handle_gov_council_replace(
         ));
     }
 
-    let instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
+    let _instr = iroha_data_model::isi::governance::PersistCouncilForEpoch {
         epoch: term.epoch,
         members: term.members.clone(),
         alternates: term.alternates.clone(),
@@ -2744,30 +2715,13 @@ pub async fn handle_gov_council_replace(
         let _ = private_key;
         return Err(reject_server_side_signing("/v1/gov/council/replace"));
     } else {
-        #[cfg(feature = "council_direct_wsv")]
-        {
-            let mut block = state.block_and_revert(iroha_core::block::BlockHeader::new(
-                nonzero_ext::nonzero!(state.committed_height().max(1) as u64),
-                None,
-                None,
-                None,
-                0,
-                0,
-            ));
-            let mut stx = block.transaction();
-            stx.world.council.insert(_target_epoch, term.clone());
-            stx.apply();
-        }
-        #[cfg(not(feature = "council_direct_wsv"))]
-        {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "direct persistence unavailable; submit a locally signed transaction instead".into(),
-                    ),
+        return Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "direct council persistence unavailable; submit a locally signed transaction instead".into(),
                 ),
-            ));
-        }
+            ),
+        ));
     }
 
     Ok(JsonBody(CouncilReplaceResponse {
@@ -3404,6 +3358,44 @@ mod tests {
         };
         let s = norito::json::to_json(&req).unwrap();
         let _: ProposeDeployContractDto = norito::json::from_str(&s).unwrap();
+    }
+
+    #[tokio::test]
+    async fn protected_namespaces_set_drafts_transaction_without_mutating_state() {
+        let (state, _queue, chain_id) = mk_basic_context();
+
+        let before = handle_gov_protected_get(state.clone())
+            .await
+            .expect("protected namespaces get")
+            .0;
+        assert!(!before.found);
+        assert!(before.namespaces.is_empty());
+
+        let response = handle_gov_protected_set(
+            chain_id,
+            state.clone(),
+            MaybeTelemetry::disabled(),
+            NoritoJson(ProtectedNamespacesDto {
+                namespaces: vec!["apps".to_owned(), " system ".to_owned(), String::new()],
+                authority: None,
+            }),
+        )
+        .await
+        .expect("protected namespaces draft")
+        .0;
+
+        assert!(response.ok);
+        assert!(!response.submitted);
+        assert_eq!(response.namespace_count, 2);
+        assert_eq!(response.tx_instructions.len(), 1);
+        assert!(response.signable_transaction_b64.is_none());
+
+        let after = handle_gov_protected_get(state)
+            .await
+            .expect("protected namespaces get")
+            .0;
+        assert!(!after.found);
+        assert!(after.namespaces.is_empty());
     }
 
     #[tokio::test]

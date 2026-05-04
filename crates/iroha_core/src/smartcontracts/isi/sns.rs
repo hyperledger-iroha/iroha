@@ -8,10 +8,11 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
-    sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1},
+    sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId},
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_telemetry::metrics;
+use norito::codec::Decode;
 
 use super::prelude::*;
 use crate::{alias::authority_can_manage_account_alias, prelude::ValidSingularQuery};
@@ -41,6 +42,79 @@ fn alias_lease_instruction_error(err: crate::sns::SnsError) -> InstructionExecut
             InstructionExecutionError::InvariantViolation(message.into())
         }
     }
+}
+
+fn sns_mutation_instruction_error(err: crate::sns::SnsError) -> InstructionExecutionError {
+    match err {
+        crate::sns::SnsError::BadRequest(message) => InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(message.into()),
+        ),
+        crate::sns::SnsError::NotFound(message)
+        | crate::sns::SnsError::Conflict(message)
+        | crate::sns::SnsError::Internal(message) => {
+            InstructionExecutionError::InvariantViolation(message.into())
+        }
+    }
+}
+
+fn namespace_from_suffix_id(
+    suffix_id: SuffixId,
+) -> Result<crate::sns::SnsNamespace, InstructionExecutionError> {
+    crate::sns::SnsNamespace::from_suffix_id(suffix_id).map_err(sns_mutation_instruction_error)
+}
+
+fn decode_sns_payload<T: Decode>(bytes: &[u8], instruction_name: &str) -> Result<T, Error> {
+    let mut cursor = bytes;
+    let value = T::decode(&mut cursor).map_err(|err| {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            format!("{instruction_name} payload failed to decode: {err}").into(),
+        ))
+    })?;
+    if !cursor.is_empty() {
+        return Err(InstructionExecutionError::InvalidParameter(
+            InvalidParameterError::SmartContract(
+                format!("{instruction_name} payload has trailing bytes").into(),
+            ),
+        ));
+    }
+    Ok(value)
+}
+
+fn ensure_payment_payer_is_authority(
+    payer: &AccountId,
+    authority: &AccountId,
+    instruction_name: &str,
+) -> Result<(), InstructionExecutionError> {
+    if payer == authority {
+        return Ok(());
+    }
+    Err(InstructionExecutionError::InvalidParameter(
+        InvalidParameterError::SmartContract(
+            format!("{instruction_name} payment payer must match the transaction authority").into(),
+        ),
+    ))
+}
+
+fn ensure_name_owner_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    namespace: crate::sns::SnsNamespace,
+    literal: &str,
+) -> Result<(), InstructionExecutionError> {
+    let record = crate::sns::get_name_record(
+        state_transaction.world(),
+        &state_transaction.nexus.dataspace_catalog,
+        namespace,
+        literal,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .map_err(sns_mutation_instruction_error)?;
+    if record.owner == *authority {
+        return Ok(());
+    }
+    Err(InstructionExecutionError::InvariantViolation(
+        "transaction authority must own the SNS name".into(),
+    ))
 }
 
 fn account_controller_for(
@@ -199,6 +273,101 @@ impl Execute for RenewAccountAliasLease {
         )
         .map(|_| ())
         .map_err(alias_lease_instruction_error)
+    }
+}
+
+impl Execute for iroha_data_model::isi::sns::RegisterSnsName {
+    #[metrics(+"register_sns_name")]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let request: RegisterNameRequestV1 = decode_sns_payload(&self.request, "RegisterSnsName")?;
+        ensure_payment_payer_is_authority(&request.payment.payer, authority, "RegisterSnsName")?;
+        crate::sns::register_name(state_transaction, request)
+            .map(|_| ())
+            .map_err(sns_mutation_instruction_error)
+    }
+}
+
+impl Execute for iroha_data_model::isi::sns::RenewSnsName {
+    #[metrics(+"renew_sns_name")]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let request: RenewNameRequestV1 = decode_sns_payload(&self.request, "RenewSnsName")?;
+        ensure_payment_payer_is_authority(&request.payment.payer, authority, "RenewSnsName")?;
+        let namespace = namespace_from_suffix_id(self.suffix_id)?;
+        crate::sns::renew_name(state_transaction, namespace, &self.literal, request)
+            .map(|_| ())
+            .map_err(sns_mutation_instruction_error)
+    }
+}
+
+impl Execute for iroha_data_model::isi::sns::TransferSnsName {
+    #[metrics(+"transfer_sns_name")]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let namespace = namespace_from_suffix_id(self.suffix_id)?;
+        let request = decode_sns_payload(&self.request, "TransferSnsName")?;
+        ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
+        crate::sns::transfer_name(state_transaction, namespace, &self.literal, request)
+            .map(|_| ())
+            .map_err(sns_mutation_instruction_error)
+    }
+}
+
+impl Execute for iroha_data_model::isi::sns::UpdateSnsNameControllers {
+    #[metrics(+"update_sns_name_controllers")]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let namespace = namespace_from_suffix_id(self.suffix_id)?;
+        let request = decode_sns_payload(&self.request, "UpdateSnsNameControllers")?;
+        ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
+        crate::sns::update_name_controllers(state_transaction, namespace, &self.literal, request)
+            .map(|_| ())
+            .map_err(sns_mutation_instruction_error)
+    }
+}
+
+impl Execute for iroha_data_model::isi::sns::FreezeSnsName {
+    #[metrics(+"freeze_sns_name")]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let namespace = namespace_from_suffix_id(self.suffix_id)?;
+        let request = decode_sns_payload(&self.request, "FreezeSnsName")?;
+        ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
+        crate::sns::freeze_name(state_transaction, namespace, &self.literal, request)
+            .map(|_| ())
+            .map_err(sns_mutation_instruction_error)
+    }
+}
+
+impl Execute for iroha_data_model::isi::sns::UnfreezeSnsName {
+    #[metrics(+"unfreeze_sns_name")]
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let namespace = namespace_from_suffix_id(self.suffix_id)?;
+        let governance = decode_sns_payload(&self.governance, "UnfreezeSnsName")?;
+        ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
+        crate::sns::unfreeze_name(state_transaction, namespace, &self.literal, governance)
+            .map(|_| ())
+            .map_err(sns_mutation_instruction_error)
     }
 }
 

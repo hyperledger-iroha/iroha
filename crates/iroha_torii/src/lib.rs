@@ -3625,7 +3625,9 @@ async fn handler_gov_protected_set(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_set(
+        app.chain_id.clone(),
         app.state.clone(),
+        app.telemetry.clone(),
         crate::utils::extractors::NoritoJson(body),
     )
     .await

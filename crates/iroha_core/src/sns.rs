@@ -5,12 +5,15 @@
 //! HTTP API. SNS records and policies are stored in `World.smart_contract_state`
 //! so the ledger-backed lifecycle model remains deterministic across peers.
 
-use std::{str::FromStr, time::SystemTime};
+use std::str::FromStr;
+#[cfg(test)]
+use std::time::SystemTime;
 
+#[cfg(test)]
+use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
     account::{AccountAddress, AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
-    block::BlockHeader,
     domain::DomainId,
     isi::{
         domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
@@ -38,7 +41,9 @@ use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
 use thiserror::Error;
 
-use crate::state::{State, StateReadOnly, StateTransaction, World, WorldReadOnly};
+#[cfg(test)]
+use crate::state::{State, StateReadOnly};
+use crate::state::{StateTransaction, World, WorldReadOnly};
 
 pub use iroha_data_model::sns::{
     ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
@@ -1686,21 +1691,13 @@ pub fn unfreeze_name(
     Ok(record)
 }
 
-/// Apply a ledger-backed SNS mutation in a dedicated state block.
-///
-/// This helper is used by Torii's HTTP adapter to keep SNS mutations in core
-/// state instead of a separate in-memory registry.
-///
-/// SNS HTTP mutations are world-state side effects, not canonical chain
-/// blocks. The helper therefore commits the `StateBlock` without registering a
-/// synthetic entry in the transactions index; doing so would advance the
-/// in-memory committed transaction height without a matching Kura block and
-/// poison the next real block commit.
+/// Apply a ledger-backed SNS mutation in a dedicated state block for unit tests.
 ///
 /// # Errors
 ///
 /// Returns [`SnsError`] when the mutation fails or the state block cannot be
 /// committed.
+#[cfg(test)]
 pub fn apply_with_state_block<T>(
     state: &State,
     mutation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, SnsError>,
