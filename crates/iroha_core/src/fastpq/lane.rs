@@ -168,6 +168,10 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     }
     let mode = map_execution_mode(cfg.execution_mode);
     let poseidon_mode = map_poseidon_mode(cfg.poseidon_mode);
+    #[cfg(feature = "fastpq-gpu")]
+    if should_preflight_poseidon(mode, poseidon_mode) {
+        let _ = fastpq_prover::preflight_poseidon_gpu_backend();
+    }
     match Prover::canonical_with_modes(FASTPQ_CANONICAL_PARAMETER_SET, mode, poseidon_mode) {
         Ok(prover) => Some(Arc::new(RealProofEngine { prover })),
         Err(err) => {
@@ -201,6 +205,13 @@ fn map_poseidon_mode(mode: FastpqPoseidonMode) -> ProverPoseidonMode {
         FastpqPoseidonMode::Cpu => ProverPoseidonMode::Cpu,
         FastpqPoseidonMode::Gpu => ProverPoseidonMode::Gpu,
     }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn should_preflight_poseidon(mode: ProverExecutionMode, poseidon_mode: ProverPoseidonMode) -> bool {
+    matches!(poseidon_mode, ProverPoseidonMode::Gpu)
+        || (matches!(poseidon_mode, ProverPoseidonMode::Auto)
+            && !matches!(mode, ProverExecutionMode::Cpu))
 }
 
 fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {

@@ -386,6 +386,8 @@ pub(crate) struct PreparedTransactionMetadata {
     pub(crate) encoded_len: usize,
     /// Canonical signed transaction bytes when a caller has already materialized them.
     pub(crate) signed_bytes: Option<Arc<Vec<u8>>>,
+    /// Canonical external entrypoint bytes derived from the same signed payload.
+    pub(crate) entrypoint_bytes: Option<Arc<Vec<u8>>>,
     /// Parsed Ed25519 key when the transaction has a single Ed25519 authority.
     pub(crate) single_ed25519_key: Option<iroha_crypto::Ed25519ParsedPublicKey>,
     /// Parsed transaction metadata nesting depths, in canonical metadata iteration order.
@@ -773,7 +775,8 @@ impl DecodedVersionedSignedTransaction {
             <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
                 input,
             )?;
-        let prepared = AcceptedTransaction::prepare_signed_metadata(&tx);
+        let prepared =
+            AcceptedTransaction::prepare_signed_metadata_from_versioned_payload(&tx, input);
         Ok(Self { tx, prepared })
     }
 
@@ -1344,9 +1347,13 @@ impl<'tx> AcceptedTransaction<'tx> {
         HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
     }
 
-    fn canonical_signed_payload(tx: &SignedTransaction) -> Vec<u8> {
+    fn canonical_signed_payload_with_flags(tx: &SignedTransaction) -> (Vec<u8>, u8) {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        norito::codec::Encode::encode(tx)
+        norito::codec::encode_with_header_flags(tx)
+    }
+
+    fn canonical_signed_payload(tx: &SignedTransaction) -> Vec<u8> {
+        Self::canonical_signed_payload_with_flags(tx).0
     }
 
     fn external_entrypoint_hash_from_signed_payload(
@@ -1378,6 +1385,31 @@ impl<'tx> AcceptedTransaction<'tx> {
             u64::try_from(signed_payload_len).expect("signed transaction payload length fits u64");
         norito::core::write_len(&mut *writer, payload_len)
             .expect("hash writer accepts length prefix");
+    }
+
+    fn external_entrypoint_bytes_from_signed_payload(
+        signed_payload: &[u8],
+        signed_payload_flags: u8,
+    ) -> Arc<Vec<u8>> {
+        let entrypoint_flags = signed_payload_flags | norito::core::default_encode_flags();
+        let mut payload = Vec::with_capacity(
+            4usize
+                .saturating_add(10)
+                .saturating_add(signed_payload.len()),
+        );
+        norito::core::NoritoSerialize::serialize(&0u32, &mut payload)
+            .expect("u32 discriminant serialization cannot fail");
+        let payload_len = u64::try_from(signed_payload.len())
+            .expect("signed transaction payload length fits u64");
+        norito::core::write_len_to_vec_with_flags(&mut payload, payload_len, entrypoint_flags);
+        payload.extend_from_slice(signed_payload);
+        Arc::new(
+            norito::core::frame_bare_with_header_flags::<TransactionEntrypoint>(
+                &payload,
+                entrypoint_flags,
+            )
+            .expect("frame synthesized external transaction entrypoint bytes"),
+        )
     }
 
     fn framed_padding_for<T>() -> usize {
@@ -1461,21 +1493,62 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Build reusable stateless metadata for a signed transaction.
     #[must_use]
     pub(crate) fn prepare_signed_metadata(tx: &SignedTransaction) -> PreparedTransactionMetadata {
-        let signed_payload = Self::canonical_signed_payload(tx);
+        let (signed_payload, _signed_payload_flags) = Self::canonical_signed_payload_with_flags(tx);
         let signed_payload_len = signed_payload.len();
         let encoded_len = Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload_len);
         let entrypoint_hash = Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
-        Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+        Self::prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
             tx,
             entrypoint_hash,
             encoded_len,
+            None,
+            None,
         )
     }
 
-    fn prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+    fn prepare_signed_metadata_from_versioned_payload(
+        tx: &SignedTransaction,
+        versioned_payload: &[u8],
+    ) -> PreparedTransactionMetadata {
+        let (signed_payload, signed_payload_flags) = Self::canonical_signed_payload_with_flags(tx);
+        let signed_payload_len = signed_payload.len();
+        let encoded_len = Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload_len);
+        let entrypoint_hash = Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
+        let signed_bytes = versioned_payload
+            .get(1..)
+            .filter(|payload| *payload == signed_payload.as_slice())
+            .and_then(|payload| {
+                norito::core::frame_bare_with_header_flags::<SignedTransaction>(
+                    payload,
+                    signed_payload_flags,
+                )
+                .ok()
+            })
+            .map(Arc::new);
+        let entrypoint_bytes = signed_bytes.as_ref().map(|_| {
+            Self::external_entrypoint_bytes_from_signed_payload(
+                signed_payload.as_slice(),
+                signed_payload_flags,
+            )
+        });
+        let encoded_len = signed_bytes
+            .as_ref()
+            .map_or(encoded_len, |bytes| bytes.len());
+        Self::prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
+            tx,
+            entrypoint_hash,
+            encoded_len,
+            signed_bytes,
+            entrypoint_bytes,
+        )
+    }
+
+    fn prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
         tx: &SignedTransaction,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         encoded_len: usize,
+        signed_bytes: Option<Arc<Vec<u8>>>,
+        entrypoint_bytes: Option<Arc<Vec<u8>>>,
     ) -> PreparedTransactionMetadata {
         let signed_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash));
         PreparedTransactionMetadata {
@@ -1483,7 +1556,8 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint_hash,
             payload_hash: HashOf::new(tx.payload()),
             encoded_len,
-            signed_bytes: None,
+            signed_bytes,
+            entrypoint_bytes,
             single_ed25519_key: Self::parsed_single_ed25519_key(tx),
             metadata_depths: prepare_metadata_depths(tx.metadata()),
         }
@@ -1538,10 +1612,12 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> PreparedTransactionMetadata {
         let encoded_len = Self::signed_encoded_len_from_external_entrypoint_frame(entrypoint_bytes)
             .unwrap_or_else(|_| Self::signed_encoded_len(tx));
-        Self::prepare_signed_metadata_with_entrypoint_hash_and_encoded_len(
+        Self::prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
             tx,
             entrypoint_hash,
             encoded_len,
+            None,
+            None,
         )
     }
 
@@ -1555,6 +1631,9 @@ impl<'tx> AcceptedTransaction<'tx> {
         let _ = accepted.single_ed25519_key.set(prepared.single_ed25519_key);
         if let Some(signed_bytes) = prepared.signed_bytes {
             let _ = accepted.signed_bytes.set(Some(signed_bytes));
+        }
+        if let Some(entrypoint_bytes) = prepared.entrypoint_bytes {
+            let _ = accepted.entrypoint_bytes.set(entrypoint_bytes);
         }
         let _ = accepted.signed_hash.set(prepared.signed_hash);
         let _ = accepted.entrypoint_hash.set(prepared.entrypoint_hash);
@@ -1595,6 +1674,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn verify_signature_for_check(
         tx: &SignedTransaction,
         signature_check: SignatureCheck,
+        prepared: Option<&PreparedTransactionMetadata>,
     ) -> Result<(), AcceptTransactionFail> {
         match signature_check {
             SignatureCheck::Override(result) => {
@@ -1604,6 +1684,23 @@ impl<'tx> AcceptedTransaction<'tx> {
                 return Ok(());
             }
             SignatureCheck::Verify | SignatureCheck::PrecheckedSingleEd25519 => {}
+        }
+
+        if let Some(prepared) = prepared
+            && let Some(public_key) = prepared.single_ed25519_key
+            && Self::has_single_ed25519_signature(tx)
+        {
+            return iroha_crypto::ed25519_verify_preparsed(
+                prepared.payload_hash.as_ref().as_slice(),
+                tx.signature().payload().payload(),
+                public_key,
+            )
+            .map_err(|err| {
+                AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
+                    tx,
+                    TransactionSignatureError::CryptoError(err.to_string()),
+                ))
+            });
         }
 
         tx.verify_signature().map_err(|err| {
@@ -2245,7 +2342,7 @@ impl<'tx> AcceptedTransaction<'tx> {
 
         Self::ensure_signing_allowed(tx, crypto)?;
 
-        Self::verify_signature_for_check(tx, signature_check)?;
+        Self::verify_signature_for_check(tx, signature_check, prepared)?;
 
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
@@ -2661,7 +2758,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             ));
         }
 
-        Self::verify_signature_for_check(tx, signature_check)?;
+        Self::verify_signature_for_check(tx, signature_check, prepared)?;
 
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
@@ -2916,6 +3013,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             payload_hash,
             encoded_len: self.encoded_len(),
             signed_bytes: self.signed_bytes(),
+            entrypoint_bytes: Some(self.entrypoint_bytes()),
             single_ed25519_key,
             metadata_depths: prepare_metadata_depths(self.metadata()?),
         })
@@ -3225,6 +3323,9 @@ impl AcceptedTransaction<'static> {
             let _ = accepted.single_ed25519_key.set(prepared.single_ed25519_key);
             if let Some(signed_bytes) = prepared.signed_bytes.as_ref() {
                 let _ = accepted.signed_bytes.set(Some(Arc::clone(signed_bytes)));
+            }
+            if let Some(entrypoint_bytes) = prepared.entrypoint_bytes.as_ref() {
+                let _ = accepted.entrypoint_bytes.set(Arc::clone(entrypoint_bytes));
             }
             let _ = accepted.signed_hash.set(prepared.signed_hash);
             let _ = accepted.entrypoint_hash.set(prepared.entrypoint_hash);
@@ -6999,6 +7100,9 @@ pub mod tests {
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
+        let expected_entrypoint_bytes =
+            norito::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                .expect("entrypoint transaction encodes");
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
 
@@ -7009,7 +7113,24 @@ pub mod tests {
         assert_eq!(decoded.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(decoded.encoded_len(), expected_len);
         assert_eq!(decoded.prepared.encoded_len, expected_len);
-        assert!(decoded.prepared.signed_bytes.is_none());
+        assert_eq!(
+            decoded
+                .prepared
+                .signed_bytes
+                .as_ref()
+                .expect("canonical signed bytes are seeded from ingress")
+                .as_slice(),
+            norito::to_bytes(&signed).unwrap().as_slice()
+        );
+        assert_eq!(
+            decoded
+                .prepared
+                .entrypoint_bytes
+                .as_ref()
+                .expect("canonical entrypoint bytes are seeded from ingress")
+                .as_slice(),
+            expected_entrypoint_bytes.as_slice()
+        );
         assert_eq!(decoded.prepared.payload_hash, HashOf::new(signed.payload()));
         assert!(decoded.prepared.single_ed25519_key.is_some());
 
@@ -7022,6 +7143,10 @@ pub mod tests {
         assert_eq!(accepted.hash(), signed.hash());
         assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(accepted.encoded_len(), expected_len);
+        assert_eq!(
+            accepted.entrypoint_bytes().as_slice(),
+            expected_entrypoint_bytes.as_slice()
+        );
         assert_eq!(accepted.payload_hash(), Some(HashOf::new(signed.payload())));
         assert!(accepted.single_ed25519_key().is_some());
     }
@@ -7076,6 +7201,14 @@ pub mod tests {
         assert_eq!(decoded.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(decoded.encoded_len(), canonical_len);
         assert_eq!(decoded.prepared.encoded_len, canonical_len);
+        assert!(
+            decoded.prepared.signed_bytes.is_some(),
+            "canonical adaptive ingress payload should seed signed bytes"
+        );
+        assert!(
+            decoded.prepared.entrypoint_bytes.is_some(),
+            "canonical adaptive ingress payload should seed entrypoint bytes"
+        );
     }
 
     #[test]
@@ -7283,6 +7416,7 @@ pub mod tests {
         assert_eq!(actual.payload_hash, expected.payload_hash);
         assert_eq!(actual.encoded_len, expected.encoded_len);
         assert!(actual.signed_bytes.is_none());
+        assert!(actual.entrypoint_bytes.is_none());
         assert_eq!(
             actual.single_ed25519_key.is_some(),
             expected.single_ed25519_key.is_some()

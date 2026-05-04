@@ -24,6 +24,7 @@ async fn protected_namespaces_get_post_cycle() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let chain_id = std::sync::Arc::new(iroha_data_model::ChainId::from("test-chain"));
 
     // GET before setting: found=false
     let resp0 = iroha_torii::handle_gov_protected_get(state.clone())
@@ -42,11 +43,17 @@ async fn protected_namespaces_get_post_cycle() {
     // POST to set namespaces
     let req = iroha_torii::ProtectedNamespacesDto {
         namespaces: vec!["apps".to_string(), "system".to_string()],
+        authority: None,
     };
-    let resp1 = iroha_torii::handle_gov_protected_set(state.clone(), iroha_torii::NoritoJson(req))
-        .await
-        .expect("ok")
-        .into_response();
+    let resp1 = iroha_torii::handle_gov_protected_set(
+        chain_id,
+        state.clone(),
+        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::NoritoJson(req),
+    )
+    .await
+    .expect("ok")
+    .into_response();
     let body1 = resp1
         .into_body()
         .collect()

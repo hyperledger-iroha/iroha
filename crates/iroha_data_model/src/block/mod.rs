@@ -1267,9 +1267,10 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-    use norito::codec::Encode;
+    use norito::codec::{DecodeAll as _, Encode};
 
     use super::*;
+    use crate::consensus::PreviousRosterEvidence;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
@@ -1411,6 +1412,42 @@ mod tests {
             vec![entrypoint]
         );
         assert_eq!(decoded.external_transactions().next(), Some(&tx));
+    }
+
+    #[test]
+    fn block_payload_decodes_legacy_payload_without_execution_context() {
+        #[derive(norito::codec::Encode)]
+        struct LegacyBlockPayload {
+            header: BlockHeader,
+            external_entrypoints: Vec<TransactionEntrypoint>,
+            da_commitments: Option<DaCommitmentBundle>,
+            da_proof_policies: Option<DaProofPolicyBundle>,
+            da_pin_intents: Option<DaPinIntentBundle>,
+            previous_roster_evidence: Option<PreviousRosterEvidence>,
+        }
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
+        let legacy = LegacyBlockPayload {
+            header,
+            external_entrypoints: Vec::new(),
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            previous_roster_evidence: None,
+        };
+        let bytes = legacy.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded =
+            BlockPayload::decode_all(&mut cursor).expect("decode legacy BlockPayload payload");
+
+        assert_eq!(decoded.header, header);
+        assert!(decoded.transactions.is_empty());
+        assert!(decoded.external_entrypoints.is_empty());
+        assert_eq!(decoded.execution_context, None);
+        assert_eq!(decoded.da_commitments, None);
+        assert_eq!(decoded.da_proof_policies, None);
+        assert_eq!(decoded.da_pin_intents, None);
+        assert_eq!(decoded.previous_roster_evidence, None);
     }
 
     #[test]

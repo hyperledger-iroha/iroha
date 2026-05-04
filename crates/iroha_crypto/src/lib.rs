@@ -682,6 +682,27 @@ pub fn ed25519_verify_batch_preparsed_deterministic(
     )
 }
 
+/// Verify a single Ed25519 signature using an already parsed public key.
+///
+/// # Errors
+/// Returns [`Error::BadSignature`] if the signature is malformed or does not verify.
+pub fn ed25519_verify_preparsed(
+    message: &[u8],
+    signature: &[u8],
+    public_key: Ed25519ParsedPublicKey,
+) -> Result<(), Error> {
+    if signature::ed25519::is_verify_ok_cached(&public_key.0, message, signature) {
+        return Ok(());
+    }
+    let parsed_signature = signature::ed25519::Ed25519Sha512::parse_signature(signature)?;
+    signature::ed25519::Ed25519Sha512::verify_batch_preparsed_signatures_uncached(
+        &[message],
+        &[signature],
+        &[parsed_signature],
+        &[public_key.0],
+    )
+}
+
 /// Deterministic Ed25519 batch verification wrapper using pre-parsed public keys and caller scratch.
 ///
 /// Reusing `scratch` avoids allocating the dalek key slice for every chunk or

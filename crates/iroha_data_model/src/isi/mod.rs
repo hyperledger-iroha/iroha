@@ -979,6 +979,36 @@ impl From<crate::isi::account_alias_lease::RenewAccountAliasLease> for Instructi
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sns::RegisterSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::RegisterSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::RenewSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::RenewSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::TransferSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::TransferSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::UpdateSnsNameControllers> for InstructionBox {
+    fn from(i: crate::isi::sns::UpdateSnsNameControllers) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::FreezeSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::FreezeSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::UnfreezeSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::UnfreezeSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::account_recovery::ReplaceAccountController> for InstructionBox {
     fn from(i: crate::isi::account_recovery::ReplaceAccountController) -> Self {
         InstructionBox(Box::new(i))
@@ -2558,6 +2588,8 @@ pub mod rwa;
 pub mod settlement;
 /// Smart contract code management instructions.
 pub mod smart_contract_code;
+/// Consensus-backed SNS mutation instructions.
+pub mod sns;
 /// Viral incentive and social reward instructions.
 pub mod social;
 /// Soracloud lifecycle and runtime-state instructions.
@@ -2598,6 +2630,7 @@ pub use ram_lfe::*;
 pub use register::*;
 pub use repo::*;
 pub use settlement::*;
+pub use sns::*;
 pub use soradns::*;
 pub use sorafs::*;
 pub use space_directory::*;
@@ -3407,6 +3440,10 @@ pub mod prelude {
             SettlementInstructionBox, SettlementKind, SettlementLedger, SettlementLedgerEntry,
             SettlementLeg, SettlementLegRole, SettlementLegSnapshot, SettlementOutcomeRecord,
             SettlementPlan, SettlementSuccessRecord,
+        },
+        sns::{
+            FreezeSnsName, RegisterSnsName, RenewSnsName, TransferSnsName, UnfreezeSnsName,
+            UpdateSnsNameControllers,
         },
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         soracloud::{

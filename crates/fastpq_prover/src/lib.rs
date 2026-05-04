@@ -86,6 +86,8 @@ pub use metal_config::{FftTuning, PoseidonTuning};
 pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
 pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
+#[cfg(feature = "fastpq-gpu")]
+pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
 pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use trace::{

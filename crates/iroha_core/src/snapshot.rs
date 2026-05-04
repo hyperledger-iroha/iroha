@@ -1180,11 +1180,21 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
 }
 
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
-#[cfg(test)]
-pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
+pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
     let mut bytes = Vec::new();
     json::to_writer(&mut bytes, state).expect("state snapshot serialization must succeed");
     bytes
+}
+
+/// Canonical hash for the committed WSV surface.
+pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new(canonical_state_snapshot_bytes(state))
+}
+
+/// Canonical bytes for the committed WSV surface used by replay parity tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
+    canonical_state_snapshot_bytes(state)
 }
 
 fn sync_dir(path: &Path) -> Result<(), TryWriteError> {

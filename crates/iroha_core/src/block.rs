@@ -2259,6 +2259,7 @@ mod chained {
                 );
                 builder = builder.with_da_proof_policies(Some(default_policies));
             }
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
                 let default_context = builder
                     .0
@@ -2519,14 +2520,15 @@ pub(crate) mod valid {
     use std::{num::NonZeroUsize, time::Instant};
 
     use commit::CommittedBlock;
+    #[cfg(test)]
+    use iroha_data_model::soracloud::{
+        SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+    };
     use iroha_data_model::{
         ChainId,
         events::pipeline::PipelineEventBox,
         nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
-        soracloud::{
-            SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-            SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        },
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
@@ -2537,15 +2539,18 @@ pub(crate) mod valid {
     };
     use crate::{
         smartcontracts::ivm::cache::IvmCache,
+        state::{
+            StateBlock, StateReadOnlyWithTransactions, storage_transactions::TransactionsReadOnly,
+        },
+        sumeragi::network_topology::Role,
+    };
+    #[cfg(test)]
+    use crate::{
         soracloud_runtime::{
             SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
             SoracloudRuntimeExecutionError,
         },
-        state::{
-            StateBlock, StateReadOnly, StateReadOnlyWithTransactions, StateTransaction,
-            storage_transactions::TransactionsReadOnly,
-        },
-        sumeragi::network_topology::Role,
+        state::{StateReadOnly, StateTransaction},
     };
 
     fn charge_rejected_overlay_fees(
@@ -2653,6 +2658,7 @@ pub(crate) mod valid {
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
+    #[cfg(test)]
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<SoraServiceMailboxMessageV1> {
@@ -2692,6 +2698,7 @@ pub(crate) mod valid {
         messages
     }
 
+    #[cfg(test)]
     fn authoritative_pending_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
         service_name: &iroha_data_model::name::Name,
@@ -2715,6 +2722,7 @@ pub(crate) mod valid {
         .unwrap_or(u32::MAX)
     }
 
+    #[cfg(test)]
     fn synthetic_mailbox_runtime_failure(
         request: SoracloudOrderedMailboxExecutionRequest,
         error: SoracloudRuntimeExecutionError,
@@ -2793,6 +2801,7 @@ pub(crate) mod valid {
         }
     }
 
+    #[cfg(test)]
     fn validate_mailbox_runtime_receipt(
         request: &SoracloudOrderedMailboxExecutionRequest,
         receipt: &SoraRuntimeReceiptV1,
@@ -2852,6 +2861,12 @@ pub(crate) mod valid {
         Ok(())
     }
 
+    /// Test-only harness for legacy block-time mailbox execution.
+    ///
+    /// Production replay must not depend on a local SoraCloud runtime. Runtime
+    /// effects must be persisted through explicit SoraCloud ISIs in committed
+    /// transactions so Kura replay reconstructs the same WSV on every peer.
+    #[cfg(test)]
     fn execute_soracloud_mailbox_runtime(state_block: &mut StateBlock<'_>) {
         let Some(runtime) = state_block.soracloud_runtime.clone() else {
             return;
@@ -3936,6 +3951,12 @@ pub(crate) mod valid {
                 block,
                 signatures_verified: true,
             }
+        }
+
+        pub(crate) fn committed_from_replay_signed_block(block: SignedBlock) -> CommittedBlock {
+            Self::new_signatures_verified(block)
+                .commit_unchecked()
+                .unpack(|_| {})
         }
 
         #[cfg(test)]
@@ -5868,6 +5889,7 @@ pub(crate) mod valid {
 
             let (time_trgs, mut time_hashes, mut time_results) =
                 state_block.execute_time_triggers(&block.header());
+            #[cfg(test)]
             execute_soracloud_mailbox_runtime(state_block);
             let pruned_sealed_commitments =
                 crate::tx::prune_expired_sealed_commitments(state_block);
@@ -9443,6 +9465,7 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
                 timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
             }
+            #[cfg(test)]
             execute_soracloud_mailbox_runtime(state_block);
             let pruned_sealed_commitments =
                 crate::tx::prune_expired_sealed_commitments(state_block);
@@ -11282,7 +11305,7 @@ pub(crate) mod valid {
 
             let err = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
+                match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
                     &state.chain_id,
@@ -11292,8 +11315,10 @@ pub(crate) mod valid {
                     &time_source,
                     false,
                     false,
-                )
-                .expect_err("live block without execution context must be rejected")
+                ) {
+                    Ok(_) => panic!("live block without execution context must be rejected"),
+                    Err(err) => err,
+                }
             };
             assert!(matches!(
                 err,
@@ -11350,7 +11375,7 @@ pub(crate) mod valid {
 
             let err = {
                 let view = state.query_view();
-                ValidBlock::validate_static_state_dependent(
+                match ValidBlock::validate_static_state_dependent(
                     &signed,
                     &topology,
                     &state.chain_id,
@@ -11360,8 +11385,12 @@ pub(crate) mod valid {
                     &time_source,
                     false,
                     false,
-                )
-                .expect_err("live block with mismatched execution context must be rejected")
+                ) {
+                    Ok(_) => {
+                        panic!("live block with mismatched execution context must be rejected")
+                    }
+                    Err(err) => err,
+                }
             };
             assert!(matches!(
                 err,

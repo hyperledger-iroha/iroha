@@ -47,7 +47,7 @@ use iroha_primitives::time::TimeSource;
 #[cfg(test)]
 use norito::core::{Header, MAGIC};
 use norito::{
-    codec::{Decode, Encode},
+    codec::{Decode, DecodeAll, Encode},
     json::Value as JsonValue,
 };
 use parking_lot::Mutex;
@@ -69,6 +69,7 @@ const HASHES_FILE_NAME: &str = "blocks.hashes";
 const COUNT_FILE_NAME: &str = "blocks.count.norito";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
+const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
 const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
@@ -156,6 +157,27 @@ pub struct Kura {
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockReplicaKey = (u64, HashOf<BlockHeader>);
 type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub(crate) struct WsvCheckpoint {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    state_hash: Hash,
+}
+
+impl WsvCheckpoint {
+    fn new(height: u64, block_hash: HashOf<BlockHeader>, state_hash: Hash) -> Self {
+        Self {
+            height,
+            block_hash,
+            state_hash,
+        }
+    }
+
+    pub(crate) fn state_hash(&self) -> Hash {
+        self.state_hash
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct BlockReplicaAdvert {
@@ -2182,6 +2204,160 @@ impl Kura {
         Some(block_arc)
     }
 
+    fn wsv_checkpoint_dir(&self) -> PathBuf {
+        self.active_blocks_dir.lock().join(WSV_CHECKPOINTS_DIR_NAME)
+    }
+
+    fn wsv_checkpoint_path(&self, height: u64) -> PathBuf {
+        self.wsv_checkpoint_dir()
+            .join(format!("{height:020}.norito"))
+    }
+
+    /// Persist the canonical WSV checkpoint for a committed block height.
+    ///
+    /// The checkpoint is stored after the block body is durable and after WSV commit succeeds.
+    /// Legacy histories may not have these sidecars, but once present they let Kura replay verify
+    /// the reconstructed committed state surface byte-for-byte by hash.
+    ///
+    /// # Errors
+    /// Returns an error if the target block is not durable or the checkpoint cannot be written.
+    pub(crate) fn store_wsv_checkpoint(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        state_hash: Hash,
+    ) -> Result<()> {
+        self.ensure_durable_block_at_height(height, block_hash)?;
+        let checkpoint = WsvCheckpoint::new(height, block_hash, state_hash);
+        let _guard = self.sidecar_lock.lock();
+        let dir = self.wsv_checkpoint_dir();
+        create_dir_all_with_context(&dir)?;
+        let path = dir.join(format!("{height:020}.norito"));
+        let tmp_path = path.with_extension("norito.tmp");
+        let bytes = checkpoint.encode();
+        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+            opts.write(true).create(true).truncate(true);
+        })?;
+        tmp_file.try_io(|file| {
+            file.write_all(&bytes)?;
+            file.flush()?;
+            file.sync_data()
+        })?;
+        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
+        Ok(())
+    }
+
+    /// Read the canonical WSV checkpoint for a committed block height, if one exists.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint file exists but cannot be read, decoded, or matched to
+    /// the canonical block hash stored at the same height.
+    pub(crate) fn wsv_checkpoint(&self, height: u64) -> Result<Option<WsvCheckpoint>> {
+        let path = self.wsv_checkpoint_path(height);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(Error::IO(err, path)),
+        };
+        let mut cursor = bytes.as_slice();
+        let checkpoint = WsvCheckpoint::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if checkpoint.height != height {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
+                "WSV checkpoint height mismatch: expected {height}, got {}",
+                checkpoint.height
+            ))));
+        }
+        let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(
+                "WSV checkpoint height must be non-zero".into(),
+            )));
+        };
+        let Some(durable_hash) = self.get_durable_block_hash(block_height) else {
+            return Err(Error::BlockHeightGap {
+                expected_next_height: u64::try_from(self.durable_blocks_count())?.saturating_add(1),
+                actual_height: height,
+            });
+        };
+        if checkpoint.block_hash != durable_hash {
+            return Err(Error::BlockHeightConflict {
+                height,
+                expected: durable_hash,
+                actual: checkpoint.block_hash,
+            });
+        }
+        Ok(Some(checkpoint))
+    }
+
+    /// Return whether any canonical WSV checkpoint file exists at or below `height`.
+    pub(crate) fn has_wsv_checkpoint_at_or_before(&self, height: u64) -> Result<bool> {
+        if height == 0 {
+            return Ok(false);
+        }
+        let _guard = self.sidecar_lock.lock();
+        let dir = self.wsv_checkpoint_dir();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(Error::IO(err, dir)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, entry.path()))?;
+            if !file_type.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("norito") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let Ok(checkpoint_height) = stem.parse::<u64>() else {
+                continue;
+            };
+            if checkpoint_height <= height {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn prune_wsv_checkpoints_above(&self, height: u64) -> Result<()> {
+        let _guard = self.sidecar_lock.lock();
+        let dir = self.wsv_checkpoint_dir();
+        if !dir.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(&dir).map_err(|err| Error::IO(err, dir.clone()))? {
+            let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, entry.path()))?;
+            if !file_type.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("norito") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let Ok(checkpoint_height) = stem.parse::<u64>() else {
+                continue;
+            };
+            if checkpoint_height > height {
+                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
+            }
+        }
+        sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
+        Ok(())
+    }
+
     fn read_durable_hash_at_height(
         block_store: &mut BlockStore,
         height: u64,
@@ -3181,6 +3357,7 @@ impl Kura {
         }
         Self::drop_persisted_blocks(&mut data, height_usize, self.blocks_in_memory.get());
         drop(data);
+        self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.append_debug_block_dump(&block);
         Ok(())
     }
@@ -3281,6 +3458,8 @@ impl Kura {
                 Err(err) => warn!(?err, "failed to measure commit roster journal after prune"),
             }
         }
+
+        self.prune_wsv_checkpoints_above(height)?;
 
         Ok(())
     }
@@ -12756,6 +12935,98 @@ mod tests {
             Some(BlockBodyStatus::LocalSidecar)
         );
         assert_eq!(kura.block_body_status_by_hash(block3_hash), None);
+    }
+
+    #[test]
+    fn wsv_checkpoint_roundtrips_and_requires_matching_block_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let blocks = store_dummy_block_arcs(&kura, 2);
+        let state_hash = Hash::new(b"canonical state surface");
+
+        assert!(
+            !kura
+                .has_wsv_checkpoint_at_or_before(2)
+                .expect("scan before checkpoint")
+        );
+        kura.store_wsv_checkpoint(2, blocks[1].hash(), state_hash)
+            .expect("store checkpoint");
+
+        let checkpoint = kura
+            .wsv_checkpoint(2)
+            .expect("read checkpoint")
+            .expect("checkpoint present");
+        assert_eq!(checkpoint.state_hash(), state_hash);
+        assert!(
+            kura.has_wsv_checkpoint_at_or_before(2)
+                .expect("scan after checkpoint")
+        );
+        assert!(
+            kura.wsv_checkpoint(1)
+                .expect("missing lower checkpoint")
+                .is_none()
+        );
+
+        let err = kura
+            .store_wsv_checkpoint(2, blocks[0].hash(), Hash::new(b"wrong block"))
+            .expect_err("checkpoint must match durable block hash");
+        assert!(matches!(err, Error::BlockHeightConflict { height: 2, .. }));
+    }
+
+    #[test]
+    fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
+        let kura = Kura::blank_kura_for_testing();
+        let blocks = store_dummy_block_arcs(&kura, 3);
+        let retained_hash = Hash::new(b"retained checkpoint");
+        let pruned_hash = Hash::new(b"pruned checkpoint");
+
+        kura.store_wsv_checkpoint(2, blocks[1].hash(), retained_hash)
+            .expect("store retained checkpoint");
+        kura.store_wsv_checkpoint(3, blocks[2].hash(), pruned_hash)
+            .expect("store pruned checkpoint");
+
+        kura.prune_to_height(2).expect("prune to height 2");
+
+        let retained = kura
+            .wsv_checkpoint(2)
+            .expect("read retained checkpoint")
+            .expect("retained checkpoint present");
+        assert_eq!(retained.state_hash(), retained_hash);
+        assert!(
+            kura.wsv_checkpoint(3)
+                .expect("read pruned checkpoint")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn replace_top_block_removes_replaced_wsv_checkpoint() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let original_hash = block.hash();
+        let original_state_hash = Hash::new(b"original checkpoint");
+        kura.store_block(block).expect("store block");
+        kura.store_wsv_checkpoint(1, original_hash, original_state_hash)
+            .expect("store original checkpoint");
+
+        let replacement: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement_hash = replacement.hash();
+        assert_ne!(original_hash, replacement_hash);
+
+        kura.replace_top_block(replacement)
+            .expect("replace top block");
+
+        assert!(
+            kura.wsv_checkpoint(1)
+                .expect("read replaced checkpoint")
+                .is_none(),
+            "checkpoint for the replaced block must not survive"
+        );
     }
 
     #[test]

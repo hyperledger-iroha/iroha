@@ -14272,9 +14272,9 @@ mod tests {
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
                 sccp_commitment_root: None,
+                execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
-                execution_context_hash: None,
                 confidential_features: None,
             };
             let mut state_block = app.state.block(block_header);
