@@ -1756,6 +1756,8 @@ pub enum BlockValidationError {
     },
     /// The merkle root does not match the computed one.
     MerkleRootMismatch,
+    /// Execution context invalid: {0}
+    ExecutionContextInvalid(String),
     /// Cannot accept a transaction
     TransactionAccept(#[from] AcceptTransactionFail),
     /// Mismatch between the actual and expected topology. Expected: {expected:?}, actual: {actual:?}
@@ -2115,6 +2117,7 @@ mod pending {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                execution_context: None,
             })
         }
     }
@@ -2135,6 +2138,7 @@ mod chained {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+        pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
     impl BlockBuilder<Chained> {
@@ -2185,6 +2189,19 @@ mod chained {
             self
         }
 
+        /// Attach durable execution context and update the header hash accordingly.
+        #[must_use]
+        pub fn with_execution_context(
+            mut self,
+            context: Option<BlockExecutionContextBundle>,
+        ) -> Self {
+            let context = context.filter(|bundle| !bundle.is_empty());
+            let hash = context.as_ref().map(HashOf::new);
+            self.0.header.set_execution_context_hash(hash);
+            self.0.execution_context = context;
+            self
+        }
+
         /// Attach an SCCP commitment root to the block header.
         #[must_use]
         pub fn with_sccp_commitment_root(mut self, root: Option<[u8; 32]>) -> Self {
@@ -2217,6 +2234,23 @@ mod chained {
                 );
                 builder = builder.with_da_proof_policies(Some(default_policies));
             }
+            if builder.0.execution_context.is_none() && !builder.0.transactions.is_empty() {
+                let default_context = builder
+                    .0
+                    .transactions
+                    .iter()
+                    .map(|tx| {
+                        ExternalExecutionContext::new(
+                            tx.hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                builder = builder.with_execution_context(Some(BlockExecutionContextBundle::new(
+                    default_context,
+                )));
+            }
             let signature = BlockSignature::new(
                 signatory_idx,
                 SignatureOf::from_hash(private_key, builder.0.header.hash()),
@@ -2230,6 +2264,7 @@ mod chained {
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
                 previous_roster_evidence: builder.0.previous_roster_evidence,
+                execution_context: builder.0.execution_context,
             })
         }
 
@@ -2256,6 +2291,7 @@ mod new {
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
         pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
+        pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
 
     impl NewBlock {
@@ -2321,6 +2357,7 @@ mod new {
                 da_proof_policies: self.da_proof_policies,
                 da_pin_intents: self.da_pin_intents,
                 previous_roster_evidence: self.previous_roster_evidence,
+                execution_context: self.execution_context,
             }
         }
     }
@@ -2345,6 +2382,7 @@ mod new {
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
             signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
+            signed_block.set_execution_context(block.execution_context);
             signed_block
         }
     }
@@ -4362,6 +4400,7 @@ pub(crate) mod valid {
                 None,
                 false,
                 false,
+                false,
             )
         }
 
@@ -4395,6 +4434,7 @@ pub(crate) mod valid {
                 None,
                 skip_block_signatures,
                 skip_tx_signature_validation,
+                true,
             )
         }
 
@@ -4423,6 +4463,7 @@ pub(crate) mod valid {
                 Some(timings),
                 false,
                 false,
+                false,
             )
         }
 
@@ -4439,6 +4480,7 @@ pub(crate) mod valid {
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
             skip_tx_signature_validation: bool,
+            replay_compatibility: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4469,6 +4511,7 @@ pub(crate) mod valid {
                     soft_fork,
                     time_source,
                     skip_block_signatures,
+                    replay_compatibility,
                 ) {
                     Ok(data) => {
                         if let Some(timings) = timings.as_deref_mut() {
@@ -4603,6 +4646,7 @@ pub(crate) mod valid {
             } else {
                 state.block(block.header())
             };
+            state_block.replay_compatibility = replay_compatibility;
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
@@ -4693,6 +4737,7 @@ pub(crate) mod valid {
                     &view,
                     soft_fork,
                     time_source,
+                    false,
                     false,
                 ) {
                     Ok(data) => data,
@@ -4857,6 +4902,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             time_source: &TimeSource,
             skip_block_signatures: bool,
+            allow_missing_legacy_context: bool,
         ) -> Result<StaticValidationData, BlockValidationError> {
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
@@ -4919,6 +4965,11 @@ pub(crate) mod valid {
                 block,
                 block.header().height().get(),
                 actual_prev_block_hash,
+            )?;
+            Self::validate_execution_context_with_state(
+                block,
+                state,
+                allow_missing_legacy_context,
             )?;
 
             let nexus = state.nexus();
@@ -5075,6 +5126,154 @@ pub(crate) mod valid {
             }
 
             Ok(())
+        }
+
+        fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
+            BlockValidationError::ExecutionContextInvalid(message.into())
+        }
+
+        fn validate_execution_context_header(
+            block: &SignedBlock,
+        ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
+            match (
+                block.header().execution_context_hash(),
+                block.execution_context(),
+            ) {
+                (None, None) => Ok(None),
+                (Some(_), None) => Err(Self::execution_context_error(
+                    "header references execution context but payload is missing",
+                )),
+                (None, Some(_)) => Err(Self::execution_context_error(
+                    "payload includes execution context but header hash is absent",
+                )),
+                (Some(expected), Some(bundle)) => {
+                    let actual = HashOf::new(bundle);
+                    if actual != expected {
+                        return Err(Self::execution_context_error(
+                            "execution context hash mismatch",
+                        ));
+                    }
+                    Ok(Some(bundle))
+                }
+            }
+        }
+
+        fn validate_execution_context_alignment(
+            block: &SignedBlock,
+            bundle: &BlockExecutionContextBundle,
+        ) -> Result<(), BlockValidationError> {
+            let expected_len = block.external_entrypoint_count();
+            if bundle.external.len() != expected_len {
+                return Err(Self::execution_context_error(format!(
+                    "execution context length mismatch: expected {expected_len}, got {}",
+                    bundle.external.len()
+                )));
+            }
+
+            for (idx, (entrypoint, context)) in block
+                .external_entrypoints_cloned()
+                .zip(bundle.external.iter())
+                .enumerate()
+            {
+                let expected = entrypoint.hash();
+                if context.entrypoint_hash != expected {
+                    return Err(Self::execution_context_error(format!(
+                        "execution context entrypoint hash mismatch at index {idx}"
+                    )));
+                }
+            }
+
+            Ok(())
+        }
+
+        fn validate_execution_context_with_state(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+            allow_missing_legacy_context: bool,
+        ) -> Result<(), BlockValidationError> {
+            let bundle = Self::validate_execution_context_header(block)?;
+            let context_required = !allow_missing_legacy_context
+                && !block.header().is_genesis()
+                && block.external_entrypoint_count() != 0;
+            let Some(bundle) = bundle else {
+                return if context_required {
+                    Err(Self::execution_context_error(
+                        "missing execution context for external entrypoints",
+                    ))
+                } else {
+                    Ok(())
+                };
+            };
+
+            Self::validate_execution_context_alignment(block, bundle)?;
+            if allow_missing_legacy_context || block.header().is_genesis() {
+                return Ok(());
+            }
+
+            let nexus = state.nexus();
+            for (idx, (entrypoint, context)) in block
+                .external_entrypoints_cloned()
+                .zip(bundle.external.iter())
+                .enumerate()
+            {
+                let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+                    Cow::Owned(entrypoint),
+                );
+                let decision = evaluate_policy_with_catalog_and_world(
+                    &nexus.routing_policy,
+                    &nexus.lane_catalog,
+                    &nexus.dataspace_catalog,
+                    &accepted,
+                    state.world(),
+                )
+                .map_err(|err| {
+                    Self::execution_context_error(format!(
+                        "execution context routing cannot be resolved at index {idx}: {err}"
+                    ))
+                })?;
+                if decision.lane_id != context.lane_id
+                    || decision.dataspace_id != context.dataspace_id
+                {
+                    return Err(Self::execution_context_error(format!(
+                        "execution context routing mismatch at index {idx}: expected lane {} dataspace {}, got lane {} dataspace {}",
+                        decision.lane_id.as_u32(),
+                        decision.dataspace_id.as_u64(),
+                        context.lane_id.as_u32(),
+                        context.dataspace_id.as_u64(),
+                    )));
+                }
+            }
+
+            Ok(())
+        }
+
+        fn embedded_routing_decisions_for_signed_transactions(
+            block: &SignedBlock,
+            tx_count: usize,
+        ) -> Option<Vec<crate::queue::RoutingDecision>> {
+            let bundle = match Self::validate_execution_context_header(block) {
+                Ok(Some(bundle)) => bundle,
+                Ok(None) => return None,
+                Err(error) => {
+                    warn!(%error, "ignoring invalid embedded execution context during unchecked execution");
+                    return None;
+                }
+            };
+            if let Err(error) = Self::validate_execution_context_alignment(block, bundle) {
+                warn!(%error, "ignoring misaligned embedded execution context during unchecked execution");
+                return None;
+            }
+
+            let decisions = block
+                .external_entrypoints_cloned()
+                .zip(bundle.external.iter())
+                .filter_map(|(entrypoint, context)| {
+                    matches!(entrypoint, TransactionEntrypoint::External(_)).then(|| {
+                        crate::queue::RoutingDecision::new(context.lane_id, context.dataspace_id)
+                    })
+                })
+                .collect::<Vec<_>>();
+            (decisions.len() == tx_count).then_some(decisions)
         }
 
         fn committed_heights_for_block(
@@ -6064,6 +6263,7 @@ pub(crate) mod valid {
                 soft_fork,
                 time_source,
                 false,
+                false,
             )?;
             let committed_heights = Self::committed_heights_for_block(block, state.transactions());
             let txs_for_cache: Vec<&SignedTransaction> = block.external_transactions().collect();
@@ -6288,9 +6488,30 @@ pub(crate) mod valid {
                     }
                 }
             }
-            let routing_results: Vec<_> = if workers > 1 {
-                if let Some(pool) = pool.as_ref() {
-                    pool.install(|| {
+            let embedded_routing =
+                Self::embedded_routing_decisions_for_signed_transactions(block, txs.len());
+            let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
+                (decisions, vec![None; txs.len()])
+            } else {
+                let routing_results: Vec<_> = if workers > 1 {
+                    if let Some(pool) = pool.as_ref() {
+                        pool.install(|| {
+                            txs.par_iter()
+                                .map(|tx| {
+                                    let accepted = crate::tx::AcceptedTransaction::new_unchecked(
+                                        Cow::Borrowed(*tx),
+                                    );
+                                    evaluate_policy_with_catalog_and_world(
+                                        routing_policy,
+                                        lane_catalog,
+                                        dataspace_catalog,
+                                        &accepted,
+                                        &state_block.world,
+                                    )
+                                })
+                                .collect()
+                        })
+                    } else {
                         txs.par_iter()
                             .map(|tx| {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
@@ -6305,9 +6526,9 @@ pub(crate) mod valid {
                                 )
                             })
                             .collect()
-                    })
+                    }
                 } else {
-                    txs.par_iter()
+                    txs.iter()
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
@@ -6320,36 +6541,23 @@ pub(crate) mod valid {
                             )
                         })
                         .collect()
+                };
+                let mut routing_decisions = Vec::with_capacity(routing_results.len());
+                let mut routing_errors = Vec::with_capacity(routing_results.len());
+                for routing in routing_results {
+                    match routing {
+                        Ok(decision) => {
+                            routing_decisions.push(decision);
+                            routing_errors.push(None);
+                        }
+                        Err(err) => {
+                            routing_decisions.push(crate::queue::RoutingDecision::default());
+                            routing_errors.push(Some(err));
+                        }
+                    }
                 }
-            } else {
-                txs.iter()
-                    .map(|tx| {
-                        let accepted =
-                            crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                        evaluate_policy_with_catalog_and_world(
-                            routing_policy,
-                            lane_catalog,
-                            dataspace_catalog,
-                            &accepted,
-                            &state_block.world,
-                        )
-                    })
-                    .collect()
+                (routing_decisions, routing_errors)
             };
-            let mut routing_decisions = Vec::with_capacity(routing_results.len());
-            let mut routing_errors = Vec::with_capacity(routing_results.len());
-            for routing in routing_results {
-                match routing {
-                    Ok(decision) => {
-                        routing_decisions.push(decision);
-                        routing_errors.push(None);
-                    }
-                    Err(err) => {
-                        routing_decisions.push(crate::queue::RoutingDecision::default());
-                        routing_errors.push(Some(err));
-                    }
-                }
-            }
             let mut signature_overrides: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
@@ -9872,6 +10080,7 @@ pub(crate) mod valid {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                execution_context: None,
             });
             let default_policies = crate::da::proof_policy_bundle(
                 &iroha_config::parameters::actual::LaneConfig::default(),
@@ -11187,6 +11396,7 @@ pub(crate) mod valid {
                     false,
                     &time_source,
                     false,
+                    false,
                 )
                 .expect("static state-dependent validation should succeed")
             };
@@ -11264,6 +11474,7 @@ pub(crate) mod valid {
                     false,
                     &time_source,
                     false,
+                    false,
                 )
                 .expect("static state-dependent validation should succeed")
             };
@@ -11292,6 +11503,136 @@ pub(crate) mod valid {
                 BlockValidationError::TransactionAccept(
                     AcceptTransactionFail::SignatureVerification(_)
                 )
+            ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_missing_execution_context() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (authority, signer) = gen_account_in("context-check");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+            time_handle.advance(Duration::from_millis(1));
+
+            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut signed: SignedBlock = new_block.into();
+            signed.set_execution_context(None);
+
+            let err = {
+                let view = state.query_view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                    false,
+                )
+                .expect_err("live block without execution context must be rejected")
+            };
+            assert!(matches!(
+                err,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("missing execution context")
+            ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_execution_context_route_mismatch() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let (authority, signer) = gen_account_in("context-check");
+            let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(Level::INFO, "context".to_owned())])
+            .sign(signer.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            time_handle.advance(Duration::from_millis(1));
+
+            let new_block = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut signed: SignedBlock = new_block.into();
+            let wrong_context =
+                BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                    tx.hash_as_entrypoint(),
+                    LaneId::new(7),
+                    DataSpaceId::UNIVERSAL,
+                )]);
+            signed.set_execution_context(Some(wrong_context));
+
+            let err = {
+                let view = state.query_view();
+                ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                    false,
+                )
+                .expect_err("live block with mismatched execution context must be rejected")
+            };
+            assert!(matches!(
+                err,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("routing mismatch")
             ));
         }
 
@@ -11344,6 +11685,7 @@ pub(crate) mod valid {
                     &view,
                     false,
                     &time_source,
+                    false,
                     false,
                 ) {
                     Ok(_) => panic!("height > 2 blocks must carry previous-roster evidence"),
@@ -14790,6 +15132,7 @@ mod event {
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions => Reason::TransactionValidationFailed,
+            BlockValidationError::ExecutionContextInvalid(_) => Reason::TransactionValidationFailed,
             BlockValidationError::PrevBlockHashMismatch { .. } => Reason::PrevBlockHashMismatch,
             BlockValidationError::PrevBlockHeightMismatch { .. } => Reason::PrevBlockHeightMismatch,
             BlockValidationError::MerkleRootMismatch => Reason::MerkleRootMismatch,

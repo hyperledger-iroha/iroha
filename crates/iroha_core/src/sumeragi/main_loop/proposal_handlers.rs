@@ -2000,8 +2000,14 @@ impl Actor {
             && self
                 .frontier_slot_conflicts_with_live_local_owner(height, view, block_hash)
                 .is_some();
-        let passive_conflicting_same_height =
-            passive_conflicting_same_height_vote || passive_conflicting_same_height_owner;
+        let quorum_locked_same_height_conflict = !authoritative_frontier_owner_supersede
+            && observed_commit_qc_epoch.is_none()
+            && self
+                .same_height_vote_lock_blocking_candidate(height, view, Some(block_hash))
+                .is_some();
+        let passive_conflicting_same_height = passive_conflicting_same_height_vote
+            || passive_conflicting_same_height_owner
+            || quorum_locked_same_height_conflict;
         if authoritative_frontier_owner_supersede {
             debug!(
                 height,
@@ -2015,6 +2021,13 @@ impl Actor {
                 view,
                 block = %block_hash,
                 "accepting BlockCreated as passive retained branch because local same-height vote history conflicts"
+            );
+        } else if quorum_locked_same_height_conflict {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "accepting BlockCreated as passive retained branch because same-height vote history makes it non-viable"
             );
         }
         if let Some(local_view) = stale_view {
@@ -2236,7 +2249,9 @@ impl Actor {
             }
         }
         let authoritative_recovery_supersede = authoritative_frontier_owner_supersede
-            || (stale_recovery_has_commit_evidence && passive_conflicting_same_height_owner);
+            || (!quorum_locked_same_height_conflict
+                && stale_recovery_has_commit_evidence
+                && passive_conflicting_same_height_owner);
         // Certified same-height recovery must stay authoritative even if the incoming block's
         // view is older than the locally stalled branch. Demoting it to a passive retained
         // branch would keep the stale owner live and strand the commit QC on an inactive payload.
@@ -2244,6 +2259,7 @@ impl Actor {
             && !authoritative_recovery_supersede
             && !stale_recovery_has_commit_evidence)
             || passive_conflicting_same_height_vote
+            || quorum_locked_same_height_conflict
             || (passive_conflicting_same_height_owner && !stale_recovery_has_commit_evidence);
         let revive_aborted = !stale_payload_only
             && pending_status.is_some_and(|(aborted, _, status, commit_qc_seen)| {

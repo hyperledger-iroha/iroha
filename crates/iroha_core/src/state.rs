@@ -6098,6 +6098,8 @@ pub struct StateBlock<'state> {
         Option<std::sync::Arc<std::collections::BTreeMap<[u8; 32], bool>>>,
     /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.
     committed_fragments: usize,
+    /// True while rebuilding state from already committed Kura blocks.
+    pub(crate) replay_compatibility: bool,
 }
 
 impl<'state> StateBlock<'state> {
@@ -6452,6 +6454,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash:
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// True while rebuilding state from already committed Kura blocks.
+    pub(crate) replay_compatibility: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -17809,6 +17813,7 @@ impl State {
             // No preverified batch at block start; may be set later by pipeline
             preverified_batch: None,
             committed_fragments: 0,
+            replay_compatibility: false,
         };
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
@@ -18287,6 +18292,7 @@ impl State {
             // No preverified batch at block start; may be set later by pipeline
             preverified_batch: None,
             committed_fragments: 0,
+            replay_compatibility: false,
         }
     }
 
@@ -21971,6 +21977,7 @@ impl<'state> StateBlock<'state> {
             current_tx_hash: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
+            replay_compatibility: self.replay_compatibility,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),

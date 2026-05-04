@@ -2105,6 +2105,15 @@ Last updated: 2026-05-04
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_keeps_retry_armed_when_body_present_but_commit_qc_repair_active' --nocapture`
   - `target/debug/deps/iroha_core-afb8267c04707e87 --exact 'sumeragi::main_loop::tests::frontier_body_next_due_ignores_passive_catchup_slot_even_with_targets' --nocapture`
 
+## 2026-05-04 Kura replay WSV determinism
+
+- Blocks now carry a header-committed execution context bundle for external entrypoints, recording the lane and dataspace used during execution so future Kura replay does not need to re-derive route-sensitive state from the current WSV.
+- Live non-genesis block validation rejects missing, tampered, misaligned, or route-mismatched execution context. The replay-specific path remains compatible with older committed blocks while preferring embedded context whenever it is present.
+- Snapshot tests now expose a canonical WSV byte surface and assert snapshot roundtrips preserve those bytes.
+- Focused validation so far:
+  - `cargo check -p iroha_data_model`
+  - `cargo check -p iroha_core`
+
 ## 2026-04-22 Sumeragi targeted main_loop regression sweep
 
 - `crates/iroha_core/src/sumeragi/main_loop/commit.rs` now keeps the initial local commit/precommit emit on the seeded collector set plus explicit parallel fanout, instead of widening that very first send through the generic commit-evidence replay path.

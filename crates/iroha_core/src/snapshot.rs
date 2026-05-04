@@ -1179,6 +1179,14 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
     Ok(())
 }
 
+/// Canonical bytes for the committed WSV surface used by replay parity tests.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    json::to_writer(&mut bytes, state).expect("state snapshot serialization must succeed");
+    bytes
+}
+
 fn sync_dir(path: &Path) -> Result<(), TryWriteError> {
     let file =
         std::fs::File::open(path).map_err(|err| TryWriteError::IO(err, path.to_path_buf()))?;
@@ -1435,6 +1443,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(snapshot_state.chain_id, expected_chain_id);
+        assert_eq!(
+            canonical_state_snapshot_bytes_for_tests(&snapshot_state),
+            canonical_state_snapshot_bytes_for_tests(&state),
+            "snapshot roundtrip must preserve canonical WSV bytes"
+        );
     }
 
     #[test]
