@@ -2495,14 +2495,15 @@ pub(crate) mod valid {
     use std::{num::NonZeroUsize, time::Instant};
 
     use commit::CommittedBlock;
+    #[cfg(test)]
+    use iroha_data_model::soracloud::{
+        SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+    };
     use iroha_data_model::{
         ChainId,
         events::pipeline::PipelineEventBox,
         nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
-        soracloud::{
-            SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-            SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        },
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
@@ -2513,15 +2514,18 @@ pub(crate) mod valid {
     };
     use crate::{
         smartcontracts::ivm::cache::IvmCache,
+        state::{
+            StateBlock, StateReadOnlyWithTransactions, storage_transactions::TransactionsReadOnly,
+        },
+        sumeragi::network_topology::Role,
+    };
+    #[cfg(test)]
+    use crate::{
         soracloud_runtime::{
             SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
             SoracloudRuntimeExecutionError,
         },
-        state::{
-            StateBlock, StateReadOnly, StateReadOnlyWithTransactions, StateTransaction,
-            storage_transactions::TransactionsReadOnly,
-        },
-        sumeragi::network_topology::Role,
+        state::{StateReadOnly, StateTransaction},
     };
 
     fn charge_rejected_overlay_fees(
@@ -2629,6 +2633,7 @@ pub(crate) mod valid {
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
+    #[cfg(test)]
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<SoraServiceMailboxMessageV1> {
@@ -2668,6 +2673,7 @@ pub(crate) mod valid {
         messages
     }
 
+    #[cfg(test)]
     fn authoritative_pending_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
         service_name: &iroha_data_model::name::Name,
@@ -2691,6 +2697,7 @@ pub(crate) mod valid {
         .unwrap_or(u32::MAX)
     }
 
+    #[cfg(test)]
     fn synthetic_mailbox_runtime_failure(
         request: SoracloudOrderedMailboxExecutionRequest,
         error: SoracloudRuntimeExecutionError,
@@ -2769,6 +2776,7 @@ pub(crate) mod valid {
         }
     }
 
+    #[cfg(test)]
     fn validate_mailbox_runtime_receipt(
         request: &SoracloudOrderedMailboxExecutionRequest,
         receipt: &SoraRuntimeReceiptV1,
@@ -2828,6 +2836,12 @@ pub(crate) mod valid {
         Ok(())
     }
 
+    /// Test-only harness for legacy block-time mailbox execution.
+    ///
+    /// Production replay must not depend on a local SoraCloud runtime. Runtime
+    /// effects must be persisted through explicit SoraCloud ISIs in committed
+    /// transactions so Kura replay reconstructs the same WSV on every peer.
+    #[cfg(test)]
     fn execute_soracloud_mailbox_runtime(state_block: &mut StateBlock<'_>) {
         let Some(runtime) = state_block.soracloud_runtime.clone() else {
             return;
@@ -9729,6 +9743,7 @@ pub(crate) mod valid {
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
                 timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
             }
+            #[cfg(test)]
             execute_soracloud_mailbox_runtime(state_block);
             let finalize_start = timings.as_ref().map(|_| Instant::now());
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
