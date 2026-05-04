@@ -15303,6 +15303,7 @@ async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
         height,
         view,
         block_hash,
+        evidence_hash: Hash::new(&[0u8]),
     };
     {
         let mut guard = actor
@@ -15387,19 +15388,6 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
         now,
     ));
 
-    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
-        height,
-        view,
-        block_hash,
-    };
-    {
-        let mut guard = actor
-            .block_payload_dedup
-            .lock()
-            .expect("block payload dedup cache poisoned");
-        guard.insert(dedup_key, Instant::now());
-    }
-
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers: BTreeSet<ValidatorIndex> = topology
         .as_ref()
@@ -15422,6 +15410,25 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
     );
     let mut update = super::message::BlockSyncUpdate::from(&block);
     update.commit_qc = Some(qc);
+    let response = super::message::BlockBodyResponse {
+        block_hash,
+        height,
+        view,
+        body: super::message::BlockBodyData::BlockSyncUpdate(update),
+    };
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+        evidence_hash: crate::sumeragi::block_body_response_evidence_hash(&response),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
 
     let sender = actor
         .effective_commit_topology()
@@ -15430,15 +15437,7 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
         .expect("remote sender");
 
     actor
-        .handle_block_body_response(
-            super::message::BlockBodyResponse {
-                block_hash,
-                height,
-                view,
-                body: super::message::BlockBodyData::BlockSyncUpdate(update),
-            },
-            Some(sender),
-        )
+        .handle_block_body_response(response, Some(sender))
         .expect("block body response handled");
 
     assert!(
@@ -15506,17 +15505,18 @@ async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_r
         },
     );
 
-    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+    let plain_dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
         height,
         view,
         block_hash,
+        evidence_hash: Hash::new(&[0u8]),
     };
     {
         let mut guard = actor
             .block_payload_dedup
             .lock()
             .expect("block payload dedup cache poisoned");
-        guard.insert(dedup_key, Instant::now());
+        guard.insert(plain_dedup_key, Instant::now());
     }
 
     let sender = actor
@@ -15544,7 +15544,7 @@ async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_r
             .block_payload_dedup
             .lock()
             .expect("block payload dedup cache poisoned")
-            .contains(&dedup_key),
+            .contains(&plain_dedup_key),
         "plain exact BlockBodyResponse should not suppress the following QC-bearing recovery response"
     );
     assert!(
@@ -15554,14 +15554,6 @@ async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_r
             .contains_key(&block_hash),
         "plain BlockBodyResponse cannot retire a missing commit-QC request by itself"
     );
-
-    {
-        let mut guard = actor
-            .block_payload_dedup
-            .lock()
-            .expect("block payload dedup cache poisoned");
-        guard.insert(dedup_key, Instant::now());
-    }
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers: BTreeSet<ValidatorIndex> = topology
@@ -15599,17 +15591,28 @@ async fn plain_block_body_response_releases_dedup_for_active_missing_commit_qc_r
     update.commit_qc = Some(qc);
     update.validator_checkpoint = Some(checkpoint);
     update.commit_votes.clear();
+    let response = super::message::BlockBodyResponse {
+        block_hash,
+        height,
+        view,
+        body: super::message::BlockBodyData::BlockSyncUpdate(update),
+    };
+    let qc_dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+        evidence_hash: crate::sumeragi::block_body_response_evidence_hash(&response),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(qc_dedup_key, Instant::now());
+    }
 
     actor
-        .handle_block_body_response(
-            super::message::BlockBodyResponse {
-                block_hash,
-                height,
-                view,
-                body: super::message::BlockBodyData::BlockSyncUpdate(update),
-            },
-            Some(sender),
-        )
+        .handle_block_body_response(response, Some(sender))
         .expect("QC-bearing block body response handled");
     drain_known_block_qc_work(actor);
 
@@ -15666,6 +15669,7 @@ async fn block_body_response_releases_dedup_when_slot_mismatch_ignores_it() {
         height,
         view,
         block_hash: response_block.hash(),
+        evidence_hash: Hash::new(&[0u8]),
     };
     {
         let mut guard = actor
@@ -15772,6 +15776,7 @@ async fn block_body_response_retains_same_height_repair_after_frontier_view_adva
         height,
         view: repair_view,
         block_hash: repair_hash,
+        evidence_hash: Hash::new(&[0u8]),
     };
     {
         let mut guard = actor
@@ -15935,6 +15940,7 @@ async fn block_body_response_block_created_uses_deferred_commit_qc_for_same_heig
         height,
         view: repair_view,
         block_hash: repair_hash,
+        evidence_hash: Hash::new(&[0u8]),
     };
     {
         let mut guard = actor
@@ -28620,19 +28626,6 @@ async fn block_body_response_retains_same_height_known_block_commit_qc_repair_af
         },
     );
 
-    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
-        height,
-        view: repair_view,
-        block_hash: repair_hash,
-    };
-    {
-        let mut guard = actor
-            .block_payload_dedup
-            .lock()
-            .expect("block payload dedup cache poisoned");
-        guard.insert(dedup_key, Instant::now());
-    }
-
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers: BTreeSet<ValidatorIndex> = topology
         .as_ref()
@@ -28669,6 +28662,25 @@ async fn block_body_response_retains_same_height_known_block_commit_qc_repair_af
     update.commit_qc = Some(qc);
     update.validator_checkpoint = Some(checkpoint);
     update.commit_votes.clear();
+    let response = super::message::BlockBodyResponse {
+        block_hash: repair_hash,
+        height,
+        view: repair_view,
+        body: super::message::BlockBodyData::BlockSyncUpdate(update),
+    };
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view: repair_view,
+        block_hash: repair_hash,
+        evidence_hash: crate::sumeragi::block_body_response_evidence_hash(&response),
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
 
     let sender = actor
         .effective_commit_topology()
@@ -28677,15 +28689,7 @@ async fn block_body_response_retains_same_height_known_block_commit_qc_repair_af
         .expect("remote sender");
 
     actor
-        .handle_block_body_response(
-            super::message::BlockBodyResponse {
-                block_hash: repair_hash,
-                height,
-                view: repair_view,
-                body: super::message::BlockBodyData::BlockSyncUpdate(update),
-            },
-            Some(sender),
-        )
+        .handle_block_body_response(response, Some(sender))
         .expect("same-height known-block commit-QC repair response handled");
     drain_known_block_qc_work(actor);
 

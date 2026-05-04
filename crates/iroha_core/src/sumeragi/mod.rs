@@ -2586,6 +2586,33 @@ mod tests {
     }
 
     #[test]
+    fn block_body_response_dedup_partitions_plain_and_evidence_companions() {
+        let mut cache = BlockPayloadDedupCache::new(4, Duration::from_secs(30));
+        let now = Instant::now();
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([4u8; 32]));
+        let plain_key = BlockPayloadDedupKey::BlockBodyResponse {
+            height: 6,
+            view: 0,
+            block_hash,
+            evidence_hash: Hash::new(&[0u8]),
+        };
+        let evidence_key = BlockPayloadDedupKey::BlockBodyResponse {
+            height: 6,
+            view: 0,
+            block_hash,
+            evidence_hash: Hash::new(&[1u8]),
+        };
+
+        assert!(cache.insert(plain_key, now).inserted);
+        assert!(
+            cache.insert(evidence_key, now).inserted,
+            "QC-bearing companion must not be suppressed by the preceding plain body response"
+        );
+        assert!(!cache.insert(plain_key, now).inserted);
+        assert!(!cache.insert(evidence_key, now).inserted);
+    }
+
+    #[test]
     fn incoming_block_message_drops_duplicate_votes() {
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -9625,6 +9652,7 @@ enum BlockPayloadDedupKey {
         height: u64,
         view: u64,
         block_hash: HashOf<BlockHeader>,
+        evidence_hash: CryptoHash,
     },
     Proposal {
         height: u64,
@@ -9704,6 +9732,18 @@ fn block_sync_update_evidence_hash(update: &message::BlockSyncUpdate) -> CryptoH
     push_optional_hash(&mut buf, commit_qc_hash);
     push_optional_hash(&mut buf, checkpoint_hash);
     push_optional_hash(&mut buf, stake_snapshot_hash);
+    CryptoHash::new(&buf)
+}
+
+fn block_body_response_evidence_hash(response: &message::BlockBodyResponse) -> CryptoHash {
+    let mut buf = Vec::new();
+    match &response.body {
+        message::BlockBodyData::BlockCreated(_) => buf.push(0),
+        message::BlockBodyData::BlockSyncUpdate(update) => {
+            buf.push(1);
+            buf.extend_from_slice(block_sync_update_evidence_hash(update).as_ref());
+        }
+    }
     CryptoHash::new(&buf)
 }
 
@@ -10666,6 +10706,7 @@ impl SumeragiHandle {
                         height: response.height,
                         view: response.view,
                         block_hash: response.block_hash,
+                        evidence_hash: block_body_response_evidence_hash(&response),
                     });
                 if duplicate {
                     iroha_logger::debug!(
