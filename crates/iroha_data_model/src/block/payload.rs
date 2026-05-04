@@ -5,7 +5,7 @@ use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use super::{SignedBlock, header::BlockHeader};
+use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
 use crate::{
     consensus::PreviousRosterEvidence,
     da::{
@@ -44,6 +44,13 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Vec::is_empty")]
         pub external_entrypoints: Vec<TransactionEntrypoint>,
+        /// Durable execution context for external entrypoints.
+        ///
+        /// New committed blocks include this context so replay does not need to
+        /// re-derive route-dependent execution inputs from the current WSV.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub execution_context: Option<BlockExecutionContextBundle>,
         /// Optional DA commitment bundle embedded in this block.
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
@@ -166,6 +173,20 @@ impl SignedBlock {
     #[inline]
     pub fn transactions_vec(&self) -> &Vec<SignedTransaction> {
         &self.payload.transactions
+    }
+
+    /// Durable execution context embedded in this block, if any.
+    #[inline]
+    pub fn execution_context(&self) -> Option<&BlockExecutionContextBundle> {
+        self.payload.execution_context.as_ref()
+    }
+
+    /// Set or clear durable execution context and update the header hash accordingly.
+    pub fn set_execution_context(&mut self, context: Option<BlockExecutionContextBundle>) {
+        let context = context.filter(|bundle| !bundle.is_empty());
+        let hash = context.as_ref().map(HashOf::new);
+        self.payload.execution_context = context;
+        self.payload.header.set_execution_context_hash(hash);
     }
 
     /// Optional DA commitment bundle embedded in this block.

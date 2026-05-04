@@ -222,6 +222,7 @@ pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
         header,
         transactions: block.transactions_vec().clone(),
         external_entrypoints,
+        execution_context: block.execution_context().cloned(),
         da_commitments: block.da_commitments().cloned(),
         da_proof_policies: block.da_proof_policies().cloned(),
         da_pin_intents: block.da_pin_intents().cloned(),

@@ -7,7 +7,10 @@ use std::{
 
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 
-use super::{BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock};
+use super::{
+    BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockResult, BlockSignature,
+    SignedBlock,
+};
 use crate::{
     consensus::PreviousRosterEvidence,
     da::{
@@ -37,6 +40,7 @@ pub struct BlockBuilder {
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
     previous_roster_evidence: Option<PreviousRosterEvidence>,
+    execution_context: Option<BlockExecutionContextBundle>,
 }
 
 impl BlockBuilder {
@@ -51,6 +55,7 @@ impl BlockBuilder {
             results: Vec::new(),
             entry_merkle: MerkleTree::default(),
             result_merkle: MerkleTree::default(),
+            execution_context: None,
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
@@ -117,6 +122,11 @@ impl BlockBuilder {
         self.previous_roster_evidence = evidence;
     }
 
+    /// Attach durable execution context that will be embedded in the resulting block.
+    pub fn set_execution_context(&mut self, context: Option<BlockExecutionContextBundle>) {
+        self.execution_context = context.filter(|bundle| !bundle.is_empty());
+    }
+
     /// Commit an SCCP commitment root in the resulting block header.
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
         self.header.set_sccp_commitment_root(root);
@@ -131,10 +141,13 @@ impl BlockBuilder {
         let da_proof_policies = self.da_proof_policies.clone();
         let da_pin_intents = self.da_pin_intents.clone();
         let previous_roster_evidence = self.previous_roster_evidence.clone();
+        self.header
+            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
         let payload = BlockPayload {
             header: self.header,
             transactions: self.transactions,
             external_entrypoints: self.external_entrypoints.clone(),
+            execution_context: self.execution_context.clone(),
             da_commitments,
             da_proof_policies,
             da_pin_intents,
@@ -159,6 +172,7 @@ impl BlockBuilder {
         block.set_da_commitments(self.da_commitments);
         block.set_da_pin_intents(self.da_pin_intents);
         block.set_previous_roster_evidence(self.previous_roster_evidence);
+        block.set_execution_context(self.execution_context);
         block
     }
 
@@ -173,6 +187,8 @@ impl BlockBuilder {
         self.header.result_merkle_root = self.result_merkle.root();
         self.header
             .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
+        self.header
+            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
         self.header.da_commitments_hash = self.da_commitments.as_ref().and_then(|bundle| {
             if bundle.is_empty() {
                 None

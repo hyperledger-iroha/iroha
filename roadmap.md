@@ -135,6 +135,10 @@ Completed history lives in `status.md`. This file should only track unfinished w
 
 ## Targeted follow-ups
 
+- Extend Kura replay parity coverage beyond the new committed execution context checks.
+  - Add a multi-block replay fixture that replays committed blocks into a fresh state and compares `canonical_state_snapshot_bytes_for_tests(...)` against the originally committed WSV.
+  - Include route-sensitive asset, alias, and domain-owned state surfaces without relying on environment toggles or sidecars.
+  - Keep the fixture on the replay-specific validation entrypoint so legacy blocks without embedded context remain covered separately from newly proposed blocks.
 - Broaden alias auto-renew mutation coverage beyond the focused onboarding grant.
   - Add an integration test proving a user-signed enable/disable update can mutate the subscription NFT created by onboarding.
   - If a non-onboarding mutation path still hits `Can't modify NFT from domain owned by another account`, capture the exact submitter, NFT id, and permission token shape before changing the permission model again.
