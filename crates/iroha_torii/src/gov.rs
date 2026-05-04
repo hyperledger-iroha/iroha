@@ -2539,8 +2539,8 @@ pub struct CouncilReplaceResponse {
 /// missing, or when routing the signed transaction fails.
 #[cfg(feature = "gov_vrf")]
 pub async fn handle_gov_council_persist(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
+    _chain_id: Arc<iroha_data_model::ChainId>,
+    _queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: crate::routing::MaybeTelemetry,
     NoritoJson(body): NoritoJson<CouncilPersistRequest>,
@@ -2614,42 +2614,23 @@ pub async fn handle_gov_council_persist(
             crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
         })?;
         let _ = private_key;
-        return Err(reject_server_side_signing("/v1/gov/council/persist"));
+        Err(reject_server_side_signing("/v1/gov/council/persist"))
     } else {
-        return Err(crate::Error::Query(
+        Err(crate::Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
                     "direct council persistence unavailable; submit a locally signed transaction instead".into(),
                 ),
             ),
-        ));
+        ))
     }
-
-    Ok(JsonBody(CouncilPersistResponse {
-        epoch,
-        members: members
-            .into_iter()
-            .map(|a| CouncilMemberDto {
-                account_id: a.to_string(),
-            })
-            .collect(),
-        alternates: alternates
-            .into_iter()
-            .map(|a| CouncilMemberDto {
-                account_id: a.to_string(),
-            })
-            .collect(),
-        total_candidates: parsed.len(),
-        verified: draw.verified,
-        derived_by,
-    }))
 }
 
 /// Replace a council member using the next available alternate and persist the updated roster.
 #[cfg(feature = "gov_vrf")]
 pub async fn handle_gov_council_replace(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
+    _chain_id: Arc<iroha_data_model::ChainId>,
+    _queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: crate::routing::MaybeTelemetry,
     NoritoJson(body): NoritoJson<CouncilReplaceRequest>,
@@ -2713,35 +2694,16 @@ pub async fn handle_gov_council_replace(
             crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
         })?;
         let _ = private_key;
-        return Err(reject_server_side_signing("/v1/gov/council/replace"));
+        Err(reject_server_side_signing("/v1/gov/council/replace"))
     } else {
-        return Err(crate::Error::Query(
+        Err(crate::Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
                     "direct council persistence unavailable; submit a locally signed transaction instead".into(),
                 ),
             ),
-        ));
+        ))
     }
-
-    Ok(JsonBody(CouncilReplaceResponse {
-        epoch: term.epoch,
-        members: term
-            .members
-            .into_iter()
-            .map(|a| CouncilMemberDto {
-                account_id: a.to_string(),
-            })
-            .collect(),
-        alternates: term
-            .alternates
-            .into_iter()
-            .map(|a| CouncilMemberDto {
-                account_id: a.to_string(),
-            })
-            .collect(),
-        replaced: true,
-    }))
 }
 
 #[derive(Debug, Default, JsonDeserialize)]
@@ -2965,6 +2927,92 @@ mod tests {
         ));
         let chain_id: ChainId = "chain".parse().expect("chain id");
         (state, queue, Arc::new(chain_id))
+    }
+
+    #[cfg(feature = "gov_vrf")]
+    #[tokio::test]
+    async fn council_persist_rejects_direct_persistence() {
+        let (state, queue, chain_id) = mk_basic_context();
+
+        let result = handle_gov_council_persist(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(CouncilPersistRequest {
+                committee_size: Some(1),
+                alternate_size: Some(1),
+                epoch: Some(0),
+                candidates: Vec::new(),
+                authority: None,
+                private_key: None,
+            }),
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("direct persistence must fail"),
+            Err(err) => err,
+        };
+        let message = conversion_message(err);
+        assert!(
+            message.contains("direct council persistence unavailable"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[cfg(feature = "gov_vrf")]
+    #[tokio::test]
+    async fn council_replace_rejects_direct_persistence() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let member = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+            .expect("member account id")
+            .into_account_id();
+        let alternate = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
+            .expect("alternate account id")
+            .into_account_id();
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world_mut_for_testing().council_mut().insert(
+                0,
+                iroha_core::state::CouncilState {
+                    epoch: 0,
+                    members: vec![member.clone()],
+                    alternates: vec![alternate],
+                    verified: 1,
+                    candidate_count: 2,
+                    derived_by: CouncilDerivationKind::Vrf,
+                },
+            );
+            tx.apply();
+            block.commit().expect("seed council");
+        }
+
+        let result = handle_gov_council_replace(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(CouncilReplaceRequest {
+                missing: member.to_string(),
+                epoch: Some(0),
+                authority: None,
+                private_key: None,
+            }),
+        )
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("direct persistence must fail"),
+            Err(err) => err,
+        };
+        let message = conversion_message(err);
+        assert!(
+            message.contains("direct council persistence unavailable"),
+            "unexpected message: {message}"
+        );
     }
 
     fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {

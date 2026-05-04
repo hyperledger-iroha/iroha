@@ -276,6 +276,21 @@ impl Execute for RenewAccountAliasLease {
     }
 }
 
+fn charge_sns_quote(
+    quote: &crate::sns::LeaseQuote,
+    payer: AccountId,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<iroha_data_model::sns::PaymentProofV1, Error> {
+    Transfer::asset_numeric(
+        AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
+        xor_nanos_to_numeric(quote.charge_amount),
+        quote.collector_account.clone(),
+    )
+    .execute(authority, state_transaction)?;
+    Ok(crate::sns::payment_proof_for_quote(quote, payer))
+}
+
 impl Execute for iroha_data_model::isi::sns::RegisterSnsName {
     #[metrics(+"register_sns_name")]
     fn execute(
@@ -283,8 +298,26 @@ impl Execute for iroha_data_model::isi::sns::RegisterSnsName {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let request: RegisterNameRequestV1 = decode_sns_payload(&self.request, "RegisterSnsName")?;
+        let mut request: RegisterNameRequestV1 =
+            decode_sns_payload(&self.request, "RegisterSnsName")?;
         ensure_payment_payer_is_authority(&request.payment.payer, authority, "RegisterSnsName")?;
+        crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(state_transaction);
+        let quote = crate::sns::quote_name_registration(
+            state_transaction.world(),
+            &state_transaction.nexus.dataspace_catalog,
+            request.selector.clone(),
+            &request.owner,
+            request.term_years,
+            request.pricing_class_hint,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .map_err(sns_mutation_instruction_error)?;
+        request.payment = charge_sns_quote(
+            &quote,
+            request.payment.payer.clone(),
+            authority,
+            state_transaction,
+        )?;
         crate::sns::register_name(state_transaction, request)
             .map(|_| ())
             .map_err(sns_mutation_instruction_error)
@@ -298,9 +331,25 @@ impl Execute for iroha_data_model::isi::sns::RenewSnsName {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let request: RenewNameRequestV1 = decode_sns_payload(&self.request, "RenewSnsName")?;
+        let mut request: RenewNameRequestV1 = decode_sns_payload(&self.request, "RenewSnsName")?;
         ensure_payment_payer_is_authority(&request.payment.payer, authority, "RenewSnsName")?;
         let namespace = namespace_from_suffix_id(self.suffix_id)?;
+        crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(state_transaction);
+        let quote = crate::sns::quote_name_renewal(
+            state_transaction.world(),
+            &state_transaction.nexus.dataspace_catalog,
+            namespace,
+            &self.literal,
+            request.term_years,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .map_err(sns_mutation_instruction_error)?;
+        request.payment = charge_sns_quote(
+            &quote,
+            request.payment.payer.clone(),
+            authority,
+            state_transaction,
+        )?;
         crate::sns::renew_name(state_transaction, namespace, &self.literal, request)
             .map(|_| ())
             .map_err(sns_mutation_instruction_error)
@@ -384,7 +433,10 @@ mod tests {
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         query::sns::prelude::FindDataspaceNameOwnerById,
-        sns::{NameControllerV1, NameRecordV1},
+        sns::{
+            NameControllerV1, NameRecordV1, PaymentProofV1, RegisterNameRequestV1,
+            RenewNameRequestV1,
+        },
     };
     use mv::storage::StorageReadOnly;
 
@@ -396,7 +448,7 @@ mod tests {
             ACCOUNT_ALIAS_SUFFIX_ID, SnsNamespace, get_name_record, policy_by_id,
             seed_default_namespace_policies,
         },
-        state::{State, World},
+        state::{State, World, WorldReadOnly},
     };
 
     fn owner() -> AccountId {
@@ -425,6 +477,110 @@ mod tests {
             0,
             0,
         )
+    }
+
+    fn sns_payment_payer_state() -> (State, AccountId, AccountId, AssetDefinitionId) {
+        let payer = owner();
+        let collector = another_owner();
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&collector);
+        let payer_account = Account::new(payer.clone()).build(&collector);
+        let collector_account = Account::new(collector.clone()).build(&collector);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&collector);
+        let mut world = World::with(
+            vec![genesis_domain],
+            vec![payer_account, collector_account],
+            vec![payment_definition],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        (state, payer, collector, payment_asset_definition_id)
+    }
+
+    fn sns_payment(
+        payer: &AccountId,
+        payment_asset_definition_id: &AssetDefinitionId,
+    ) -> PaymentProofV1 {
+        PaymentProofV1 {
+            asset_id: payment_asset_definition_id.to_string(),
+            gross_amount: 0,
+            net_amount: 0,
+            settlement_tx: iroha_primitives::json::Json::from("self-asserted"),
+            payer: payer.clone(),
+            signature: iroha_primitives::json::Json::from("self-asserted"),
+        }
+    }
+
+    fn asset_balance(
+        state: &State,
+        payment_asset_definition_id: &AssetDefinitionId,
+        account: &AccountId,
+    ) -> Numeric {
+        let view = state.view();
+        view.world()
+            .asset(&AssetId::of(
+                payment_asset_definition_id.clone(),
+                account.clone(),
+            ))
+            .map(|asset| asset.value().clone().into_inner())
+            .unwrap_or_else(|_| Numeric::zero())
+    }
+
+    fn register_paid_alias(
+        state: &State,
+        payer: &AccountId,
+        payment_asset_definition_id: &AssetDefinitionId,
+        label: &str,
+    ) -> u64 {
+        let alias = AccountAlias::domainless(label.parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let selector = {
+            let view = state.view();
+            crate::sns::selector_for_account_alias(&alias, &view.nexus.dataspace_catalog)
+                .expect("selector")
+        };
+        let request = RegisterNameRequestV1 {
+            selector,
+            owner: payer.clone(),
+            controllers: vec![account_controller_for(payer).expect("controller")],
+            term_years: 1,
+            pricing_class_hint: None,
+            payment: sns_payment(payer, payment_asset_definition_id),
+            governance: None,
+            metadata: Metadata::default(),
+        };
+        {
+            let mut block = state.block(next_header(state));
+            let mut stx = block.transaction();
+            iroha_data_model::isi::sns::RegisterSnsName::new(request)
+                .execute(payer, &mut stx)
+                .expect("register SNS alias");
+            stx.apply();
+            block.commit().expect("register block commits");
+        }
+
+        let literal = alias
+            .to_literal(&state.nexus_snapshot().dataspace_catalog)
+            .expect("literal");
+        let view = state.view();
+        get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            &literal,
+            0,
+        )
+        .expect("registered alias")
+        .expires_at_ms
     }
 
     #[test]
@@ -573,6 +729,135 @@ mod tests {
         assert!(
             renewed.expires_at_ms > initial_expiry,
             "renewal must extend the alias expiry"
+        );
+    }
+
+    #[test]
+    fn register_sns_name_charges_authoritative_quote_before_persisting() {
+        let (state, payer, collector, payment_asset_definition_id) = sns_payment_payer_state();
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Mint::asset_numeric(
+                2_u64,
+                AssetId::of(payment_asset_definition_id.clone(), payer.clone()),
+            )
+            .execute(&collector, &mut stx)
+            .expect("mint payment balance");
+            stx.apply();
+            block.commit().expect("mint block commits");
+        }
+
+        let initial_expiry =
+            register_paid_alias(&state, &payer, &payment_asset_definition_id, "paid");
+
+        assert!(initial_expiry > 0);
+        assert_eq!(
+            asset_balance(&state, &payment_asset_definition_id, &payer),
+            Numeric::new(1_500_000_000_i128, 9)
+        );
+        assert_eq!(
+            asset_balance(&state, &payment_asset_definition_id, &collector),
+            Numeric::new(500_000_000_i128, 9)
+        );
+    }
+
+    #[test]
+    fn renew_sns_name_charges_authoritative_quote_before_extending() {
+        let (state, payer, collector, payment_asset_definition_id) = sns_payment_payer_state();
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Mint::asset_numeric(
+                2_u64,
+                AssetId::of(payment_asset_definition_id.clone(), payer.clone()),
+            )
+            .execute(&collector, &mut stx)
+            .expect("mint payment balance");
+            stx.apply();
+            block.commit().expect("mint block commits");
+        }
+        let initial_expiry =
+            register_paid_alias(&state, &payer, &payment_asset_definition_id, "renewed");
+
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            iroha_data_model::isi::sns::RenewSnsName::new(
+                ACCOUNT_ALIAS_SUFFIX_ID,
+                "renewed@universal",
+                RenewNameRequestV1 {
+                    term_years: 1,
+                    payment: sns_payment(&payer, &payment_asset_definition_id),
+                },
+            )
+            .execute(&payer, &mut stx)
+            .expect("renew SNS alias");
+            stx.apply();
+            block.commit().expect("renew block commits");
+        }
+
+        let view = state.view();
+        let renewed = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "renewed@universal",
+            0,
+        )
+        .expect("renewed alias");
+        assert!(renewed.expires_at_ms > initial_expiry);
+        drop(view);
+        assert_eq!(
+            asset_balance(&state, &payment_asset_definition_id, &payer),
+            Numeric::new(1_000_000_000_i128, 9)
+        );
+        assert_eq!(
+            asset_balance(&state, &payment_asset_definition_id, &collector),
+            Numeric::new(1_000_000_000_i128, 9)
+        );
+    }
+
+    #[test]
+    fn register_sns_name_without_balance_does_not_persist_record() {
+        let (state, payer, _collector, payment_asset_definition_id) = sns_payment_payer_state();
+        let alias =
+            AccountAlias::domainless("free".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let selector = {
+            let view = state.view();
+            crate::sns::selector_for_account_alias(&alias, &view.nexus.dataspace_catalog)
+                .expect("selector")
+        };
+        let request = RegisterNameRequestV1 {
+            selector,
+            owner: payer.clone(),
+            controllers: vec![account_controller_for(&payer).expect("controller")],
+            term_years: 1,
+            pricing_class_hint: None,
+            payment: sns_payment(&payer, &payment_asset_definition_id),
+            governance: None,
+            metadata: Metadata::default(),
+        };
+
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+        iroha_data_model::isi::sns::RegisterSnsName::new(request)
+            .execute(&payer, &mut stx)
+            .expect_err("unfunded payer must not register SNS name");
+        drop(stx);
+        drop(block);
+
+        let view = state.view();
+        assert!(
+            get_name_record(
+                view.world(),
+                &view.nexus.dataspace_catalog,
+                SnsNamespace::AccountAlias,
+                "free@universal",
+                0,
+            )
+            .is_err(),
+            "failed payment must not persist SNS record"
         );
     }
 
