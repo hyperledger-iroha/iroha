@@ -16176,6 +16176,283 @@ mod tests {
     }
 
     #[test]
+    fn signed_block_sponsored_fee_burns_when_sponsor_is_fee_sink() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let chain_id = ChainId::from("sponsored-block-fee-burn-test");
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority_id);
+        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
+        let world = World::with_assets(
+            [domain],
+            [authority, sponsor],
+            [asset_definition],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 5;
+        }
+
+        {
+            let fee_permission: Permission =
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                }
+                .into();
+            let mut world = state.world.block();
+            world.account_permissions.insert(
+                authority_id.clone(),
+                std::collections::BTreeSet::from([fee_permission]),
+            );
+            world.commit();
+        }
+
+        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
+            .chain(0, None)
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let genesis_signed: SignedBlock = genesis_block.clone().into();
+        let mut genesis_state_block = state.block(genesis_block.header);
+        let _valid_genesis = genesis_block
+            .validate_and_record_transactions(&mut genesis_state_block)
+            .unpack(|_| {});
+        genesis_state_block.commit().expect("commit first block");
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            iroha_primitives::json::Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
+            .sign(authority_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&genesis_signed))
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "sponsored transaction should be approved"
+        );
+        state_block.commit().expect("commit sponsored fee block");
+
+        let committed_balance_after = state
+            .view()
+            .world()
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists after block commit")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(committed_balance_after, 9);
+    }
+
+    #[test]
+    fn routed_signed_block_sponsored_fee_burns_global_sponsor_asset() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let chain_id = ChainId::from("routed-sponsored-block-fee-burn-test");
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, sponsor_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority_id);
+        let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
+        let world = World::with_assets(
+            [domain],
+            [authority, sponsor],
+            [asset_definition],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let mut state =
+            State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+        let bpng_lane = LaneId::new(3);
+        let bpng_dataspace = DataSpaceId::new(10);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_definition_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 5;
+            nexus.lane_catalog = LaneCatalog::new(
+                nonzero!(4_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: bpng_lane,
+                        dataspace_id: bpng_dataspace,
+                        alias: "bpng".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: bpng_dataspace,
+                    alias: "bpng".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            nexus.routing_policy.default_lane = bpng_lane;
+            nexus.routing_policy.default_dataspace = bpng_dataspace;
+        }
+
+        {
+            let fee_permission: Permission =
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                }
+                .into();
+            let mut world = state.world.block();
+            world.account_permissions.insert(
+                authority_id.clone(),
+                std::collections::BTreeSet::from([fee_permission]),
+            );
+            world.commit();
+        }
+
+        let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let genesis_block = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
+            .chain(0, None)
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let genesis_signed: SignedBlock = genesis_block.clone().into();
+        let mut genesis_state_block = state.block(genesis_block.header);
+        let _valid_genesis = genesis_block
+            .validate_and_record_transactions(&mut genesis_state_block)
+            .unpack(|_| {});
+        genesis_state_block.commit().expect("commit first block");
+
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            iroha_primitives::json::Json::new(sponsor_id.to_string()),
+        );
+        let mut builder = TransactionBuilder::new(chain_id.clone(), authority_id.clone());
+        builder.set_creation_time(Duration::from_millis(0));
+        let tx = builder
+            .with_metadata(metadata)
+            .with_instructions::<InstructionBox>([Log::new(Level::INFO, "fee".to_owned()).into()])
+            .sign(authority_keypair.private_key());
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            state.crypto().as_ref(),
+        )
+        .expect("transaction should pass stateless admission");
+
+        let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
+        let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
+            .chain(1, Some(&genesis_signed))
+            .sign(sponsor_keypair.private_key())
+            .unpack(|_| {});
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "routed sponsored transaction should be approved"
+        );
+        state_block
+            .commit()
+            .expect("commit routed sponsored fee block");
+
+        let committed_balance_after = state
+            .view()
+            .world()
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists after block commit")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(committed_balance_after, 9);
+    }
+
+    #[test]
     fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()

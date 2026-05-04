@@ -244,15 +244,5 @@ public final class MultisigSeedHelper {
       };
 
   private static final TypeAdapter<AccountIdParts> ACCOUNT_ID_ADAPTER =
-      new TypeAdapter<AccountIdParts>() {
-        @Override
-        public void encode(final NoritoEncoder encoder, final AccountIdParts value) {
-          encodeSizedField(encoder, ACCOUNT_CONTROLLER_ADAPTER, value);
-        }
-
-        @Override
-        public AccountIdParts decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("AccountIdParts decode is not supported");
-        }
-      };
+      NoritoAdapters.transparent(ACCOUNT_CONTROLLER_ADAPTER, value -> value, value -> value);
 }
