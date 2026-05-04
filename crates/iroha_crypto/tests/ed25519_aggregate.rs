@@ -1,8 +1,8 @@
 //! Tests for Ed25519 aggregate-style verification.
 
 use iroha_crypto::{
-    Algorithm, Error, KeyPair, Signature, ed25519_parse_public_key, ed25519_verify_aggregate,
-    ed25519_verify_batch_deterministic, ed25519_verify_preparsed,
+    Algorithm, Error, KeyPair, Signature, ed25519_verify_aggregate,
+    ed25519_verify_batch_deterministic,
 };
 
 type ByteBuffers = Vec<Vec<u8>>;
@@ -121,25 +121,6 @@ fn ed25519_batch_deterministic_matches_single_verification() {
             .is_ok()
         );
     }
-}
-
-#[test]
-fn ed25519_verify_preparsed_matches_single_verification() {
-    let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-    let message = b"preparsed-single-ed25519";
-    let signature = Signature::new(keypair.private_key(), message);
-    let (_algorithm, public_key_bytes) = keypair.public_key().to_bytes();
-    let parsed = ed25519_parse_public_key(public_key_bytes).expect("parse Ed25519 public key");
-
-    ed25519_verify_preparsed(message, signature.payload(), parsed)
-        .expect("preparsed verification accepts valid signature");
-
-    let mut bad_signature = signature.payload().to_vec();
-    bad_signature[0] ^= 0x01;
-    assert_eq!(
-        ed25519_verify_preparsed(message, bad_signature.as_slice(), parsed),
-        Err(Error::BadSignature)
-    );
 }
 
 fn sample_ed25519_batch(count: u8) -> Ed25519Batch {

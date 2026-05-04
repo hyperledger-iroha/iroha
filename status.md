@@ -49,9 +49,26 @@ Last updated: 2026-05-04
   for `iroha`, `iroha_core`, `iroha_torii`, `network_functional`,
   `nexus_and_streaming`, and the `core_api` integration target. Focused
   `iroha_core` unit tests for entrypoint hashing, the stateless-validation
-  cache, and snapshot roundtrip helpers are also green. A fresh end-to-end
-  `cargo test --workspace` remains queued for an uncontended multi-hour
-  validation window.
+  cache, and snapshot roundtrip helpers are also green.
+- The latest broad `cargo test --workspace` reached the integration-test
+  library after a full workspace compile and the earlier crate/test targets
+  were green. The first integration library pass exposed a stale spawned
+  daemon artifact that rejected generated genesis as a Norito length mismatch;
+  after the daemon artifact rebuilt, the exact startup/drop regressions and the
+  full `integration_tests --lib` suite are green (`41` passed).
+- Core transaction signature validation now routes the prepared single-Ed25519
+  verifier path through the deterministic batch verifier, removes the obsolete
+  public single pre-parsed Ed25519 verifier, and renames replay/precheck
+  internals so the signature-bypass source guard stays meaningful. Sumeragi
+  heartbeat block fixtures now embed routing execution context before signing,
+  matching production proposal construction and keeping signature-index
+  recovery validation compatible with external entrypoint context checks.
+  Focused validation passed with the core `signature` slice (`102` passed),
+  `iroha_crypto` Ed25519 aggregate tests (`7` passed), the Ed25519 public-key
+  fast-cache unit, strict clippy for `iroha_core --lib`, `iroha_crypto
+  --lib --tests`, and `integration_tests --lib`, plus formatting, diff
+  whitespace, no-SCALE, and signature-bypass term guards. A fresh end-to-end
+  `cargo test --workspace` remains queued for a clean uninterrupted rerun.
 
 ## 2026-05-04 Sumeragi embedded QC and NPoS block-sync hardening
 

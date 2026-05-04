@@ -126,9 +126,9 @@ impl PublicKeyFullFastCache {
     #[cfg(test)]
     fn stats(&self) -> PublicKeyFullFastCacheStats {
         PublicKeyFullFastCacheStats {
-            ed25519_hits: self.ed25519_hits,
-            ed25519_misses: self.ed25519_misses,
-            ed25519_inserts: self.ed25519_inserts,
+            hits: self.ed25519_hits,
+            misses: self.ed25519_misses,
+            inserts: self.ed25519_inserts,
         }
     }
 }
@@ -136,9 +136,9 @@ impl PublicKeyFullFastCache {
 #[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PublicKeyFullFastCacheStats {
-    ed25519_hits: usize,
-    ed25519_misses: usize,
-    ed25519_inserts: usize,
+    hits: usize,
+    misses: usize,
+    inserts: usize,
 }
 
 thread_local! {
@@ -691,9 +691,9 @@ mod tests {
         assert_eq!(
             public_key_full_fast_cache_stats_for_tests(),
             PublicKeyFullFastCacheStats {
-                ed25519_hits: 0,
-                ed25519_misses: 1,
-                ed25519_inserts: 1,
+                hits: 0,
+                misses: 1,
+                inserts: 1,
             }
         );
 
@@ -702,9 +702,9 @@ mod tests {
         assert_eq!(
             public_key_full_fast_cache_stats_for_tests(),
             PublicKeyFullFastCacheStats {
-                ed25519_hits: 1,
-                ed25519_misses: 1,
-                ed25519_inserts: 1,
+                hits: 1,
+                misses: 1,
+                inserts: 1,
             }
         );
     }

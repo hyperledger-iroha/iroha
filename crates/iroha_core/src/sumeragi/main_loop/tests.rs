@@ -41,7 +41,8 @@ use iroha_data_model::{
     ChainId, Encode as _, Level, Registrable,
     asset::{AssetDefinitionId, AssetId},
     block::{
-        BlockHeader, BlockSignature, SignedBlock,
+        BlockExecutionContextBundle, BlockHeader, BlockSignature, ExternalExecutionContext,
+        SignedBlock,
         builder::BlockBuilder,
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
     },
@@ -137266,6 +137267,23 @@ fn heartbeat_block_for_state(
         height,
         &time_source,
     );
+    let execution_context = {
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(&heartbeat));
+        let view = state.view();
+        let routing = crate::queue::evaluate_policy_with_catalog_and_world(
+            &view.nexus.routing_policy,
+            &view.nexus.lane_catalog,
+            &view.nexus.dataspace_catalog,
+            &accepted,
+            view.world(),
+        )
+        .expect("heartbeat transaction routing must resolve");
+        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            heartbeat.hash_as_entrypoint(),
+            routing.lane_id,
+            routing.dataspace_id,
+        )])
+    };
     time_handle.advance(Duration::from_millis(1));
     let creation_time_ms =
         u64::try_from(time_source.get_unix_time().as_millis()).expect("creation time fits in u64");
@@ -137286,6 +137304,7 @@ fn heartbeat_block_for_state(
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
+    builder.set_execution_context(Some(execution_context));
     builder.set_da_proof_policies(Some(policies));
     builder.set_previous_roster_evidence(previous_roster_evidence);
     builder.build_with_signature(signer_idx, signer_kp.private_key())

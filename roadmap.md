@@ -62,8 +62,16 @@ Completed history lives in `status.md`. This file should only track unfinished w
     The full `core_api` target is green again as of 2026-05-04 after repairing
     private-entrypoint hash handling and widening the slow asset/sealed-reveal
     liveness paths (`171` passed, `4` ignored).
-  - Broader `cargo test --workspace` remains for an uncontended validation
-    window.
+    A broad `cargo test --workspace` reached `integration_tests --lib` after
+    compiling the workspace and passing the preceding crate/test targets; the
+    first integration-library pass failed on a stale spawned daemon artifact,
+    then the exact startup/drop regressions and the full integration library
+    passed after rebuild (`41` passed). The core signature slice, crypto
+    Ed25519 tests, and strict clippy for core/crypto/integration are also green
+    after the deterministic single-Ed25519 verifier cleanup and heartbeat
+    execution-context fixture repair.
+  - Remaining validation: rerun `cargo test --workspace` from a clean start to
+    completion in an uncontended multi-hour window.
 - Carry the RAM-LFE API/proof hardening through the remaining signing and clean
   full-workspace Cargo corridor.
   - Focused OpenAPI detached-envelope tests, crypto RAM-LFE tests, the new

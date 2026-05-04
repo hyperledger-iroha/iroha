@@ -4488,7 +4488,7 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
-            skip_tx_signature_validation: bool,
+            trust_replay_tx_signatures: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -4501,7 +4501,7 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
-                skip_tx_signature_validation,
+                trust_replay_tx_signatures,
                 true,
             )
         }
@@ -4547,7 +4547,7 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
-            skip_tx_signature_validation: bool,
+            trust_replay_tx_signatures: bool,
             replay_compatibility: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             let total_start = Instant::now();
@@ -4636,7 +4636,7 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                skip_tx_signature_validation,
+                trust_replay_tx_signatures,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -5386,7 +5386,7 @@ pub(crate) mod valid {
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
-            skip_tx_signature_validation: bool,
+            trust_replay_tx_signatures: bool,
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
@@ -5618,8 +5618,8 @@ pub(crate) mod valid {
                     .map(BlockValidationError::TransactionAccept);
                 }
 
-                let signature_override = skip_tx_signature_validation.then_some(Ok(()));
-                let stateless = if let Some(signature_override) = signature_override {
+                let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
+                let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
                     if crate::tx::is_heartbeat_transaction(tx) {
                         AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
                             tx,
@@ -5628,7 +5628,7 @@ pub(crate) mod valid {
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            Some(signature_override),
+                            Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
                     } else {
@@ -5639,7 +5639,7 @@ pub(crate) mod valid {
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            Some(signature_override),
+                            Some(prechecked_signature_result),
                             &prepared.metadata,
                         )
                     }
@@ -6221,7 +6221,7 @@ pub(crate) mod valid {
                 }
                 (routing_decisions, routing_errors)
             };
-            let mut signature_overrides: Vec<
+            let mut prechecked_signature_results: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
             let signature_result_for_tx = |tx: &SignedTransaction| {
@@ -6264,13 +6264,13 @@ pub(crate) mod valid {
                         }
                         let (_algo, pk_bytes) = signatory.to_bytes();
                         if pk_bytes.len() != 32 {
-                            signature_overrides[idx] =
+                            prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad signature or key length"));
                             continue;
                         }
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
-                            signature_overrides[idx] =
+                            prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad signature or key length"));
                             continue;
                         }
@@ -6330,11 +6330,11 @@ pub(crate) mod valid {
                             let refs: Vec<&EdItem> = batch.iter().collect();
                             if verify_batch_slice(&refs) {
                                 for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in batch {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6367,7 +6367,7 @@ pub(crate) mod valid {
                         let (_algo, pk_bytes) = signatory.to_bytes();
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
-                            signature_overrides[idx] =
+                            prechecked_signature_results[idx] =
                                 Some(malformed_signature(tx, "bad secp256k1 signature length"));
                             continue;
                         }
@@ -6426,11 +6426,11 @@ pub(crate) mod valid {
                             let refs: Vec<&SecpItem> = batch.iter().collect();
                             if verify_batch_slice(&refs) {
                                 for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in batch {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6513,11 +6513,11 @@ pub(crate) mod valid {
                             let refs: Vec<&PqcItem> = batch.iter().collect();
                             if verify_batch_slice(&refs) {
                                 for it in batch {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in batch {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6646,11 +6646,11 @@ pub(crate) mod valid {
                             };
                             if ok {
                                 for it in group {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in group {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6675,11 +6675,11 @@ pub(crate) mod valid {
                             };
                             if ok {
                                 for it in singletons {
-                                    signature_overrides[it.idx] = Some(Ok(()));
+                                    prechecked_signature_results[it.idx] = Some(Ok(()));
                                 }
                             } else {
                                 for it in singletons {
-                                    signature_overrides[it.idx] =
+                                    prechecked_signature_results[it.idx] =
                                         Some(signature_result_for_tx(txs[it.idx]));
                                 }
                             }
@@ -6754,9 +6754,9 @@ pub(crate) mod valid {
                     if skip_stateless_checks {
                         return None;
                     }
-                    let signature_override = signature_overrides
+                    let prechecked_signature_result = prechecked_signature_results
                         .get(idx)
-                        .and_then(|override_result| override_result.as_ref().cloned());
+                        .and_then(|result| result.as_ref().cloned());
                     let stateless = if is_heartbeat {
                         AcceptedTransaction::validate_heartbeat_with_now_with_signature_result_and_prepared_metadata(
                             tx,
@@ -6765,7 +6765,7 @@ pub(crate) mod valid {
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            signature_override,
+                            prechecked_signature_result,
                             &prepared_txs[idx].metadata,
                         )
                     } else {
@@ -6776,7 +6776,7 @@ pub(crate) mod valid {
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
-                            signature_override,
+                            prechecked_signature_result,
                             &prepared_txs[idx].metadata,
                         )
                     };

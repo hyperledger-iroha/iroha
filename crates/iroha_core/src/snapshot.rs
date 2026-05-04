@@ -1192,7 +1192,7 @@ pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash
 }
 
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }

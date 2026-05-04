@@ -1690,10 +1690,17 @@ impl<'tx> AcceptedTransaction<'tx> {
             && let Some(public_key) = prepared.single_ed25519_key
             && Self::has_single_ed25519_signature(tx)
         {
-            return iroha_crypto::ed25519_verify_preparsed(
-                prepared.payload_hash.as_ref().as_slice(),
-                tx.signature().payload().payload(),
-                public_key,
+            let message = prepared.payload_hash.as_ref().as_slice();
+            let signature = tx.signature().payload().payload();
+            let messages = [message];
+            let signatures = [signature];
+            let public_keys = [public_key];
+
+            return iroha_crypto::ed25519_verify_batch_preparsed_deterministic(
+                &messages,
+                &signatures,
+                &public_keys,
+                [0; 32],
             )
             .map_err(|err| {
                 AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
@@ -2259,11 +2266,11 @@ impl<'tx> AcceptedTransaction<'tx> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
-        signature_override: Option<Result<(), SignatureVerificationFail>>,
+        prechecked_signature_result: Option<Result<(), SignatureVerificationFail>>,
         prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
         let signature_check =
-            signature_override.map_or(SignatureCheck::Verify, SignatureCheck::Override);
+            prechecked_signature_result.map_or(SignatureCheck::Verify, SignatureCheck::Override);
         Self::validate_with_now_and_signature_check(
             tx,
             expected_chain_id,
@@ -2701,11 +2708,11 @@ impl<'tx> AcceptedTransaction<'tx> {
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
-        signature_override: Option<Result<(), SignatureVerificationFail>>,
+        prechecked_signature_result: Option<Result<(), SignatureVerificationFail>>,
         prepared: &PreparedTransactionMetadata,
     ) -> Result<(), AcceptTransactionFail> {
         let signature_check =
-            signature_override.map_or(SignatureCheck::Verify, SignatureCheck::Override);
+            prechecked_signature_result.map_or(SignatureCheck::Verify, SignatureCheck::Override);
         Self::validate_heartbeat_with_now_and_signature_check(
             tx,
             expected_chain_id,

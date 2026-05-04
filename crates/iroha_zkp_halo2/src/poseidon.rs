@@ -533,10 +533,7 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn field_to_bytes(f: Fr) -> [u8; 32] {
-    let repr = f.to_repr();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(repr.as_ref());
-    out
+    f.to_repr().into()
 }
 
 fn field_to_u64(f: Fr) -> u64 {
