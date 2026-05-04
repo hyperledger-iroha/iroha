@@ -3832,13 +3832,14 @@ async fn handler_account_assets(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
             .await?;
     }
-    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &key_hint,
-        &tel,
-        routing::ENDPOINT_ACCOUNTS_ASSETS,
-    )?;
-    let caller = torii_visibility_account_from_headers(
+    let (_parsed_account_id, canonical_account_id) =
+        routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &tel,
+            routing::ENDPOINT_ACCOUNTS_ASSETS,
+        )?;
+    let _caller = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
@@ -3846,21 +3847,8 @@ async fn handler_account_assets(
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let use_target_account_routes = trusted_internal || caller.is_signed();
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
-    let routes = match torii_account_read_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    ) {
-        Ok(routes) => routes,
-        Err(response) => return Ok(response),
-    };
+    let route_scope = ToriiFanoutRouteScopeV1::AllDataspaces;
+    let routes = torii_account_assets_read_routes(app.as_ref());
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -3970,13 +3958,14 @@ async fn handler_account_assets_query(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
             .await?;
     }
-    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
-        app.state.as_ref(),
-        &key_hint,
-        &tel,
-        routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
-    )?;
-    let caller = torii_visibility_account_from_headers(
+    let (_parsed_account_id, canonical_account_id) =
+        routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &key_hint,
+            &tel,
+            routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
+        )?;
+    let _caller = torii_visibility_account_from_headers(
         &app,
         &headers,
         &method,
@@ -3984,21 +3973,8 @@ async fn handler_account_assets_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
-    let use_target_account_routes = trusted_internal || caller.is_signed();
-    let route_scope = torii_account_read_route_scope(
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    );
-    let routes = match torii_account_read_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        use_target_account_routes,
-    ) {
-        Ok(routes) => routes,
-        Err(response) => return Ok(response),
-    };
+    let route_scope = ToriiFanoutRouteScopeV1::AllDataspaces;
+    let routes = torii_account_assets_read_routes(app.as_ref());
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -12129,6 +12105,11 @@ fn torii_account_read_routes(
     } else {
         Ok(torii_visible_account_read_routes(app, caller))
     }
+}
+
+#[cfg(feature = "app_api")]
+fn torii_account_assets_read_routes(app: &AppState) -> Vec<RoutingDecision> {
+    torii_all_dataspace_routes(app)
 }
 
 #[cfg(feature = "app_api")]
@@ -39773,6 +39754,79 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             !dataspaces.contains(&restricted_dataspace),
             "unsigned public reads must not automatically gain private dataspace visibility",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes = super::torii_account_assets_read_routes(app.as_ref());
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([
+                DataSpaceId::UNIVERSAL,
+                governance_dataspace,
+                restricted_dataspace,
+            ]),
+            "account asset reads must fan out like asset-holder reads so dataspace-scoped balances are visible",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn handler_account_assets_fanout_reports_merged_route_headers() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::assets-known-scope"));
+        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
+            &authority,
+            uaid,
+            restricted_dataspace,
+        ));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
+            .parse()
+            .expect("valid account assets uri");
+        let response = super::handler_account_assets(
+            State(app),
+            axum::http::Method::GET,
+            uri,
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath(authority.to_string()),
+            AxQuery(crate::routing::AccountAssetsGetParams::default()),
+        )
+        .await
+        .expect("account assets should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "account asset fanout should not expose a singular route lane",
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "account asset fanout should not expose a singular dataspace",
         );
     }
 
