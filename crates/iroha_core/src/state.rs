@@ -24452,13 +24452,27 @@ pub fn replay_blocks_from_kura_range(
                 });
             }
         };
-        let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-        ensure_replayed_results_match_committed(height, &signed_block, committed_block.as_ref())
-            .wrap_err_with(|| {
-                format!(
-                    "failed to verify replayed block #{height} against committed execution results"
-                )
-            })?;
+        let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
+        let mut committed_block = replayed_committed_block;
+        if let Err(err) =
+            ensure_replayed_results_match_committed(height, &signed_block, committed_block.as_ref())
+        {
+            let legacy_uncheckpointed_history = wsv_checkpoint.is_none() && !wsv_checkpoint_seen;
+            if legacy_uncheckpointed_history {
+                iroha_logger::warn!(
+                    height,
+                    error = %err,
+                    "legacy uncheckpointed block replay produced different execution-result material; preserving committed Kura block hash and continuing"
+                );
+                committed_block = ValidBlock::committed_from_replay_signed_block(signed_block);
+            } else {
+                return Err(err).wrap_err_with(|| {
+                    format!(
+                        "failed to verify replayed block #{height} against committed execution results"
+                    )
+                });
+            }
+        }
         let tx_count = committed_block.as_ref().external_transactions().count();
         let mut rejected = Vec::new();
         for idx in 0..tx_count {

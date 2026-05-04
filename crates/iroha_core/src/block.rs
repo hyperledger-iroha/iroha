@@ -3906,6 +3906,12 @@ pub(crate) mod valid {
             }
         }
 
+        pub(crate) fn committed_from_replay_signed_block(block: SignedBlock) -> CommittedBlock {
+            Self::new_signatures_verified(block)
+                .commit_unchecked()
+                .unpack(|_| {})
+        }
+
         #[cfg(test)]
         fn mark_signatures_verified(&mut self) {
             self.signatures_verified = true;

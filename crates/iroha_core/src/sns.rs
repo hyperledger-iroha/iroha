@@ -1376,6 +1376,66 @@ pub fn quote_account_alias_renewal_with_fee_asset_fallback(
     lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
 }
 
+/// Quote the cost and resulting lifecycle for registering a SNS name.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the selector is invalid, the suffix policy is missing or inactive,
+/// the label is reserved for another owner, or the name is already registered.
+pub fn quote_name_registration(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    selector: NameSelectorV1,
+    owner: &AccountId,
+    term_years: u8,
+    pricing_class_hint: Option<u8>,
+    now_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    let (namespace, canonical_selector) = canonicalize_request_selector(selector, catalog)?;
+    ensure_selector_is_mutable(&canonical_selector)?;
+    let policy = policy_or_not_found(world, canonical_selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    enforce_reserved_label_assignment(namespace, &policy, &canonical_selector, owner, now_ms)?;
+    if record_by_selector(world, &canonical_selector).is_some() {
+        return Err(SnsError::Conflict(format!(
+            "selector `{}` is already registered",
+            canonical_selector.normalized_label()
+        )));
+    }
+    let tier = pick_pricing_tier(&policy, &canonical_selector, pricing_class_hint)?;
+    lease_quote(canonical_selector, &policy, &tier, term_years, now_ms)
+}
+
+/// Quote the cost and resulting lifecycle for renewing a SNS name.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the name or policy is missing, immutable, tombstoned, or no longer
+/// satisfies the pricing class used for the original registration.
+pub fn quote_name_renewal(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    namespace: SnsNamespace,
+    literal: &str,
+    term_years: u8,
+    now_ms: u64,
+) -> Result<LeaseQuote, SnsError> {
+    let selector = selector_for_namespace_literal(namespace, literal, catalog)?;
+    ensure_selector_is_mutable(&selector)?;
+    let policy = policy_or_not_found(world, selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    let mut record = record_or_not_found(world, &selector)?;
+    refresh_lifecycle(&mut record, now_ms);
+    if matches!(record.status, NameStatus::Tombstoned(_)) {
+        return Err(SnsError::Conflict(format!(
+            "registration `{}` is tombstoned",
+            selector.normalized_label()
+        )));
+    }
+    let tier = tier_by_pricing_class(&policy, &record.selector, record.pricing_class)?;
+    lease_quote(selector, &policy, &tier, term_years, record.expires_at_ms)
+}
+
 fn persist_record(state_transaction: &mut StateTransaction<'_, '_>, record: &NameRecordV1) {
     state_transaction
         .world

@@ -6,6 +6,12 @@ use crate::sns::{
     TransferNameRequestV1, UpdateControllersRequestV1,
 };
 
+fn encode_sns_payload<T: norito::codec::Encode>(payload: T) -> Vec<u8> {
+    let encoded = payload.encode();
+    drop(payload);
+    encoded
+}
+
 isi! {
     /// Register a SNS name record through normal transaction consensus.
     pub struct RegisterSnsName {
@@ -22,7 +28,7 @@ impl RegisterSnsName {
     #[must_use]
     pub fn new(request: RegisterNameRequestV1) -> Self {
         Self {
-            request: request.encode(),
+            request: encode_sns_payload(request),
         }
     }
 }
@@ -55,7 +61,7 @@ impl RenewSnsName {
         Self {
             suffix_id,
             literal: literal.into(),
-            request: request.encode(),
+            request: encode_sns_payload(request),
         }
     }
 }
@@ -88,7 +94,7 @@ impl TransferSnsName {
         Self {
             suffix_id,
             literal: literal.into(),
-            request: request.encode(),
+            request: encode_sns_payload(request),
         }
     }
 }
@@ -121,7 +127,7 @@ impl UpdateSnsNameControllers {
         Self {
             suffix_id,
             literal: literal.into(),
-            request: request.encode(),
+            request: encode_sns_payload(request),
         }
     }
 }
@@ -154,7 +160,7 @@ impl FreezeSnsName {
         Self {
             suffix_id,
             literal: literal.into(),
-            request: request.encode(),
+            request: encode_sns_payload(request),
         }
     }
 }
@@ -187,7 +193,7 @@ impl UnfreezeSnsName {
         Self {
             suffix_id,
             literal: literal.into(),
-            governance: governance.encode(),
+            governance: encode_sns_payload(governance),
         }
     }
 }
